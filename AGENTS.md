@@ -40,6 +40,6 @@ Unknown priorities, incomplete history and an unreviewed current head also block
 Only remaining P2/P3 Code Review findings may become deduplicated follow-up issues;
 Security Review and human approval requirements remain separate and mandatory.
 The staged `.github/scripts/review_budget.py` is NOT active CI clearance. Until the
-trusted adapter/writer in `.github/REVIEW_BUDGET.md` is approved and deployed, stop
+trusted controller in `.github/REVIEW_BUDGET.md` is approved and deployed, stop
 and report the cap/activation blocker; do not fabricate a thumbs-up, resolve threads
 just to pass the gate, or request a fourth review. Do not backfill merged PRs.

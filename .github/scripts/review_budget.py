@@ -72,10 +72,8 @@ def validate(snapshot):
             raise Blocked('Duplicate, unknown, running or incomplete review invocation.')
         seen.add(run.identity)
     seen = set()
-    sources = set()
     for finding in snapshot.findings:
         if (not finding.identity or finding.identity in seen
-                or finding.source in sources
                 or not re.fullmatch(
                     rf'https://github\.com/{re.escape(snapshot.repo)}/pull/{snapshot.pr}'
                     r'#(?:discussion_r|issuecomment-|pullrequestreview-)[1-9][0-9]*', finding.source)
@@ -85,7 +83,6 @@ def validate(snapshot):
                 or not finding.title.strip()):
             raise Blocked('Unknown priority or incomplete finding identity/history.')
         seen.add(finding.identity)
-        sources.add(finding.source)
 
 
 def completed_rounds(snapshot):
@@ -152,7 +149,15 @@ def existing_issue(snapshot, finding, inventory):
         seen.add(issue.number)
         # Exact URL boundary avoids #discussion_r12 matching #discussion_r123.
         source = re.search(re.escape(finding.source) + r'(?:(?![A-Za-z0-9_/#?=&%.-])|\.(?=\s|$))', issue.body)
-        if not issue.is_pull_request and (marker(snapshot, finding) in issue.body or source):
+        # One review-body permalink can contain several distinct findings. A
+        # legacy URL-only issue is safe only when that source names one finding
+        # in the complete history. An issue marked for another identity is not
+        # a legacy issue and must never satisfy this one by URL alone.
+        legacy = source and '<!-- codex-deferred:' not in issue.body
+        if (not issue.is_pull_request and legacy
+                and sum(f.source == finding.source for f in snapshot.findings) != 1):
+            raise Blocked('Ambiguous legacy source-only issue; reconcile finding identities before writing.')
+        if not issue.is_pull_request and (marker(snapshot, finding) in issue.body or legacy):
             matches.append(issue.number)
     if len(matches) > 1:
         raise Blocked('Multiple existing issues match; reconcile without another write.')
