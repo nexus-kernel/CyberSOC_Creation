@@ -115,6 +115,22 @@
     Agreed patch cadence in days for EW.10. A machine is within cadence when it has no pending
     security or critical patch published more than this many days ago. Default 30.
 
+.PARAMETER PatchExclusionTagPattern
+    Regular expression (RE2, as used by KQL) matched against the lowercased JSON of each machine's
+    tags. A machine whose tags match is left out of the patch measures (EW.6, EW.10) and listed in
+    EW.10-EXCLUDED. The default matches a tag that records patching as waived or as client owned,
+    under whichever key the client uses, for example Patching=Waived, PatchPolicy=Client Owned or
+    Maintenance=Patching waived. Must not contain line breaks. Pass an empty string to turn the
+    exclusion off.
+
+.PARAMETER EdrVendorPattern
+    Regular expression (RE2) naming the third-party endpoint detection products in use, matched
+    against virtual machine extension publishers and types and against the Sentinel tables and
+    vendors that carry the product's telemetry (EW.1-EDR, EW.1-EDR-HOSTS). An Azure virtual
+    machine that is not onboarded to Defender for Endpoint but carries a matching product is
+    reported as covered by that product, not as a gap. The default covers CrowdStrike Falcon and
+    the other common products. Must not contain double quotes or line breaks.
+
 .PARAMETER DryRun
     Expand and write every query without signing in or calling anything.
 
@@ -151,7 +167,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07
-    Version: 1.13.0
+    Version: 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -178,6 +194,9 @@ param(
     [switch]$SkipGraph,
     [ValidateRange(1, 365)]
     [int]$PatchCadenceDays = 30,
+    [AllowEmptyString()]
+    [string]$PatchExclusionTagPattern,
+    [string]$EdrVendorPattern,
     [switch]$SkipWorkspaceBreakdown,
     [switch]$SkipHtmlReport,
     [ValidateSet('Brief', 'Balanced', 'Detailed')]
@@ -187,7 +206,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.13.1'
+$script:EbrVersion = '1.14.0'
 # Atmosera ticket reference in a Sentinel incident comment or closing comment. Incidents without
 # one never reached the managed service and are not counted as alerts. The optional subdomain keeps
 # the full host in the extracted reference (atmosera.zendesk.com, not zendesk.com).
@@ -201,6 +220,16 @@ $script:EbrNetworkDevicePattern = 'palo ?alto|pan-?os|meraki|fortinet|forti(gate
 # agents or endpoint detection, so they leave those VM measures. Matched against the plan
 # publisher and the image reference publisher. P0.6-APPLIANCES lists every machine it removes.
 $script:EbrAppliancePattern = 'paloalto|fortinet|checkpoint|barracuda|cisco|sophos|f5-networks|netgate|juniper|citrix|versa-networks|silver-peak|silverpeak|aviatrix|watchguard|forcepoint|kemptech|a10networks|arista|zscaler|cloudflare|vyos|mikrotik|opnsense|riverbed|catonetworks|cradlepoint'
+# Tags that take a machine out of the patch cadence measures (EW.6, EW.10): patching recorded as
+# waived, or as owned by the client, under whichever tag key the client uses (1.14.0). Matched
+# against the lowercased JSON of the machine's tags, so the key and the value are both tested.
+# EW.10-EXCLUDED lists every machine it removes. -PatchExclusionTagPattern overrides it.
+$script:EbrPatchExclusionTagPattern = '"[^"]*patch[^"]*"\s*:\s*"[^"]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^"]*"|"[^"]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^"]*patch[^"]*"|"[^"]*patch[^"]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^"]*"'
+# Third-party endpoint detection products (1.14.0). An Azure virtual machine that is not onboarded
+# to Defender for Endpoint but runs one of these is covered, not a gap. Matched against virtual
+# machine extension publishers and types (EW.1-EDR) and against the Sentinel tables and vendors
+# that carry the product's telemetry (EW.1-EDR-HOSTS). -EdrVendorPattern overrides it.
+$script:EbrEdrVendorPattern = 'crowdstrike|falcon|sentinelone|carbon ?black|cortex ?xdr|cybereason|tanium|trellix|cylance'
 
 #region Console, snark and logging
 
@@ -426,7 +455,7 @@ function Get-EbrDefaultReportingWindow {
         # Data begins after the last full month started, so the only option is a partial month
         $start = [datetime]::new($source.Year, $source.Month, 1)
         if ($start -gt $end) { $start = $lastFullMonthStart }
-        $basis += '; partial first month because the data starts after the last full month began'
+        $basis += ', partial first month because the data starts after the last full month began'
     }
 
     [pscustomobject]@{ Start = $start; End = $end; Basis = $basis }
@@ -723,12 +752,14 @@ function New-EbrQuery {
         # workspace run even with -SkipWorkspaceBreakdown, because later steps depend on it.
         [string]$TenantTable = '', [switch]$CombinedOnly, [switch]$AlwaysBreakdown,
         # Resource Graph: the result is incomplete when read through Lighthouse
-        [switch]$LighthouseIncomplete
+        [switch]$LighthouseIncomplete,
+        # Derived: built from results already collected, no engine call. The block receives the context.
+        [scriptblock]$Derive
     )
     [pscustomobject]@{
         Id = $Id; Phase = $Phase; Title = $Title; Engine = $Engine; Query = $Query.Trim(); Notes = $Notes
         TenantTable = $TenantTable; CombinedOnly = [bool]$CombinedOnly; AlwaysBreakdown = [bool]$AlwaysBreakdown
-        LighthouseIncomplete = [bool]$LighthouseIncomplete
+        LighthouseIncomplete = [bool]$LighthouseIncomplete; Derive = $Derive
     }
 }
 
@@ -748,7 +779,10 @@ function Expand-EbrQuery {
         [datetime]$WindowEnd,
         [AllowEmptyString()][string]$ManagedRgPattern,
         [AllowEmptyString()][string]$TicketPattern = '',
-        [int]$PatchCadenceDays = 30
+        [int]$PatchCadenceDays = 30,
+        # Left out means the default pattern. An empty string turns the patch exclusion off.
+        [AllowEmptyString()][string]$PatchExclusionTagPattern,
+        [AllowEmptyString()][string]$EdrVendorPattern = ''
     )
     if ($ManagedRgPattern -match '["\\\r\n]') {
         throw 'ManagedRgPattern must not contain quotes, backslashes or line breaks.'
@@ -756,8 +790,21 @@ function Expand-EbrQuery {
     if ([string]::IsNullOrWhiteSpace($TicketPattern)) { $TicketPattern = $script:EbrTicketPattern }
     if ($TicketPattern -match '["\r\n]') { throw 'TicketPattern must not contain double quotes or line breaks.' }
     if ($PatchCadenceDays -lt 1) { $PatchCadenceDays = 30 }
+    if (-not $PSBoundParameters.ContainsKey('PatchExclusionTagPattern')) { $PatchExclusionTagPattern = $script:EbrPatchExclusionTagPattern }
+    if ($PatchExclusionTagPattern -match '[\r\n]') { throw 'PatchExclusionTagPattern must not contain line breaks.' }
+    if ([string]::IsNullOrWhiteSpace($EdrVendorPattern)) { $EdrVendorPattern = $script:EbrEdrVendorPattern }
+    if ($EdrVendorPattern -match '["\r\n]') { throw 'EdrVendorPattern must not contain double quotes or line breaks.' }
     $inv = [cultureinfo]::InvariantCulture
     $text = $Query.Replace('{{PATCH_DAYS}}', [string]$PatchCadenceDays)
+    $text = $text.Replace('{{EDR_VENDOR}}', $EdrVendorPattern)
+    if ([string]::IsNullOrWhiteSpace($PatchExclusionTagPattern)) {
+        # Exclusion off: drop the lines that test the tag. Each query sets PatchExcluded to false first.
+        $text = (($text -split "`r?`n") | Where-Object { $_ -notmatch '\{\{PATCH_EXCLUDED\}\}' }) -join "`n"
+    }
+    else {
+        # Inside a KQL verbatim string a double quote is written twice
+        $text = $text.Replace('{{PATCH_EXCLUDED}}', $PatchExclusionTagPattern.Replace('"', '""'))
+    }
     $text = $text.Replace('{{WINDOW_START}}', ('datetime({0})' -f $WindowStart.ToString('yyyy-MM-dd', $inv)))
     $text = $text.Replace('{{WINDOW_END}}', ('datetime({0})' -f $WindowEnd.ToString('yyyy-MM-dd', $inv)))
     $text = $text.Replace('{{RECENT_START}}', ('datetime({0})' -f (Get-EbrRecentStart -WindowStart $WindowStart -WindowEnd $WindowEnd).ToString('yyyy-MM-dd', $inv)))
@@ -781,8 +828,10 @@ function Expand-EbrQuery {
 
 function New-EbrDeviceCheckQuery {
     # One shape for every per-device secure configuration measure: the latest assessment per device
-    # and check, applicable checks only, joined to the onboarded fleet for Scope. A device counts as
-    # compliant only when every applicable check in the set is compliant.
+    # and check, applicable checks only, joined to the onboarded Azure virtual machines. A device
+    # counts as compliant only when every applicable check in the set is compliant. Since 1.14.0
+    # every device measure reads Azure virtual machines only: workstations, laptops and other
+    # endpoints that are not Azure resources are never counted.
     param([string[]]$ConfigurationIds)
     $ids = ($ConfigurationIds | ForEach-Object { '"{0}"' -f $_ }) -join ', '
     @"
@@ -796,9 +845,10 @@ DeviceTvmSecureConfigurationAssessment
     | where Timestamp between (ago(30d) .. now())
     | where OnboardingStatus == "Onboarded"
     | summarize arg_max(Timestamp, AzureResourceId, OSPlatform) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
     | where AzureResourceId !contains "{{MRG}}"
   ) on DeviceId
-| extend Scope = iff(isnotempty(AzureResourceId), "Azure VM", "Other device")
+| extend Scope = "Azure VM"
 | summarize Devices = count(), Compliant = countif(Passed == Checks) by Scope
 | extend PctCompliant = round(100.0 * Compliant / Devices, 1)
 | order by Scope asc
@@ -1464,23 +1514,26 @@ Permission: Policy.Read.All
     #endregion
 
     #region Phase 2 Endpoint and Workload
-    $q.Add((New-EbrQuery -Id 'EW.1' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'EDR onboarding and sensor health' -Notes 'Denominator is Onboarded plus CanBeOnboarded. SensorActive feeds DR-F1, which the report reads on the Azure VM rows only. Network devices and firewalls (Palo Alto, Meraki, Fortinet, SonicWall and similar) are left out since 1.11.0 because they cannot run a sensor.' -Query @'
+    $q.Add((New-EbrQuery -Id 'EW.1' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'EDR onboarding and sensor health, Azure virtual machines' -Notes 'Azure virtual machines only since 1.14.0: devices with no Azure resource ID (workstations, laptops, other endpoints) are never counted. Denominator is Onboarded plus CanBeOnboarded. Unsupported and InsufficientInfo are context for EW.1-GAPS. SensorActive feeds DR-F1. Network devices and firewalls (Palo Alto, Meraki, Fortinet, SonicWall and similar) are left out since 1.11.0 because they cannot run a sensor.' -Query @'
 DeviceInfo
 | where Timestamp between (ago(7d) .. now())
 | summarize arg_max(Timestamp, *) by DeviceId
 | where isnotempty(OSPlatform)
+| where isnotempty(AzureResourceId)   // Azure virtual machines only
 | where not({{NETWORK_DEVICE}})   // network devices and firewalls cannot run a sensor
 | where AzureResourceId !contains "{{MRG}}"
-| extend Scope = iff(isnotempty(AzureResourceId), "Azure VM", "Other device")
-| summarize Devices        = count(),
-            Onboarded      = countif(OnboardingStatus == "Onboarded"),
-            CanBeOnboarded = countif(OnboardingStatus == "Can be onboarded"),
-            SensorActive   = countif(SensorHealthState == "Active")
+| extend Scope = "Azure VM"
+| summarize Devices          = count(),
+            Onboarded        = countif(OnboardingStatus == "Onboarded"),
+            CanBeOnboarded   = countif(OnboardingStatus == "Can be onboarded"),
+            Unsupported      = countif(OnboardingStatus == "Unsupported"),
+            InsufficientInfo = countif(OnboardingStatus == "Insufficient info"),
+            SensorActive     = countif(SensorHealthState == "Active")
           by Scope, OSPlatform
-| order by Scope asc, Devices desc
+| order by Devices desc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'EW.1-DEVICES' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'Azure virtual machines not onboarded or with an inactive sensor' -Notes 'SecOps worklist input, added in 1.8.0. Azure virtual machines only since 1.10.0: endpoints that are not native to Azure stay out of the worklist. Every Azure VM not onboarded, whatever its onboarding status, plus onboarded Azure VMs whose sensor is not Active. Network devices and firewalls are left out since 1.11.0. Internal: names devices, never embedded in the client report.' -Query @'
+    $q.Add((New-EbrQuery -Id 'EW.1-DEVICES' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'Azure virtual machines not onboarded or with an inactive sensor' -Notes 'SecOps worklist input, added in 1.8.0. Azure virtual machines only since 1.10.0: endpoints that are not native to Azure stay out of the worklist. Every Azure VM not onboarded, whatever its onboarding status, plus onboarded Azure VMs whose sensor is not Active. Network devices and firewalls are left out since 1.11.0. EW.1-GAPS adds the reason for each one. Internal: names devices, never embedded in the client report.' -Query @'
 DeviceInfo
 | where Timestamp between (ago(7d) .. now())
 | summarize arg_max(Timestamp, *) by DeviceId
@@ -1495,6 +1548,70 @@ DeviceInfo
 | order by Gap asc, Scope asc, DeviceName asc
 '@))
 
+    $q.Add((New-EbrQuery -Id 'EW.1-VMS' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'Azure virtual machines known to Defender for Endpoint' -Notes 'Added in 1.14.0. Every Azure virtual machine Defender for Endpoint has seen in the last 7 days, in any onboarding status, so EW.1-GAPS can tell which machines in Resource Graph Defender has never discovered. Internal: names devices, never embedded in the client report.' -Query @'
+DeviceInfo
+| where Timestamp between (ago(7d) .. now())
+| summarize arg_max(Timestamp, *) by DeviceId
+| where isnotempty(OSPlatform)
+| where not({{NETWORK_DEVICE}})   // network devices and firewalls cannot run a sensor
+| where isnotempty(AzureResourceId)
+| where AzureResourceId !contains "{{MRG}}"
+| project DeviceId, DeviceName, OSPlatform, OnboardingStatus, SensorHealthState, LastSeen = Timestamp, MachineGroup, AzureResourceId
+| order by DeviceName asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'EW.1-EDR' -Phase 'P2 Endpoint' -Engine 'ARG' -Title 'Endpoint detection evidence per Azure virtual machine, from Azure' -Notes 'Added in 1.14.0. One row per Azure virtual machine: the Defender for Endpoint extension (MDE.Windows, MDE.Linux), any extension whose publisher or type names a third-party product (-EdrVendorPattern, CrowdStrike Falcon by default), the Defender for Cloud EDR assessment status, the power state and whether the image is a network appliance. EW.1-GAPS reads it to explain each machine that is not reporting to Defender for Endpoint. Internal: names machines, the report embeds counts only.' -Query @'
+resources
+| where type =~ "microsoft.compute/virtualmachines"
+| where id !contains "{{MRG}}"
+| project VmId = tolower(id), VmName = name, resourceGroup, subscriptionId,
+          OsType     = tostring(properties.storageProfile.osDisk.osType),
+          PowerState = tostring(properties.extended.instanceView.powerState.code),
+          Appliance  = {{APPLIANCE}}
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.compute/virtualmachines/extensions"
+    | extend VmId = tostring(split(tolower(id), "/extensions/")[0]),
+             Publisher = tostring(properties.publisher), ExtensionType = tostring(properties.type)
+    | extend Product = tolower(strcat(Publisher, " ", ExtensionType, " ", name))
+    | summarize DefenderExtension    = countif(ExtensionType startswith "MDE."),
+                ThirdPartyExtensions = make_set_if(strcat(Publisher, "/", ExtensionType), Product matches regex @"({{EDR_VENDOR}})")
+              by VmId
+  ) on VmId
+| join kind=leftouter (
+    securityresources
+    | where type =~ "microsoft.security/assessments"
+    | extend Recommendation = tostring(properties.displayName), Status = tostring(properties.status.code)
+    | where Recommendation has "EDR solution should be installed"
+    | extend VmId = tostring(split(tolower(id), "/providers/microsoft.security/assessments/")[0])
+    | summarize EdrAssessment = make_set(Status) by VmId
+  ) on VmId
+| extend DefenderExtension    = coalesce(DefenderExtension, 0),
+         ThirdPartyExtensions = coalesce(ThirdPartyExtensions, dynamic([])),
+         EdrAssessment        = coalesce(EdrAssessment, dynamic([]))
+| extend ThirdPartyEdr = array_length(ThirdPartyExtensions) > 0
+| project VmId, VmName, resourceGroup, subscriptionId, OsType, PowerState, Appliance, DefenderExtension, ThirdPartyEdr, ThirdPartyExtensions, EdrAssessment
+| order by resourceGroup asc, VmName asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'EW.1-EDR-HOSTS' -Phase 'P2 Endpoint' -Engine 'LA' -CombinedOnly -Title 'Hosts reporting to a third-party endpoint detection product through Sentinel' -Notes 'Added in 1.14.0. Hosts seen in the last 7 days in the CrowdStrike tables or in CommonSecurityLog with a vendor or product matching -EdrVendorPattern. EW.1-GAPS matches them by host name to Azure virtual machines that are not onboarded to Defender for Endpoint. EMPTY means the workspaces hold no such telemetry, which is a reading, not a gap. Internal: names hosts, never embedded in the client report.' -Query @'
+union withsource = SourceTable isfuzzy = true CrowdStrike*, CommonSecurityLog
+| where TimeGenerated > ago(7d)
+| extend Product = tolower(strcat(SourceTable, " ", tostring(column_ifexists("DeviceVendor", "")), " ", tostring(column_ifexists("DeviceProduct", ""))))
+| where Product matches regex @"({{EDR_VENDOR}})"
+| extend Host = tolower(case(isnotempty(tostring(column_ifexists("ComputerName", ""))),   tostring(column_ifexists("ComputerName", "")),
+                             isnotempty(tostring(column_ifexists("DeviceName", ""))),     tostring(column_ifexists("DeviceName", "")),
+                             isnotempty(tostring(column_ifexists("SourceHostName", ""))), tostring(column_ifexists("SourceHostName", "")),
+                             isnotempty(tostring(column_ifexists("HostName", ""))),       tostring(column_ifexists("HostName", "")),
+                             tostring(column_ifexists("Computer", ""))))
+| where isnotempty(Host)
+| extend Host = tostring(split(Host, ".")[0])
+| summarize Events = count(), LastSeen = max(TimeGenerated), Sources = make_set(SourceTable) by Host
+| order by Host asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'EW.1-GAPS' -Phase 'P2 Endpoint' -Engine 'DERIVED' -Title 'Azure virtual machines not reporting to Defender for Endpoint, with the reason' -Notes 'Added in 1.14.0. Built from EW.1-VMS, EW.1-DEVICES, EW.1-EDR, EW.1-EDR-HOSTS and P0.6-APPLIANCES, no query. One row per Azure virtual machine that is not onboarded with an active sensor, with the reason: covered by a third-party product, network virtual appliance, operating system not supported, deallocated, discovered only, not discovered, sensor not active, or not onboarded with no endpoint detection found. The report counts a machine covered by a third-party product as protected and explains the difference between the sensor and onboarding figures. Internal: names machines, the report embeds counts by reason only.' -Derive { param($Ctx) New-EbrOnboardingGapResult -Ctx $Ctx }))
+
     $q.Add((New-EbrQuery -Id 'EW.3' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'Security configuration checks, every control in one pass' -Notes 'Select rows by ConfigurationName per the runbook table, then pin the ConfigurationId values. A control spanning several checks grades on its weakest check.' -Query @'
 DeviceTvmSecureConfigurationAssessment
 | summarize arg_max(Timestamp, *) by DeviceId, ConfigurationId
@@ -1503,10 +1620,11 @@ DeviceTvmSecureConfigurationAssessment
     DeviceInfo
     | where Timestamp between (ago(7d) .. now())
     | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
     | where AzureResourceId !contains "{{MRG}}"
   ) on DeviceId
 | join kind=inner DeviceTvmSecureConfigurationAssessmentKB on ConfigurationId
-| extend Scope = iff(isnotempty(AzureResourceId), "Azure VM", "Other device")
+| extend Scope = "Azure VM"
 | summarize Devices   = dcount(DeviceId),
             Compliant = dcountif(DeviceId, tobool(IsCompliant))
           by Scope, ConfigurationId, ConfigurationName
@@ -1542,6 +1660,7 @@ DeviceTvmSecureConfigurationAssessment
     | where Timestamp between (ago(7d) .. now())
     | summarize arg_max(Timestamp, DeviceName, OSPlatform, OSVersion, MachineGroup, AzureResourceId)
               by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
     | where AzureResourceId !contains "{{MRG}}"
   ) on DeviceId
 | extend ResourceGroup = tostring(split(AzureResourceId, "/")[4]),
@@ -1555,28 +1674,43 @@ DeviceTvmSecureConfigurationAssessment
 DeviceEvents
 | where Timestamp between (ago(30d) .. now())
 | where ActionType startswith "Asr"
-| join kind=leftouter (
+| join kind=inner (
     DeviceInfo
     | where Timestamp between (ago(7d) .. now())
     | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
   ) on DeviceId
 | where AzureResourceId !contains "{{MRG}}"
 | extend Mode  = iff(ActionType endswith "Blocked", "Block", "Audit"),
-         Scope = iff(isnotempty(AzureResourceId), "Azure VM", "Other device")
+         Scope = "Azure VM"
 | summarize Events = count(), Devices = dcount(DeviceId) by Scope, ActionType, Mode
 | order by Scope asc, Events desc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'EW.6' -Phase 'P2 Endpoint' -Engine 'ARG' -Title 'Pending patches from Update Manager' -Query @'
+    # Machines whose tags record patching as waived or client owned leave EW.6 and EW.10 (1.14.0).
+    # Each query sets PatchExcluded to false first, so an empty -PatchExclusionTagPattern, which
+    # drops the token line, leaves every machine in.
+    $patchTagJoin = @'
+| join kind=leftouter (
+    resources
+    | where type in~ ("microsoft.compute/virtualmachines", "microsoft.hybridcompute/machines")
+    | extend PatchExcluded = false
+    | extend PatchExcluded = tolower(tostring(tags)) matches regex @"{{PATCH_EXCLUDED}}"
+    | project MachineId = tolower(id), PatchExcluded
+  ) on MachineId
+| where not(coalesce(PatchExcluded, false))   // patching waived or client owned by tag, see EW.10-EXCLUDED
+'@
+    $q.Add((New-EbrQuery -Id 'EW.6' -Phase 'P2 Endpoint' -Engine 'ARG' -Title 'Pending patches from Update Manager' -Notes 'Machines whose tags record patching as waived or client owned are left out since 1.14.0 (EW.10-EXCLUDED names them).' -Query (@'
 patchassessmentresources
 | where type in~ ("microsoft.compute/virtualmachines/patchassessmentresults/softwarepatches",
                   "microsoft.hybridcompute/machines/patchassessmentresults/softwarepatches")
 | where id !contains "{{MRG}}"
 | extend MachineId      = tostring(split(tolower(id), "/patchassessmentresults")[0]),
          Classification = tostring(properties.classifications[0])
+'@ + "`n" + $patchTagJoin + "`n" + @'
 | summarize PendingPatches = count(), Machines = dcount(MachineId) by Classification
 | order by PendingPatches desc
-'@))
+'@)))
 
     $q.Add((New-EbrQuery -Id 'EW.7' -Phase 'P2 Endpoint' -Engine 'ARG' -Title 'Trusted Launch, Secure Boot and vTPM' -Notes 'Grade on the DFC.1 rows (supported machines only). EW.7-DETAIL is the itemized list. Network virtual appliances (P0.6-APPLIANCES) are left out because their vendor images do not support Trusted Launch.' -Query @'
 resources
@@ -1639,19 +1773,19 @@ guestconfigurationresources
     #endregion
 
     #region Phase 2 Network and Boundary
-    $q.Add((New-EbrQuery -Id 'EW.10' -Phase 'P2 Endpoint' -Engine 'ARG' -Title 'Patch cadence from Update Manager' -Notes 'A machine is within cadence when it has no pending Critical or Security patch published more than the agreed cadence ago (-PatchCadenceDays, default 30). Machines never assessed are not in the denominator: compare Machines with the VM count in DP.4.' -Query @'
+    $q.Add((New-EbrQuery -Id 'EW.10' -Phase 'P2 Endpoint' -Engine 'ARG' -Title 'Patch cadence from Update Manager' -Notes 'A machine is within cadence when it has no pending Critical or Security patch published more than the agreed cadence ago (-PatchCadenceDays, default 30). Machines never assessed are not in the denominator: compare Machines with the VM count in DP.4. Machines whose tags record patching as waived or client owned are left out since 1.14.0 (-PatchExclusionTagPattern, EW.10-EXCLUDED names them).' -Query (@'
 patchassessmentresources
 | where type in~ ("microsoft.compute/virtualmachines/patchassessmentresults",
                   "microsoft.hybridcompute/machines/patchassessmentresults")
 | where id !contains "{{MRG}}"
-| extend MachineId   = tolower(tostring(split(id, "/patchassessmentresults")[0])),
+| extend MachineId   = tostring(split(tolower(id), "/patchassessmentresults")[0]),
          AssessedUtc = todatetime(properties.lastModifiedDateTime)
 | join kind=leftouter (
     patchassessmentresources
     | where type in~ ("microsoft.compute/virtualmachines/patchassessmentresults/softwarepatches",
                       "microsoft.hybridcompute/machines/patchassessmentresults/softwarepatches")
     | where id !contains "{{MRG}}"
-    | extend MachineId      = tolower(tostring(split(id, "/patchassessmentresults")[0])),
+    | extend MachineId      = tostring(split(tolower(id), "/patchassessmentresults")[0]),
              Classification = tostring(properties.classifications[0]),
              PublishedUtc   = todatetime(properties.publishedDateTime)
     | where Classification in~ ("Critical", "Security")
@@ -1659,15 +1793,29 @@ patchassessmentresources
     | summarize OverduePatches = count() by MachineId
   ) on MachineId
 | extend OverduePatches = coalesce(OverduePatches, 0)
+'@ + "`n" + $patchTagJoin + "`n" + @'
 | summarize Machines         = count(),
             WithinCadence    = countif(OverduePatches == 0),
             OverduePatches   = sum(OverduePatches),
             AssessedWithin7d = countif(AssessedUtc > ago(7d))
+'@)))
+
+    $q.Add((New-EbrQuery -Id 'EW.10-EXCLUDED' -Phase 'P2 Endpoint' -Engine 'ARG' -Title 'Machines left out of the patch measures by tag' -Notes 'Added in 1.14.0. Virtual machines and Arc machines whose tags record patching as waived or client owned (-PatchExclusionTagPattern). They leave EW.6 and EW.10. The report embeds the count only. Internal: names machines.' -Query @'
+resources
+| where type in~ ("microsoft.compute/virtualmachines", "microsoft.hybridcompute/machines")
+| where id !contains "{{MRG}}"
+| extend TagText = tolower(tostring(tags))
+| extend PatchExcluded = false, MatchedTag = ""
+| extend PatchExcluded = TagText matches regex @"{{PATCH_EXCLUDED}}"
+| extend MatchedTag = extract(@"{{PATCH_EXCLUDED}}", 0, TagText)
+| where PatchExcluded
+| project Name = name, ResourceType = tolower(type), resourceGroup, subscriptionId, MatchedTag, ResourceId = tolower(id)
+| order by resourceGroup asc, Name asc
 '@))
 
     $q.Add((New-EbrQuery -Id 'EW.12' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'Credential protection per device' -Notes 'LSA protection (scid-25, or scid-102 on Windows 11 22H2 and later) and WDigest credential caching off (scid-57). A device counts only when every applicable check passes.' -Query (New-EbrDeviceCheckQuery -ConfigurationIds 'scid-25', 'scid-102', 'scid-57')))
 
-    $q.Add((New-EbrQuery -Id 'EW.14' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'Remote Desktop hardening per device' -Notes 'Remote Desktop security level TLS (scid-24) and Network Level Authentication (scid-45). Drive and clipboard redirection are not secure configuration checks; read them from Intune or machine configuration.' -Query (New-EbrDeviceCheckQuery -ConfigurationIds 'scid-24', 'scid-45')))
+    $q.Add((New-EbrQuery -Id 'EW.14' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'Remote Desktop hardening per device' -Notes 'Remote Desktop security level TLS (scid-24) and Network Level Authentication (scid-45). Drive and clipboard redirection are not secure configuration checks. Read them from Intune or machine configuration.' -Query (New-EbrDeviceCheckQuery -ConfigurationIds 'scid-24', 'scid-45')))
 
     $q.Add((New-EbrQuery -Id 'EW.15' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'Tamper protection per device' -Notes 'Turn on Tamper Protection (scid-2003). The document numbers this EW.8, which the collector already uses for Guest Configuration.' -Query (New-EbrDeviceCheckQuery -ConfigurationIds 'scid-2003')))
 
@@ -1785,7 +1933,7 @@ Usage
 
     $q.Add((New-EbrQuery -Id 'NB.11' -Phase 'P2 Network' -Engine 'AH' -Title 'NTLMv2 only per device' -Notes 'LAN Manager authentication level set to send NTLMv2 only and refuse LM and NTLM (scid-72). Dependent systems show up in IdentityLogonEvents, which the Defender for Identity connector brings into Sentinel.' -Query (New-EbrDeviceCheckQuery -ConfigurationIds 'scid-72')))
 
-    $q.Add((New-EbrQuery -Id 'DP.1' -Phase 'P2 Data protection' -Engine 'ARG' -Title 'Storage account protection' -Notes 'AnonymousBlobOff is anonymous blob reads; PublicNetworkOff is network reachability. Name the property on the slide.' -Query @'
+    $q.Add((New-EbrQuery -Id 'DP.1' -Phase 'P2 Data protection' -Engine 'ARG' -Title 'Storage account protection' -Notes 'AnonymousBlobOff is anonymous blob reads. PublicNetworkOff is network reachability. Name the property on the slide.' -Query @'
 resources
 | where type =~ "microsoft.storage/storageaccounts"
 | where id !contains "{{MRG}}"
@@ -1798,7 +1946,7 @@ resources
             SharedKeyOff     = countif(tobool(properties.allowSharedKeyAccess) == false)
 '@))
 
-    $q.Add((New-EbrQuery -Id 'DP.1-CONTAINERS' -Phase 'P2 Data protection' -Engine 'STORAGE-CONTAINERS' -Title 'Blob container anonymous access levels' -Notes 'Added in 1.11.0. Resource Graph does not index blob containers, so the collector lists them per storage account with GET <account>/blobServices/default/containers (Reader is enough). One row per account: the account-level anonymous access setting, the containers, the containers whose own access level is Blob or Container, and how many of those are readable anonymously today because the account setting allows it. Containers are read in every account, so a public container under an account that blocks anonymous access still counts against the defense in depth control. Internal: names accounts and containers, the report embeds counts only.' -Query @'
+    $q.Add((New-EbrQuery -Id 'DP.1-CONTAINERS' -Phase 'P2 Data protection' -Engine 'STORAGE-CONTAINERS' -Title 'Blob container anonymous access levels' -Notes 'Added in 1.11.0. Resource Graph does not index blob containers, so the collector lists them per storage account with a GET on the blobServices/default/containers path of each account (Reader is enough). One row per account: the account-level anonymous access setting, the containers, the containers whose own access level is Blob or Container, and how many of those are readable anonymously today because the account setting allows it. Containers are read in every account, so a public container under an account that blocks anonymous access still counts against the defense in depth control. Internal: names accounts and containers, the report embeds counts only.' -Query @'
 resources
 | where type =~ "microsoft.storage/storageaccounts"
 | where id !contains "{{MRG}}"
@@ -2041,19 +2189,20 @@ IdentityLogonEvents
 | order by LastEvent asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'DR.5' -Phase 'P2 Detection and response' -Engine 'AH' -Title 'Vulnerability assessment coverage of onboarded devices' -Query @'
+    $q.Add((New-EbrQuery -Id 'DR.5' -Phase 'P2 Detection and response' -Engine 'AH' -Title 'Vulnerability assessment coverage of onboarded Azure virtual machines' -Notes 'Azure virtual machines only since 1.14.0.' -Query @'
 DeviceInfo
 | where Timestamp between (ago(7d) .. now())
 | summarize arg_max(Timestamp, OnboardingStatus, AzureResourceId) by DeviceId
 | where OnboardingStatus == "Onboarded"
+| where isnotempty(AzureResourceId)   // Azure virtual machines only
 | where AzureResourceId !contains "{{MRG}}"
 | join kind=leftouter (
     DeviceTvmSoftwareInventory
     | distinct DeviceId
     | extend HasInventory = true
   ) on DeviceId
-| summarize Onboarded = count(), Assessed = countif(HasInventory == true)
-          by Scope = iff(isnotempty(AzureResourceId), "Azure VM", "Other device")
+| extend Scope = "Azure VM"
+| summarize Onboarded = count(), Assessed = countif(HasInventory == true) by Scope
 '@))
 
     $q.Add((New-EbrQuery -Id 'DR.6' -Phase 'P2 Detection and response' -Engine 'ARG' -Title 'Diagnostic and audit logging gaps' -Notes 'Summed Unhealthy is the Tier 3 Enable audit logging figure. Cross-check against the POS.3 row.' -Query @'
@@ -2122,11 +2271,12 @@ SecurityIncident
 | order by ClosedTime desc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'DR.12' -Phase 'P2 Detection and response' -Engine 'AH' -Title 'Onboarded devices by device group' -Notes 'Device group membership. The automation level of each group (Full, Semi, No automated response) is read at Defender portal > System > Settings > Endpoints > Device groups; there is no documented API for it.' -Query @'
+    $q.Add((New-EbrQuery -Id 'DR.12' -Phase 'P2 Detection and response' -Engine 'AH' -Title 'Onboarded Azure virtual machines by device group' -Notes 'Device group membership, Azure virtual machines only since 1.14.0. The automation level of each group (Full, Semi, No automated response) is read at Defender portal > System > Settings > Endpoints > Device groups. There is no documented API for it.' -Query @'
 DeviceInfo
 | where Timestamp between (ago(30d) .. now())
 | where OnboardingStatus == "Onboarded"
 | summarize arg_max(Timestamp, MachineGroup, OSPlatform, AzureResourceId) by DeviceId
+| where isnotempty(AzureResourceId)   // Azure virtual machines only
 | where AzureResourceId !contains "{{MRG}}"
 | extend MachineGroup = iff(isempty(MachineGroup), "(no group)", MachineGroup)
 | summarize Devices = count() by MachineGroup
@@ -2232,7 +2382,7 @@ GET /v1.0/security/secureScores?$top=90
 GET /v1.0/security/secureScoreControlProfiles
 Permission: SecurityEvents.Read.All
 Also writes POS.6-TREND (one row per daily snapshot) and POS.6-CATEGORIES (points by category).
-'@ -Notes 'Portal fallback: Defender portal > Exposure management > Secure score: record score, max and read date; export History (90 days), Recommended actions (category points) and the Comparison view (peer median). POS.6-SUB adds the device secure score and exposure score.'))
+'@ -Notes 'Portal fallback: Defender portal > Exposure management > Secure score: record score, max and read date. Export History (90 days), Recommended actions (category points) and the Comparison view (peer median). POS.6-SUB adds the device secure score and exposure score.'))
 
     $q.Add((New-EbrQuery -Id 'POS.6-SUB' -Phase 'P3 Posture' -Engine 'DEFENDER-SCORES' -Title 'Device secure score and exposure score (substitute)' -Notes 'Substitute for part of POS.6 from the Defender API: Microsoft Secure Score for Devices and the exposure score. Not the tenant Secure Score.'))
 
@@ -2264,7 +2414,7 @@ SecurityRecommendation
     #endregion
 
     #region Phase 4
-    $q.Add((New-EbrQuery -Id 'BKL.1' -Phase 'P4 Backlog' -Engine 'AH' -Title 'Exploitable vulnerabilities open' -Notes 'Current state only. Month-by-month stories cite the CyberSOC report.' -Query @'
+    $q.Add((New-EbrQuery -Id 'BKL.1' -Phase 'P4 Backlog' -Engine 'AH' -Title 'Exploitable vulnerabilities open on Azure virtual machines' -Notes 'Current state only, Azure virtual machines only since 1.14.0. Month-by-month stories cite the CyberSOC report.' -Query @'
 DeviceTvmSoftwareVulnerabilities
 | join kind=inner (
     DeviceTvmSoftwareVulnerabilitiesKB
@@ -2275,9 +2425,10 @@ DeviceTvmSoftwareVulnerabilities
     DeviceInfo
     | where Timestamp between (ago(7d) .. now())
     | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
     | where AzureResourceId !contains "{{MRG}}"
   ) on DeviceId
-| extend Scope    = iff(isnotempty(AzureResourceId), "Azure VM", "Other device"),
+| extend Scope    = "Azure VM",
          Software = iff(SoftwareName startswith "windows" or SoftwareName contains "linux",
                         "Operating system", "Application")
 | summarize ExploitableCves = dcount(CveId), Devices = dcount(DeviceId)
@@ -2352,6 +2503,181 @@ function Get-EbrReadDate {
     $t.ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
 }
 
+# Why an Azure virtual machine is not reporting to Defender for Endpoint with an active sensor
+# (EW.1-GAPS, 1.14.0). Eligible: the machine belongs in the onboarding denominator. Covered: it
+# counts as protected by endpoint detection. The order is the order the reasons are tested in.
+$script:EbrGapReasons = @(
+    @{ Key = 'Appliance';    Reason = 'Network virtual appliance, cannot run a sensor';      Eligible = $false; Covered = $false }
+    @{ Key = 'ThirdParty';   Reason = 'Covered by a third-party endpoint detection product'; Eligible = $true;  Covered = $true }
+    @{ Key = 'Unsupported';  Reason = 'Operating system not supported by the sensor';        Eligible = $false; Covered = $false }
+    @{ Key = 'Deallocated';  Reason = 'Deallocated or stopped at collection';                Eligible = $false; Covered = $false }
+    @{ Key = 'Discovered';   Reason = 'Discovered only, insufficient information';           Eligible = $false; Covered = $false }
+    @{ Key = 'NotSeen';      Reason = 'Not discovered by Defender for Endpoint';             Eligible = $true;  Covered = $false }
+    @{ Key = 'Sensor';       Reason = 'Onboarded, sensor not active';                        Eligible = $true;  Covered = $true }
+    @{ Key = 'NotOnboarded'; Reason = 'Not onboarded, no endpoint detection found';          Eligible = $true;  Covered = $false }
+)
+
+function Get-EbrEdrProductName {
+    # The product a piece of evidence names, in the words the report uses.
+    param([string]$Text)
+    switch -Regex ([string]$Text) {
+        '(?i)crowdstrike|falcon' { return 'CrowdStrike Falcon' }
+        '(?i)sentinelone'        { return 'SentinelOne' }
+        '(?i)carbon ?black'      { return 'Carbon Black' }
+        '(?i)cortex'             { return 'Cortex XDR' }
+        '(?i)cybereason'         { return 'Cybereason' }
+        '(?i)tanium'             { return 'Tanium' }
+        '(?i)trellix'            { return 'Trellix' }
+        '(?i)cylance'            { return 'Cylance' }
+    }
+    'a third-party endpoint detection product'
+}
+
+function Get-EbrOnboardingGapRows {
+    <#
+    .SYNOPSIS
+        One row per Azure virtual machine that is not onboarded to Defender for Endpoint with an
+        active sensor, with the reason. Pure: takes the collected row sets and touches nothing.
+    .PARAMETER Known
+        EW.1-VMS rows (every Azure VM Defender has seen), or EW.1-DEVICES rows on an older pack.
+    .PARAMETER Azure
+        EW.1-EDR rows: every Azure VM in Resource Graph with its extensions, EDR assessment and power state.
+    .PARAMETER Hosts
+        EW.1-EDR-HOSTS rows: hosts reporting to a third-party product through Sentinel.
+    .PARAMETER Appliances
+        P0.6-APPLIANCES rows.
+    .PARAMETER KnownIsComplete
+        $true when Known lists every Azure VM Defender has seen (EW.1-VMS), so a machine in Azure
+        that is absent from it was never discovered. $false with EW.1-DEVICES, which lists gaps only.
+    #>
+    param($Known, $Azure, $Hosts, $Appliances, [bool]$KnownIsComplete = $true)
+    $lower = { param($v) ([string]$v).Trim().ToLowerInvariant() }
+    $short = { param($v) ((& $lower $v) -split '\.')[0] }
+    $applianceIds = @{}
+    foreach ($a in @($Appliances)) { $id = & $lower (Get-EbrProp $a 'ResourceId'); if ($id) { $applianceIds[$id] = $true } }
+    $hostIndex = @{}
+    foreach ($h in @($Hosts)) { $n = & $short (Get-EbrProp $h 'Host'); if ($n) { $hostIndex[$n] = $h } }
+    $azureIndex = @{}
+    foreach ($v in @($Azure)) { $id = & $lower (Get-EbrProp $v 'VmId'); if ($id) { $azureIndex[$id] = $v } }
+    $reasonOf = { param($key) $script:EbrGapReasons | Where-Object { $_.Key -eq $key } | Select-Object -First 1 }
+    $build = {
+        param([string]$Id, $Device, $Vm)
+        $status = [string](Get-EbrProp $Device 'OnboardingStatus')
+        $sensor = [string](Get-EbrProp $Device 'SensorHealthState')
+        $platform = [string](Get-EbrProp $Device 'OSPlatform')
+        if (-not $platform -and $Vm) { $platform = [string](Get-EbrProp $Vm 'OsType') }
+        $name = [string](Get-EbrProp $Device 'DeviceName')
+        if (-not $name -and $Vm) { $name = [string](Get-EbrProp $Vm 'VmName') }
+        $power = ([string](Get-EbrProp $Vm 'PowerState')).Replace('PowerState/', '')
+        $extensions = @(Get-EbrProp $Vm 'ThirdPartyExtensions' | ForEach-Object { [string]$_ } | Where-Object { $_ })
+        $assessment = @(Get-EbrProp $Vm 'EdrAssessment' | ForEach-Object { [string]$_ } | Where-Object { $_ })
+        $defenderExt = [int](Get-EbrSum @($Vm) 'DefenderExtension')
+        $sentinelHost = $hostIndex[(& $short $name)]
+        $isAppliance = $applianceIds.ContainsKey($Id) -or (Test-EbrTrue (Get-EbrProp $Vm 'Appliance')) -or ($platform -match ('(?i)' + $script:EbrNetworkDevicePattern))
+        # Third-party evidence, strongest first: an extension, telemetry in Sentinel, then Defender for Cloud
+        # reporting an EDR solution installed on a machine that Defender for Endpoint says is not onboarded.
+        $evidence = ''
+        $sources = @(Get-EbrProp $sentinelHost 'Sources' | ForEach-Object { [string]$_ } | Where-Object { $_ })
+        $hostSeen = [string](Get-EbrProp $sentinelHost 'LastSeen')
+        if ($hostSeen.Length -gt 10) { $hostSeen = $hostSeen.Substring(0, 10) }
+        if ($extensions.Count) { $evidence = 'Extension ' + ($extensions -join ', ') }
+        elseif ($sentinelHost) { $evidence = 'Reporting through Sentinel ({0}), last seen {1}' -f ($sources -join ', '), $hostSeen }
+        elseif ($status -ne 'Onboarded' -and $defenderExt -eq 0 -and ($assessment -contains 'Healthy')) { $evidence = 'Defender for Cloud reports an EDR solution installed' }
+        $key = if ($isAppliance) { 'Appliance' }
+        elseif ($evidence) { 'ThirdParty' }
+        elseif ($status -eq 'Unsupported') { 'Unsupported' }
+        elseif ($power -match '(?i)deallocat|stopp') { 'Deallocated' }
+        elseif ($status -eq 'Insufficient info') { 'Discovered' }
+        elseif ($null -eq $Device) { 'NotSeen' }
+        elseif ($status -eq 'Onboarded') { 'Sensor' }
+        else { 'NotOnboarded' }
+        $r = & $reasonOf $key
+        $product = if ($key -eq 'ThirdParty') { Get-EbrEdrProductName ($evidence + ' ' + ($sources -join ' ')) } else { '' }
+        $countedAs = if ($null -eq $Device) { 'NotSeen' } elseif ($status -eq 'Onboarded') { 'Onboarded' } elseif ($status -eq 'Can be onboarded') { 'CanBeOnboarded' } else { 'Other' }
+        $gap = if ($null -eq $Device) { 'Not discovered' } elseif ($status -ne 'Onboarded') { 'Not onboarded' } else { 'Sensor ' + $sensor }
+        [pscustomobject]@{
+            DeviceName = $name
+            VmName = [string](Get-EbrProp $Vm 'VmName')
+            resourceGroup = [string](Get-EbrProp $Vm 'resourceGroup')
+            subscriptionId = [string](Get-EbrProp $Vm 'subscriptionId')
+            OSPlatform = $platform
+            OnboardingStatus = $(if ($null -eq $Device) { 'Not discovered' } else { $status })
+            SensorHealthState = $sensor
+            PowerState = $power
+            Gap = $gap
+            Reason = $r.Reason
+            Product = $product
+            Evidence = $evidence
+            CountedAs = $countedAs
+            Eligible = [bool]$r.Eligible
+            Covered = [bool]$r.Covered
+            LastSeen = [string](Get-EbrProp $Device 'LastSeen')
+            AzureResourceId = $Id
+        }
+    }
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $seen = @{}
+    foreach ($d in @($Known)) {
+        if ($null -eq $d) { continue }
+        $id = & $lower (Get-EbrProp $d 'AzureResourceId')
+        if (-not $id -or $seen.ContainsKey($id)) { continue }
+        $seen[$id] = $true
+        if ([string](Get-EbrProp $d 'OnboardingStatus') -eq 'Onboarded' -and [string](Get-EbrProp $d 'SensorHealthState') -eq 'Active') { continue }
+        $rows.Add((& $build $id $d $azureIndex[$id]))
+    }
+    if ($KnownIsComplete) {
+        foreach ($v in @($Azure)) {
+            if ($null -eq $v) { continue }
+            $id = & $lower (Get-EbrProp $v 'VmId')
+            if (-not $id -or $seen.ContainsKey($id)) { continue }
+            $seen[$id] = $true
+            $rows.Add((& $build $id $null $v))
+        }
+    }
+    $order = @{}; $i = 0; foreach ($r in $script:EbrGapReasons) { $order[$r.Reason] = $i; $i++ }
+    @($rows | Sort-Object { $order[$_.Reason] }, { $_.DeviceName })
+}
+
+function New-EbrOnboardingGapResult {
+    # EW.1-GAPS from the results already collected. Defender's own device list decides which
+    # machines are gaps, so without it the result is UNAVAILABLE rather than a list of every VM.
+    param($Ctx)
+    $columns = @('DeviceName', 'VmName', 'resourceGroup', 'subscriptionId', 'OSPlatform', 'OnboardingStatus', 'SensorHealthState', 'PowerState', 'Gap', 'Reason', 'Product', 'Evidence', 'CountedAs', 'Eligible', 'Covered', 'LastSeen', 'AzureResourceId')
+    $source = 'Derived from EW.1-VMS, EW.1-EDR, EW.1-EDR-HOSTS and P0.6-APPLIANCES'
+    $known = Get-EbrRows $Ctx.Results 'EW.1-VMS'
+    $complete = $null -ne $known
+    if (-not $complete) { $known = Get-EbrRows $Ctx.Results 'EW.1-DEVICES' }
+    if ($null -eq $known) {
+        return New-EbrResult -ResultId 'EW.1-GAPS' -Status 'UNAVAILABLE' -Source $source -Columns $columns -Detail 'Not a zero: Defender for Endpoint did not return its device list (EW.1-VMS, EW.1-DEVICES), so the machines not reporting to it cannot be named.'
+    }
+    $azure = Get-EbrRows $Ctx.Results 'EW.1-EDR'
+    $hosts = Get-EbrRows $Ctx.Results 'EW.1-EDR-HOSTS'
+    $appliances = Get-EbrRows $Ctx.Results 'P0.6-APPLIANCES'
+    $rows = @(Get-EbrOnboardingGapRows -Known $known -Azure $azure -Hosts $hosts -Appliances $appliances -KnownIsComplete ($complete -and $null -ne $azure))
+    $notes = [System.Collections.Generic.List[string]]::new()
+    if ($null -ne $azure) { $notes.Add(('{0} Azure virtual machines in Resource Graph' -f @($azure).Count)) } else { $notes.Add('EW.1-EDR was not available, so machines Defender has never discovered are not listed and no extension evidence was read') }
+    if ($complete) {
+        $active = @($known | Where-Object { [string](Get-EbrProp $_ 'OnboardingStatus') -eq 'Onboarded' -and [string](Get-EbrProp $_ 'SensorHealthState') -eq 'Active' }).Count
+        $notes.Add(('{0} seen by Defender for Endpoint, {1} onboarded with an active sensor' -f @($known).Count, $active))
+    }
+    else { $notes.Add('Built from EW.1-DEVICES (gaps only), so machines Defender has never discovered are not listed') }
+    if ($null -eq $hosts) { $notes.Add('EW.1-EDR-HOSTS was not available, so Sentinel telemetry was not matched') }
+    $byReason = @($rows | Group-Object Reason | Sort-Object Count -Descending | ForEach-Object { '{0}: {1}' -f $_.Name, $_.Count })
+    if ($byReason.Count) { $notes.Add('Not reporting with an active sensor, by reason: ' + ($byReason -join ', ')) } else { $notes.Add('Every Azure virtual machine Defender has seen is onboarded with an active sensor') }
+    $status = if ($rows.Count) { 'OK' } else { 'EMPTY' }
+    New-EbrResult -ResultId 'EW.1-GAPS' -Status $status -Rows $rows -Columns $columns -Source $source -Detail (($notes -join '. ') + '.')
+}
+
+function Get-EbrGapSummary {
+    # One sentence for the worksheet note: the EW.1-GAPS reasons, or nothing.
+    param([hashtable]$Results)
+    $rows = Get-EbrRows $Results 'EW.1-GAPS'
+    if ($null -eq $rows) { return '' }
+    if ($rows.Count -eq 0) { return ' Every Azure virtual machine seen by Defender is onboarded with an active sensor.' }
+    $parts = @($rows | Group-Object Reason | Sort-Object Count -Descending | ForEach-Object { '{0} ({1})' -f $_.Name.ToLowerInvariant(), $_.Count })
+    ' Not reporting with an active sensor: {0}. By reason: {1}.' -f $rows.Count, ($parts -join ', ')
+}
+
 function Get-EbrWorksheetSpec {
     # One entry per row of the runbook slide map, in the runbook's order. Each Derive block
     # returns @{ Value; Note; Source } or nothing, in which case the row points at the CSV.
@@ -2371,7 +2697,7 @@ function Get-EbrWorksheetSpec {
                 $type = [string](Get-EbrProp $_ 'UserType')
                 if (-not $type -or $type -eq '-1') { $type = 'Unknown type' }
                 '{0}: {1}' -f $type, (Format-EbrRatio ([double](Get-EbrProp $_ 'UsersChallenged')) ([double](Get-EbrProp $_ 'UsersSignedIn')))
-            }) -join '; '
+            }) -join ', '
         $all = Format-EbrRatio (Get-EbrSum $rows 'UsersChallenged') (Get-EbrSum $rows 'UsersSignedIn')
         if ($membersIn -gt 0) {
             # Collector 1.12.0 classifies each sign-in by its strongest MFA evidence and counts
@@ -2395,7 +2721,7 @@ function Get-EbrWorksheetSpec {
     $highOutcome = {
         param($R)
         $rows = Get-EbrRows $R 'OUT.3'; if ($null -eq $rows -or $rows.Count -eq 0) { return }
-        @{ Value = (($rows | ForEach-Object { '{0}: {1}' -f (Format-EbrMonth (Get-EbrProp $_ 'Month')), (Format-EbrNumber ([double](Get-EbrProp $_ 'High'))) }) -join '; ')
+        @{ Value = (($rows | ForEach-Object { '{0}: {1}' -f (Format-EbrMonth (Get-EbrProp $_ 'Month')), (Format-EbrNumber ([double](Get-EbrProp $_ 'High'))) }) -join ', ')
            Note  = 'High severity incidents created per month. Compare full months only.' }
     }
 
@@ -2478,7 +2804,7 @@ function Get-EbrWorksheetSpec {
                    Note  = 'First full month against last full month.' } } }
         @{ Slide = 'Tier 1'; Figure = 'Monthly incident volume'; Query = 'OUT.3'; Ids = @('OUT.3'); Window = $true; Derive = {
                 param($R) $rows = Get-EbrRows $R 'OUT.3'; if ($null -eq $rows) { return }
-                @{ Value = (($rows | ForEach-Object { '{0}: {1}' -f (Format-EbrMonth (Get-EbrProp $_ 'Month')), (Format-EbrNumber ([double](Get-EbrProp $_ 'Total'))) }) -join '; ')
+                @{ Value = (($rows | ForEach-Object { '{0}: {1}' -f (Format-EbrMonth (Get-EbrProp $_ 'Month')), (Format-EbrNumber ([double](Get-EbrProp $_ 'Total'))) }) -join ', ')
                    Note  = 'Total incidents created per month. Severity and classification split in results/OUT.3.csv.' } } }
         @{ Slide = 'Tier 1'; Figure = 'True positives detected and managed'; Query = 'OUT.4'; Ids = @('OUT.4'); Window = $true; Derive = {
                 param($R) $rows = Get-EbrRows $R 'OUT.4'; if ($null -eq $rows) { return }
@@ -2496,7 +2822,7 @@ function Get-EbrWorksheetSpec {
                 $isVm = { param($r) (Get-EbrProp $r 'Scope') -eq 'Azure VM' }
                 $vmOn = Get-EbrSum $rows 'Onboarded' $isVm; $vmCan = Get-EbrSum $rows 'CanBeOnboarded' $isVm
                 @{ Value = Format-EbrRatio $on ($on + $can)
-                   Note  = 'Onboarded over onboarded plus can be onboarded. Azure VMs: {0}. Sensor active over onboarded Azure VMs (DR-F1): {1}.' -f (Format-EbrRatio $vmOn ($vmOn + $vmCan)), (Format-EbrRatio (Get-EbrSum $rows 'SensorActive' $isVm) $vmOn) } } }
+                   Note  = 'Azure virtual machines only. Onboarded over onboarded plus can be onboarded: {0}. Sensor active over onboarded (DR-F1): {1}.{2}' -f (Format-EbrRatio $vmOn ($vmOn + $vmCan)), (Format-EbrRatio (Get-EbrSum $rows 'SensorActive' $isVm) $vmOn), (Get-EbrGapSummary $R) } } }
         @{ Slide = 'Tier 2'; Figure = 'MFA required at sign-in'; Query = 'IA.1'; Ids = @('IA.1'); Derive = $mfa }
         @{ Slide = 'Tier 2'; Figure = 'Workload protection coverage'; Query = 'Portal, DR.2'; Ids = @('DR.2'); Derive = {
                 param($R) $rows = Get-EbrRows $R 'DR.2'; if ($null -eq $rows -or $rows.Count -eq 0) { return }
@@ -2509,13 +2835,13 @@ function Get-EbrWorksheetSpec {
                 $weak = $checks | Sort-Object { [double](Get-EbrProp $_ 'PctCompliant') } | Select-Object -First 1
                 $every = ($checks | Sort-Object { [string](Get-EbrProp $_ 'Scope') }, { [string](Get-EbrProp $_ 'ConfigurationName') } | ForEach-Object {
                         '{0}, {1}: {2}' -f (Get-EbrProp $_ 'Scope'), (Get-EbrProp $_ 'ConfigurationName'), (Format-EbrRatio ([double](Get-EbrProp $_ 'Compliant')) ([double](Get-EbrProp $_ 'Devices')))
-                    }) -join '; '
+                    }) -join '. '
                 @{ Value = Format-EbrRatio ([double](Get-EbrProp $weak 'Compliant')) ([double](Get-EbrProp $weak 'Devices'))
                    Note  = 'Weakest check: {0} ({1}). A control spanning several checks grades on its weakest. Every check: {2}.' -f (Get-EbrProp $weak 'ConfigurationName'), (Get-EbrProp $weak 'Scope'), $every } } }
         @{ Slide = 'Tier 3'; Figure = 'Exploitable OS findings open'; Query = 'BKL.1'; Ids = @('BKL.1'); Derive = {
                 param($R) $rows = Get-EbrRows $R 'BKL.1'; if ($null -eq $rows) { return }
                 @{ Value = Format-EbrNumber (Get-EbrSum $rows 'ExploitableCves' { param($r) (Get-EbrProp $r 'Software') -eq 'Operating system' })
-                   Note  = 'Distinct exploitable CVEs on OS software, summed across scope and severity rows (a CVE on both Azure VMs and other devices counts twice). Current state only.' } } }
+                   Note  = 'Distinct exploitable CVEs on OS software across Azure virtual machines, summed across the severity rows. Current state only.' } } }
         @{ Slide = 'Tier 3'; Figure = 'Enable audit logging'; Query = 'DR.6'; Ids = @('DR.6'); Derive = {
                 param($R) $rows = Get-EbrRows $R 'DR.6'; if ($null -eq $rows) { return }
                 @{ Value = Format-EbrNumber (Get-EbrSum $rows 'Unhealthy'); Note = 'Resources unhealthy on the logging recommendations. Cross-check the POS.3 Enable auditing and logging row.' } } }
@@ -2599,7 +2925,7 @@ function Get-EbrWorksheetSpec {
         @{ Slide = 'Measured outcomes'; Figure = 'Storage closed to public access with secure transfer'; Query = 'DP.1'; Ids = @('DP.1'); Derive = {
                 param($R) $rows = Get-EbrRows $R 'DP.1'; if ($null -eq $rows -or $rows.Count -eq 0) { return }
                 $r0 = $rows[0]; $n = [double](Get-EbrProp $r0 'Accounts')
-                @{ Value = 'Public network access disabled {0}; secure transfer {1}' -f (Format-EbrRatio ([double](Get-EbrProp $r0 'PublicNetworkOff')) $n), (Format-EbrRatio ([double](Get-EbrProp $r0 'SecureTransfer')) $n)
+                @{ Value = 'Public network access disabled {0}, secure transfer {1}' -f (Format-EbrRatio ([double](Get-EbrProp $r0 'PublicNetworkOff')) $n), (Format-EbrRatio ([double](Get-EbrProp $r0 'SecureTransfer')) $n)
                    Note  = 'Anonymous blob access off: {0}. Name the property on the slide.' -f (Format-EbrRatio ([double](Get-EbrProp $r0 'AnonymousBlobOff')) $n) } } }
         @{ Slide = 'Measured outcomes'; Figure = 'Workload subnets segmented, x of y'; Query = 'NB.1'; Ids = @('NB.1'); Derive = {
                 param($R) $rows = Get-EbrRows $R 'NB.1'; if ($null -eq $rows) { return }
@@ -2857,7 +3183,7 @@ function Invoke-EbrRest {
             $wait = Get-EbrRetryAfter $_
             if (-not $wait) { $wait = [int]([math]::Pow(2, $attempt) * 2) }
             $wait = [math]::Min($wait, 60)
-            Write-EbrLog -Level WARNING -Component Http -Message ("{0} {1} returned {2}; retry {3} in {4}s" -f $Method, ($Uri -replace '\?.*$', ''), $status, $attempt, $wait)
+            Write-EbrLog -Level WARNING -Component Http -Message ("{0} {1} returned {2}, retry {3} in {4}s" -f $Method, ($Uri -replace '\?.*$', ''), $status, $attempt, $wait)
             Start-Sleep -Seconds $wait
         }
     }
@@ -4163,13 +4489,24 @@ function Invoke-EbrCatalogItem {
     if ($Item.Query) {
         $ticket = if ($Ctx.PSObject.Properties['TicketPattern']) { [string]$Ctx.TicketPattern } else { '' }
         $cadence = if ($Ctx.PSObject.Properties['PatchCadenceDays'] -and [int]$Ctx.PatchCadenceDays -ge 1) { [int]$Ctx.PatchCadenceDays } else { 30 }
-        $text = Expand-EbrQuery -Query $Item.Query -WindowStart $Ctx.WindowStart -WindowEnd $Ctx.WindowEnd -ManagedRgPattern $Ctx.ManagedRgPattern -TicketPattern $ticket -PatchCadenceDays $cadence
+        $patchTags = if ($Ctx.PSObject.Properties['PatchExclusionTagPattern']) { [string]$Ctx.PatchExclusionTagPattern } else { $script:EbrPatchExclusionTagPattern }
+        $edrVendors = if ($Ctx.PSObject.Properties['EdrVendorPattern']) { [string]$Ctx.EdrVendorPattern } else { '' }
+        $text = Expand-EbrQuery -Query $Item.Query -WindowStart $Ctx.WindowStart -WindowEnd $Ctx.WindowEnd -ManagedRgPattern $Ctx.ManagedRgPattern -TicketPattern $ticket -PatchCadenceDays $cadence -PatchExclusionTagPattern $patchTags -EdrVendorPattern $edrVendors
     }
     $elapsed = { $sw.Elapsed.TotalSeconds }
 
     switch ($Item.Engine) {
         'MANUAL' {
             return New-EbrResult -ResultId $Item.Id -Status 'MANUAL' -Source 'Portal' -Detail $Item.Notes
+        }
+        'DERIVED' {
+            # Built from results already in the pack. Nothing is queried.
+            try {
+                $r = & $Item.Derive $Ctx
+                $r.DurationSec = [math]::Round((& $elapsed), 1)
+                return $r
+            }
+            catch { return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Derived from collected results' -Detail $_.Exception.Message -DurationSec (& $elapsed) }
         }
         'ARG' {
             Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
@@ -4179,7 +4516,7 @@ function Invoke-EbrCatalogItem {
                 $detail = $r.Detail
                 if ($Item.LighthouseIncomplete -and $Ctx.AccessPath -eq 'Lighthouse') {
                     $status = 'PARTIAL'
-                    $detail = (@($detail, "Read through Lighthouse, which shows the managing tenant's delegations rather than the client's own role assignments, so this is incomplete. Sign in directly (az login --tenant <client domain>) and rerun.") | Where-Object { $_ }) -join ' '
+                    $detail = (@($detail, "Read through Lighthouse, which shows the managing tenant's delegations rather than the client's own role assignments, so this is incomplete. Sign in directly (az login --tenant followed by the client domain) and rerun.") | Where-Object { $_ }) -join ' '
                 }
                 return New-EbrResult -ResultId $Item.Id -Status $status -Rows $r.Rows -Columns $r.Columns -Source ('Resource Graph ({0})' -f $(if ($Ctx.AccessPath) { $Ctx.AccessPath.ToLowerInvariant() } else { 'direct' })) -Detail $detail -DurationSec (& $elapsed)
             }
@@ -4314,7 +4651,7 @@ function Invoke-EbrCatalogItem {
             return New-EbrResult -ResultId $Item.Id -Status $status -Rows $summary -Columns @('Scope', 'Metric', 'Value') -Source ('Sentinel ARM API, {0} workspace(s)' -f $all.Count) -Detail $detail -DurationSec (& $elapsed)
         }
         'STORAGE-CONTAINERS' {
-            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then GET <account>/blobServices/default/containers for each account, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
+            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the blobServices/default/containers path of each account, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
             $columns = @('subscriptionId', 'resourceGroup', 'Account', 'AccountAnonymousAccess', 'Containers', 'PublicContainers', 'ExposedContainers', 'PublicContainerNames', 'ReadStatus', 'ResourceId')
             try { $accounts = @((Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant).Rows) }
             catch { return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed) }
@@ -4412,7 +4749,7 @@ function Get-EbrPreflightWarnings {
     }
     $dup = Get-EbrRows $Ctx.Results 'P0.1-XDRDUP'
     if ($null -ne $dup -and $dup.Count -and [double](Get-EbrProp $dup[0] 'XdrIncidents') -eq 0) {
-        $w.Add('P0.1-XDRDUP: No Defender XDR incidents reached Sentinel in the last 365 days. The incident and alert figures (OUT.*) cover Defender for Cloud, Sentinel analytics and Identity Protection only; Defender for Endpoint, Office 365, Identity and Cloud Apps incidents are not in them. Say so on the outcome slides, or take those counts from the Defender portal.')
+        $w.Add('P0.1-XDRDUP: No Defender XDR incidents reached Sentinel in the last 365 days. The incident and alert figures (OUT.*) cover Defender for Cloud, Sentinel analytics and Identity Protection only. Defender for Endpoint, Office 365, Identity and Cloud Apps incidents are not in them. Say so on the outcome slides, or take those counts from the Defender portal.')
     }
     if ($null -ne $dup -and $dup.Count -and [double](Get-EbrProp $dup[0] 'InMultipleWorkspaces') -gt 0) {
         $w.Add(('P0.1-XDRDUP: {0} of {1} Defender XDR incidents appear in more than one workspace, so the combined OUT.1 and OUT.3 counts include them more than once. Use the BY-WORKSPACE files to pick one workspace per incident.' -f (Get-EbrProp $dup[0] 'InMultipleWorkspaces'), (Get-EbrProp $dup[0] 'XdrIncidents')))
@@ -4435,7 +4772,7 @@ function Get-EbrPreflightWarnings {
         if ($absentDevice.Count) { $w.Add("P0.4: Device tables did not resolve: $($absentDevice -join ', '). Grade EW-F1, EW-F2 and EW-D1 from Secure Score controls (POS.6) and footnote the substitution.") }
         if ($absentOther.Count) {
             if ([string]$Ctx.Results['P0.4'].Source -eq 'Defender Advanced Hunting') {
-                $w.Add("P0.4: $($absentOther -join ', ') are not exposed by the Defender for Endpoint hunting API that Azure CLI reaches, so their absence says nothing about whether the client has Defender for Office 365 or Defender for Identity. DP.7 and DR.4 come from Sentinel if it collects those tables; otherwise run queries/DP.7.kql and queries/DR.4.kql in Defender portal > Advanced hunting.")
+                $w.Add("P0.4: $($absentOther -join ', ') are not exposed by the Defender for Endpoint hunting API that Azure CLI reaches, so their absence says nothing about whether the client has Defender for Office 365 or Defender for Identity. DP.7 and DR.4 come from Sentinel if it collects those tables. Otherwise run queries/DP.7.kql and queries/DR.4.kql in Defender portal > Advanced hunting.")
             }
             else {
                 $w.Add("P0.4: The Sentinel workspaces hold no $($absentOther -join ', ') data. Run queries/DP.7.kql and queries/DR.4.kql in Defender portal > Advanced hunting.")
@@ -4505,11 +4842,11 @@ function New-EbrNotes {
     $unavailable = @($Ctx.Manifest | Where-Object { $_.Status -eq 'UNAVAILABLE' -and $_.ResultId -notin $graphIds } | ForEach-Object ResultId)
     if ($unavailable.Count) {
         $why = if ($Ctx.DefenderReason) { ' Advanced Hunting: ' + $Ctx.DefenderReason } else { '' }
-        $attention.Add('No data source, so no figure (these are not zeros): ' + ($unavailable -join ', ') + '.' + $why + ' Their queries are saved as queries/<ID>.kql to run by hand in Defender portal > Advanced hunting.')
+        $attention.Add('No data source, so no figure (these are not zeros): ' + ($unavailable -join ', ') + '.' + $why + ' Their queries are saved in the queries folder as ID.kql files to run by hand in Defender portal > Advanced hunting.')
     }
     if ($Ctx.DefenderAdvice) { $attention.Add('Defender access: ' + $Ctx.DefenderAdvice) }
     if ($Ctx.PSObject.Properties['GraphAvailable'] -and -not $Ctx.GraphAvailable -and $Ctx.GraphReason) {
-        $attention.Add('Microsoft Graph: ' + $Ctx.GraphReason + $(if ($Ctx.GraphAdvice) { ' ' + $Ctx.GraphAdvice } else { '' }) + ' Graph measures read UNAVAILABLE with their portal path; their substitutes still ran.')
+        $attention.Add('Microsoft Graph: ' + $Ctx.GraphReason + $(if ($Ctx.GraphAdvice) { ' ' + $Ctx.GraphAdvice } else { '' }) + ' Graph measures read UNAVAILABLE with their portal path. Their substitutes still ran.')
     }
     if ($Ctx.PSObject.Properties['GraphMissingScopes'] -and @($Ctx.GraphMissingScopes).Count) {
         $scopes = @($Ctx.GraphMissingScopes)
@@ -4524,7 +4861,7 @@ function New-EbrNotes {
     $manual = @($Ctx.Manifest | Where-Object Status -eq 'MANUAL' | ForEach-Object ResultId)
     if ($manual.Count) { $attention.Add('Manual portal readings still needed: ' + ($manual -join ', ') + '. Paths are in 00-manifest.csv and 01-worksheet.csv.') }
     $review = @($Worksheet | Where-Object Value -eq 'REVIEW' | ForEach-Object Figure)
-    if ($review.Count) { $attention.Add('Analyst calculation needed for: ' + ($review -join '; ') + '.') }
+    if ($review.Count) { $attention.Add('Analyst calculation needed for: ' + ($review -join ', ') + '.') }
     if ($attention.Count) {
         & $line '--- Attention Required ---'
         foreach ($a in $attention) { & $line ("  {0} {1}" -f $sym.Warn, $a) }
@@ -4542,6 +4879,7 @@ function Invoke-EbrMain {
         [string]$WindowStart, [string]$WindowEnd, [AllowEmptyString()][string]$ManagedRgPattern, [string]$TicketPattern,
         [string]$ClientName, [string]$OutputPath, [switch]$SkipExchange, [switch]$SkipDefender,
         [switch]$SkipGraph, [int]$PatchCadenceDays = 30,
+        [AllowEmptyString()][string]$PatchExclusionTagPattern, [AllowEmptyString()][string]$EdrVendorPattern = '',
         [switch]$SkipWorkspaceBreakdown, [switch]$DryRun,
         [switch]$SkipHtmlReport, [ValidateSet('Brief', 'Balanced', 'Detailed')][string]$ReportDepth = 'Balanced',
         [switch]$SkipSecOpsWorklist
@@ -4559,6 +4897,8 @@ function Invoke-EbrMain {
         DefenderAvailable = $false; DefenderReason = ''; DefenderAdvice = ''; FallbackChecked = $false; FallbackTables = $null
         GraphAvailable = $false; GraphReason = ''; GraphAdvice = ''; GraphCache = @{}; GraphMissingScopes = [System.Collections.Generic.List[string]]::new(); GraphPartial = [System.Collections.Generic.List[string]]::new()
         PatchCadenceDays = $(if ($PatchCadenceDays -ge 1) { $PatchCadenceDays } else { 30 })
+        PatchExclusionTagPattern = $(if ($PSBoundParameters.ContainsKey('PatchExclusionTagPattern')) { $PatchExclusionTagPattern } else { $script:EbrPatchExclusionTagPattern })
+        EdrVendorPattern = $(if ([string]::IsNullOrWhiteSpace($EdrVendorPattern)) { $script:EbrEdrVendorPattern } else { $EdrVendorPattern })
         AccessPath = ''; AccessDescription = ''
         WindowStart = $null; WindowEnd = $null; WindowBasis = ''; ManagedRgPattern = $ManagedRgPattern
         TicketPattern = $(if ([string]::IsNullOrWhiteSpace($TicketPattern)) { $script:EbrTicketPattern } else { $TicketPattern })
@@ -4612,7 +4952,7 @@ function Invoke-EbrMain {
             Set-EbrLogPath (Join-Path $ctx.OutDir 'run.log')
             foreach ($item in $catalog) {
                 if ($item.Query) {
-                    $text = Expand-EbrQuery -Query $item.Query -WindowStart $ctx.WindowStart -WindowEnd $ctx.WindowEnd -ManagedRgPattern $ManagedRgPattern -TicketPattern $TicketPattern -PatchCadenceDays $ctx.PatchCadenceDays
+                    $text = Expand-EbrQuery -Query $item.Query -WindowStart $ctx.WindowStart -WindowEnd $ctx.WindowEnd -ManagedRgPattern $ManagedRgPattern -TicketPattern $TicketPattern -PatchCadenceDays $ctx.PatchCadenceDays -PatchExclusionTagPattern $ctx.PatchExclusionTagPattern -EdrVendorPattern $ctx.EdrVendorPattern
                     Write-EbrQueryFile -OutDir $ctx.OutDir -Item $item -Text $text -Target ('dry run; subscriptions: ' + ($ctx.Subscriptions -join ', '))
                 }
                 $status = if ($item.Engine -eq 'MANUAL') { 'MANUAL' } else { 'DRYRUN' }
@@ -4665,7 +5005,7 @@ function Invoke-EbrMain {
         $ctx.AccessDescription = if ($access.Path -eq 'Direct') { 'direct sign-in to the client tenant' } else { "Lighthouse, through managing tenant $($access.ArmTenant)" }
         if ($access.Warning) { $ctx.Warnings.Add($access.Warning); Write-EbrWarn $access.Warning }
         $accessTenants = @($subAccess.Values | Select-Object -Unique)
-        if ($accessTenants.Count -gt 1) { Write-EbrWarn "Subscriptions are reached through different tenants ($($accessTenants -join ', ')). Resource Graph uses $($ctx.ArmTenant); subscriptions only visible through another tenant may return nothing." }
+        if ($accessTenants.Count -gt 1) { Write-EbrWarn "Subscriptions are reached through different tenants ($($accessTenants -join ', ')). Resource Graph uses $($ctx.ArmTenant). Subscriptions only visible through another tenant may return nothing." }
         $via = if ($ctx.AccessPath -eq 'Direct') { 'directly (complete role assignment data)' } else { "through managing tenant $($ctx.ArmTenant) (Lighthouse)" }
         $null = Get-EbrToken -Resource 'https://management.azure.com/' -Tenant $ctx.ArmTenant
         Write-EbrOk "All subscriptions belong to the client tenant and are reached $via." -Snark
@@ -4808,13 +5148,13 @@ function Invoke-EbrMain {
             $msg = 'Incident data starts {0}, which is the {1}-day retention limit of {2}, not the service start. Older incidents were purged: anything before {0} needs a search job against archived data (if long-term retention is set) or the CyberSOC reports.' -f $earliest.ToString('yyyy-MM-dd', $inv), $wsRetention, $wsName
             $ctx.Warnings.Add($msg)
             Write-EbrWarn $msg
-            if (-not ($startOverride -or $endOverride)) { $ctx.WindowBasis += "; cut off by the $wsRetention-day workspace retention" }
+            if (-not ($startOverride -or $endOverride)) { $ctx.WindowBasis += ", cut off by the $wsRetention-day workspace retention" }
         }
         if ($earliest -and $ctx.WindowStart -lt $earliest.Date) {
             $ctx.Warnings.Add(('The window starts {0} but SecurityIncident data only reaches back to {1}. Figures before that need a search job or the CyberSOC reports.' -f $ctx.WindowStart.ToString('yyyy-MM-dd', $inv), $earliest.ToString('yyyy-MM-dd', $inv)))
         }
         if ($inc.PerWorkspace.Count -gt 1) {
-            $ctx.Warnings.Add(('Earliest SecurityIncident record per workspace: {0}. A workspace that starts later contributes nothing before that date; say so on any slide that compares months.' -f ($inc.PerWorkspace -join '; ')))
+            $ctx.Warnings.Add(('Earliest SecurityIncident record per workspace: {0}. A workspace that starts later contributes nothing before that date. Say so on any slide that compares months.' -f ($inc.PerWorkspace -join ', ')))
         }
         Write-EbrOk ("Reporting window {0} to {1} ({2})." -f $ctx.WindowStart.ToString('yyyy-MM-dd', $inv), $ctx.WindowEnd.ToString('yyyy-MM-dd', $inv), $ctx.WindowBasis)
         foreach ($w in (Get-EbrPreflightWarnings -Ctx $ctx)) { $ctx.Warnings.Add($w); Write-EbrWarn $w }
@@ -4869,6 +5209,8 @@ function Invoke-EbrMain {
             GraphMissingScopes  = @($ctx.GraphMissingScopes)
             GraphPartial        = @($ctx.GraphPartial)
             PatchCadenceDays    = $ctx.PatchCadenceDays
+            PatchExclusionTagPattern = $ctx.PatchExclusionTagPattern
+            EdrVendorPattern    = $ctx.EdrVendorPattern
             ExchangeAndPurview  = $(if ($SkipExchange) { 'skipped' } else { 'attempted' })
             Warnings            = @($ctx.Warnings)
         }
@@ -4942,10 +5284,14 @@ if ($LoadFunctionsOnly) { return }
 # On 2026-10-14 a click in the window after each sign-in, and each copy of the output, paused a Windows run until Enter
 $quickEditMode = Disable-EbrQuickEdit
 try {
+    # The patch exclusion pattern is passed only when it was given, so an empty string (exclusion off) and
+    # the default stay distinct.
+    $patternArgs = @{ EdrVendorPattern = $EdrVendorPattern }
+    if ($PSBoundParameters.ContainsKey('PatchExclusionTagPattern')) { $patternArgs.PatchExclusionTagPattern = $PatchExclusionTagPattern }
     $mainOutput = Invoke-EbrMain -TenantId $TenantId -SubscriptionId $SubscriptionId -WorkspaceResourceId $WorkspaceResourceId `
         -WindowStart $WindowStart -WindowEnd $WindowEnd -ManagedRgPattern $ManagedRgPattern -TicketPattern $TicketPattern -ClientName $ClientName `
         -OutputPath $OutputPath -SkipExchange:$SkipExchange -SkipDefender:$SkipDefender `
-        -SkipGraph:$SkipGraph -PatchCadenceDays $PatchCadenceDays `
+        -SkipGraph:$SkipGraph -PatchCadenceDays $PatchCadenceDays @patternArgs `
         -SkipWorkspaceBreakdown:$SkipWorkspaceBreakdown -DryRun:$DryRun `
         -SkipHtmlReport:$SkipHtmlReport -ReportDepth $ReportDepth -SkipSecOpsWorklist:$SkipSecOpsWorklist
 }

@@ -17,8 +17,8 @@
     ./New-EbrSecOpsWorklist.ps1 -EvidencePath ./EBR-Evidence_Client_20261012-120000
 .NOTES
     Categories whose result was added in collector 1.8.0 (OUT.1-OPEN, DR.10-GAPS, EW.1-DEVICES,
-    DP.5-STALE), 1.10.0 (IA.8-SIGNINS, P0.6-APPLIANCES) or 1.11.0 (DP.1-CONTAINERS) read "needs recollection" on packs
-    collected with an earlier version.
+    DP.5-STALE), 1.10.0 (IA.8-SIGNINS, P0.6-APPLIANCES), 1.11.0 (DP.1-CONTAINERS) or 1.14.0 (EW.1-GAPS,
+    EW.10-EXCLUDED) read "needs recollection" on packs collected with an earlier version.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -39,7 +39,7 @@ $parameters = Get-Content -LiteralPath (Join-Path $pack '00-parameters.json') -R
 $manifest = @(Import-Csv -LiteralPath (Join-Path $pack '00-manifest.csv'))
 $inv = [cultureinfo]::InvariantCulture
 # The collector version that added each worklist source, for the needs recollection status.
-$addedIn = @{ 'OUT.1-OPEN' = '1.8'; 'DR.10-GAPS' = '1.8'; 'EW.1-DEVICES' = '1.8'; 'DP.5-STALE' = '1.8'; 'IA.8-SIGNINS' = '1.10.0'; 'P0.6-APPLIANCES' = '1.10.0'; 'DP.1-CONTAINERS' = '1.11.0' }
+$addedIn = @{ 'OUT.1-OPEN' = '1.8'; 'DR.10-GAPS' = '1.8'; 'EW.1-DEVICES' = '1.8'; 'DP.5-STALE' = '1.8'; 'IA.8-SIGNINS' = '1.10.0'; 'P0.6-APPLIANCES' = '1.10.0'; 'DP.1-CONTAINERS' = '1.11.0'; 'EW.1-GAPS' = '1.14.0'; 'EW.10-EXCLUDED' = '1.14.0' }
 # Managed resource group. The collector records the pattern it excluded (1.9.0 applies it to every
 # query that names a resource). Packs from older collectors carry the default, and an explicit empty
 # value means the exclusion was turned off for the run.
@@ -99,6 +99,14 @@ try { $ca = Read-EbrCaEvaluation -Pack $pack -Manifest $manifest }
 catch { Write-Warning "The Conditional Access evaluation could not be completed. $($_.Exception.Message)" }
 $policiesRead = (Get-Status 'IA.8-POLICIES') -in 'OK', 'EMPTY'
 $azureDevice = { param($r) (Get-Text $r.AzureResourceId) -ne '' -and (Get-Text $r.AzureResourceId).ToLowerInvariant() -notin $applianceIds }
+# The reason each machine is not reporting to Defender for Endpoint (EW.1-GAPS, collector 1.14.0), keyed by
+# resource ID. A machine covered by a third-party product, or one that cannot take a sensor, is not an
+# onboarding item: those move to their own categories.
+$gapByResource = @{}
+foreach ($g in @(Get-Rows 'EW.1-GAPS')) { $id = (Get-Text $g.AzureResourceId).ToLowerInvariant(); if ($id) { $gapByResource[$id] = $g } }
+$gapOf = { param($r) $id = (Get-Text $r.AzureResourceId).ToLowerInvariant(); if ($id -and $gapByResource.ContainsKey($id)) { $gapByResource[$id] } }
+$gapIsOnboardingItem = { param($r) $g = & $gapOf $r; if ($null -eq $g) { return $true } (Test-True $g.Eligible) -and -not (Test-True $g.Covered) }
+$gapReasonText = { param($r) $g = & $gapOf $r; if ($null -eq $g) { return '' } $p = Get-Text $g.Product; $e = Get-Text $g.Evidence; '. ' + (Get-Text $g.Reason) + $(if ($p) { " ($p)" } else { '' }) + $(if ($e) { ". $e" } else { '' }) }
 
 # Category definitions. Each maps the raw rows of one result to worklist items.
 $categories = @(
@@ -113,18 +121,27 @@ $categories = @(
             $by = Get-Text $_.ClosedBy; if (-not $by) { $by = 'unknown' }
             New-Item2 ('Incident {0}: {1}' -f (Get-Text $_.IncidentNumber), (Get-Text $_.Title)) ('{0}. {1} severity, closed {2} by {3}' -f (Get-Text $_.Gap), (Get-Text $_.Severity), (Get-Day $_.ClosedTime), $by) (Get-Ticket $_) (Get-Text $_.IncidentUrl) } } }
     @{ Title = 'Azure virtual machines not onboarded to endpoint detection'; Id = 'EW.1-DEVICES'; Control = 'EW.1'
-       Why = 'Azure virtual machines seen in the last 7 days that are not onboarded to Defender for Endpoint. Defender for Servers should onboard them, so check the plan, the MDE extension and the machine state. Endpoints that are not native to Azure are left out.'
-       Filter = { param($r) (& $azureDevice $r) -and (Get-Text $r.OnboardingStatus) -ine 'Onboarded' }
+       Why = 'Azure virtual machines seen in the last 7 days that are not onboarded to Defender for Endpoint and carry no other endpoint detection product. Defender for Servers should onboard them, so check the plan, the MDE extension and the machine state. Machines covered by a third-party product, network appliances and machines the sensor cannot run on are listed under their own reason instead. Endpoints that are not native to Azure are left out.'
+       Filter = { param($r) (& $azureDevice $r) -and (Get-Text $r.OnboardingStatus) -ine 'Onboarded' -and (& $gapIsOnboardingItem $r) }
        Note = { param($all) Get-OutsideAzureNote $all { param($r) (Get-Text $r.OnboardingStatus) -ine 'Onboarded' } }
        Map = { param($rows) $rows | Sort-Object { Get-Text $_.DeviceName } | ForEach-Object {
             $group = Get-Text $_.MachineGroup; $groupText = if ($group) { ", group $group" } else { '' }
-            New-Item2 (Get-Text $_.DeviceName) ('{0}, onboarding status {1}, last seen {2}{3}' -f (Get-Text $_.OSPlatform), (Get-Text $_.OnboardingStatus), (Get-Day $_.LastSeen), $groupText) (Get-Text $_.AzureResourceId) 'EW.1-DEVICES' } } }
+            New-Item2 (Get-Text $_.DeviceName) ('{0}, onboarding status {1}, last seen {2}{3}{4}' -f (Get-Text $_.OSPlatform), (Get-Text $_.OnboardingStatus), (Get-Day $_.LastSeen), $groupText, (& $gapReasonText $_)) (Get-Text $_.AzureResourceId) 'EW.1-DEVICES' } } }
     @{ Title = 'Azure virtual machines with an inactive sensor'; Id = 'EW.1-DEVICES'; Control = 'EW.1'
        Why = 'Onboarded Azure virtual machines whose sensor state is not Active. Check connectivity, the sensor service and whether the machine is deallocated or retired. Endpoints that are not native to Azure are left out.'
        Filter = { param($r) (& $azureDevice $r) -and (Get-Text $r.OnboardingStatus) -ieq 'Onboarded' }
        Note = { param($all) Get-OutsideAzureNote $all { param($r) (Get-Text $r.OnboardingStatus) -ieq 'Onboarded' } }
        Map = { param($rows) $rows | Sort-Object { Get-Text $_.Gap }, { Get-Text $_.DeviceName } | ForEach-Object {
-            New-Item2 (Get-Text $_.DeviceName) ('{0}, {1}, last seen {2}' -f (Get-Text $_.Gap), (Get-Text $_.OSPlatform), (Get-Day $_.LastSeen)) (Get-Text $_.AzureResourceId) 'EW.1-DEVICES' } } }
+            New-Item2 (Get-Text $_.DeviceName) ('{0}, {1}, last seen {2}{3}' -f (Get-Text $_.Gap), (Get-Text $_.OSPlatform), (Get-Day $_.LastSeen), (& $gapReasonText $_)) (Get-Text $_.AzureResourceId) 'EW.1-DEVICES' } } }
+    @{ Title = 'Azure virtual machines not reporting to Defender for Endpoint, by reason'; Id = 'EW.1-GAPS'; Control = 'EW.1'
+       Why = 'Every Azure virtual machine that is not onboarded with an active sensor, with the reason the collector established: covered by a third-party product (CrowdStrike Falcon or another product named by the EDR vendor pattern), a network virtual appliance, an operating system the sensor does not support, deallocated at collection, discovered only, never discovered by Defender, sensor not active, or not onboarded with no endpoint detection found. The last two are the onboarding work. A machine covered by a third-party product counts as protected in the client report, so confirm that the product is licensed and reporting before the review.'
+       Map = { param($rows) $rows | ForEach-Object {
+            $p = Get-Text $_.Product; $e = Get-Text $_.Evidence
+            New-Item2 (Get-Text $_.DeviceName) ('{0}{1}. {2}, {3}{4}{5}' -f (Get-Text $_.Reason), $(if ($p) { " ($p)" } else { '' }), (Get-Text $_.OSPlatform), (Get-Text $_.Gap).ToLowerInvariant(), $(if (Get-Text $_.PowerState) { ', ' + (Get-Text $_.PowerState) } else { '' }), $(if ($e) { ". $e" } else { '' })) (Get-Text $_.AzureResourceId) 'EW.1-GAPS' } } }
+    @{ Title = 'Machines left out of the patch measures by tag'; Id = 'EW.10-EXCLUDED'; Control = 'EW.10'
+       Why = 'Virtual machines and Arc machines whose tags record patching as waived or client owned. They are left out of the patch cadence and pending patch figures (EW.6, EW.10). Confirm that each tag is still intended, since a stale tag hides a machine from the patch measures.'
+       Map = { param($rows) $rows | Sort-Object { Get-Text $_.resourceGroup }, { Get-Text $_.Name } | ForEach-Object {
+            New-Item2 (Get-Text $_.Name) ('Tag {0}, resource group {1}' -f (Get-Text $_.MatchedTag), (Get-Text $_.resourceGroup)) (Get-Text $_.subscriptionId) 'EW.10-EXCLUDED' } } }
     @{ Title = 'Device code and legacy sign-ins to review'; Id = 'IA.8-SIGNINS'; Control = 'IA.3'
        Why = 'Successful sign-ins in the last 30 days through flows the Conditional Access baseline blocks. Not governed and not evaluated accounts are the gap: fix the policy scope or move the account to a modern flow. Excluded accounts are listed so each exclusion can be confirmed as intended.'
        Note = { param($all) if (-not $policiesRead) { 'the policy inventory (IA.8-POLICIES) was not read, so exclusions could not be checked' } }

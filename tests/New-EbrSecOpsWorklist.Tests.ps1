@@ -175,3 +175,51 @@ Describe 'SecOps worklist generation' {
         { & $generator -EvidencePath $pack } | Should -Throw '*missing 00-manifest.csv*'
     }
 }
+Describe 'Onboarding reasons and patch exclusions (collector 1.14.0)' {
+    BeforeEach {
+        $pack = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        New-WorklistFixture $pack
+        Add-WorklistResult $pack 'EW.1-DEVICES' '[{"DeviceName":"cs-01","Scope":"Azure VM","OSPlatform":"WindowsServer2019","OnboardingStatus":"Can be onboarded","SensorHealthState":"","Gap":"Not onboarded","LastSeen":"2026-10-13T00:00:00Z","MachineGroup":"","AzureResourceId":"/subscriptions/s1/resourceGroups/app/providers/Microsoft.Compute/virtualMachines/cs-01"},{"DeviceName":"gap-01","Scope":"Azure VM","OSPlatform":"WindowsServer2022","OnboardingStatus":"Can be onboarded","SensorHealthState":"","Gap":"Not onboarded","LastSeen":"2026-10-13T00:00:00Z","MachineGroup":"","AzureResourceId":"/subscriptions/s1/resourceGroups/app/providers/Microsoft.Compute/virtualMachines/gap-01"},{"DeviceName":"off-01","Scope":"Azure VM","OSPlatform":"WindowsServer2022","OnboardingStatus":"Onboarded","SensorHealthState":"Inactive","Gap":"Sensor Inactive","LastSeen":"2026-10-01T00:00:00Z","MachineGroup":"","AzureResourceId":"/subscriptions/s1/resourceGroups/app/providers/Microsoft.Compute/virtualMachines/off-01"}]'
+        Add-WorklistResult $pack 'EW.1-GAPS' '[{"DeviceName":"cs-01","VmName":"cs-01","resourceGroup":"app","subscriptionId":"s1","OSPlatform":"WindowsServer2019","OnboardingStatus":"Can be onboarded","SensorHealthState":"","PowerState":"running","Gap":"Not onboarded","Reason":"Covered by a third-party endpoint detection product","Product":"CrowdStrike Falcon","Evidence":"Extension CrowdStrike.Falcon/FalconSensorWindows","CountedAs":"CanBeOnboarded","Eligible":true,"Covered":true,"LastSeen":"2026-10-13T00:00:00Z","AzureResourceId":"/subscriptions/s1/resourcegroups/app/providers/microsoft.compute/virtualmachines/cs-01"},{"DeviceName":"gap-01","VmName":"gap-01","resourceGroup":"app","subscriptionId":"s1","OSPlatform":"WindowsServer2022","OnboardingStatus":"Can be onboarded","SensorHealthState":"","PowerState":"running","Gap":"Not onboarded","Reason":"Not onboarded, no endpoint detection found","Product":"","Evidence":"","CountedAs":"CanBeOnboarded","Eligible":true,"Covered":false,"LastSeen":"2026-10-13T00:00:00Z","AzureResourceId":"/subscriptions/s1/resourcegroups/app/providers/microsoft.compute/virtualmachines/gap-01"},{"DeviceName":"off-01","VmName":"off-01","resourceGroup":"app","subscriptionId":"s1","OSPlatform":"WindowsServer2022","OnboardingStatus":"Onboarded","SensorHealthState":"Inactive","PowerState":"deallocated","Gap":"Sensor Inactive","Reason":"Deallocated or stopped at collection","Product":"","Evidence":"","CountedAs":"Onboarded","Eligible":false,"Covered":false,"LastSeen":"2026-10-01T00:00:00Z","AzureResourceId":"/subscriptions/s1/resourcegroups/app/providers/microsoft.compute/virtualmachines/off-01"},{"DeviceName":"new-01","VmName":"new-01","resourceGroup":"app","subscriptionId":"s1","OSPlatform":"Windows","OnboardingStatus":"Not discovered","SensorHealthState":"","PowerState":"running","Gap":"Not discovered","Reason":"Not discovered by Defender for Endpoint","Product":"","Evidence":"","CountedAs":"NotSeen","Eligible":true,"Covered":false,"LastSeen":"","AzureResourceId":"/subscriptions/s1/resourcegroups/app/providers/microsoft.compute/virtualmachines/new-01"}]'
+        Add-WorklistResult $pack 'EW.10-EXCLUDED' '[{"Name":"legacy-app-01","ResourceType":"microsoft.compute/virtualmachines","resourceGroup":"app","subscriptionId":"s1","MatchedTag":"\"patching\":\"client owned\"","ResourceId":"/subscriptions/s1/resourcegroups/app/providers/microsoft.compute/virtualmachines/legacy-app-01"}]'
+        $null = & $generator -EvidencePath $pack
+        $csv = @(Import-Csv (Join-Path $pack '04-secops-worklist.csv'))
+        $md = Get-Content (Join-Path $pack '04-secops-worklist.md') -Raw
+    }
+    It 'keeps a machine covered by a third-party product out of the onboarding work and carries the reason on the rest' {
+        $not = @($csv | Where-Object Category -eq 'Azure virtual machines not onboarded to endpoint detection')
+        $not.Resource | Should -Be @('gap-01')
+        $not[0].Detail | Should -Match 'onboarding status Can be onboarded, last seen 2026-10-13\. Not onboarded, no endpoint detection found$'
+        $inactive = @($csv | Where-Object Category -eq 'Azure virtual machines with an inactive sensor')
+        $inactive.Resource | Should -Be @('off-01')
+        $inactive[0].Detail | Should -Match 'Sensor Inactive, WindowsServer2022, last seen 2026-10-01\. Deallocated or stopped at collection$'
+    }
+    It 'lists every machine not reporting to Defender for Endpoint with its reason, product and evidence' {
+        $gaps = @($csv | Where-Object Category -eq 'Azure virtual machines not reporting to Defender for Endpoint, by reason')
+        $gaps.Resource | Should -Be @('cs-01', 'gap-01', 'off-01', 'new-01')
+        $gaps[0].Detail | Should -Be 'Covered by a third-party endpoint detection product (CrowdStrike Falcon). WindowsServer2019, not onboarded, running. Extension CrowdStrike.Falcon/FalconSensorWindows'
+        $gaps[2].Detail | Should -Be 'Deallocated or stopped at collection. WindowsServer2022, sensor inactive, deallocated'
+        $gaps[3].Detail | Should -Be 'Not discovered by Defender for Endpoint. Windows, not discovered, running'
+        $gaps[0].Reference | Should -Match 'virtualmachines/cs-01$'
+        $md | Should -Match 'confirm that the product is licensed and reporting'
+    }
+    It 'lists the machines a tag left out of the patch measures' {
+        $ex = @($csv | Where-Object Category -eq 'Machines left out of the patch measures by tag')
+        $ex.Resource | Should -Be @('legacy-app-01')
+        $ex[0].Detail | Should -Be 'Tag "patching":"client owned", resource group app'
+        $ex[0].Source | Should -Be 'EW.10-EXCLUDED'
+    }
+    It 'reads needs recollection on an older pack' {
+        $old = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        New-WorklistFixture $old
+        $null = & $generator -EvidencePath $old
+        $text = Get-Content (Join-Path $old '04-secops-worklist.md') -Raw
+        $text | Should -Match '\| Azure virtual machines not reporting to Defender for Endpoint, by reason \| EW\.1 \| 0 \| Needs recollection with collector 1\.14\.0 or later \|'
+        $text | Should -Match '\| Machines left out of the patch measures by tag \| EW\.10 \| 0 \| Needs recollection with collector 1\.14\.0 or later \|'
+    }
+    It 'keeps every line to the copy rules' {
+        $md | Should -Not -Match ';'
+        $md | Should -Not -Match '[←-⇿]|->|=>'
+        ($md -replace '[A-Za-z0-9)] > [A-Za-z]', '') | Should -Not -Match '>'
+    }
+}

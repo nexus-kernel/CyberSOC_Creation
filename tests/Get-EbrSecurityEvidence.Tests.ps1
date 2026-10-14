@@ -93,7 +93,7 @@ Describe 'Query catalog' {
     }
 
     It 'uses only known engines' {
-        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'DEFENDER-SCORES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL'
+        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'DEFENDER-SCORES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
         $catalog | Where-Object { $_.Engine -notin $known } | Should -BeNullOrEmpty
     }
 
@@ -1711,6 +1711,30 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         ($summary | Where-Object { $_.Scope -eq 'All workspaces' -and $_.Metric -eq 'Total rules' }).Value | Should -Be '3'
     }
 
+    It 'records the endpoint detection and patch exclusion patterns and derives EW.1-GAPS as UNAVAILABLE without the device list' {
+        $params.EdrVendorPattern | Should -Be $script:EbrEdrVendorPattern
+        $params.PatchExclusionTagPattern | Should -Be $script:EbrPatchExclusionTagPattern
+        (Get-M 'EW.1-GAPS').Status | Should -Be 'UNAVAILABLE'
+        (Get-M 'EW.1-GAPS').Engine | Should -Be 'DERIVED'
+        (Get-M 'EW.1-GAPS').Detail | Should -Match 'Not a zero'
+        (Get-M 'EW.10-EXCLUDED') | Should -Not -BeNullOrEmpty
+        (Get-M 'EW.1-EDR') | Should -Not -BeNullOrEmpty
+    }
+
+    It 'keeps the notes and the worksheet to the copy rules' {
+        $notes = Get-Content (Join-Path $outDir.FullName '02-notes.txt') -Raw
+        $notes | Should -Not -Match ';'
+        $notes | Should -Not -Match '->|=>|[\u2190-\u21FF]'
+        ($notes -replace '[A-Za-z0-9)] > [A-Za-z]', '') | Should -Not -Match '[<>]'
+        foreach ($row in @(Import-Csv (Join-Path $outDir.FullName '01-worksheet.csv'))) {
+            foreach ($text in @($row.Figure, $row.Value, $row.Note)) {
+                $text | Should -Not -Match ';' -Because $row.Figure
+                ($text -replace '[A-Za-z0-9)] > [A-Za-z]', '') | Should -Not -Match '[<>]' -Because $row.Figure
+            }
+        }
+        foreach ($m in $manifest) { $m.Guidance | Should -Not -Match ';' -Because $m.ResultId }
+    }
+
     It 'fills the worksheet from the combined result and flags it partial' {
         $ws = Import-Csv (Join-Path $outDir.FullName '01-worksheet.csv')
         $row = $ws | Where-Object Figure -eq 'Alerts triaged'
@@ -1949,6 +1973,203 @@ Describe 'Run stalls' {
         It 'stays quiet for a fast request' {
             $null = Invoke-EbrRest -Method POST -Uri 'https://api.loganalytics.io/v1/workspaces/0a1399e1-c245-4c67-96d1-378ab497dd3a/query' -Resource 'https://api.loganalytics.io' -Tenant 't' -Body @{ query = 'T' }
             Should -Invoke Write-EbrLog -Times 0 -ParameterFilter { $Component -eq 'Http' }
+        }
+    }
+}
+
+Describe 'Azure virtual machine scope, third-party endpoint detection and patch exclusions (1.14.0)' {
+    BeforeAll {
+        $catalog = Get-EbrQueryCatalog
+        $expand = { param($id, $extra = @{}) Expand-EbrQuery -Query ($catalog | Where-Object Id -eq $id).Query -WindowStart ([datetime]'2026-01-01') -WindowEnd ([datetime]'2026-06-30') -ManagedRgPattern 'aznativesol0' @extra }
+    }
+
+    It 'reads Azure virtual machines only in every device query and never counts another kind of endpoint' {
+        foreach ($id in 'EW.1', 'EW.1-DEVICES', 'EW.1-VMS', 'EW.3', 'EW.4', 'EW.5', 'EW.12', 'EW.14', 'EW.15', 'EW.16', 'NB.8', 'NB.10', 'NB.11', 'DR.5', 'DR.12', 'BKL.1') {
+            $q = ($catalog | Where-Object Id -eq $id).Query
+            $q | Should -Match 'where isnotempty\(AzureResourceId\)' -Because $id
+            $q | Should -Not -Match 'Other device' -Because $id
+        }
+        $every = @($catalog | Where-Object { $_.Engine -eq 'AH' -and $_.Query -match 'DeviceInfo' -and $_.Id -ne 'P0.4' -and $_.Query -notmatch 'where isnotempty\(AzureResourceId\)' } | ForEach-Object Id)
+        $every | Should -BeNullOrEmpty -Because 'every Advanced Hunting query that reads DeviceInfo is scoped to Azure virtual machines'
+        ($catalog | Where-Object Id -eq 'EW.1').Query | Should -Match 'Unsupported\s+= countif\(OnboardingStatus == "Unsupported"\)'
+        ($catalog | Where-Object Id -eq 'EW.1').Query | Should -Match 'InsufficientInfo = countif\(OnboardingStatus == "Insufficient info"\)'
+    }
+
+    It 'carries the endpoint detection evidence queries and the derived gap list' {
+        foreach ($id in 'EW.1-VMS', 'EW.1-EDR', 'EW.1-EDR-HOSTS', 'EW.1-GAPS', 'EW.10-EXCLUDED') { $catalog.Id | Should -Contain $id }
+        ($catalog | Where-Object Id -eq 'EW.1-EDR').Engine | Should -Be 'ARG'
+        ($catalog | Where-Object Id -eq 'EW.1-EDR-HOSTS').Engine | Should -Be 'LA'
+        ($catalog | Where-Object Id -eq 'EW.1-EDR-HOSTS').CombinedOnly | Should -BeTrue
+        $gaps = $catalog | Where-Object Id -eq 'EW.1-GAPS'
+        $gaps.Engine | Should -Be 'DERIVED'
+        $gaps.Query | Should -BeNullOrEmpty
+        $gaps.Derive | Should -Not -BeNullOrEmpty
+        # EW.1-GAPS runs after the results it reads, within Phase 2
+        $ids = @($catalog | Where-Object { $_.Phase -like 'P2*' } | ForEach-Object Id)
+        foreach ($before in 'EW.1-VMS', 'EW.1-EDR', 'EW.1-EDR-HOSTS', 'EW.1-DEVICES') { $ids.IndexOf($before) | Should -BeLessThan $ids.IndexOf('EW.1-GAPS') -Because $before }
+    }
+
+    It 'expands the EDR vendor pattern into the extension and Sentinel queries and rejects quotes in it' {
+        $edr = & $expand 'EW.1-EDR'
+        $edr | Should -Match 'make_set_if\(strcat\(Publisher, "/", ExtensionType\), Product matches regex @"\(crowdstrike\|falcon\|'
+        $edr | Should -Match 'ExtensionType startswith "MDE\."'
+        $edr | Should -Match 'Recommendation has "EDR solution should be installed"'
+        $edr | Should -Match 'Appliance  = tolower\(strcat\(tostring\(plan\.publisher\)'
+        $edr | Should -Not -Match '\{\{'
+        $hosts = & $expand 'EW.1-EDR-HOSTS' @{ EdrVendorPattern = 'crowdstrike|falcon' }
+        $hosts | Should -Match '^union withsource = SourceTable isfuzzy = true CrowdStrike\*, CommonSecurityLog'
+        $hosts | Should -Match 'Product matches regex @"\(crowdstrike\|falcon\)"'
+        { & $expand 'EW.1-EDR' @{ EdrVendorPattern = 'crowd"strike' } } | Should -Throw '*EdrVendorPattern*'
+    }
+
+    It 'leaves machines tagged as patching waived or client owned out of EW.6 and EW.10, names them in EW.10-EXCLUDED, and an empty pattern turns it off' {
+        foreach ($id in 'EW.6', 'EW.10') {
+            $q = ($catalog | Where-Object Id -eq $id).Query
+            $q | Should -Match 'extend PatchExcluded = false' -Because $id
+            $q | Should -Match 'PatchExcluded = tolower\(tostring\(tags\)\) matches regex @"\{\{PATCH_EXCLUDED\}\}"' -Because $id
+            $q | Should -Match 'where not\(coalesce\(PatchExcluded, false\)\)' -Because $id
+            $on = & $expand $id
+            # inside a KQL verbatim string every double quote of the pattern is doubled
+            $on | Should -Match 'matches regex @"""\[\^""\]\*patch' -Because $id
+            $on | Should -Not -Match '\{\{' -Because $id
+            $off = & $expand $id @{ PatchExclusionTagPattern = '' }
+            $off | Should -Not -Match 'matches regex' -Because $id
+            $off | Should -Match 'extend PatchExcluded = false\n    \| project MachineId = tolower\(id\), PatchExcluded' -Because $id
+        }
+        $ex = & $expand 'EW.10-EXCLUDED'
+        $ex | Should -Match 'extract\(@"""\[\^""\]\*patch'
+        $ex | Should -Match '\| where PatchExcluded\n\| project Name = name'
+        $custom = & $expand 'EW.10-EXCLUDED' @{ PatchExclusionTagPattern = '"patching":"waived"' }
+        $custom | Should -Match 'matches regex @"""patching"":""waived"""'
+        { & $expand 'EW.10' @{ PatchExclusionTagPattern = "a`nb" } } | Should -Throw '*PatchExclusionTagPattern*'
+        # The default tag pattern reads the key and the value, whichever carries the word
+        $re = [regex]::new($script:EbrPatchExclusionTagPattern)
+        foreach ($tags in '{"patching":"waived","env":"prod"}', '{"patchpolicy":"client owned"}', '{"maintenance":"patching waived"}', '{"owner":"client-owned patching"}', '{"patchgroup":"clientowned"}') { $re.IsMatch($tags) | Should -BeTrue -Because $tags }
+        foreach ($tags in '{"patching":"atmosera","env":"prod"}', '{"owner":"client owned"}', '{}') { $re.IsMatch($tags) | Should -BeFalse -Because $tags }
+    }
+
+    Context 'Get-EbrOnboardingGapRows' {
+        BeforeAll {
+            $vm = { param($name, $rg = 'app') "/subscriptions/s1/resourceGroups/$rg/providers/Microsoft.Compute/virtualMachines/$name" }
+            $known = @(
+                [pscustomobject]@{ DeviceId = 'd1'; DeviceName = 'web-01'; OSPlatform = 'WindowsServer2022'; OnboardingStatus = 'Onboarded'; SensorHealthState = 'Active'; LastSeen = '2026-10-13T00:00:00Z'; MachineGroup = 'Servers'; AzureResourceId = (& $vm 'web-01') }
+                [pscustomobject]@{ DeviceId = 'd2'; DeviceName = 'cs-01.corp.example'; OSPlatform = 'WindowsServer2019'; OnboardingStatus = 'Can be onboarded'; SensorHealthState = ''; LastSeen = '2026-10-13T00:00:00Z'; MachineGroup = ''; AzureResourceId = (& $vm 'cs-01') }
+                [pscustomobject]@{ DeviceId = 'd3'; DeviceName = 'cs-02'; OSPlatform = 'Linux'; OnboardingStatus = 'Can be onboarded'; SensorHealthState = ''; LastSeen = '2026-10-13T00:00:00Z'; MachineGroup = ''; AzureResourceId = (& $vm 'cs-02') }
+                [pscustomobject]@{ DeviceId = 'd4'; DeviceName = 'fw-01'; OSPlatform = 'Linux'; OnboardingStatus = 'Unsupported'; SensorHealthState = ''; LastSeen = '2026-10-13T00:00:00Z'; MachineGroup = ''; AzureResourceId = (& $vm 'fw-01' 'fw') }
+                [pscustomobject]@{ DeviceId = 'd5'; DeviceName = 'old-01'; OSPlatform = 'WindowsServer2008'; OnboardingStatus = 'Unsupported'; SensorHealthState = ''; LastSeen = '2026-10-13T00:00:00Z'; MachineGroup = ''; AzureResourceId = (& $vm 'old-01') }
+                [pscustomobject]@{ DeviceId = 'd6'; DeviceName = 'off-01'; OSPlatform = 'WindowsServer2022'; OnboardingStatus = 'Onboarded'; SensorHealthState = 'Inactive'; LastSeen = '2026-10-01T00:00:00Z'; MachineGroup = ''; AzureResourceId = (& $vm 'off-01') }
+                [pscustomobject]@{ DeviceId = 'd7'; DeviceName = 'gap-01'; OSPlatform = 'WindowsServer2022'; OnboardingStatus = 'Can be onboarded'; SensorHealthState = ''; LastSeen = '2026-10-13T00:00:00Z'; MachineGroup = ''; AzureResourceId = (& $vm 'gap-01') }
+                [pscustomobject]@{ DeviceId = 'd8'; DeviceName = 'disc-01'; OSPlatform = ''; OnboardingStatus = 'Insufficient info'; SensorHealthState = ''; LastSeen = '2026-10-13T00:00:00Z'; MachineGroup = ''; AzureResourceId = (& $vm 'disc-01') }
+                [pscustomobject]@{ DeviceId = 'd9'; DeviceName = 'imp-01'; OSPlatform = 'WindowsServer2022'; OnboardingStatus = 'Onboarded'; SensorHealthState = 'Impaired communications'; LastSeen = '2026-10-13T00:00:00Z'; MachineGroup = ''; AzureResourceId = (& $vm 'imp-01') }
+            )
+            $azure = @(
+                [pscustomobject]@{ VmId = (& $vm 'web-01').ToLowerInvariant(); VmName = 'web-01'; resourceGroup = 'app'; subscriptionId = 's1'; OsType = 'Windows'; PowerState = 'PowerState/running'; Appliance = $false; DefenderExtension = 1; ThirdPartyEdr = $false; ThirdPartyExtensions = @(); EdrAssessment = @('Healthy') }
+                [pscustomobject]@{ VmId = (& $vm 'cs-01').ToLowerInvariant(); VmName = 'cs-01'; resourceGroup = 'app'; subscriptionId = 's1'; OsType = 'Windows'; PowerState = 'PowerState/running'; Appliance = $false; DefenderExtension = 0; ThirdPartyEdr = $true; ThirdPartyExtensions = @('CrowdStrike.Falcon/FalconSensorWindows'); EdrAssessment = @('Healthy') }
+                [pscustomobject]@{ VmId = (& $vm 'cs-02').ToLowerInvariant(); VmName = 'cs-02'; resourceGroup = 'app'; subscriptionId = 's1'; OsType = 'Linux'; PowerState = 'PowerState/running'; Appliance = $false; DefenderExtension = 0; ThirdPartyEdr = $false; ThirdPartyExtensions = @(); EdrAssessment = @() }
+                [pscustomobject]@{ VmId = (& $vm 'fw-01' 'fw').ToLowerInvariant(); VmName = 'fw-01'; resourceGroup = 'fw'; subscriptionId = 's1'; OsType = 'Linux'; PowerState = 'PowerState/running'; Appliance = $true; DefenderExtension = 0; ThirdPartyEdr = $false; ThirdPartyExtensions = @(); EdrAssessment = @() }
+                [pscustomobject]@{ VmId = (& $vm 'old-01').ToLowerInvariant(); VmName = 'old-01'; resourceGroup = 'app'; subscriptionId = 's1'; OsType = 'Windows'; PowerState = 'PowerState/running'; Appliance = $false; DefenderExtension = 0; ThirdPartyEdr = $false; ThirdPartyExtensions = @(); EdrAssessment = @('Unhealthy') }
+                [pscustomobject]@{ VmId = (& $vm 'off-01').ToLowerInvariant(); VmName = 'off-01'; resourceGroup = 'app'; subscriptionId = 's1'; OsType = 'Windows'; PowerState = 'PowerState/deallocated'; Appliance = $false; DefenderExtension = 1; ThirdPartyEdr = $false; ThirdPartyExtensions = @(); EdrAssessment = @() }
+                [pscustomobject]@{ VmId = (& $vm 'gap-01').ToLowerInvariant(); VmName = 'gap-01'; resourceGroup = 'app'; subscriptionId = 's1'; OsType = 'Windows'; PowerState = 'PowerState/running'; Appliance = $false; DefenderExtension = 0; ThirdPartyEdr = $false; ThirdPartyExtensions = @(); EdrAssessment = @('Unhealthy') }
+                [pscustomobject]@{ VmId = (& $vm 'new-01').ToLowerInvariant(); VmName = 'new-01'; resourceGroup = 'app'; subscriptionId = 's1'; OsType = 'Windows'; PowerState = 'PowerState/running'; Appliance = $false; DefenderExtension = 0; ThirdPartyEdr = $false; ThirdPartyExtensions = @(); EdrAssessment = @() }
+                [pscustomobject]@{ VmId = (& $vm 'dfc-01').ToLowerInvariant(); VmName = 'dfc-01'; resourceGroup = 'app'; subscriptionId = 's1'; OsType = 'Windows'; PowerState = 'PowerState/running'; Appliance = $false; DefenderExtension = 0; ThirdPartyEdr = $false; ThirdPartyExtensions = @(); EdrAssessment = @('Healthy') }
+            )
+            $hosts = @([pscustomobject]@{ Host = 'cs-02'; Events = 120; LastSeen = '2026-10-13T11:00:00Z'; Sources = @('CrowdStrikeFalconEventStream_CL') })
+            $appliances = @([pscustomobject]@{ Name = 'fw-01'; ResourceId = (& $vm 'fw-01' 'fw').ToLowerInvariant() })
+            $rows = @(Get-EbrOnboardingGapRows -Known $known -Azure $azure -Hosts $hosts -Appliances $appliances -KnownIsComplete $true)
+            function Get-Gap([string]$name) { $rows | Where-Object DeviceName -eq $name | Select-Object -First 1 }
+        }
+
+        It 'lists every machine that is not onboarded with an active sensor, and nothing else' {
+            $rows.DeviceName | Sort-Object | Should -Be @('cs-01.corp.example', 'cs-02', 'dfc-01', 'disc-01', 'fw-01', 'gap-01', 'imp-01', 'new-01', 'off-01', 'old-01')
+            $rows | Where-Object DeviceName -eq 'web-01' | Should -BeNullOrEmpty
+        }
+
+        It 'finds a third-party product through the extension, the Sentinel host name or the Defender for Cloud assessment, and names it' {
+            $ext = Get-Gap 'cs-01.corp.example'
+            $ext.Reason | Should -Be 'Covered by a third-party endpoint detection product'
+            $ext.Product | Should -Be 'CrowdStrike Falcon'
+            $ext.Evidence | Should -Be 'Extension CrowdStrike.Falcon/FalconSensorWindows'
+            @($ext.CountedAs, $ext.Eligible, $ext.Covered) | Should -Be @('CanBeOnboarded', $true, $true)
+            $sentinel = Get-Gap 'cs-02'
+            $sentinel.Product | Should -Be 'CrowdStrike Falcon'
+            $sentinel.Evidence | Should -Be 'Reporting through Sentinel (CrowdStrikeFalconEventStream_CL), last seen 2026-10-13'
+            $dfc = Get-Gap 'dfc-01'
+            $dfc.Reason | Should -Be 'Covered by a third-party endpoint detection product'
+            $dfc.Product | Should -Be 'a third-party endpoint detection product'
+            $dfc.Evidence | Should -Be 'Defender for Cloud reports an EDR solution installed'
+            $dfc.CountedAs | Should -Be 'NotSeen'
+        }
+
+        It 'explains appliances, unsupported systems, deallocated and discovered-only machines and leaves them out of the denominator' {
+            (Get-Gap 'fw-01').Reason | Should -Be 'Network virtual appliance, cannot run a sensor'
+            (Get-Gap 'fw-01').Eligible | Should -BeFalse
+            (Get-Gap 'old-01').Reason | Should -Be 'Operating system not supported by the sensor'
+            (Get-Gap 'old-01').CountedAs | Should -Be 'Other'
+            (Get-Gap 'off-01').Reason | Should -Be 'Deallocated or stopped at collection'
+            (Get-Gap 'off-01').PowerState | Should -Be 'deallocated'
+            (Get-Gap 'off-01').Gap | Should -Be 'Sensor Inactive'
+            (Get-Gap 'disc-01').Reason | Should -Be 'Discovered only, insufficient information'
+            foreach ($n in 'fw-01', 'old-01', 'off-01', 'disc-01') { (Get-Gap $n).Covered | Should -BeFalse -Because $n }
+        }
+
+        It 'reports the real gaps: never discovered, sensor not active, and not onboarded with nothing else on the machine' {
+            $new = Get-Gap 'new-01'
+            @($new.Reason, $new.OnboardingStatus, $new.Gap, $new.CountedAs, $new.Eligible, $new.Covered) | Should -Be @('Not discovered by Defender for Endpoint', 'Not discovered', 'Not discovered', 'NotSeen', $true, $false)
+            $new.OSPlatform | Should -Be 'Windows'
+            $imp = Get-Gap 'imp-01'
+            @($imp.Reason, $imp.Gap, $imp.CountedAs, $imp.Covered) | Should -Be @('Onboarded, sensor not active', 'Sensor Impaired communications', 'Onboarded', $true)
+            $gap = Get-Gap 'gap-01'
+            @($gap.Reason, $gap.CountedAs, $gap.Eligible, $gap.Covered) | Should -Be @('Not onboarded, no endpoint detection found', 'CanBeOnboarded', $true, $false)
+            $gap.Evidence | Should -BeNullOrEmpty
+        }
+
+        It 'orders the rows by reason and never lists a machine Defender has not seen when the known list is incomplete' {
+            $rows[0].Reason | Should -Be 'Network virtual appliance, cannot run a sensor'
+            $rows[-1].Reason | Should -Be 'Not onboarded, no endpoint detection found'
+            $partial = @(Get-EbrOnboardingGapRows -Known ($known | Where-Object OnboardingStatus -ne 'Onboarded') -Azure $azure -Hosts $hosts -Appliances $appliances -KnownIsComplete $false)
+            $partial | Where-Object DeviceName -in 'new-01', 'dfc-01' | Should -BeNullOrEmpty
+            ($partial | Where-Object DeviceName -eq 'cs-01.corp.example').Product | Should -Be 'CrowdStrike Falcon'
+            $noAzure = @(Get-EbrOnboardingGapRows -Known $known -Azure $null -Hosts $null -Appliances $null -KnownIsComplete $false)
+            ($noAzure | Where-Object DeviceName -eq 'cs-01.corp.example').Reason | Should -Be 'Not onboarded, no endpoint detection found'
+            ($noAzure | Where-Object DeviceName -eq 'old-01').Reason | Should -Be 'Operating system not supported by the sensor'
+        }
+
+        It 'derives EW.1-GAPS from the context, UNAVAILABLE without the Defender device list' {
+            $r = @{ 'EW.1-EDR' = (New-EbrResult -ResultId 'EW.1-EDR' -Status 'OK' -Rows $azure) }
+            $ctx = [pscustomobject]@{ Results = $r }
+            $none = New-EbrOnboardingGapResult -Ctx $ctx
+            $none.Status | Should -Be 'UNAVAILABLE'
+            $none.Detail | Should -Match 'Not a zero'
+            $r['EW.1-VMS'] = New-EbrResult -ResultId 'EW.1-VMS' -Status 'OK' -Rows $known
+            $r['EW.1-EDR-HOSTS'] = New-EbrResult -ResultId 'EW.1-EDR-HOSTS' -Status 'OK' -Rows $hosts
+            $r['P0.6-APPLIANCES'] = New-EbrResult -ResultId 'P0.6-APPLIANCES' -Status 'OK' -Rows $appliances
+            $full = New-EbrOnboardingGapResult -Ctx $ctx
+            $full.Status | Should -Be 'OK'
+            @($full.Rows).Count | Should -Be 10
+            $full.Detail | Should -Match '^9 Azure virtual machines in Resource Graph\. 9 seen by Defender for Endpoint, 1 onboarded with an active sensor\. Not reporting with an active sensor, by reason: Covered by a third-party endpoint detection product: 3'
+            $full.Detail | Should -Not -Match ';'
+            # The derived item runs through the catalog like any other
+            $item = (Get-EbrQueryCatalog) | Where-Object Id -eq 'EW.1-GAPS'
+            $viaCatalog = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+            $viaCatalog.ResultId | Should -Be 'EW.1-GAPS'
+            @($viaCatalog.Rows).Count | Should -Be 10
+            $r['EW.1-GAPS'] = $full
+            (Get-EbrGapSummary $r) | Should -Match '^ Not reporting with an active sensor: 10\. By reason: covered by a third-party endpoint detection product \(3\)'
+        }
+    }
+
+    It 'keeps the manifest guidance and titles to the copy rules: no semicolons, arrows or emoji, and the greater-than sign only in navigation steps' {
+        $arrows = [regex]'[←-⇿➔➡▶►]|->|=>'
+        $emoji = [regex]'[☀-➿\uD83C-\uDBFF]'
+        foreach ($item in $catalog) {
+            foreach ($text in @($item.Title, $item.Notes)) {
+                $text | Should -Not -Match ';' -Because "$($item.Id): $text"
+                $arrows.IsMatch($text) | Should -BeFalse -Because "$($item.Id): $text"
+                $emoji.IsMatch($text) | Should -BeFalse -Because "$($item.Id): $text"
+                $text | Should -Not -Match '<' -Because "$($item.Id): $text"
+                # every > is a navigation step: a word, a space, the sign, a space, a word
+                ($text -replace '[A-Za-z0-9)] > [A-Za-z]', '') | Should -Not -Match '>' -Because "$($item.Id): $text"
+            }
         }
     }
 }
