@@ -75,12 +75,12 @@ class BudgetTests(unittest.TestCase):
     def test_identity_and_source_dedup_in_all_states(self):
         s = snapshot()
         for state in ('open', 'closed'):
-            for body in (budget.marker(s, s.findings[0]), f'Tracked from ({s.findings[0].source}).',
+            for body in (budget.tracking_body(s, s.findings[0]), f'Tracked from ({s.findings[0].source}).',
                          f'Original finding: {s.findings[0].source}.',
                          f'Original finding: {s.findings[0].source}. More context',
                          f'Source: `{s.findings[0].source}`',
                          f'<a href="{s.findings[0].source}">Finding</a>'):
-                inventory = budget.IssueInventory(True, (budget.Issue(4, state, body),))
+                inventory = budget.IssueInventory(True, (budget.Issue(4, state, body, title=budget.tracking_title(s.findings[0]), author=(9, 'controller')),), ((9, 'controller'),))
                 self.assertEqual(budget.existing_issue(s, s.findings[0], inventory), 4)
         inventory = budget.IssueInventory(True, (budget.Issue(4, 'open', s.findings[0].source + '4'),))
         self.assertIsNone(budget.existing_issue(s, s.findings[0], inventory))
@@ -95,10 +95,10 @@ class BudgetTests(unittest.TestCase):
     def test_uncertain_success_is_read_back_and_never_retried(self):
         s, issues, calls = snapshot(), [], []
         def inventory():
-            return budget.IssueInventory(True, tuple(issues))
+            return budget.IssueInventory(True, tuple(issues), ((9, 'controller'),))
         def create(title, body):
             calls.append(title)
-            issues.append(budget.Issue(7, 'open', body))
+            issues.append(budget.Issue(7, 'open', body, title=title, author=(9, 'controller')))
             raise TimeoutError('response lost after write')
         result = budget.defer(lambda: s, inventory, create)
         self.assertEqual(result, budget.Deferral('capped-deferral', s.head, (7,)))
@@ -128,8 +128,8 @@ class BudgetTests(unittest.TestCase):
         def read():
             return s if not issues else replace(s, human_requirements_met=False)
         with self.assertRaises(budget.Blocked):
-            budget.defer(read, lambda: budget.IssueInventory(True, tuple(issues)),
-                         lambda title, body: issues.append(budget.Issue(7, 'open', body)))
+            budget.defer(read, lambda: budget.IssueInventory(True, tuple(issues), ((9, 'controller'),)),
+                         lambda title, body: issues.append(budget.Issue(7, 'open', body, title=title, author=(9, 'controller'))))
         self.assertEqual(len(issues), 1)  # Keep issue for reconciliation; no rollback/duplicate.
 
 

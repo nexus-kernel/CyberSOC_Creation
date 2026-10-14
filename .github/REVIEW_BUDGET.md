@@ -224,7 +224,7 @@ PowerShell 7.4.7 was already installed locally. No system changes or credentials
 - All 238 Pester tests passed, zero failed/skipped/inconclusive/not-run.
 - All 83 Node tests passed, zero skipped, using the documented synthetic offline
   evidence fixture to exercise the optional evidence-pack comparison.
-- All 161 Python aggregate gate/policy/runtime tests passed. Actionlint 1.7.7,
+- All 172 Python aggregate gate/policy/runtime tests passed. Actionlint 1.7.7,
   Python compilation and full diff whitespace checks passed. Independent final
   review found no remaining findings for the disabled implementation; the reviewer
   independently reran all 161 Python tests and whitespace checks.
@@ -241,3 +241,36 @@ immediately; ordinary clean-gate or malformed fallback failures do not acquire
 retries. The regression tests failed against the prior implementation and pass
 with the fix. Independent scoped review found no remaining findings. No review
 request or thread resolution was performed as part of the correction.
+
+### Tracking association and native-policy hardening
+
+Every candidate issue, including legacy source-URL matches in open or closed
+issues, must have the configured controller's authenticated numeric author ID
+and login. Marker-bearing issues additionally require the complete expected
+title and body (priority, source and reviewed head). A matching untrusted or
+incomplete issue blocks reconciliation; it never authorizes clearance or a
+duplicate issue. Confirmed associations are hashed into the protected journal
+and checked on every reuse and admission. Changing only open/closed state is
+allowed. Editing a confirmed issue down to its marker or source URL blocks.
+Uncertain new writes require the complete marked association on readback.
+Legacy issues by other authors need an explicitly approved protected adoption
+mechanism; issues 4/5 are examples of deduplication, not backfill authorization.
+
+EBR retains its original native review policy: an explicit null reviewDecision
+means no native approval decision, not proof of human approval. APPROVED and
+explicit null retain their previous admission semantics; absent, inconsistent,
+REVIEW_REQUIRED and CHANGES_REQUESTED values block. Ports with a mandatory human
+approval policy must separately verify qualifying actual reviews; they must not
+copy EBR's null handling as evidence of approval.
+
+Opening deliveries deduplicate by GUID and validated event/action/payload before
+enrollment uniqueness checks. Conflicting redeliveries or distinct opening GUIDs
+block. The earliest raw opening remains the enrollment boundary, while the latest
+raw delivery remains the history watermark.
+
+Enrollment additionally requires the original non-redelivery opening delivery.
+A retained redelivery cannot replace expired original evidence, and any scoped
+activity before the apparent opening blocks enrollment. This closes the history
+gap found during independent review. Current validation: 172 Python, 238 Pester
+and 83 Node tests passed, with zero skips; actionlint, compilation and whitespace
+checks passed.

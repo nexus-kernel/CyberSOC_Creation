@@ -61,7 +61,7 @@ class DeliveryAPI:
         if endpoint == prefix:
             return deepcopy(self.hook)
         def metadata(e):
-            return {**{k: e[k] for k in ('id', 'guid', 'event', 'action')}, 'repository_id': 777, 'redelivery': False}
+            return {**{k: e[k] for k in ('id', 'guid', 'event', 'action')}, 'repository_id': 777, 'redelivery': e.get('redelivery', False)}
         if endpoint == prefix + '/deliveries?per_page=100':
             values = [metadata(e) for e in reversed(self.events)]
             return [values[i:i+100] for i in range(0, len(values), 100)] or [[]]
@@ -77,6 +77,51 @@ class HistoryTests(unittest.TestCase):
         self.api = DeliveryAPI()
         self.history = history.History(REPO, 1, REQUESTER, self.api)
         self.state = self.history.sync(pr(True))
+
+    def test_opening_redelivery_uses_one_guid_and_latest_raw_watermark(self):
+        duplicate = deepcopy(self.api.events[0])
+        duplicate['id'] = 3
+        duplicate['redelivery'] = True
+        self.api.events.append(duplicate)
+        state = self.history.sync(pr(True))
+        self.assertEqual(len(state['events']), 1)
+        self.assertEqual(state['anchor'], 3)
+        self.assertEqual(self.history.sync(pr(True), state), state)
+
+    def test_missing_original_opening_cannot_enroll_from_redelivery(self):
+        duplicate = deepcopy(self.api.events[0])
+        duplicate.update(id=3, redelivery=True)
+        for earlier in ([], [event(2, 'pull_request_review')]):
+            self.api.events = earlier + [duplicate]
+            with self.subTest(earlier=earlier), self.assertRaises(budget.Blocked):
+                self.history.sync(pr(True))
+
+    def test_activity_before_apparent_original_opening_blocks(self):
+        opening = deepcopy(self.api.events[0])
+        opening['id'] = 3
+        self.api.events = [event(2), opening]
+        with self.assertRaises(budget.Blocked):
+            self.history.sync(pr(True))
+
+    def test_conflicting_or_distinct_openings_block(self):
+        for change in ('payload', 'guid', 'action'):
+            duplicate = deepcopy(self.api.events[0])
+            duplicate['id'] = 3
+            if change == 'payload':
+                duplicate['payload']['pull_request']['draft'] = False
+            else:
+                duplicate[change] = 'different'
+            self.api.events = [self.api.events[0], duplicate]
+            with self.subTest(change=change), self.assertRaises(budget.Blocked):
+                self.history.sync(pr(True))
+
+    def test_opening_redelivery_cannot_skip_intervening_review(self):
+        duplicate = deepcopy(self.api.events[0])
+        duplicate['id'] = 3
+        self.api.events += [event(2, 'pull_request_review'), duplicate]
+        self.api.events[1]['payload']['pull_request'] = pr(True)
+        with self.assertRaises(budget.Blocked):
+            self.history.sync(pr(True))
 
     def test_prospective_only_and_missing_anchor(self):
         with self.assertRaises(budget.Blocked):
@@ -186,12 +231,12 @@ class FakeLive:
         return self.current, pr()
 
     def inventory(self):
-        return budget.IssueInventory(True, tuple(self.issues))
+        return budget.IssueInventory(True, tuple(self.issues), ((9, 'controller'),))
 
     def call(self, endpoint, method='GET', payload=None):
         self.posts.append(payload)
         if self.fail != 'before':
-            self.issues.append(budget.Issue(len(self.issues)+1, 'open', payload['body']))
+            self.issues.append(budget.Issue(len(self.issues)+1, 'open', payload['body'], title=payload['title'], author=(9, 'controller')))
         if self.change_after_post:
             self.current = replace(self.current, revision='e'*64)
         if self.fail:
@@ -218,6 +263,20 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(len(self.live.posts), 1)
         self.assertTrue(any(next(iter(s['prs']['99']['writes'].values()), {}).get('state') == 'intent'
                             for s in self.journal.saves))
+
+    def test_uncertain_write_rejects_downgraded_readback_without_resend(self):
+        original = self.live.call
+        def changed(*args, **kwargs):
+            original(*args, **kwargs)
+            issue = self.live.issues[0]
+            self.live.issues[0] = replace(issue, body=self.live.current.findings[0].source)
+            raise TimeoutError('lost response')
+        self.live.call = changed
+        for _ in range(2):
+            with self.assertRaises(budget.Blocked):
+                self.controller.defer()
+        self.assertEqual(len(self.live.posts), 1)
+        self.assertEqual(next(iter(self.journal.state['prs']['99']['writes'].values()))['state'], 'intent')
 
     def test_uncertain_absent_write_is_not_retried_after_restart(self):
         self.live.fail = 'before'
@@ -354,6 +413,7 @@ class LiveAPI:
         self.resolved = False
         self.reactions = []
         self.reviews = []
+        self.review_decision = 'APPROVED'
         self.state = {'hook': {}, 'anchor': 1, 'events': [
             {'event': 'issue_comment', 'payload': {'comment': self.comments[0]}},
             {'event': 'pull_request_review_comment', 'payload': {'comment': self.inline[0]}}],
@@ -368,7 +428,7 @@ class LiveAPI:
             return deepcopy(self.current_pr)
         if endpoint == 'graphql':
             return {'data': {'repository': {'pullRequest': {
-                'headRefOid': SHA, 'baseRefOid': 'b'*40, 'reviewDecision': 'APPROVED',
+                'headRefOid': SHA, 'baseRefOid': 'b'*40, 'reviewDecision': self.review_decision,
                 'reviewThreads': {'nodes': [{'id': 'thread101', 'isResolved': self.resolved,
                                             'comments': {'nodes': [{'databaseId': 101}]}}],
                                   'pageInfo': {'hasNextPage': False, 'endCursor': None}}}}}}
@@ -383,7 +443,7 @@ class LiveAPI:
             return [deepcopy(values[endpoint])]
         if endpoint == prefix + '/issues' and method == 'POST':
             number = len(self.issues)+1
-            self.issues.append({'id': number, 'number': number, 'state': 'open', 'body': payload['body']})
+            self.issues.append({'id': number, 'number': number, 'state': 'open', 'body': payload['body'], 'title': payload['title'], 'user': REQUESTER})
             return self.issues[-1]
         raise AssertionError(endpoint)
 
@@ -392,8 +452,86 @@ class LiveIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.api = LiveAPI()
         self.journal = MemoryJournal({'version': 1, 'prs': {'99': self.api.state}, 'locks': {}})
-        self.live = runtime.Live(REPO, 99, self.api)
+        self.live = runtime.Live(REPO, 99, self.api, issue_author=REQUESTER)
         self.controller = runtime.Controller(REPO, 99, self.journal, FakeHistory(), self.live)
+
+    def test_tracking_issue_requires_author_and_complete_association(self):
+        snap, _ = self.live.snapshot(self.api.state)
+        finding = snap.findings[0]
+        for state in ('open', 'closed'):
+            for author, body in ((HUMAN, budget.tracking_body(snap, finding)),
+                                 (HUMAN, finding.source),
+                                 (REQUESTER, budget.marker(snap, finding))):
+                self.api.issues = [{'id': 1, 'number': 1, 'state': state, 'user': author,
+                                    'title': budget.tracking_title(finding), 'body': body}]
+                with self.subTest(state=state, author=author, body=body), self.assertRaises(budget.Blocked):
+                    self.controller.defer()
+                self.assertEqual(len(self.api.issues), 1)
+
+    def test_confirmed_issue_edits_block_admission_and_reuse(self):
+        self.controller.defer()
+        original = deepcopy(self.api.issues[0])
+        snap, _ = self.live.snapshot(self.api.state)
+        finding = snap.findings[0]
+        for body in (budget.marker(snap, finding), finding.source,
+                     original['body'] + '\nChanged association'):
+            self.api.issues[0] = {**original, 'body': body}
+            for operation in (lambda: self.controller.admit(SHA), self.controller.defer):
+                with self.subTest(body=body), self.assertRaises(budget.Blocked):
+                    operation()
+            self.assertEqual(len(self.api.issues), 1)
+        self.api.issues[0] = {**original, 'state': 'closed'}
+        self.assertEqual(self.controller.admit(SHA)['clearance_basis'], 'capped-deferral')
+
+    def test_trusted_legacy_association_is_pinned_after_adoption(self):
+        source = self.api.inline[0]['html_url']
+        self.api.issues = [{'id': 1, 'number': 1, 'state': 'closed', 'user': REQUESTER,
+                            'title': 'Existing tracking issue', 'body': 'Context: ' + source}]
+        self.controller.defer()
+        self.assertEqual(len(self.api.issues), 1)
+        self.controller.admit(SHA)
+        self.api.issues[0]['body'] = source
+        for operation in (lambda: self.controller.admit(SHA), self.controller.defer):
+            with self.assertRaises(budget.Blocked):
+                operation()
+        self.assertEqual(len(self.api.issues), 1)
+
+    def test_native_null_preserves_ebr_policy_but_missing_or_required_blocks(self):
+        self.api.review_decision = None
+        self.controller.defer()
+        self.controller.admit(SHA)
+        for decision in ('REVIEW_REQUIRED', 'CHANGES_REQUESTED'):
+            self.api.review_decision = decision
+            with self.subTest(decision=decision), self.assertRaises(budget.Blocked):
+                self.controller.defer()
+        original = self.live.call
+        def missing(endpoint, *args, **kwargs):
+            result = original(endpoint, *args, **kwargs)
+            if endpoint == 'graphql':
+                del result['data']['repository']['pullRequest']['reviewDecision']
+            return result
+        self.live.call = missing
+        with self.assertRaises(budget.Blocked):
+            self.controller.defer()
+
+    def test_native_decision_must_be_consistent_across_thread_pages(self):
+        original = self.live.call
+        calls = []
+        def changing(endpoint, *args, **kwargs):
+            result = original(endpoint, *args, **kwargs)
+            if endpoint == 'graphql':
+                calls.append(1)
+                node = result['data']['repository']['pullRequest']
+                if len(calls) == 1:
+                    node['reviewThreads']['pageInfo'] = {'hasNextPage': True, 'endCursor': 'next'}
+                else:
+                    node['reviewDecision'] = None
+                    node['reviewThreads']['nodes'] = []
+            return result
+        self.live.call = changing
+        with self.assertRaises(budget.Blocked):
+            self.controller.defer()
+        self.assertEqual(self.api.issues, [])
 
     def test_real_snapshot_journal_receipt_survives_own_bookkeeping(self):
         receipt = self.controller.defer()
@@ -581,7 +719,7 @@ class RecordedCodexFormatTests(unittest.TestCase):
         api.reviews = [review]
         api.state['events'].append({'event': 'pull_request_review', 'payload': {'review': deepcopy(review)}})
         journal = MemoryJournal({'version': 1, 'prs': {'99': api.state}, 'locks': {}})
-        live = runtime.Live(REPO, 99, api)
+        live = runtime.Live(REPO, 99, api, issue_author=REQUESTER)
         return api, runtime.Controller(REPO, 99, journal, FakeHistory(), live)
 
     def test_authenticated_recorded_submission_and_badge_pass_live_deferral_and_admission(self):

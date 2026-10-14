@@ -123,21 +123,36 @@ def marker(snapshot, finding):
     return '<!-- codex-deferred:' + hashlib.sha256(identity.encode()).hexdigest() + ' -->'
 
 
+def tracking_title(finding):
+    return f'[{finding.priority}] {finding.title}'
+
+
+def tracking_body(snapshot, finding):
+    return (f'{marker(snapshot, finding)}\n\n'
+            f'Deferred {finding.priority} Code Review finding after the PR lifetime '
+            f'budget of {MAX_ROUNDS} rounds. This is not Codex approval.\n\n'
+            f'Source: {finding.source}\nReviewed head: `{snapshot.head}`\n')
+
+
 @dataclass(frozen=True)
 class Issue:
     number: int
     state: str
     body: str
     is_pull_request: bool = False
+    title: str = ''
+    author: tuple[int, str] | None = None
 
 
 @dataclass(frozen=True)
 class IssueInventory:
     complete: bool
     issues: tuple[Issue, ...]
+    # Trusted controller configuration, never inferred from issue content.
+    trusted_authors: tuple[tuple[int, str], ...] = ()
 
 
-def existing_issue(snapshot, finding, inventory):
+def existing_issue(snapshot, finding, inventory, *, require_marked=False):
     if inventory.complete is not True:
         raise Blocked('Complete all-state issue inventory required; search is insufficient.')
     seen, matches = set(), []
@@ -157,7 +172,15 @@ def existing_issue(snapshot, finding, inventory):
         if (not issue.is_pull_request and legacy
                 and sum(f.source == finding.source for f in snapshot.findings) != 1):
             raise Blocked('Ambiguous legacy source-only issue; reconcile finding identities before writing.')
-        if not issue.is_pull_request and (marker(snapshot, finding) in issue.body or legacy):
+        marked = marker(snapshot, finding) in issue.body
+        if not issue.is_pull_request and (marked or legacy):
+            if require_marked and not marked:
+                raise Blocked('Recorded controller issue lost its tracking marker.')
+            if issue.author is None or issue.author not in inventory.trusted_authors:
+                raise Blocked('Tracking association has no trusted issue-author provenance.')
+            if marked and (issue.title != tracking_title(finding)
+                           or issue.body != tracking_body(snapshot, finding)):
+                raise Blocked('Marked issue does not contain the complete expected tracking association.')
             matches.append(issue.number)
     if len(matches) > 1:
         raise Blocked('Multiple existing issues match; reconcile without another write.')
@@ -195,16 +218,13 @@ def defer(read: Callable, inventory: Callable, create: Callable):
         number = existing_issue(original, finding, inventory())
         if number is None:
             unchanged()
-            body = (f'{marker(original, finding)}\n\n'
-                    f'Deferred {finding.priority} Code Review finding after the PR lifetime '
-                    f'budget of {MAX_ROUNDS} rounds. This is not Codex approval.\n\n'
-                    f'Source: {finding.source}\nReviewed head: `{original.head}`\n')
+            body = tracking_body(original, finding)
             try:
-                create(f'[{finding.priority}] {finding.title}', body)
+                create(tracking_title(finding), body)
             except Exception:
                 # A lost response can conceal a successful write. Never retry it.
                 pass
-            number = existing_issue(original, finding, inventory())
+            number = existing_issue(original, finding, inventory(), require_marked=True)
             if number is None:
                 raise Blocked('Issue write is unconfirmed; do not retry without reconciliation.')
         linked.append(number)

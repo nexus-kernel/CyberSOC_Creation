@@ -111,7 +111,7 @@ class History:
                     or payload['repository']['id'] != item['repository_id']):
                 raise Blocked('Delivery authentication/context mismatch.')
             details.append({'id': item['id'], 'guid': item['guid'], 'event': item['event'],
-                            'action': item['action'], 'payload': payload})
+                            'action': item['action'], 'redelivery': item['redelivery'], 'payload': payload})
         second = all_items(self.prefix + '/deliveries?per_page=100', self.call)
         if [i['id'] for i in items] != [i['id'] for i in second] or self.call(self.prefix) != hook:
             raise Blocked('Delivery history changed; retry without mutation.')
@@ -121,15 +121,32 @@ class History:
         hook, deliveries = self.batch()
         number = pr['number']
         if previous is None:
-            openings = [d for d in deliveries if d['event'] == 'pull_request' and d['action'] == 'opened'
-                        and d['payload']['pull_request']['number'] == number]
+            openings_by_guid = {}
+            for delivery in deliveries:
+                if (delivery['event'] != 'pull_request' or delivery['action'] != 'opened'
+                        or delivery['payload']['pull_request']['number'] != number):
+                    continue
+                previous_opening = openings_by_guid.get(delivery['guid'])
+                if previous_opening is not None:
+                    if any(delivery[key] != previous_opening[key] for key in ('event', 'action', 'payload')):
+                        raise Blocked('Conflicting opening-event redelivery.')
+                    # Keep the earliest raw delivery as the enrollment boundary.
+                    if previous_opening['id'] < delivery['id']:
+                        continue
+                openings_by_guid[delivery['guid']] = delivery
+            openings = list(openings_by_guid.values())
             # Initial enrollment is prospective, while still a pristine draft.
-            if (len(openings) != 1 or pr.get('draft') is not True or pr['state'] != 'open'
+            if (len(openings) != 1 or openings[0].get('redelivery') is not False
+                    or pr.get('draft') is not True or pr['state'] != 'open'
                     or openings[0]['payload']['pull_request']['draft'] is not True
                     or openings[0]['payload']['pull_request']['created_at'] != pr['created_at']
                     or date(hook['created_at']) >= date(pr['created_at'])):
                 raise Blocked('No prospective opening evidence; historical PRs cannot enroll.')
             start = openings[0]['id']
+            if any(d['id'] < start and
+                   d['payload'].get('pull_request', d['payload'].get('issue', {})).get('number') == number
+                   for d in deliveries):
+                raise Blocked('Scoped activity precedes original opening evidence.')
             state = {'hook': hook, 'anchor': start, 'events': [], 'guids': {}, 'summaries': {},
                      'rounds': {}, 'latest': {}, 'requests': {}, 'writes': {}, 'pending': None,
                      'created_at': pr['created_at']}

@@ -12,7 +12,8 @@ import sys
 import uuid
 
 from review_budget import (Blocked, Finding, Snapshot, Issue, IssueInventory,
-                           deferral_candidates, existing_issue, marker, request_allowed)
+                           deferral_candidates, existing_issue, marker, request_allowed,
+                           tracking_body, tracking_title)
 from review_budget_store import GitJournal, api, all_items
 from review_budget_history import History, digest, is_bot, rounds, SUMMARY
 
@@ -20,6 +21,12 @@ ENABLED = False
 HOOK_ID = None
 REQUESTER = None  # Verified {'id': integer, 'login': string}; never PR input.
 LEDGER_REPOSITORY = None  # Separately provisioned controller-only state repository.
+
+
+def issue_association(inventory, number):
+    issue, = (issue for issue in inventory.issues if issue.number == number)
+    # State is deliberately excluded: closing a genuine tracking issue is valid.
+    return digest([issue.number, issue.author, issue.title, issue.body])
 
 
 def require_enabled(repo):
@@ -105,9 +112,10 @@ def is_codex_review_notice(body, commit_id):
 
 
 class Live:
-    def __init__(self, repo, number, call=api):
+    def __init__(self, repo, number, call=api, issue_author=None):
         self.repo, self.number, self.call = repo, number, call
         self.prefix = f'repos/{repo}'
+        self.issue_author = issue_author
 
     def pr(self):
         return self.call(f'{self.prefix}/pulls/{self.number}')
@@ -117,8 +125,10 @@ class Live:
         first = all_items(endpoint, self.call)
         if first != all_items(endpoint, self.call):
             raise Blocked('Issue inventory changed while paginating.')
+        trusted = () if self.issue_author is None else ((self.issue_author['id'], self.issue_author['login']),)
         return IssueInventory(True, tuple(Issue(i['number'], i['state'], i.get('body') or '',
-                                               'pull_request' in i) for i in first))
+                                               'pull_request' in i, i.get('title', ''),
+                                               (i['user']['id'], i['user']['login'])) for i in first), trusted)
 
     def threads(self, pr):
         owner, name = self.repo.split('/')
@@ -130,15 +140,18 @@ class Live:
             }
           } }
         }'''
-        cursor, seen, result = None, set(), {}
+        cursor, seen, result, decisions = None, set(), {}, set()
         for _ in range(1000):
             response = self.call('graphql', 'POST', {'query': query, 'variables': {
                 'owner': owner, 'name': name, 'number': self.number, 'after': cursor}})
             if response.get('errors'):
                 raise Blocked('Incomplete review-thread data.')
             node = response['data']['repository']['pullRequest']
+            if 'reviewDecision' not in node:
+                raise Blocked('Native review decision is missing.')
+            decisions.add(node['reviewDecision'])
             if (node['headRefOid'] != pr['head']['sha'] or node['baseRefOid'] != pr['base']['sha']
-                    or node['reviewDecision'] not in (None, 'APPROVED')):
+                    or node['reviewDecision'] not in (None, 'APPROVED') or len(decisions) != 1):
                 raise Blocked('Human review requirements or PR references changed.')
             page = node['reviewThreads']
             for thread in page['nodes']:
@@ -147,7 +160,7 @@ class Live:
                     raise Blocked('Unclassifiable review thread.')
                 result[roots[0]['databaseId']] = thread['isResolved']
             if page['pageInfo']['hasNextPage'] is False:
-                return result
+                return result, node['reviewDecision']
             cursor = page['pageInfo']['endCursor']
             if not cursor or cursor in seen:
                 raise Blocked('Broken review-thread cursor.')
@@ -159,7 +172,7 @@ class Live:
         comments = all_items(f'{self.prefix}/issues/{self.number}/comments?per_page=100', self.call)
         reviews = all_items(f'{self.prefix}/pulls/{self.number}/reviews?per_page=100', self.call)
         inline = all_items(f'{self.prefix}/pulls/{self.number}/comments?per_page=100', self.call)
-        threads = self.threads(pr)
+        threads, native_decision = self.threads(pr)
         if (pr['state'] != 'open' or pr.get('draft') is not False or pr.get('mergeable') is not True
                 or not pr['head'].get('repo') or pr['head']['repo']['full_name'] != self.repo
                 or pr['base']['repo']['full_name'] != self.repo):
@@ -207,6 +220,10 @@ class Live:
                 raise Blocked('Pending or unknown review state.')
         if 'CHANGES_REQUESTED' in decisions.values():
             raise Blocked('Outstanding human or bot changes request.')
+        # EBR retains its original native-review policy: explicit null is not
+        # proof of human approval, but is permitted when GitHub reports no native
+        # decision. Repositories mandating a human approval need an extra rule.
+        human_requirements_met = native_decision in (None, 'APPROVED')
         findings = []
         # Security findings cannot be guessed from identical inline formatting:
         # if Security Review exists, require the original strict clean gate.
@@ -249,11 +266,12 @@ class Live:
         # history and request reservations remain part of the evidence digest.
         evidence_state = {k: v for k, v in state.items() if k not in ('writes', 'deferral', 'anchor')}
         evidence = {'pr': pr, 'comments': comments, 'reviews': reviews, 'inline': inline,
-                    'threads': threads, 'reactions': reactions, 'state': evidence_state}
+                    'threads': threads, 'native_decision': native_decision,
+                    'reactions': reactions, 'state': evidence_state}
         if self.pr() != pr:
             raise Blocked('PR changed during snapshot.')
         return Snapshot(self.repo, self.number, pr['head']['sha'], pr['base']['sha'], digest(evidence),
-                        True, True, True, True, security, False, rounds(state), tuple(findings)), pr
+                        True, True, True, human_requirements_met, security, False, rounds(state), tuple(findings)), pr
 
 
 class Controller:
@@ -287,28 +305,33 @@ class Controller:
                 unchanged()
                 identity = marker(original, finding)
                 inventory = self.live.inventory()
-                number = existing_issue(original, finding, inventory)
                 _, document = tx.read()
                 intent = document['prs'][self.key]['writes'].get(identity)
+                number = existing_issue(original, finding, inventory,
+                                        require_marked=bool(intent and intent.get('marked', True)))
+                if (number is not None and intent and intent.get('state') == 'confirmed'
+                        and issue_association(inventory, number) != intent.get('association')):
+                    raise Blocked('Previously confirmed tracking association changed.')
                 if number is None:
                     if intent is not None:
                         raise Blocked('Uncertain prior issue intent: read-only reconciliation required; never resend.')
                     intent = {'state': 'intent', 'source': finding.source, 'head': original.head}
                     tx.update(lambda d: d['prs'][self.key]['writes'].__setitem__(identity, intent))
                     unchanged()
-                    body = (f'{identity}\n\nDeferred {finding.priority} Code Review finding at the '
-                            f'three-round lifetime cap; not Codex approval.\n\nSource: {finding.source}\n'
-                            f'Reviewed head: `{original.head}`\n')
+                    body = tracking_body(original, finding)
                     try:
                         self.live.call(f'repos/{self.repo}/issues', 'POST',
-                                       {'title': f'[{finding.priority}] {finding.title}', 'body': body})
+                                       {'title': tracking_title(finding), 'body': body})
                     except Exception:
                         pass
-                    number = existing_issue(original, finding, self.live.inventory())
+                    inventory = self.live.inventory()
+                    number = existing_issue(original, finding, inventory, require_marked=True)
                     if number is None:
                         raise Blocked('Issue write unconfirmed; durable intent prevents resend after restart.')
                 tx.update(lambda d: d['prs'][self.key]['writes'].__setitem__(identity,
-                          {'state': 'confirmed', 'number': number, 'source': finding.source, 'head': original.head}))
+                          {'state': 'confirmed', 'number': number, 'source': finding.source, 'head': original.head,
+                           'marked': any(marker(original, finding) in i.body for i in inventory.issues if i.number == number),
+                           'association': issue_association(inventory, number)}))
             unchanged()
             # Record evidence only after all issues read back and final live check.
             receipt = {'head': original.head, 'base': original.base, 'revision': original.revision,
@@ -374,7 +397,9 @@ class Controller:
         for finding in candidates:
             recorded = state['writes'].get(marker(snapshot, finding), {})
             if (recorded.get('state') != 'confirmed' or
-                    existing_issue(snapshot, finding, inventory) != recorded.get('number')):
+                    existing_issue(snapshot, finding, inventory,
+                                   require_marked=recorded.get('marked', True)) != recorded.get('number') or
+                    issue_association(inventory, recorded['number']) != recorded.get('association')):
                 raise Blocked('Linked issue missing, changed or unconfirmed.')
         fresh_state = self.history.sync(self.live.pr(), document['prs'][self.key])
         fresh, fresh_pr = self.live.snapshot(fresh_state)
@@ -387,7 +412,7 @@ class Controller:
 def controller(repo, number):
     require_enabled(repo)
     return Controller(repo, number, GitJournal(LEDGER_REPOSITORY, source_repo=repo),
-                      History(repo, HOOK_ID, REQUESTER), Live(repo, number))
+                      History(repo, HOOK_ID, REQUESTER), Live(repo, number, issue_author=REQUESTER))
 
 
 def check(repo, number, expected_sha=None):
