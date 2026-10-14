@@ -1,0 +1,14 @@
+name: Retired direct Reviewed CI entry point
+
+# Historical runs remain available for deduplication. This file cannot execute CI.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  retired:
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Use review-clearance.yml; direct Reviewed CI dispatch is retired."
