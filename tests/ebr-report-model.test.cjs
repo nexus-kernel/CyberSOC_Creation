@@ -232,7 +232,8 @@ test('tenant score comes from POS.6 when the context file has none, with movemen
   put(p, 'POS.6-TREND', [{ Date: '2026-10-10', Current: 412.5, Max: 1000, Percent: 41.25 }, { Date: '2026-07-15', Current: 380, Max: 1000, Percent: 38 }])
   let m = build(p)
   assert.equal(m.tenantScore.value, 41.3)
-  assert.equal(m.tenantScore.delta.points, 32.5); assert.equal(m.tenantScore.delta.since, 'Jul 2026')
+  // Movement reads in percentage points of the maximum, with the starting percentage, as the cloud score does.
+  assert.deepEqual(m.tenantScore.delta, { points: 3.3, since: 'Jul 2026', from: 38 })
   assert.equal(m.tenantScore.categories.length, 4)
   assert.match(m.tenantScore.source, /^POS\.6\./)
   assert.ok(!m.review.some(n => n.title === 'Microsoft tenant Secure Score'))
@@ -263,8 +264,9 @@ test('cloud score uses points, shows a gain only when the trend is not declining
   put(p, 'POS.7', [{ Month: '2026-07-01', Current: 36, Max: 80, Percent: 45 }, { Month: '2026-10-01', Current: 40, Max: 80, Percent: 50 }])
   let m = build(p)
   assert.equal(m.cloudScore.value, 50)
-  assert.deepEqual(m.cloudScore.delta, { points: 5, since: 'Jul 2026' })
-  assert.match(m.headline.find(t => /Defender for Cloud/.test(t.label)).sub, /Up 5 points since Jul 2026/)
+  assert.deepEqual(m.cloudScore.delta, { points: 5, since: 'Jul 2026', from: 45 })
+  assert.match(m.headline.find(t => /Defender for Cloud/.test(t.label)).sub, /^Up 5 points since Jul 2026, from 45%$/)
+  assert.ok(!/points across|of \d+ points/.test(m.cloudScore.note), 'the note never states the points available')
   p.results['POS.7'][0].Percent = 60
   m = build(p)
   assert.equal(m.cloudScore.delta, null)
@@ -279,7 +281,9 @@ test('context supplies tenure, tenant score and dated delivery, and rejects malf
   assert.equal(m.service.months, 37)
   assert.equal(m.headline[0].label, 'Months of managed security')
   assert.equal(m.tenantScore.value, 45)
-  assert.deepEqual(m.tenantScore.delta, { points: 5, since: 'Jul 2026' })
+  assert.deepEqual(m.tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 })
+  assert.match(m.headline.find(t => /tenant Secure Score/.test(t.label)).sub, /^Up 5 points since Jul 2026, from 40%$/)
+  assert.ok(!/of \d+ points/.test(m.tenantScore.note), 'the note never states the points available')
   assert.equal(m.tenantScore.categories.length, 2)
   assert.equal(m.delivered.length, 1)
   p.context.TenantScore.ReadDate = '2026-02-31'
@@ -288,13 +292,16 @@ test('context supplies tenure, tenant score and dated delivery, and rejects malf
   assert.equal(bad.tenantScore, null)
   assert.equal(bad.service, null)
 })
-test('passwordless transition appears only when retiring methods are in use', () => {
+test('the MFA method update appears only when retiring methods are in use, and is never framed as passwordless', () => {
   const p = pack()
   put(p, 'IA.2', [{ Bucket: 'Retiring: SMS or voice', DistinctUsers: 7 }, { Bucket: 'Phishing-resistant', DistinctUsers: 3 }, { Bucket: 'Authenticator or OTP', DistinctUsers: 50 }])
   const m = build(p)
-  assert.equal(m.passwordless.retiring, 7)
-  assert.match(m.whatNext, /February 1, 2027/)
-  assert.ok(m.priorities.some(x => x.title === 'Passwordless transition'))
+  assert.equal(m.mfaMethods.retiring, 7)
+  assert.match(m.whatNext, /MFA method update already scoped ahead of February 1, 2027/)
+  const update = m.priorities.find(x => x.id === 'IA.2')
+  assert.equal(update.title, 'MFA method update')
+  assert.match(update.action, /Microsoft Authenticator or a phishing-resistant method/)
+  assert.ok(!/passwordless|passkey/i.test(JSON.stringify([m.priorities, m.whatNext, m.pillars])), 'no passwordless or passkey wording')
   put(p, 'IA.2', [{ Bucket: 'Authenticator or OTP', DistinctUsers: 50 }])
   assert.ok(!/February/.test(build(p).whatNext))
 })
@@ -756,7 +763,10 @@ test('MFA at sign-in and admin portal MFA read In force from the Conditional Acc
   const scoped = m.controls.find(c => c.id === 'IA.1')
   assert.deepEqual([scoped.value, scoped.mark, scoped.boolean, scoped.pct, scoped.good, scoped.total, scoped.ratioText], ['Mostly enforced', 'P', true, 75, 150, 200, '150 of 200'])
   assert.match(m.priorities.find(x => x.id === 'IA.1').evidence, /applies to selected users, applications or conditions only\. 50 of 200 members showed no multifactor authentication/)
-  assert.ok(m.hardening.some(h => h.id === 'IA.1' && h.value === 50))
+  // The hardening count is written against the same members as the control, so the executive summary reads
+  // "50 of 200" beside a control reading "150 of 200".
+  assert.ok(m.hardening.some(h => h.id === 'IA.1' && h.value === 50 && h.of === 200))
+  assert.deepEqual(m.tiers.hardening.find(r => r.id === 'IA.1'), { label: 'Members who signed in without MFA, last 30 days', value: '50 of 200', id: 'IA.1' })
   assert.ok(m.presenter.some(n => n.title === 'MFA at sign-in' && /reads mostly enforced from the Conditional Access policy, because the enabled policy applies to selected users, applications or conditions only and the sign-in ratio/.test(n.text)))
   assert.deepEqual([m.controls.find(c => c.id === 'IA.1-ADMINPORTAL').value, m.controls.find(c => c.id === 'IA.1-ADMINPORTAL').ratioText], ['Mostly enforced', '19 of 20'])
   assert.equal(m.pillars[0].headline, 'Multifactor authentication covers most sign-ins, with full coverage sequenced')
@@ -826,13 +836,13 @@ test('the Defender for Cloud score movement is measured to the current score, so
   put(p, 'POS.7', [{ Month: '2026-07-01', Current: 123.82, Max: 238, Percent: 52 }, { Month: '2026-08-01', Current: 114.09, Max: 232, Percent: 49.2 }, { Month: '2026-10-01', Current: 133.32, Max: 232, Percent: 57.5 }])
   const m = build(p)
   assert.equal(m.cloudScore.value, 57.2)
-  assert.deepEqual(m.cloudScore.delta, { points: 5.2, since: 'Jul 2026' })
+  assert.deepEqual(m.cloudScore.delta, { points: 5.2, since: 'Jul 2026', from: 52 })
   p.results['POS.1'][0].Current = 120
   assert.equal(build(p).cloudScore.delta, null, 'a current score below the first month shows no gain')
   // The export can lag the current reading: a last trend point below the first month does not hide a real gain.
   p.results['POS.1'][0].Current = 132.75
   p.results['POS.7'][2].Percent = 50
-  assert.deepEqual(build(p).cloudScore.delta, { points: 5.2, since: 'Jul 2026' })
+  assert.deepEqual(build(p).cloudScore.delta, { points: 5.2, since: 'Jul 2026', from: 52 })
 })
 test('the benchmark meter reads the Microsoft cloud security benchmark alone when a preview edition or another standard is assigned too', () => {
   const p = pack()

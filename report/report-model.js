@@ -82,7 +82,7 @@
       workspaces: [...new Map(array(p.Workspaces).map(w => [String(w.CustomerId || w.ResourceId || w.Name).toLowerCase(), w])).values()],
       depth: ['brief', 'balanced', 'detailed'].includes(data.depth) ? data.depth : 'balanced',
       service: null, headline: [], tiers: { outcomes: [], controls: [], hardening: [], benchmark: [] }, tierSummary: null, whatNext: '',
-      response: null, alerts: null, threats: null, detections: null, trend: [], pillars: [], controls: [], priorities: [], delivered: [], passwordless: null,
+      response: null, alerts: null, threats: null, detections: null, trend: [], pillars: [], controls: [], priorities: [], delivered: [], mfaMethods: null,
       cloudScore: null, tenantScore: null, posture: {}, review: [], presenter: [], unmeasured: [], notApplicable: [], issues: array(data.issues).map(clean),
       manifest: manifest.map(r => ({ id: clean(r.ResultId), status: clean(r.Status), rows: count(r.Rows), date: date(r.ReadTimeUtc) })),
       tenantWorkspace: clean(p.TenantWideTables?.SigninLogs || 'Not recorded'),
@@ -212,8 +212,8 @@
       const sample = selected.n < 20 ? ` Based on ${fmt(selected.n)} closed alerts.` : ` Based on ${fmt(selected.n)} closed alerts.`
       m.response = {
         cohort: selected.cohort, scope: selected.scope, analyst: selected.analyst, n: selected.n, key: selected.key,
-        median: { value: duration(selected.median), minutes: selected.median, label: selected.scope === 'High' ? 'Median time to close, high severity' : 'Median time to close', note: `Creation to recorded close.${sample}`, source: source(selected.id) },
-        p90: chosen ? { value: duration(selected.p90), minutes: selected.p90, label: selected.scope === 'High' ? '90th percentile close, high severity' : '90th percentile close', note: `Nine in ten alerts closed within this time.${sample}`, source: source(selected.id) } : null,
+        median: { value: duration(selected.median), minutes: selected.median, label: selected.scope === 'High' ? 'Median time to close, high severity alerts' : 'Median time to close, all alerts', note: `Creation to recorded close.${sample}`, source: source(selected.id) },
+        p90: chosen ? { value: duration(selected.p90), minutes: selected.p90, label: selected.scope === 'High' ? '90th percentile close, high severity alerts' : '90th percentile close, all alerts', note: `Nine in ten alerts triaged, investigated and resolved within this time.${sample}`, source: source(selected.id) } : null,
         small: selected.n < 20
       }
     }
@@ -694,8 +694,11 @@
     const criticalCves = has('BKL.1') ? (sum(critical, 'ExploitableCves') ?? 0) : null
     const exploitable = has('BKL.1') ? (sum(vmRows('BKL.1'), 'ExploitableCves') ?? 0) : null
     m.criticalCves = criticalCves
+    // A hardening count can carry the population it is counted against (of), so the executive summary
+    // reads "14 of 194" beside a control that reads "180 of 194" and the two figures reconcile at a glance.
     const hardening = []
-    const harden = (label, value, id, rank, roadmap) => { if (count(value) !== null && value > 0) hardening.push({ label: clean(label), value, id, rank, roadmap }) }
+    const harden = (label, value, id, rank, of = null) => { if (count(value) !== null && value > 0) hardening.push({ label: clean(label), value, id, rank, of: count(of) !== null && of >= value ? of : null }) }
+    const hardenText = h => h.of !== null ? `${fmt(h.value)} of ${fmt(h.of)}` : fmt(h.value)
     harden('Critical exploitable findings open', criticalCves, 'BKL.1', 1)
     harden('Virtual machines pending host encryption', encryption.total !== null ? encryption.total - encryption.good : null, 'DP.4', 8)
     harden('Users on a retiring MFA method', count(retiring?.DistinctUsers), 'IA.2', 3)
@@ -709,7 +712,10 @@
     harden('Storage accounts open to public networks', publicOff.total !== null ? publicOff.total - publicOff.good : null, 'DP.1', 10)
     harden('Virtual machines without Azure Backup', backup.total !== null ? backup.total - backup.good : null, 'DP.5b', 9)
     harden('Azure virtual machines pending endpoint onboarding', edr.total !== null ? edr.total - edr.good : null, 'EW.1', 4)
-    harden('Members who signed in without MFA, last 30 days', mfaRatio && !isInForce(mfa) ? mfaRatio.total - mfaRatio.good : mfa.total !== null && !mfa.boolean ? mfa.total - mfa.good : null, 'IA.1', 2)
+    // Counted against the same members as the Multifactor authentication required at sign-in control, so the
+    // executive summary figure and the control figure share their denominator.
+    const mfaPopulation = mfaRatio && !isInForce(mfa) ? mfaRatio : mfa.total !== null && !mfa.boolean ? { good: mfa.good, total: mfa.total } : null
+    harden('Members who signed in without MFA, last 30 days', mfaPopulation ? mfaPopulation.total - mfaPopulation.good : null, 'IA.1', 2, mfaPopulation ? mfaPopulation.total : null)
     harden('Open alerts referred for client action', m.alerts?.open ?? null, 'OUT.1', 99)
     m.hardening = hardening.sort((a, b) => a.rank - b.rank)
 
@@ -721,7 +727,7 @@
       if (unevaluated !== null) priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} members whose sign-ins could be evaluated showed no multifactor authentication in the last 30 days. Members whose only sign-ins reused a device session that no policy checked are not part of this figure.`, 'Deploy a report-only Conditional Access policy requiring multifactor authentication for all members to measure session coverage, confirm the identity provider sign-on rules, then move to enforcement in waves.', 'Every member sign-in evaluated by policy and covered by multifactor authentication, with documented exceptions.', 'IA.1')
       else priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} active members signed in without a recorded multifactor requirement in the last 30 days.`, 'Confirm exclusions and service accounts, pilot the Conditional Access change in report-only mode, then move to enforcement in waves.', 'Every intended user covered by validated policy, with documented exceptions.', 'IA.1')
     }
-    if (count(retiring?.DistinctUsers) > 0) priority(3, 'Passwordless transition', `${plural(retiring.DistinctUsers, 'user', 'users')} signed in with text message or voice in the last 30 days. Microsoft retires these methods on ${RETIREMENT.label}.`, 'Enable passkeys under change control, register the affected users first in guided waves, then govern service and shared accounts.', `${RETIREMENT.label} arrives as a non-event. No blocked sign-ins and phishing-resistant sign-in as the default.`, 'IA.2')
+    if (count(retiring?.DistinctUsers) > 0) priority(3, 'MFA method update', `${plural(retiring.DistinctUsers, 'user', 'users')} signed in with text message or voice in the last 30 days. Microsoft retires these methods on ${RETIREMENT.label}.`, 'Notify the affected users, register each one on Microsoft Authenticator or a phishing-resistant method in guided waves, then remove text message and voice from the allowed methods under change control.', `${RETIREMENT.label} arrives as a non-event. Every user signs in with a stronger method and no sign-in is blocked.`, 'IA.2')
     if (edr.pct !== null && edr.pct < E_THRESHOLD) priority(4, 'Endpoint coverage', `${fmt(edr.total - edr.good)} of ${fmt(edr.total)} eligible Azure virtual machines are not yet reporting to endpoint detection.${reconciliation ? ' ' + reconciliation : ''}`, 'Confirm ownership and operating state, complete onboarding and verify sensor health.', 'Every eligible Azure virtual machine reports through an active sensor.', 'EW.1')
     if (antimalware && antimalware.pct !== null && antimalware.pct < E_THRESHOLD) priority(5, 'Anti-malware configuration', `${fmt(antimalware.total - antimalware.good)} of ${fmt(antimalware.total)} Azure virtual machines do not meet the real-time protection configuration checks.`, 'Apply the endpoint security baseline to the affected platforms and verify through the configuration assessment.', 'Real-time protection enforced on every onboarded Azure virtual machine.', 'EW.3')
     if (plan.pct !== null && plan.pct < E_THRESHOLD || (aiRow && count(aiRow.Resources) - count(aiRow.Covered) > 0)) priority(6, 'Workload protection scope', `${plan.total !== null && plan.total - plan.good > 0 ? `${plural(plan.total - plan.good, 'eligible resource is', 'eligible resources are')} outside Standard plan coverage.` : ''}${aiRow && count(aiRow.Resources) - count(aiRow.Covered) > 0 ? ` ${plural(count(aiRow.Resources) - count(aiRow.Covered), 'AI service resource is', 'AI service resources are')} not yet covered.` : ''}`, 'Validate resource-level coverage in Defender for Cloud and agree the intended protection scope, including AI services.', 'Every agreed resource has workload protection or a documented exception.', 'DR.2')
@@ -735,9 +741,11 @@
     m.priorities.sort((a, b) => a.rank - b.rank)
     if (!m.priorities.length) priority(20, 'Baseline validation', 'The collected evidence does not identify an open hardening item.', 'Confirm the intended control scope with the client and complete any outstanding portal readings.', 'An agreed, evidence-backed baseline for the next review.', 'P0.1')
 
-    // Passwordless transition.
+    // MFA methods: the users still signing in with text message or voice, which Microsoft retires, and the
+    // stronger methods already in use. The report frames this as updating each user's MFA method, never as a
+    // passwordless programme (Oct 14, 2026).
     if (count(retiring?.DistinctUsers) > 0 || count(resistant?.DistinctUsers) > 0) {
-      m.passwordless = { retiring: count(retiring?.DistinctUsers) ?? 0, resistant: count(resistant?.DistinctUsers) ?? 0, authenticator: count(authenticator?.DistinctUsers) ?? 0, deadline: RETIREMENT.label, source: source('IA.2', 'Methods used in successful sign-ins, last 30 days.') }
+      m.mfaMethods = { retiring: count(retiring?.DistinctUsers) ?? 0, resistant: count(resistant?.DistinctUsers) ?? 0, authenticator: count(authenticator?.DistinctUsers) ?? 0, deadline: RETIREMENT.label, source: source('IA.2', 'Methods used in successful sign-ins, last 30 days.') }
     }
 
     // Scores and posture.
@@ -751,8 +759,9 @@
       // percentage on the page reconcile. The trend's own last month may differ from the current reading by a few tenths.
       // The gate is the current score against the first month: the export can lag the current reading, so its own
       // last point is not the truth about today.
-      const delta = trendRows.length >= 2 && value >= Number(first.Percent) ? { points: Number((value - Number(first.Percent)).toFixed(1)), since: monthLabel(first.Month) } : null
-      m.cloudScore = { value, current: Number(cloud.Current), max: Number(cloud.Max), subscriptions: count(cloud.Subscriptions), delta, trend: trendRows.map(r => ({ label: monthLabel(r.Month), pct: Number(r.Percent) })), note: `${fmt(cloud.Current)} of ${fmt(cloud.Max)} points across ${plural(cloud.Subscriptions, 'subscription', 'subscriptions')}.`, source: source('POS.1') }
+      // The movement is stated in percentage points with the starting percentage (from), never as points available.
+      const delta = trendRows.length >= 2 && value >= Number(first.Percent) ? { points: Number((value - Number(first.Percent)).toFixed(1)), since: monthLabel(first.Month), from: Number(first.Percent) } : null
+      m.cloudScore = { value, current: Number(cloud.Current), max: Number(cloud.Max), subscriptions: count(cloud.Subscriptions), delta, trend: trendRows.map(r => ({ label: monthLabel(r.Month), pct: Number(r.Percent) })), note: `Secure score across ${plural(cloud.Subscriptions, 'subscription', 'subscriptions')}, calculated by Microsoft.`, source: source('POS.1') }
       if (trendRows.length >= 2 && !delta) presenter('Defender for Cloud score movement', `The continuous export shows ${pctText(first.Percent)} in ${monthLabel(first.Month)} and ${pctText(last.Percent)} in ${monthLabel(last.Month)}. The report presents the current score with the Microsoft measurement model explainer and does not print a decline.`)
       if (count(cloud.Subscriptions) !== m.subscriptions) presenter('Score subscription scope', `The cloud score covers ${fmt(cloud.Subscriptions)} of ${fmt(m.subscriptions)} in-scope subscriptions.`)
     } else unmeasured('POS.1', 'Defender for Cloud score', state('POS.1'))
@@ -767,8 +776,9 @@
     const tenant = context.TenantScore || graphTenant
     if (tenant && num(tenant.Current) !== null && num(tenant.Max) > 0 && tenant.Current <= tenant.Max && validDate(tenant.ReadDate) && clean(tenant.Source)) {
       const categories = ['Identity', 'Device', 'Apps', 'Data'].filter(k => num(tenant.Categories?.[k]) !== null && tenant.Categories[k] <= 100).map(k => ({ label: k, pct: Number(tenant.Categories[k]) }))
-      const previous = num(tenant.Previous) !== null && validDate(tenant.PreviousReadDate) && tenant.Previous <= tenant.Current ? { points: Number((tenant.Current - tenant.Previous).toFixed(1)), since: monthLabel(tenant.PreviousReadDate) } : null
-      m.tenantScore = { value: pct(tenant.Current, tenant.Max), current: Number(tenant.Current), max: Number(tenant.Max), read: date(tenant.ReadDate), delta: previous, categories, note: `${fmt(tenant.Current)} of ${fmt(tenant.Max)} points. Read ${date(tenant.ReadDate)}.`, source: clean(tenant.Source) }
+      // Movement in percentage points of the maximum, with the starting percentage, so both scores read the same way.
+      const previous = num(tenant.Previous) !== null && validDate(tenant.PreviousReadDate) && tenant.Previous <= tenant.Current ? { points: Number((100 * (tenant.Current - tenant.Previous) / tenant.Max).toFixed(1)), since: monthLabel(tenant.PreviousReadDate), from: pct(tenant.Previous, tenant.Max) } : null
+      m.tenantScore = { value: pct(tenant.Current, tenant.Max), current: Number(tenant.Current), max: Number(tenant.Max), read: date(tenant.ReadDate), delta: previous, categories, note: `Secure score for the Microsoft 365 tenant, calculated by Microsoft. Read ${date(tenant.ReadDate)}.`, source: clean(tenant.Source) }
     } else note('Microsoft tenant Secure Score', 'Add a dated portal reading through the context file to show the tenant score beside the Defender for Cloud score. Optional Previous and PreviousReadDate fields add the movement line.')
     const high = rows('POS.4').find(r => /High/i.test(r.Severity))
     // POS.5 carries every assigned standard. The Microsoft cloud security benchmark is the one reported, so a preview
@@ -819,7 +829,7 @@
       else if (basicPhish) parts.push('The Microsoft default anti-phishing policy covers every mailbox.')
       const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')
       const mfaMeasure = mfa.boolean ? (mfaRatio ? { ...mfa, good: mfaRatio.good, total: mfaRatio.total, pct: mfaRatio.pct, mark: mark(mfaRatio.pct), label: 'Users challenged for MFA at sign-in' } : null) : mfa.pct !== null ? { ...mfa, label: 'Users challenged for MFA at sign-in' } : null
-      pillar(G.identity, headline, parts.join(' ') || 'Sign-in telemetry was not available in this collection. Identity coverage is confirmed from the Entra admin center during the review.', mfaMeasure, m.passwordless && m.passwordless.resistant > 0 ? { value: fmt(m.passwordless.resistant), label: 'users already on phishing-resistant sign-in' } : null, mfa.pct !== null ? mfa.source : legacyBlockedInForce ? legacyControl.source : locControl.source)
+      pillar(G.identity, headline, parts.join(' ') || 'Sign-in telemetry was not available in this collection. Identity coverage is confirmed from the Entra admin center during the review.', mfaMeasure, m.mfaMethods && m.mfaMethods.resistant > 0 ? { value: fmt(m.mfaMethods.resistant), label: 'users already on phishing-resistant sign-in' } : null, mfa.pct !== null ? mfa.source : legacyBlockedInForce ? legacyControl.source : locControl.source)
     }
     {
       const parts = []
@@ -855,7 +865,7 @@
       if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
       if (ruleControl && ruleControl.pct !== null) parts.push(`${fmt(ruleControl.good)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
       const headline = m.alerts ? 'Every alert reaches a documented disposition' : band(plan, 'Workload protection covers the resource estate', 'Workload protection covers most of the resource estate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
-      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : ruleControl, m.response ? { value: m.response.median.value, label: `median time to close${m.response.scope === 'High' ? ', high severity' : ''}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, m.alerts ? m.alerts.source : plan.source)
+      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : ruleControl, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, m.alerts ? m.alerts.source : plan.source)
     }
 
     // Executive summary tiles and tiers.
@@ -865,11 +875,11 @@
     else if (m.posture.estate !== null) tile('Azure resources in the estate', fmt(m.posture.estate), 'Under managed security coverage', source('P0.5'))
     if (m.alerts) tile('Alerts triaged', fmt(m.alerts.triaged), m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} resolved by automation rules` : m.alerts.truePositives > 0 ? `${plural(m.alerts.truePositives, 'confirmed threat', 'confirmed threats')}, all investigated` : m.detections ? `Across ${m.detections.sources}` : m.period.label, m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
-    if (m.response) tile(m.response.median.label, m.response.median.value, m.response.p90 ? `Nine in ten closed within ${m.response.p90.value}` : m.response.analyst ? 'Analyst-handled alerts' : m.response.cohort.split(',')[0], m.response.median.source)
+    if (m.response) tile(m.response.median.label, m.response.median.value, m.response.p90 ? `Nine in ten triaged, investigated and resolved within ${m.response.p90.value}` : m.response.analyst ? 'Analyst-handled alerts' : m.response.cohort.split(',')[0], m.response.median.source)
     else if (m.alerts && m.alerts.truePositives !== null) tile('Confirmed threats investigated', fmt(m.alerts.truePositives), m.alerts.flaggedKnown && m.alerts.flagged === 0 ? 'None recorded exfiltration or impact' : 'Each closed to a documented disposition', m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
-    if (m.tenantScore) tile('Microsoft tenant Secure Score', pctText(m.tenantScore.value), m.tenantScore.delta ? `Up ${fmt(m.tenantScore.delta.points)} points since ${m.tenantScore.delta.since}` : `Read ${m.tenantScore.read}`, m.tenantScore.source, m.tenantScore.delta ? 'up' : '')
-    else if (m.cloudScore) tile('Defender for Cloud secure score', pctText(m.cloudScore.value), m.cloudScore.delta && m.cloudScore.delta.points > 0 ? `Up ${fmt(m.cloudScore.delta.points)} points since ${m.cloudScore.delta.since}` : 'Classic Defender for Cloud score', m.cloudScore.source, m.cloudScore.delta && m.cloudScore.delta.points > 0 ? 'up' : '')
+    if (m.tenantScore) tile('Microsoft tenant Secure Score', pctText(m.tenantScore.value), m.tenantScore.delta ? `Up ${fmt(m.tenantScore.delta.points)} points since ${m.tenantScore.delta.since}, from ${pctText(m.tenantScore.delta.from)}` : `Read ${m.tenantScore.read}`, m.tenantScore.source, m.tenantScore.delta ? 'up' : '')
+    else if (m.cloudScore) tile('Defender for Cloud secure score', pctText(m.cloudScore.value), m.cloudScore.delta && m.cloudScore.delta.points > 0 ? `Up ${fmt(m.cloudScore.delta.points)} points since ${m.cloudScore.delta.since}, from ${pctText(m.cloudScore.delta.from)}` : 'Classic Defender for Cloud score', m.cloudScore.source, m.cloudScore.delta && m.cloudScore.delta.points > 0 ? 'up' : '')
     m.headline = m.headline.slice(0, 4)
 
     const row = (tier, label, value, id) => { if (value !== null && value !== undefined && value !== '' && value !== 'Not available') m.tiers[tier].push({ label: clean(label), value: clean(String(value)), id }) }
@@ -877,7 +887,7 @@
       row('outcomes', 'Alerts triaged', fmt(m.alerts.triaged), 'OUT.1')
       if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts resolved and closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
       if (m.alerts.truePositives !== null) row('outcomes', 'Confirmed threats investigated', fmt(m.alerts.truePositives), 'OUT.1')
-      if (m.alerts.flaggedKnown) row('outcomes', 'Confirmed threats with exfiltration or impact recorded', `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
+      if (m.alerts.flaggedKnown) row('outcomes', 'True positives that resulted in data exfiltration or impact', `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
     }
     if (m.response) {
       row('outcomes', m.response.median.label, m.response.median.value, 'OUT.2')
@@ -899,14 +909,14 @@
       if (m.tiers.controls.length >= 6) break
       row('controls', c.label, c.total > 9999 ? pctText(c.pct) : c.value, c.id)
     }
-    for (const h of m.hardening.filter(h => h.rank < 99).slice(0, 6)) row('hardening', h.label, fmt(h.value), h.id)
+    for (const h of m.hardening.filter(h => h.rank < 99).slice(0, 6)) row('hardening', h.label, hardenText(h), h.id)
     if (m.cloudScore) row('benchmark', 'Defender for Cloud score', pctText(m.cloudScore.value), 'POS.1')
     if (m.tenantScore) row('benchmark', 'Microsoft tenant Secure Score', pctText(m.tenantScore.value), 'POS.6')
     if (m.posture.benchmark) row('benchmark', 'Benchmark controls passed', `${fmt(m.posture.benchmark.passed)} of ${fmt(m.posture.benchmark.total)}`, 'POS.5')
     if (m.posture.highHealthy) row('benchmark', 'High severity assessments healthy', pctText(m.posture.highHealthy.pct), 'POS.4')
     if (m.posture.assessed !== null) row('benchmark', 'Resources assessed by Defender for Cloud', fmt(m.posture.assessed), 'POS.2')
     for (const c of (m.tenantScore?.categories || [])) { if (m.tiers.benchmark.length < 6) row('benchmark', `${c.label} category score`, pctText(c.pct), 'POS.6') }
-    m.whatNext = `The foundational and defense in depth controls we hold this environment to across five pillars, the status of each, ${m.period.months ? `${plural(m.period.months, 'month', 'months')} of measured outcomes` : 'the measured outcomes'}, the sequenced hardening roadmap${m.passwordless && m.passwordless.retiring > 0 ? ` and the ${RETIREMENT.label} passwordless deadline already scoped` : ''}.`
+    m.whatNext = `The foundational and defense in depth controls we hold this environment to across five pillars, the status of each, ${m.period.months ? `${plural(m.period.months, 'month', 'months')} of measured outcomes` : 'the measured outcomes'}, the sequenced hardening roadmap${m.mfaMethods && m.mfaMethods.retiring > 0 ? ` and the MFA method update already scoped ahead of ${RETIREMENT.label}` : ''}.`
 
     // Presenter notes and boundaries.
     const manual = m.manifest.filter(r => r.status === 'MANUAL').map(r => r.id)
