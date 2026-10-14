@@ -35,6 +35,25 @@ def date(value):
     return parsed.astimezone(timezone.utc)
 
 
+def resolve_commit(commit, repo, call=api):
+    """Bind an authenticated summary commit cell to exactly one full SHA.
+
+    GitHub's commits endpoint also accepts branch and tag names, so a ref named
+    like an abbreviation could resolve to an unrelated commit. The response must
+    be a full lowercase hexadecimal SHA that starts with the abbreviation; a full
+    SHA needs no call. API failures and malformed responses fail closed.
+    """
+    if not isinstance(commit, str) or not re.fullmatch('[0-9a-f]{7,40}', commit):
+        raise Blocked('Missing review commit.')
+    if len(commit) == 40:
+        return commit
+    response = call(f'repos/{repo}/commits/{commit}')
+    sha = response.get('sha') if isinstance(response, dict) else None
+    if not isinstance(sha, str) or not re.fullmatch('[0-9a-f]{40}', sha) or not sha.startswith(commit):
+        raise Blocked('Resolved commit does not match the authenticated review abbreviation.')
+    return sha
+
+
 def summary_rows(body, repo, call=api):
     allowed_prose = {
         SUMMARY, '## Codex Review Summary',
@@ -65,9 +84,7 @@ def summary_rows(body, repo, call=api):
         commit = re.fullmatch(r'`([0-9a-f]{7,40})`', cells[2])
         if not commit:
             raise Blocked('Missing review commit.')
-        sha = call(f'repos/{repo}/commits/{commit[1]}')['sha'] if len(commit[1]) < 40 else commit[1]
-        if not re.fullmatch('[0-9a-f]{40}', sha):
-            raise Blocked('Invalid resolved commit.')
+        sha = resolve_commit(commit[1], repo, call)
         completed = re.fullmatch(r'✅ \*\*Completed\*\* <relative-time datetime="([^"]+)">([^<]+)</relative-time>', cells[1])
         if not completed and not re.fullmatch(r'(?:[🔄⏳] )?\*\*(?:Running|Pending|Queued)\*\*', cells[1]):
             raise Blocked('Unclassified summary status/result content.')
