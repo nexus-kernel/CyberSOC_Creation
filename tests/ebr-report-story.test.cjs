@@ -17,7 +17,7 @@ function quarterPack() {
   const timing = [{ Scope: 'High', Incidents: 208, AutoClosed: 0, MedianCloseMin: 7, P90CloseMin: 36 }, { Scope: 'Medium', Incidents: 15, AutoClosed: 0, MedianCloseMin: 178, P90CloseMin: 1302 }, { Scope: 'Low', Incidents: 15, AutoClosed: 0, MedianCloseMin: 99, P90CloseMin: 1608 }, { Scope: 'All', Incidents: 238, AutoClosed: 0, MedianCloseMin: 8, P90CloseMin: 76 }]
   put('OUT.2', timing); put('OUT.2-ANALYST', timing)
   put('OUT.3', [{ Month: '2026-07-01', Total: 105, High: 6, Medium: 14, Low: 85, Informational: 0 }, { Month: '2026-08-01', Total: 163, High: 22, Medium: 20, Low: 121, Informational: 0 }, { Month: '2026-09-01', Total: 347, High: 208, Medium: 7, Low: 132, Informational: 0 }])
-  put('OUT.4', [{ IncidentNumber: 1, Severity: 'High', ExfilOrImpactTactic: false }, { IncidentNumber: 2, Severity: 'High', ExfilOrImpactTactic: false }])
+  put('OUT.4', [{ IncidentNumber: 1, Severity: 'High', Tactics: 'InitialAccess', ExfilOrImpactTactic: false }, { IncidentNumber: 2, Severity: 'High', Tactics: 'Execution', ExfilOrImpactTactic: false }])
   put('OUT.5', [{ ProductName: 'Azure Sentinel', AlertSeverity: 'High', Alerts: 659 }])
   put('P0.1-BY-WORKSPACE', [{ WorkspaceId: 'w1', SourceTable: 'SecurityIncident', EarliestRecord: '2026-01-01', Records: 900 }])
   put('IA.1', [{ UserType: 'Member', UsersSignedIn: 194, UsersChallenged: 180 }])
@@ -70,6 +70,9 @@ test('the story carries the wins, asks and takeaways the review asked for, worde
   const { s } = story(quarterPack())
   assert.equal(s.quarter, 'Q3 2026')
   assert.deepEqual(s.kpis.map(k => k.value), ['615', '0 of 2', '36 min', '59.7%'])
+  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'True positives that reached exfiltration or impact', 'Time for 90% of high-severity alerts to close', 'Defender for Cloud secure score'])
+  assert.equal(s.kpis[0].sub, 'Jul 1 to Sep 30, 2026', 'the alert KPI carries the period, not the detection count')
+  assert.equal(s.kpis[3].sub, 'Up 6.1 points since Jul 2026, from 53.6%')
   assert.deepEqual(s.wins.map(w => w.eyebrow), ['Threat outcomes', 'Response speed', 'Posture', 'Identity', 'Patching', 'Email protection'])
   assert.equal(new Set(s.wins.map(w => w.area)).size, s.wins.length, 'at most one win per area')
   assert.equal(s.takeaways.summary, 'Neither confirmed threat reached exfiltration or impact, and secure score rose 6.1 points.')
@@ -78,8 +81,11 @@ test('the story carries the wins, asks and takeaways the review asked for, worde
   assert.ok(!/\bdrift|at build|regress/i.test(spoken), 'the story never claims a regression or a build-time configuration')
   assert.ok(s.takeaways.pillars && s.takeaways.priorities, 'the grounding slides have takeaways')
   assert.deepEqual(s.drift.map(c => c.short).sort(), ['Key Vault purge protection', 'anonymous blob access', 'storage TLS 1.2'].sort())
-  assert.deepEqual(s.asks.map(a => a.title), ['Approve a passkey change window', 'Grant read access for one ungraded control', 'Approve the user-risk policy', 'Agree a segmentation design and change windows'])
+  assert.deepEqual(s.asks.map(a => a.title), ['Move users off text message and voice MFA', 'Grant read access for one ungraded control', 'Approve the user-risk policy', 'Agree a segmentation design and change windows'])
   assert.equal(s.asks[1].body, 'Sharing settings.', 'only the permission gap is an access ask, not the service error')
+  // The executive summary names the items that need action from the client. Read access is Atmosera's to arrange.
+  assert.deepEqual(s.summaryAsks, [{ value: '40 users', label: 'need to update their MFA method before Feb 1, 2027' }, { value: '1 control', label: 'Approve the user-risk policy' }, { value: '2 controls', label: 'Agree a segmentation design and change windows' }])
+  assert.ok(!/passwordless|passkey/i.test(JSON.stringify(s)), 'the story never frames the MFA method update as passwordless')
   assert.equal(s.deadlineDays, 112)
   const all = JSON.stringify(s)
   assert.ok(!/;|→|←|\bcontain(ed|ment)\b|\(null\)|\bincidents?\b/i.test(all.replace(/\\u[0-9a-f]{4}/gi, '')), all.match(/.{0,40}(;|contain|\(null\)|incident).{0,40}/i)?.[0])
@@ -140,11 +146,11 @@ test('counts read as natural English', () => {
   p.results['IA.1'] = [{ UserType: 'Member', UsersSignedIn: 194, UsersChallenged: 193 }]
   p.results['IA.2'] = [{ Bucket: 'Retiring: SMS or voice', DistinctUsers: 1 }]
   p.results['OUT.1'][0].TruePositive = 1
-  p.results['OUT.4'] = [{ IncidentNumber: 1, Severity: 'High', ExfilOrImpactTactic: false }]
+  p.results['OUT.4'] = [{ IncidentNumber: 1, Severity: 'High', Tactics: 'InitialAccess', ExfilOrImpactTactic: false }]
   const { s } = story(p)
   assert.equal(s.takeaways.summary.startsWith('The confirmed threat did not reach exfiltration or impact'), true)
-  assert.equal(s.asks[0].body, 'Moves 1 text message and voice user before February 1, 2027.')
-  assert.equal(s.takeaways.passwordless, 'Microsoft retires text message and voice sign-in on February 1, 2027. 1 user still relies on it.')
+  assert.equal(s.asks[0].body, '1 user needs to update their MFA method before February 1, 2027, when Microsoft retires text message and voice sign-in.')
+  assert.equal(s.takeaways.methods, 'Microsoft retires text message and voice sign-in on February 1, 2027. 1 user still relies on it.')
   assert.ok(s.watch.every(w => !/^1$/.test(w.value) || !/^(members|users|devices|resources) /.test(w.label)), JSON.stringify(s.watch))
 })
 test('every control in the register has a value, never null', () => {
@@ -172,7 +178,7 @@ test('the confirmed threats takeaway counts the threats, adds the exfiltration l
   const withRows = flaggedOne => {
     const p = quarterPack()
     p.results['OUT.4'] = [
-      { Severity: 'High', ExfilOrImpactTactic: flaggedOne, Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Tactics: 'CommandAndControl', Created: '2026-08-18' },
+      { Severity: 'High', ExfilOrImpactTactic: flaggedOne, Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Tactics: flaggedOne ? 'CommandAndControl,Exfiltration' : 'CommandAndControl', Created: '2026-08-18' },
       { Severity: 'Medium', ExfilOrImpactTactic: false, Threat: 'Password spray attack against Microsoft Entra ID application', Tactics: 'CredentialAccess', Created: '2026-07-28' }
     ]
     return story(p)
@@ -183,7 +189,58 @@ test('the confirmed threats takeaway counts the threats, adds the exfiltration l
   const flagged = withRows(true)
   assert.equal(flagged.m.alerts.flagged, 1)
   assert.equal(flagged.s.takeaways.threats, '2 confirmed threats were investigated and closed.')
+  // A Collection tactic sets the collector flag but is not exfiltration or impact, so the count stays narrow.
+  const p = quarterPack()
+  p.results['OUT.4'] = [{ Severity: 'High', ExfilOrImpactTactic: true, Threat: 'Suspicious inbox rule created', Tactics: 'Collection', Created: '2026-08-18' }, { Severity: 'High', ExfilOrImpactTactic: false, Threat: 'Password spray attack', Tactics: 'CredentialAccess', Created: '2026-07-28' }]
+  const collection = story(p)
+  assert.deepEqual([collection.m.alerts.flagged, collection.m.alerts.flaggedScope], [0, 'exfiltration or impact'])
+  assert.equal(collection.s.takeaways.summary, 'Neither confirmed threat reached exfiltration or impact, and secure score rose 6.1 points.')
+  // Rows without tactics keep the flag count and name the wider scope on every surface.
+  p.results['OUT.4'] = p.results['OUT.4'].map(({ Tactics, Threat, Created, ...r }) => r)
+  const wide = story(p)
+  assert.deepEqual([wide.m.alerts.flagged, wide.m.alerts.flaggedScope], [1, 'collection, exfiltration or impact'])
+  assert.equal(wide.s.kpis[1].label, 'True positives that reached collection, exfiltration or impact')
+  assert.ok(!/reached exfiltration or impact/.test(JSON.stringify([wide.s.kpis, wide.s.wins, wide.s.takeaways, wide.m.tiers, wide.m.headline])), 'the narrow wording never appears without tactics')
   const none = story(quarterPack())
   assert.equal(none.m.threats, null, 'rows without a title give no examples')
   assert.equal(none.s.takeaways.threats, '')
+})
+test('a median at the floor reads as nine in ten triaged and closed, never investigated or resolved, and names high severity alerts', () => {
+  const p = quarterPack()
+  p.results['OUT.2'][0].MedianCloseMin = 22; p.results['OUT.2-ANALYST'][0].MedianCloseMin = 22
+  const { s } = story(p)
+  assert.equal(s.speed.value, '22 min')
+  assert.equal(s.speed.label, 'median time to close, high severity alerts')
+  assert.equal(s.speed.sub, '208 alerts closed. Nine in ten triaged and closed within 36 min.')
+  assert.equal(s.kpis[2].sub, 'Nine in ten triaged and closed within 36 min')
+  assert.ok(!/investigated and resolved|resulted in/.test(JSON.stringify([s.kpis, s.wins, s.takeaways])), 'closure time and tactic flags never read as verified outcomes')
+  assert.equal(s.kpis[2].label, 'Median time to close, high severity alerts')
+})
+test('MFA at sign-in and MFA at the admin portals below E together read as one gap outside the appendix', () => {
+  const p = quarterPack()
+  p.manifest.push({ ResultId: 'IA.1-ADMINPORTAL', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' })
+  p.results['IA.1-ADMINPORTAL'] = [{ UserType: 'Member', Users: 15, UsersChallenged: 12 }]
+  p.results['IA.8-CA'] = [
+    { Flow: 'MFA at sign-in', Control: 'IA.1', PolicyRead: true, PolicySource: 'Raw', PolicyState: 'Scoped', ScopeReason: 'Users', EnforcedPolicies: 1, ExcludedIdentities: 2, DetailRead: false },
+    { Flow: 'Admin portals', Control: 'IA.1-ADMINPORTAL', PolicyRead: true, PolicySource: 'Raw', PolicyState: 'Scoped', ScopeReason: 'Users', EnforcedPolicies: 1, ExcludedIdentities: 1, DetailRead: false }
+  ]
+  const { m, s } = story(p)
+  assert.ok(m.controls.find(c => c.id === 'IA.1').mark === 'P' && m.controls.find(c => c.id === 'IA.1-ADMINPORTAL').mark === 'P', 'both read below E')
+  assert.equal(s.drift.filter(c => /^Multifactor authentication/.test(c.label)).length, 1, 'one MFA gap on the panel')
+  const gap = s.drift.find(c => c.id === 'IA.1')
+  assert.equal(gap.detail, '180 of 194 · admin portals 12 of 15')
+  assert.deepEqual(gap.folded.map(c => c.id), ['IA.1-ADMINPORTAL'])
+  assert.equal(s.driftControls.length, s.drift.length + 1, 'the counts still cover every control')
+  assert.equal(s.watch.find(w => /foundational controls read below enforced/.test(w.label)).value, String(s.driftControls.length))
+  assert.match(s.takeaways.posture, new RegExp(`${['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven'][s.driftControls.length]} read below the baseline`, 'i'))
+  const now = s.roadmap.find(h => h.key === 'now').items.find(i => i.key === 'drift')
+  assert.match(now.evidence, /^\d+ controls below the baseline: MFA at sign-in \(180 of 194 · admin portals 12 of 15\), /)
+  assert.ok(!/admin portal MFA/.test(now.evidence), 'the roadmap names the MFA gap once')
+  assert.ok(now.controls.some(c => c.id === 'IA.1-ADMINPORTAL'), 'the folded control still lands on the roadmap')
+  // The register in the appendix keeps both rows.
+  const identity = s.register.find(r => r.group === 'Identity and access')
+  assert.equal(identity.foundational.filter(c => /^Multifactor authentication/.test(c.label) && c.chip === 'P').length, 2)
+  // Below E at the admin portals alone is its own gap.
+  p.results['IA.8-CA'][0].PolicyState = 'Enforced'
+  assert.deepEqual(story(p).s.drift.filter(c => /^Multifactor authentication/.test(c.label)).map(c => c.id), ['IA.1-ADMINPORTAL'])
 })

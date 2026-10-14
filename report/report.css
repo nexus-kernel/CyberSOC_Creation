@@ -168,9 +168,9 @@ details[open] summary::before { content:'\2212'; }
 .stages span { display:block; color:var(--blue); font-size:12px; padding-bottom:8px; border-bottom:2px solid var(--cyan); margin-bottom:12px; }
 .stages h3 { font-size:16px; }
 .stages p { font-size:12px; color:var(--muted); }
-.passwordless { display:grid; grid-template-columns:1.3fr 1fr; gap:28px; background:var(--wash); border-left:4px solid var(--navy); padding:22px 26px; margin-top:24px; }
-.passwordless h3 { font-size:17px; color:var(--navy); }
-.passwordless p { font-size:13px; color:var(--muted); }
+.mfa-methods { display:grid; grid-template-columns:1.3fr 1fr; gap:28px; background:var(--wash); border-left:4px solid var(--navy); padding:22px 26px; margin-top:24px; }
+.mfa-methods h3 { font-size:17px; color:var(--navy); }
+.mfa-methods p { font-size:13px; color:var(--muted); }
 .steps { list-style:none; margin:0; padding:0; display:grid; gap:10px; }
 .steps li { display:grid; grid-template-columns:26px 1fr; gap:10px; font-size:12px; color:var(--muted); align-items:start; }
 .steps li span { display:flex; align-items:center; justify-content:center; width:26px; height:26px; border-radius:50%; background:var(--navy); color:#fff; font-size:12px; font-weight:700; }
@@ -238,7 +238,7 @@ thead th { background:var(--wash); color:var(--navy); }
   .tile-value { font-size:30px; }
   .tiers { grid-template-columns:1fr 1fr; gap:18px; }
   .tier { padding:0; border-left:0; }
-  .two-col,.two-col.even,.meters,.passwordless { grid-template-columns:1fr; }
+  .two-col,.two-col.even,.meters,.mfa-methods { grid-template-columns:1fr; }
   .pillar-row { grid-template-columns:1fr; gap:10px; }
   .pillar-callout { border-left:0; padding-left:0; text-align:left; }
   .pillar { grid-template-columns:1fr; }
@@ -351,9 +351,9 @@ thead th { background:var(--wash); color:var(--navy); }
   .stages { margin-top:16px; gap:16px; }
   .stages h3 { font-size:12px; }
   .stages p { font-size:9px; }
-  .passwordless { padding:14px 18px; margin-top:16px; gap:16px; }
-  .passwordless h3 { font-size:12px; }
-  .passwordless p,.steps li { font-size:9px; }
+  .mfa-methods { padding:14px 18px; margin-top:16px; gap:16px; }
+  .mfa-methods h3 { font-size:12px; }
+  .mfa-methods p,.steps li { font-size:9px; }
   .steps li strong { font-size:10px; }
   .score-card { padding:14px; }
   .score-main h3 { font-size:24px; }

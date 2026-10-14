@@ -52,8 +52,8 @@ PowerPoint, Python, LibreOffice and Chrome are not needed to build the deck. The
 | 02 Security operations | Balanced, Detailed | Response performance, alerts created each month, disposition, detections by source, and the confirmed threats table when there are examples |
 | 03 Measured outcomes | Balanced, Detailed | One row per pillar with a headline statement, narrative, measure and callout |
 | 04 The controls that matter | Balanced, Detailed | E, P, N status marks by pillar |
-| 05 What comes next | all | Verified delivery, the top three sequenced priorities, the passwordless transition |
-| 06 Tenant and cloud posture | Detailed | Score rings, trend, where the next points are, the measurement model explainer |
+| 05 What comes next | all | Verified delivery, the top three sequenced priorities, the MFA method update |
+| 06 Tenant and cloud posture | Detailed | Score rings as percentages with their movement in percentage points, trend, where the next points are, the measurement model explainer |
 | Presenter notes | screen only | Prepared answers, timing selection, evidence review, collection register |
 
 The default is Balanced. The depth selector updates the view without modifying the embedded evidence. Printing follows the selected view and excludes the presenter notes.
@@ -65,19 +65,19 @@ The default is Balanced. The depth selector updates the view without modifying t
 | Slide | Brief | Balanced | Detailed |
 |---|---|---|---|
 | Cover, with a quarter label when the alert window is a calendar quarter | yes | yes | yes |
-| Executive summary: four outcome KPIs, then Wins, Watch and Decisions needed | yes | yes | yes |
+| Executive summary: four outcome KPIs, the four tier "How we report posture" block as the HTML page shows it, then Wins, Watch and Items that need action (read access stays on the closing slide) | yes | yes | yes |
 | Quarter wins: up to six, at most one per area | yes | yes | yes |
 | Security operations: volume by month, time to close by severity, how closed alerts were resolved, detections by source | | yes | yes |
-| Confirmed threats: up to five example groups by alert title, highest severity first, only when there are examples | | yes | yes |
-| Control posture: five-pillar matrix and the foundational gaps panel | | yes | yes |
+| Confirmed threats: up to five example groups by alert title, highest severity first, only when there are examples. A short table is followed by the outcome cards (confirmed threats, exfiltration or impact, high severity alerts, response speed) and the handling strip | | yes | yes |
+| Control posture: five-pillar matrix with the headline measure column on a band, figures in bold, and the foundational gaps panel. MFA at sign-in and MFA at the admin portals below E together read as one gap, with the admin portal reading folded in | | yes | yes |
 | Measured outcomes by pillar: the headline, narrative, lead measure and callout of each pillar, as the HTML pillar page shows them | | yes | yes |
 | Hardening roadmap: Now, Next and Later, every below-E control mapped | yes | yes | yes |
 | Priority workstreams: the first three priorities with evidence, action and outcome, the rest in one line | | yes | yes |
-| Passwordless transition, when users still sign in with text message or voice | yes | yes | yes |
+| MFA method update, when users still sign in with text message or voice: the countdown, users by method, and the steps to move each one to a stronger method | yes | yes | yes |
 | Decisions needed | yes | yes | yes |
 | Appendix A1 to A3: the control register, two pillars per slide, and how we grade | | yes | yes |
 | Appendix A4: scope and evidence, what the readings cover and the controls this collection could not grade | | yes | yes |
-| Appendix A5 and A6: tenant and cloud posture, where the next points are | | | yes |
+| Appendix A5 and A6: tenant and cloud posture (the Defender for Cloud score by month as a line chart, the tenant score with its category scores, both as percentages with their movement in percentage points), where the next points are | | | yes |
 
 Rules the deck follows:
 
@@ -90,7 +90,8 @@ Rules the deck follows:
 - A ratio control with fewer than 10 resources, such as 2 of 2 machines patched, never stands as a win or leads a pillar in the posture matrix. The control itself still reads in the register.
 - Read access is asked for only where the collector's token was not permitted to read the evidence (the `AccessGap` flag the builder derives from the manifest detail). Service errors are Atmosera's to resolve and never become an ask. A service that answers that the tenant is not onboarded or not licensed sets `NotOnboarded` instead, so the control reads Not in force where the collection shows domain controllers (NB.10 devices or DR.4 events). Without that positive evidence it stays ungathered: NB.10 reads Azure virtual machines only and DR.4 needs Defender for Identity telemetry, so an empty read never proves a cloud-only tenant.
 - The deck never prints `(null)`. Ungathered controls read "Not gathered" with a dash chip.
-- Containment is never claimed. The threat outcome reads "reached exfiltration or impact" from the OUT.4 tactic flag.
+- Containment is never claimed. The threat outcome counts the true positives whose recorded tactics include Exfiltration or Impact, from the tactics the builder embeds on every OUT.4 row, and reads "reached exfiltration or impact" on every surface. The collector's ExfilOrImpactTactic flag also fires on a Collection tactic, so a pack whose rows carry no tactics (an older builder, or a flagged row whose tactics could not be read) keeps the flag count and reads "reached collection, exfiltration or impact" instead. Neither is a verified outcome or a notification. The 90th percentile is creation to recorded close, so it reads "Nine in ten triaged and closed within", never investigated or resolved.
+- The hardening count of members without MFA is written against the same members as the MFA at sign-in control, for example "14 of 194" beside a control reading "180 of 194", so the two reconcile at a glance.
 
 Charts are native PowerPoint charts, so they stay editable. Speaker notes are talking points built only from text the client already sees in the HTML, such as pillar narratives and control descriptions. The presenter notes are never copied in, so the deck can be sent to the client after the review.
 
@@ -121,9 +122,9 @@ Sentinel incidents are presented as **alerts** in every client-facing sentence. 
 | Patch cadence | Machines whose tags record patching as waived or client owned leave the measure at collection (collector 1.14.0, `-PatchExclusionTagPattern`). The note states how many were left out, from EW.10-EXCLUDED, and the evidence review repeats it |
 | Blob containers | DP.1-CONTAINERS (collector 1.11.0) grades the defense in depth row Blob containers closed to anonymous access on each container's own access level, read in every storage account. Containers readable anonymously today, and accounts that could not be listed, go to the presenter notes and evidence review, never the client page |
 | Conditional Access controls | IA.1, IA.1-ADMINPORTAL, IA.3 and IA.3-DEVICECODE read the policy state from IA.8-POLICIES (or the flattened IA.8 inventory for packs before collector 1.10.0) and the per-account sign-in detail from IA.8-SIGNINS, through `report/Get-EbrCaEvaluation.ps1`. Only the per-control counts are embedded, as IA.8-CA. Multifactor authentication required at sign-in (IA.1) reads In force when an enabled policy requires multifactor authentication on every application for all users and is not narrowed to a platform, risk level, device filter or location, or when security defaults are on (Oct 14, 2026). Multifactor authentication at admin portal sign-in (IA.1-ADMINPORTAL) reads In force when an enabled policy requires it on the Microsoft admin portals or on every application, for all users or for the administrator roles. A scoped, report-only or missing policy reads Not in force. The sign-in ratio from IA.1 and IA.1-ADMINPORTAL moves to the note and the pillar page, and a ratio below E with the policy in force is explained in the presenter notes. Without a policy inventory the sign-in ratio grades both as before. For IA.3 and IA.3-DEVICECODE the block policy decides the status. An enabled block policy for all users, or security defaults for legacy authentication, makes the control In force, and a scoped, report-only or missing policy makes it Not in force. Sign-ins show only whether an account got past the policy. Sign-ins by excluded accounts are framed as approved exceptions, and successful sign-ins the policy did not evaluate go to the presenter notes. Without a policy inventory the control reads In force only when Conditional Access blocks are recorded and no sign-in succeeded, Not in force when a sign-in succeeded, and N/A otherwise. Only error 53003 counts as a Conditional Access block, so legacy attempts that failed without one, such as a wrong password or a locked account, are never presented as blocked |
-| Cloud score | Computed from points. A gain line appears only when the continuous export trend (POS.7) ends at or above its first reading. Otherwise the score is reported as current state beside the Microsoft measurement model explainer |
+| Cloud score | Computed from points. With at least two valid monthly readings, the continuous export trend (POS.7) is shown in both HTML and PowerPoint whether rising, flat or declining. With less history the current score stands alone. A gain line compares the current POS.1 score with the first trend reading and appears only for a positive change. The Microsoft measurement model explainer remains alongside the scores: scope, weighting and model changes can move the percentage without a change in controls |
 | Tenant score | Requires a dated portal reading in the context file. The device score is never substituted |
-| Priorities | Ranked in a fixed sequence: critical exploitable findings, multifactor coverage, passwordless transition, endpoint coverage, anti-malware configuration, workload protection, logging, encryption at host, backup, storage transport, key protection, segmentation, platform integrity. The top three are shown, the rest expand |
+| Priorities | Ranked in a fixed sequence: critical exploitable findings, multifactor coverage, the MFA method update, endpoint coverage, anti-malware configuration, workload protection, logging, encryption at host, backup, storage transport, key protection, segmentation, platform integrity. The top three are shown, the rest expand |
 | Data gaps | Missing, failed, unavailable, manual and empty evidence never become a favorable zero or 100 percent. Duplicate cross-workspace alerts withhold every alert figure until reconciled |
 
 Alert activity uses the recorded period. Identity and endpoint evidence retains its source lookback, generally the last 30 days. Configuration and score readings are point-in-time measurements.
@@ -143,6 +144,7 @@ Copy `report/context.example.json`, enter the exact client and tenant from the p
     "ReadDate": "2026-10-08",
     "Source": "Defender portal capture saved with the October review",
     "Previous": 53.2,
+    "PreviousMax": 100,
     "PreviousReadDate": "2026-07-10",
     "Categories": { "Identity": 50.8, "Device": 61.3, "Apps": 59.5, "Data": 71.4 }
   },
@@ -158,7 +160,7 @@ Copy `report/context.example.json`, enter the exact client and tenant from the p
 }
 ```
 
-`ServiceStartDate` enables the "Months of managed security" tile. `Previous` and `PreviousReadDate` add the tenant score movement line. `Categories` are percentages and add the category bars on the posture page. A delivered item needs a title, outcome, reference and a completion date inside the alert period. Incomplete entries appear in the evidence review instead of on the client page. The generator checks structure and date scope but cannot verify the referenced ticket or portal capture. It accepts no overrides for computed metrics.
+`ServiceStartDate` enables the "Months of managed security" tile. `Previous`, `PreviousMax` and `PreviousReadDate` add the tenant score movement line, in percentage points with each reading over its own maximum, since Microsoft widens the maximum over time. Without `PreviousMax` the maximum comes from the POS.6-TREND snapshot dated `PreviousReadDate`, and without that the movement line is omitted and the evidence review says so. `Categories` are percentages and add the category bars on the posture page. A delivered item needs a title, outcome, reference and a completion date inside the alert period. Incomplete entries appear in the evidence review instead of on the client page. The generator checks structure and date scope but cannot verify the referenced ticket or portal capture. It accepts no overrides for computed metrics.
 
 ## Presenter notes
 

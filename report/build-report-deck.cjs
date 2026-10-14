@@ -3,11 +3,16 @@
    model, then the story layer (report-story.js) for the wins, decisions, drift and roadmap.
 
    Structure (docs/plans/2026-10-12-ebr-deck-restructure-design.md, grounding slides added Oct 14, 2026):
-   cover, executive summary, wins, security operations, confirmed threats (only when there are examples),
-   control posture, measured outcomes by pillar, hardening roadmap, priority workstreams, passwordless
-   transition, decisions needed, then the appendix: the control register, scope and evidence. Brief keeps
-   the cover, summary, wins, roadmap, passwordless and decisions. Detailed adds the two Microsoft score
-   slides to the appendix.
+   cover, executive summary (the outcome KPIs, the four tier "How we report posture" block as the HTML
+   executive summary shows it, then wins, watch and the items that need action), wins, security operations,
+   confirmed threats (only when there are examples, with outcome cards and the handling strip when the table
+   leaves room), control posture, measured outcomes by pillar, hardening roadmap, priority workstreams, the
+   MFA method update, decisions needed, then the appendix: the control register, scope and evidence. Brief
+   keeps the cover, summary, wins, roadmap, the MFA method update and decisions. Detailed adds the two
+   Microsoft score slides to the appendix.
+
+   One MFA gap: when MFA at sign-in and MFA at the admin portals both read below E, every slide outside the
+   appendix names the gap once, with the admin portal reading folded into its figure line.
 
    A foundational control below E is a gap against the baseline. The deck never says it was configured at
    build, drifted or regressed, because the evidence holds the current reading only.
@@ -22,7 +27,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { createDeck, writeDeck, lines, HEX, X0, CW } = require('./deck-common.cjs')
 const { build, fmt, clean, pctText, plural } = require('./report-model.js')
-const { buildStory } = require('./report-story.js')
+const { buildStory, shortName } = require('./report-story.js')
 
 const [dataFile, outFile] = process.argv.slice(2)
 if (!dataFile || !outFile) { console.error('usage: node build-report-deck.cjs <data.json> <output.pptx>'); process.exit(2) }
@@ -66,32 +71,80 @@ async function main() {
   s.addText(scopeMeta, { placeholder: 'meta' })
   s.addNotes(notesOf([`Security business review for ${m.client}.`, `Alert activity covers ${m.period.label}. Identity and endpoint readings use the source lookback, generally the last 30 days. Configuration and score readings are from ${m.readDate}.`]))
 
-  // 2. Executive summary: outcome KPIs, then wins, watch and decisions.
+  // 2. Executive summary, in line with the HTML executive summary page: the outcome KPIs, the four tier
+  // "How we report posture" block, then the wins, the watch list and the items that need action from the
+  // client (Oct 14, 2026). Every block takes the height its text needs, so nothing overlaps.
   s = content('Summary', 'Executive summary', st.takeaways.summary)
+  let sy = TOP
   if (st.kpis.length) {
-    const n = st.kpis.length, w = CW / n
+    const n = st.kpis.length, w = CW / n, kw = w - 0.45
+    const kpiH = Math.max(1.2, ...st.kpis.map(k => 0.5 + lines(k.label, kw, 12, true) * 0.2 + lines(k.sub, kw, 10.5) * 0.175 + 0.14))
     rule(s, X0, TOP - 0.05, CW, C.text2, 1, 'KPI top rule')
     st.kpis.forEach((k, i) => {
       const x = X0 + i * w
-      if (i) s.addShape(pres.shapes.LINE, { x, y: TOP + 0.05, w: 0, h: 1.8, line: { color: HEX.track, width: 0.75 }, objectName: `KPI divider ${i}` })
-      text(s, [{ text: k.value, options: { fontSize: 38, bold: true, color: C.accent2, breakLine: true } }, { text: k.label, options: { fontSize: 15, bold: true, color: C.text2, breakLine: true, paraSpaceBefore: 2 } }, { text: k.sub, options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 3 } }], { x: x + (i ? 0.3 : 0), y: TOP + 0.08, w: w - 0.45, h: 1.8, objectName: `KPI ${i + 1}` })
+      if (i) s.addShape(pres.shapes.LINE, { x, y: TOP + 0.05, w: 0, h: kpiH - 0.15, line: { color: HEX.track, width: 0.75 }, objectName: `KPI divider ${i}` })
+      text(s, [{ text: k.value, options: { fontSize: 30, bold: true, color: C.accent2, breakLine: true } }, { text: k.label, options: { fontSize: 12, bold: true, color: C.text2, breakLine: true, paraSpaceBefore: 2 } }, { text: k.sub, options: { fontSize: 10.5, color: C.accent6, paraSpaceBefore: 2 } }], { x: x + (i ? 0.3 : 0), y: TOP + 0.05, w: kw, h: kpiH - 0.1, objectName: `KPI ${i + 1}` })
     })
-    rule(s, X0, TOP + 1.98, CW, HEX.track, 0.75, 'KPI bottom rule')
+    rule(s, X0, TOP + kpiH, CW, HEX.track, 0.75, 'KPI bottom rule')
+    sy = TOP + kpiH + 0.15
   }
-  const colW = (CW - 0.8) / 3, colY = TOP + 2.2
-  ;[['Wins', C.accent3, st.summaryWins, 'Readings are completed in the review.'], ['Watch', C.accent4, st.watch, 'Nothing on the watch list from this collection.'], ['Decisions needed', C.text2, st.summaryAsks, 'No approvals or access needed before the next review.']].forEach(([label, color, items, empty], i) => {
-    const x = X0 + i * (colW + 0.4)
-    eyebrow(s, label, x, colY, colW, C.text2, `Summary ${label}`)
-    rule(s, x, colY + 0.38, colW, color, 2.5, `Summary ${label} rule`)
-    if (!items.length) { text(s, empty, { x, y: colY + 0.55, w: colW, h: 0.5, fontSize: 13, color: C.accent6, objectName: `Summary ${label} empty` }); return }
-    let y = colY + 0.52
-    items.forEach((it, n) => {
-      const h = 0.34 + lines(it.label, colW, 13) * 0.21 + 0.08
-      text(s, [{ text: it.value, options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: it.label, options: { fontSize: 13, color: C.text1 } }], { x, y, w: colW, h, objectName: `Summary ${label} ${n + 1}` })
-      y += h
+  // How we report posture: the four tiers of the HTML executive summary on a navy band, up to three rows each.
+  // Long row labels are shortened for the band. The HTML keeps the full label.
+  const TIER_SHORT = [
+    [/^True positives that reached collection/, 'Collection, exfiltration or impact'], [/^True positives .*exfiltration or impact$/, 'Exfiltration or impact'], [/^Confirmed threats investigated$/, 'Confirmed threats'],
+    [/^Median time to close, high severity alerts$/, 'Median close, high severity'], [/^Median time to close, all alerts$/, 'Median close, all alerts'],
+    [/^90th percentile close/, 'Nine in ten closed within'], [/^Detections correlated into alerts$/, 'Detections correlated'],
+    [/^Foundational controls enforced$/, 'Foundational controls'], [/^Defense in depth controls enforced$/, 'Defense in depth controls'],
+    [/^Critical exploitable findings open$/, 'Critical exploitable findings'], [/^Members who signed in without MFA, last 30 days$/, 'Members without MFA'], [/^Users on a retiring MFA method$/, 'Users on SMS or voice MFA'],
+    [/^Azure virtual machines pending endpoint onboarding$/, 'VMs not on endpoint detection'], [/^Storage accounts open to public networks$/, 'Public storage accounts'], [/^Key Vaults without purge protection$/, 'Vaults without purge protection'],
+    [/^Virtual machines pending host encryption$/, 'VMs pending host encryption'], [/^Resources without diagnostic logging$/, 'Resources not logging'], [/^AI service resources without workload protection$/, 'AI resources without protection'],
+    [/^Workload subnets without segmentation$/, 'Subnets without segmentation'], [/^Virtual machines without Azure Backup$/, 'VMs without Azure Backup'],
+    [/^Microsoft tenant Secure Score$/, 'Tenant Secure Score'], [/^High severity assessments healthy$/, 'High severity findings healthy'], [/^Resources assessed by Defender for Cloud$/, 'Resources assessed']
+  ]
+  const tierLabel = r => { const hit = TIER_SHORT.find(([re]) => re.test(r.label)); if (hit) return hit[1]; return /^TIER\./.test(r.id) ? r.label : sentence(shortName(r)) }
+  const tierDefs = [['outcomes', 'Tier 1 · Outcomes', 'Did the program hold'], ['controls', 'Tier 2 · Control effectiveness', 'What is actually enforced'], ['hardening', 'Tier 3 · Hardening next', 'Scoped and sequenced'], ['benchmark', 'Tier 4 · Vendor benchmark', 'Context, not the objective']]
+  const tierPad = 0.25, tierGap = 0.3, tierW = (CW - 2 * tierPad - 3 * tierGap) / 4, tierValueW = 0.8, tierLabelW = tierW - tierValueW - 0.05
+  const tierRows = tierDefs.map(([key]) => m.tiers[key].slice(0, 3).map(r => ({ ...r, short: tierLabel(r) })))
+  const tierRowH = r => Math.min(2, lines(r.short, tierLabelW, 9)) * 0.16 + 0.09
+  const tierBodyH = Math.max(0.27, ...tierRows.map(rows => rows.reduce((n, r) => n + tierRowH(r), 0)))
+  const tierH = 0.42 + 0.48 + tierBodyH + 0.12
+  card(s, X0, sy, CW, tierH, 'Posture tiers card', C.text2)
+  text(s, 'HOW WE REPORT POSTURE', { x: X0 + tierPad, y: sy + 0.13, w: 3.0, h: 0.24, fontSize: 10, bold: true, color: C.accent1, charSpacing: 1.5, objectName: 'Posture tiers heading' })
+  text(s, 'Reported for the whole tenant, never as a single vendor percentage, and weighted in this order.', { x: X0 + 3.3, y: sy + 0.13, w: CW - 3.3 - tierPad, h: 0.24, fontSize: 10, color: C.background2, align: 'right', objectName: 'Posture tiers note' })
+  tierDefs.forEach(([key, eye, title], i) => {
+    const x = X0 + tierPad + i * (tierW + tierGap), ty = sy + 0.42
+    if (i) s.addShape(pres.shapes.LINE, { x: x - tierGap / 2, y: ty, w: 0, h: tierH - 0.54, line: { color: HEX.accent5, width: 0.75 }, objectName: `Tier ${i + 1} divider` })
+    text(s, [{ text: eye.toUpperCase(), options: { fontSize: 8.5, bold: true, color: C.accent1, charSpacing: 1, breakLine: true } }, { text: title, options: { fontSize: 11, bold: true, color: C.background1, paraSpaceBefore: 2 } }], { x, y: ty, w: tierW, h: 0.46, objectName: `Tier ${i + 1} head` })
+    let ry = ty + 0.48
+    if (!tierRows[i].length) text(s, key === 'hardening' ? 'No open hardening items from this collection.' : 'Readings are completed in the review.', { x, y: ry, w: tierW, h: 0.3, fontSize: 9.5, color: C.background2, objectName: `Tier ${i + 1} empty` })
+    tierRows[i].forEach((r, n) => {
+      const h = tierRowH(r)
+      rule(s, x, ry, tierW, HEX.accent5, 0.5, `Tier ${i + 1} row ${n + 1} rule`)
+      text(s, r.short, { x, y: ry + 0.03, w: tierLabelW, h: h - 0.03, fontSize: 9, color: C.background2, valign: 'middle', objectName: `Tier ${i + 1} row ${n + 1} label` })
+      text(s, r.value, { x: x + tierW - tierValueW, y: ry + 0.03, w: tierValueW, h: h - 0.03, fontSize: 9.5, bold: true, color: key === 'hardening' ? C.accent4 : C.background1, align: 'right', valign: 'middle', objectName: `Tier ${i + 1} row ${n + 1} value` })
+      ry += h
     })
   })
-  s.addNotes(notesOf(['Lead with outcomes.', st.takeaways.summary, st.kpis.map(k => `${k.label}: ${k.value}. ${k.sub}.`), 'Then the watch list, and the decisions we will ask for at the close.']))
+  sy += tierH + 0.15
+  // Wins, the watch list and the items that need action. Each item is one paragraph, the figure leading, so the
+  // column takes the height its text needs. Items that would run past the slide are left out.
+  const colW = (CW - 0.8) / 3, colRoom = BOTTOM - sy - 0.5
+  ;[['Wins', C.accent3, st.summaryWins, 'Readings are completed in the review.'], ['Watch', C.accent4, st.watch, 'Nothing on the watch list from this collection.'], ['Items that need action', C.text2, st.summaryAsks, 'Nothing needs action from your team before the next review.']].forEach(([label, color, items, empty], i) => {
+    const x = X0 + i * (colW + 0.4)
+    eyebrow(s, label, x, sy, colW, C.text2, `Summary ${label}`)
+    rule(s, x, sy + 0.36, colW, color, 2.5, `Summary ${label} rule`)
+    if (!items.length) { text(s, empty, { x, y: sy + 0.5, w: colW, h: 0.5, fontSize: 12, color: C.accent6, objectName: `Summary ${label} empty` }); return }
+    const fit = [], runs = []
+    let used = 0
+    for (const it of items) {
+      const need = lines(`${it.value} ${it.label}`, colW, 11) * 0.19 + (fit.length ? 0.1 : 0)
+      if (used + need > colRoom) break
+      fit.push(it); used += need
+    }
+    fit.forEach((it, n) => runs.push({ text: it.value, options: { fontSize: 12, bold: true, color: C.text2, paraSpaceBefore: n ? 7 : 0 } }, { text: ` ${it.label}`, options: { fontSize: 11, color: C.text1, breakLine: n < fit.length - 1 } }))
+    text(s, runs, { x, y: sy + 0.5, w: colW, h: colRoom, objectName: `Summary ${label} items` })
+  })
+  s.addNotes(notesOf(['Lead with outcomes.', st.takeaways.summary, st.kpis.map(k => `${k.label}: ${k.value}. ${k.sub}.`), 'Posture is reported for the whole tenant, never as a single vendor percentage, in four tiers: outcomes, control effectiveness, what we are hardening next, and the vendor benchmark as context.', 'Then the wins, the watch list, and the items that need action from your team before the next review.']))
 
   // 3. Wins
   s = content('Summary', st.quarter ? 'Quarter wins' : 'Wins this period', st.takeaways.wins)
@@ -217,20 +270,70 @@ async function main() {
       const body = fit.cells.map(r => r.map((v, i) => ({ text: v, options: { fontSize: fit.size, color: i ? HEX.dk1 : HEX.dk2, bold: i === 0, align: i === 1 ? 'right' : 'left', valign: 'middle', border: border(0.5) } })))
       s.addTable([head, ...body], { x: X0, y: TOP, w: CW, colW, rowH: [HEAD_H, ...fit.rowH], margin: [0.05, PAD_X, 0.05, PAD_X], objectName: 'Confirmed threats table' })
       text(s, `${m.threats.more ? `And ${plural(m.threats.moreAlerts, 'more confirmed alert', 'more confirmed alerts')} in ${plural(m.threats.more, 'further group', 'further groups')}. ` : ''}Confirmed as true positives by the SOC and closed, grouped by alert title.`, { x: X0, y: TOP + HEAD_H + fit.height + GAP, w: CW, h: CAPTION_H, fontSize: 11, color: C.accent6, objectName: 'Confirmed threats caption' })
+      // A short table leaves the slide empty, so the room below it carries what the confirmed threats add up to
+      // (the outcome cards) and how every confirmed threat is handled (the strip). Five long titles leave no
+      // room, and the slide then holds the table alone (Oct 14, 2026).
+      // The outcome cards stay within the evidence: the true positive count (OUT.1) and the rows (OUT.4) are
+      // classifications regardless of status, so the cards never claim closure. The tactic count is of tactics
+      // recorded on the alert, in the scope the model names (exfiltration or impact, or the wider flag scope for
+      // packs without tactics), never a verified outcome or a notification. The severity count comes from the
+      // model, counted per alert before grouping.
+      const tp = m.alerts ? m.alerts.truePositives : null
+      const high = m.threats.severities.High
+      const scope = m.alerts ? m.alerts.flaggedScope : ''
+      const tactic = `${/^[aeiou]/.test(scope) ? 'an' : 'a'} ${scope} tactic`
+      const outcomeCards = [
+        tp !== null && tp > 0 ? [fmt(tp), tp === 1 ? 'Confirmed threat' : 'Confirmed threats', `${tp === 1 ? 'An alert' : 'Alerts'} the SOC classified as ${tp === 1 ? 'a true positive' : 'true positives'} ${st.periodPhrase}.`] : null,
+        m.alerts && m.alerts.flaggedKnown && tp > 0 ? [`${fmt(m.alerts.flagged)} of ${fmt(tp)}`, sentence(`reached ${scope}`), m.alerts.flagged === 0 ? `None carried ${tactic}.` : `${plural(m.alerts.flagged, 'alert carried', 'alerts carried')} ${tactic} in Sentinel.`] : null,
+        m.threats.alerts > 0 ? [fmt(high), high === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(m.threats.alerts, 'confirmed alert', 'confirmed alerts')} grouped above, at the severity Sentinel recorded.`] : null,
+        st.speed ? [st.speed.value, sentence(st.speed.label), st.speed.sub] : null
+      ].filter(Boolean).slice(0, 4)
+      const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages every alert and confirms its severity'], ['3 Investigate', ' scope, attack stage and impact are established'], ['4 Resolve', ' closed with a documented disposition, and referred to your team where action is needed']]
+      const STRIP_H = 0.85, cardTop = TOP + HEAD_H + fit.height + GAP + CAPTION_H + 0.2
+      const roomWithStrip = BOTTOM - STRIP_H - 0.25 - cardTop, roomAlone = BOTTOM - cardTop
+      const cardH = outcomeCards.length && roomWithStrip >= 1.1 ? Math.min(1.6, roomWithStrip) : outcomeCards.length && roomAlone >= 1.1 ? Math.min(1.6, roomAlone) : 0
+      if (cardH) {
+        const ocw = (CW - (outcomeCards.length - 1) * 0.3) / outcomeCards.length
+        outcomeCards.forEach(([value, label, sub], i) => {
+          const x = X0 + i * (ocw + 0.3)
+          card(s, x, cardTop, ocw, cardH, `Threat outcome ${i + 1} card`)
+          rule(s, x, cardTop, ocw, i === 1 && m.alerts.flagged > 0 ? C.accent4 : C.accent1, 2.5, `Threat outcome ${i + 1} rule`)
+          text(s, [{ text: value, options: { fontSize: 26, bold: true, color: C.accent2, breakLine: true } }, { text: label, options: { fontSize: 13, bold: true, color: C.text2, breakLine: true, paraSpaceBefore: 2 } }, { text: sub, options: { fontSize: 11, color: C.accent6, paraSpaceBefore: 4 } }], { x: x + 0.25, y: cardTop + 0.2, w: ocw - 0.5, h: cardH - 0.3, objectName: `Threat outcome ${i + 1}` })
+        })
+      }
+      const strip = (cardH && roomWithStrip >= 1.1) || (!cardH && roomAlone >= STRIP_H + 0.1)
+      if (strip) {
+        card(s, X0, BOTTOM - STRIP_H, CW, STRIP_H, 'Threat handling card')
+        text(s, 'EVERY CONFIRMED THREAT', { x: X0 + 0.25, y: BOTTOM - STRIP_H, w: 1.9, h: STRIP_H, fontSize: 10, bold: true, color: C.text2, charSpacing: 1.5, valign: 'middle', objectName: 'Threat handling label' })
+        const hw = (CW - 2.4) / handling.length
+        handling.forEach(([lead, rest], i) => text(s, [{ text: lead, options: { bold: true, color: C.accent2 } }, { text: rest, options: { color: C.text1 } }], { x: X0 + 2.3 + i * hw, y: BOTTOM - STRIP_H, w: hw - 0.15, h: STRIP_H, fontSize: 11, valign: 'middle', objectName: `Threat handling ${i + 1}` }))
+      }
       s.addNotes(notesOf([
         'These are alerts the SOC confirmed as true positive threats, grouped by alert title, highest severity first.',
         m.ticketed ? 'Each one opened a ticket with the managed security service and was closed by the SOC.' : '',
-        st.takeaways.threats
+        st.takeaways.threats,
+        cardH ? outcomeCards.map(([value, label, sub]) => `${value} ${label.charAt(0).toLowerCase() + label.slice(1)}. ${sub}`) : '',
+        strip ? 'Every confirmed threat follows the same path: detections are correlated into one alert, the SOC triages it and confirms its severity, the investigation establishes scope, attack stage and impact, and the alert is closed with a documented disposition and referred to your team where action is needed.' : ''
       ]))
     }
 
-    // 5. Control posture: pillar matrix and the foundational drift panel.
+    // 5. Control posture: pillar matrix and the foundational gaps panel. The headline measure column sits on a
+    // light band with its figures in bold, one measure per line, so the lead reading of each pillar stands out.
     s = content('Operations and posture', 'Control posture', st.takeaways.posture)
-    const mw = 7.85, cols = [1.95, 1.45, 1.45, mw - 4.85]
+    const mw = 7.85, cols = [1.85, 1.3, 1.3, mw - 4.45]
     const cx = [X0, X0 + cols[0], X0 + cols[0] + cols[1], X0 + cols[0] + cols[1] + cols[2]]
-    ;['Pillar', 'Foundational', 'Defense in depth', 'Headline measure'].forEach((h, i) => text(s, h, { x: cx[i], y: TOP, w: cols[i] - 0.15, h: 0.45, fontSize: 12, bold: true, color: C.accent6, valign: 'bottom', objectName: `Matrix header ${i + 1}` }))
-    rule(s, X0, TOP + 0.52, mw, C.text2, 1, 'Matrix header rule')
     const rh = 0.74
+    card(s, cx[3] - 0.15, TOP, cols[3] + 0.15, 0.6 + st.matrix.length * rh - 0.05, 'Headline measure band')
+    ;['Pillar', 'Foundational', 'Defense in depth', 'Headline measure'].forEach((h, i) => text(s, h, { x: cx[i], y: TOP, w: cols[i] - 0.15, h: 0.45, fontSize: 12, bold: true, color: i === 3 ? C.text2 : C.accent6, valign: 'bottom', objectName: `Matrix header ${i + 1}` }))
+    rule(s, X0, TOP + 0.52, mw, C.text2, 1, 'Matrix header rule')
+    // "180 of 194 users on MFA at sign-in · 3 users already on phishing-resistant sign-in" becomes two lines, each
+    // led by its figure in bold.
+    const measureRuns = measure => measure.split(' · ').flatMap((part, i, all) => {
+      const hit = part.match(/^(\d[\d,.]*%?(?: of \d[\d,.]*)?)\s+(.*)$/)
+      const runs = hit ? [{ text: hit[1], options: { fontSize: 11.5, bold: true, color: C.text2 } }, { text: ` ${hit[2]}`, options: { fontSize: 10.5, color: C.text1 } }] : [{ text: part, options: { fontSize: 10.5, color: C.text1 } }]
+      if (i < all.length - 1) runs[runs.length - 1] = { ...runs[runs.length - 1], options: { ...runs[runs.length - 1].options, breakLine: true } }
+      return runs
+    })
     st.matrix.forEach((r, i) => {
       const y = TOP + 0.6 + i * rh
       text(s, r.group, { x: cx[0], y, w: cols[0] - 0.15, h: rh - 0.08, fontSize: 15, bold: true, color: C.text2, valign: 'middle', objectName: `${r.group} name` })
@@ -239,7 +342,7 @@ async function main() {
         text(s, t.measured ? `${t.enforced} of ${t.measured}` : 'Not measured', { x: cx[col], y: y + 0.1, w: cols[col] - 0.2, h: 0.32, fontSize: t.measured ? 15 : 12, bold: !!t.measured, color: t.measured ? C.text2 : C.accent6, objectName: `${r.group} ${tier} count` })
         if (t.measured) meter(s, cx[col], y + 0.47, cols[col] - 0.25, t.pct, fill, `${r.group} ${tier}`)
       })
-      text(s, r.measure || 'Readings completed in the review', { x: cx[3], y, w: cols[3], h: rh - 0.08, fontSize: 12, color: C.text1, valign: 'middle', objectName: `${r.group} measure` })
+      text(s, r.measure ? measureRuns(r.measure) : 'Readings completed in the review', { x: cx[3], y, w: cols[3] - 0.15, h: rh - 0.08, fontSize: 10.5, color: C.accent6, valign: 'middle', objectName: `${r.group} measure` })
       if (i < st.matrix.length - 1) rule(s, X0, y + rh - 0.02, mw, HEX.track, 0.75, `${r.group} rule`)
     })
     const ay = TOP + 0.6 + st.matrix.length * rh + 0.05
@@ -247,7 +350,7 @@ async function main() {
     text(s, 'All pillars', { x: cx[0] + 0.15, y: ay, w: cols[0], h: BOTTOM - ay, fontSize: 15, bold: true, color: C.text2, valign: 'middle', objectName: 'All pillars name' })
     text(s, st.foundational.measured ? `${st.foundational.enforced} of ${st.foundational.measured}` : '–', { x: cx[1], y: ay, w: cols[1], h: BOTTOM - ay, fontSize: 20, bold: true, color: C.accent2, valign: 'middle', objectName: 'All pillars foundational' })
     text(s, st.defense.measured ? `${st.defense.enforced} of ${st.defense.measured}` : '–', { x: cx[2], y: ay, w: cols[2], h: BOTTOM - ay, fontSize: 20, bold: true, color: C.accent2, valign: 'middle', objectName: 'All pillars defense' })
-    text(s, st.ungathered.length ? `${plural(st.ungathered.length, 'more control', 'more controls')} not gathered. See the appendix.` : 'Every control was gathered in this collection.', { x: cx[3], y: ay, w: cols[3] - 0.1, h: BOTTOM - ay, fontSize: 12, color: C.accent6, valign: 'middle', objectName: 'All pillars note' })
+    text(s, 'Foundational and defense in depth controls enforced, of those measured', { x: cx[3], y: ay, w: cols[3] - 0.1, h: BOTTOM - ay, fontSize: 11, color: C.accent6, valign: 'middle', objectName: 'All pillars note' })
     // Drift panel.
     const px = X0 + mw + 0.4, pw = CW - mw - 0.4
     card(s, px, TOP, pw, BOTTOM - TOP, 'Drift panel')
@@ -374,36 +477,37 @@ async function main() {
     s.addNotes(notesOf([`Priorities reflect the evidence collected ${m.readDate}. Each one names the evidence, the action and the outcome we verify at the next review.`, m.priorities.map(p => `${p.title}. ${p.evidence} ${p.action} Outcome: ${p.success}`)]))
   }
 
-  // 7. Passwordless transition
-  const pwd = m.passwordless && m.passwordless.retiring > 0 ? m.passwordless : null
-  if (pwd) {
-    s = content('Roadmap and decisions', 'Passwordless transition', st.takeaways.passwordless)
+  // 7. MFA method update: the users still signing in with text message or voice, and the plan to move each one
+  // to a stronger method before Microsoft retires those methods. Never framed as passwordless (Oct 14, 2026).
+  const methods = m.mfaMethods && m.mfaMethods.retiring > 0 ? m.mfaMethods : null
+  if (methods) {
+    s = content('Roadmap and decisions', 'MFA method update', st.takeaways.methods)
     const lw = 6.1
     if (st.deadlineDays !== null && st.deadlineDays > 0) {
       text(s, fmt(st.deadlineDays), { x: X0 - 0.05, y: TOP - 0.15, w: 2.6, h: 1.25, fontSize: 80, bold: true, color: C.accent2, valign: 'middle', objectName: 'Countdown' })
-      text(s, [{ text: 'days to the deadline', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: `From ${st.readShort} to ${st.deadlineShort}`, options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 2 } }], { x: X0 + 2.6, y: TOP + 0.35, w: lw - 2.6, h: 0.8, objectName: 'Countdown label' })
-    } else text(s, [{ text: fmt(pwd.retiring), options: { fontSize: 60, bold: true, color: C.accent2, breakLine: true } }, { text: 'users still sign in with text message or voice', options: { fontSize: 16, bold: true, color: C.text2 } }], { x: X0, y: TOP, w: lw, h: 1.3, objectName: 'Retiring users' })
+      text(s, [{ text: `days to move ${plural(methods.retiring, 'user', 'users')}`, options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: `From ${st.readShort} to ${st.deadlineShort}, when text message and voice sign-in retire`, options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 2 } }], { x: X0 + 2.6, y: TOP + 0.3, w: lw - 2.6, h: 0.9, objectName: 'Countdown label' })
+    } else text(s, [{ text: fmt(methods.retiring), options: { fontSize: 60, bold: true, color: C.accent2, breakLine: true } }, { text: 'users still sign in with text message or voice', options: { fontSize: 16, bold: true, color: C.text2 } }], { x: X0, y: TOP, w: lw, h: 1.3, objectName: 'Retiring users' })
     rule(s, X0, TOP + 1.4, lw, C.text2, 1, 'Methods rule')
     eyebrow(s, 'Users by sign-in method, last 30 days', X0, TOP + 1.55, lw, C.text2, 'Methods')
-    const methods = [['Authenticator or OTP', pwd.authenticator, C.accent2], ['Text message or voice', pwd.retiring, C.accent4], ['Phishing-resistant', pwd.resistant, C.accent3]]
-    const maxM = Math.max(1, ...methods.map(([, v]) => v))
-    methods.forEach(([l, v, c], i) => {
+    const bars = [['Authenticator or OTP', methods.authenticator, C.accent2], ['Text message or voice', methods.retiring, C.accent4], ['Phishing-resistant', methods.resistant, C.accent3]]
+    const maxM = Math.max(1, ...bars.map(([, v]) => v))
+    bars.forEach(([l, v, c], i) => {
       const y = TOP + 2.05 + i * 0.5
       text(s, l, { x: X0, y, w: 2.3, h: 0.35, fontSize: 13, bold: i === 1, color: C.text1, valign: 'middle', objectName: `Method ${i + 1} label` })
       if (v > 0) s.addShape(pres.shapes.RECTANGLE, { x: X0 + 2.35, y: y + 0.07, w: Math.max(0.05, 3.0 * v / maxM), h: 0.22, fill: { color: c }, line: { color: c, width: 0 }, objectName: `Method ${i + 1} bar` })
       text(s, fmt(v), { x: X0 + lw - 0.75, y, w: 0.75, h: 0.35, fontSize: 14, bold: true, color: C.text2, align: 'right', valign: 'middle', objectName: `Method ${i + 1} value` })
     })
-    if (pwd.authenticator > 0) text(s, `A passkey can be issued inside the Authenticator app ${plural(pwd.authenticator, 'user already carries', 'users already carry')}.`, { x: X0, y: TOP + 3.65, w: lw, h: 0.4, fontSize: 12, color: C.accent6, objectName: 'Methods caption' })
-    const steps = [['Enable passkeys', 'Under change control, inside the app users already carry.'], ['Register in waves', `The ${plural(pwd.retiring, 'affected user', 'affected users')} first, in guided waves with device guidance.`], ['Govern non-user accounts', 'Service and shared accounts move under policy.'], ['Confirm readiness early', 'A final sweep before enforcement. No blocked sign-ins.']]
+    text(s, methods.authenticator > 0 ? `${plural(methods.authenticator, 'user already signs', 'users already sign')} in with Microsoft Authenticator, the method the ${plural(methods.retiring, 'affected user moves', 'affected users move')} to.` : `The ${plural(methods.retiring, 'affected user moves', 'affected users move')} to Microsoft Authenticator or a phishing-resistant method.`, { x: X0, y: TOP + 3.65, w: lw, h: 0.5, fontSize: 12, color: C.accent6, objectName: 'Methods caption' })
+    const steps = [['Notify the affected users', `Each of the ${plural(methods.retiring, 'user', 'users')} on text message or voice is told what to change and by when.`], ['Register a stronger method', 'Microsoft Authenticator, or a phishing-resistant method where the device allows it, in guided waves.'], ['Remove the retiring methods', 'Text message and voice leave the allowed methods under change control, group by group.'], ['Confirm readiness early', `A final sweep before ${methods.deadline}. No blocked sign-ins.`]]
     const sx = X0 + lw + 0.5, sw = CW - lw - 0.5
     steps.forEach(([head, body], i) => {
       const y = TOP + i * 1.08
       chip(s, String(i + 1), sx, y + 0.05, 0.5, 0.5, C.text2, 16, `Step ${i + 1} number`)
-      text(s, [{ text: head, options: { fontSize: 17, bold: true, color: C.text2, breakLine: true } }, { text: body, options: { fontSize: 13, color: C.text1, paraSpaceBefore: 2 } }], { x: sx + 0.7, y, w: sw - 0.7, h: 0.85, objectName: `Step ${i + 1}` })
+      text(s, [{ text: head, options: { fontSize: 17, bold: true, color: C.text2, breakLine: true } }, { text: body, options: { fontSize: 13, color: C.text1, paraSpaceBefore: 2 } }], { x: sx + 0.7, y, w: sw - 0.7, h: 0.95, objectName: `Step ${i + 1}` })
     })
     card(s, X0, BOTTOM - 0.7, CW, 0.7, 'Outcome strip')
-    text(s, [{ text: 'OUTCOME   ', options: { bold: true, color: C.text2, charSpacing: 1.5, fontSize: 11 } }, { text: `${pwd.deadline} arrives as a non-event: no blocked sign-ins, and phishing-resistant sign-in as the default.`, options: { color: C.text1, fontSize: 13 } }], { x: X0 + 0.25, y: BOTTOM - 0.7, w: CW - 0.5, h: 0.7, valign: 'middle', objectName: 'Outcome' })
-    s.addNotes(notesOf([`${plural(pwd.retiring, 'user', 'users')} signed in with text message or voice over the last 30 days. Microsoft retires these methods on ${pwd.deadline}.`, pwd.authenticator ? `${plural(pwd.authenticator, 'user already uses', 'users already use')} Microsoft Authenticator, where a passkey can be issued.` : '', 'The plan enables passkeys under change control, registers affected users in guided waves, governs service and shared accounts, and confirms readiness with a final sweep before enforcement.']))
+    text(s, [{ text: 'OUTCOME   ', options: { bold: true, color: C.text2, charSpacing: 1.5, fontSize: 11 } }, { text: `${methods.deadline} arrives as a non-event: every user signs in with a stronger method, and no sign-in is blocked.`, options: { color: C.text1, fontSize: 13 } }], { x: X0 + 0.25, y: BOTTOM - 0.7, w: CW - 0.5, h: 0.7, valign: 'middle', objectName: 'Outcome' })
+    s.addNotes(notesOf([`${plural(methods.retiring, 'user', 'users')} signed in with text message or voice over the last 30 days. Microsoft retires these methods on ${methods.deadline}, so each of these users updates their MFA method before then.`, methods.authenticator ? `${plural(methods.authenticator, 'user already uses', 'users already use')} Microsoft Authenticator, the method the affected users move to.` : '', 'The plan notifies the affected users, registers each one on Microsoft Authenticator or a phishing-resistant method in guided waves, removes text message and voice from the allowed methods under change control, and confirms readiness with a final sweep before the deadline.']))
   }
 
   // 8. Decisions needed
@@ -567,19 +671,54 @@ async function main() {
     }
     s = content('Appendix', 'Tenant and cloud security posture', 'Appendix A5 · Microsoft calculates both scores. We report them as context, not as the objective.')
     const cw2 = (CW - 0.3) / 2, ch2 = 2.95
-    const scoreCard = (x, eye, score, body, name) => {
+    // Each score reads as a percentage with its movement in percentage points, never as points available. The
+    // Defender for Cloud card draws the score by month as the HTML page does, and the tenant card adds the
+    // category scores (Oct 14, 2026).
+    const scoreCard = (x, eye, score, body, name, trend = null) => {
       card(s, x, TOP, cw2, ch2, `${name} card`)
       text(s, eye, { x: x + 0.3, y: TOP + 0.2, w: cw2 - 0.6, h: 0.3, fontSize: 11, bold: true, color: C.accent2, charSpacing: 1.5, objectName: `${name} eyebrow` })
-      if (score !== null) {
+      const chartW = trend ? 3.1 : 2.25
+      if (trend) {
+        const values = trend.map(t => t.pct), lo = Math.max(0, Math.floor((Math.min(...values) - 4) / 5) * 5), hi = Math.min(100, Math.ceil((Math.max(...values) + 4) / 5) * 5)
+        s.addChart(pres.charts.LINE, [{ name: 'Score', labels: trend.map(t => t.label), values }], {
+          x: x + 0.15, y: TOP + 0.5, w: chartW, h: ch2 - 0.6, lineSize: 2.5, lineDataSymbol: 'circle', lineDataSymbolSize: 7, chartColors: [HEX.accent2],
+          valAxisMinVal: lo, valAxisMaxVal: hi, valAxisLabelFontSize: 9, valAxisLabelColor: HEX.accent6, valAxisLabelFontFace: '+mn-lt', valAxisLabelFormatCode: '0"%"', valGridLine: { color: HEX.track, size: 0.5 },
+          catAxisLabelFontSize: 9, catAxisLabelColor: HEX.dk1, catAxisLabelFontFace: '+mn-lt', catGridLine: { style: 'none' }, showLegend: false,
+          showValue: trend.length <= 6, dataLabelPosition: 't', dataLabelFontSize: 9, dataLabelFontBold: true, dataLabelColor: HEX.dk2, dataLabelFontFace: '+mn-lt', dataLabelFormatCode: '0.0"%"', objectName: `${name} chart`
+        })
+      } else if (score !== null) {
         s.addChart(pres.charts.DOUGHNUT, [{ name, labels: ['Score', 'Remaining'], values: [score, Math.max(0, 100 - score)] }], { x: x + 0.25, y: TOP + 0.55, w: 2.25, h: 2.25, holeSize: 72, chartColors: [HEX.accent2, HEX.track], showLegend: false, showValue: false, showPercent: false, showLabel: false, showTitle: false, objectName: `${name} chart` })
         text(s, pctText(score), { x: x + 0.25, y: TOP + 1.37, w: 2.25, h: 0.6, fontSize: 22, bold: true, color: C.text2, align: 'center', valign: 'middle', objectName: `${name} value` })
       }
-      text(s, body, { x: x + (score !== null ? 2.8 : 0.3), y: TOP + 0.65, w: cw2 - (score !== null ? 3.1 : 0.6), h: ch2 - 0.85, fontSize: 13, color: C.text1, valign: 'middle', objectName: `${name} text` })
+      const tx = x + (score !== null ? chartW + 0.55 : 0.3), tw = cw2 - (score !== null ? chartW + 0.85 : 0.6)
+      text(s, body, { x: tx, y: TOP + 0.6, w: tw, h: ch2 - 0.8, fontSize: 12, color: C.text1, valign: 'top', objectName: `${name} text` })
+      return { tx, tw }
     }
+    const movement = (sc, color) => ({ text: sc.delta && sc.delta.points > 0 ? `Up ${fmt(sc.delta.points)} points since ${sc.delta.since}, from ${pctText(sc.delta.from)}.` : 'Reported as current state.', options: { bold: !!(sc.delta && sc.delta.points > 0), color: sc.delta && sc.delta.points > 0 ? C.accent3 : color, breakLine: true, paraSpaceBefore: 4 } })
     const cs = m.cloudScore
-    scoreCard(X0, 'DEFENDER FOR CLOUD · AZURE ESTATE', cs ? cs.value : null, cs ? [{ text: pctText(cs.value), options: { fontSize: 20, bold: true, color: C.text2, breakLine: true } }, { text: `${cs.note}${m.posture.assessed !== null ? ` Measured across ${fmt(m.posture.assessed)} assessed resources.` : ''}`, options: { breakLine: true, paraSpaceBefore: 4 } }, { text: cs.delta && cs.delta.points > 0 ? `Up ${fmt(cs.delta.points)} points since ${cs.delta.since}` : 'Reported as current state.', options: { color: cs.delta && cs.delta.points > 0 ? C.accent3 : C.accent6, paraSpaceBefore: 6 } }] : 'Reading completed in the review.', 'Defender for Cloud')
+    const cloudTrend = cs && cs.trend.length >= 2 ? cs.trend : null
+    scoreCard(X0, 'DEFENDER FOR CLOUD · AZURE RESOURCE ESTATE', cs ? cs.value : null, cs ? [
+      { text: pctText(cs.value), options: { fontSize: 24, bold: true, color: C.text2, breakLine: true } },
+      movement(cs, C.accent6),
+      { text: `${cs.note}${m.posture.assessed !== null ? ` Measured across ${fmt(m.posture.assessed)} assessed resources.` : ''}`, options: { fontSize: 11, color: C.accent6, paraSpaceBefore: 4 } }
+    ] : 'Reading completed in the review.', 'Defender for Cloud', cloudTrend)
     const tsc = m.tenantScore
-    scoreCard(X0 + cw2 + 0.3, 'MICROSOFT SECURE SCORE · MICROSOFT 365', tsc ? tsc.value : null, tsc ? [{ text: pctText(tsc.value), options: { fontSize: 20, bold: true, color: C.text2, breakLine: true } }, { text: tsc.note, options: { breakLine: !!tsc.delta, paraSpaceBefore: 4 } }, ...(tsc.delta ? [{ text: `Up ${fmt(tsc.delta.points)} points since ${tsc.delta.since}`, options: { color: C.accent3, paraSpaceBefore: 6 } }] : [])] : [{ text: 'Added from the portal reading', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: 'The tenant score is read in the Defender portal and added through the review context so both estates are presented together.', options: { paraSpaceBefore: 6 } }], 'Secure Score')
+    const tenantBox = scoreCard(X0 + cw2 + 0.3, 'MICROSOFT SECURE SCORE · MICROSOFT 365 TENANT', tsc ? tsc.value : null, tsc ? [
+      { text: pctText(tsc.value), options: { fontSize: 24, bold: true, color: C.text2, breakLine: true } },
+      movement(tsc, C.accent6),
+      { text: `Read ${tsc.read}.`, options: { fontSize: 11, color: C.accent6, paraSpaceBefore: 4 } }
+    ] : [{ text: 'Added from the portal reading', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: 'The tenant score is read in the Defender portal and added through the review context so both estates are presented together.', options: { paraSpaceBefore: 6 } }], 'Secure Score')
+    if (tsc && tsc.categories.length) {
+      // Category scores under the reading, as the HTML card shows them.
+      let cy = TOP + 1.85
+      const rowH = Math.min(0.24, (ch2 - 1.95) / tsc.categories.length)
+      tsc.categories.forEach((c, i) => {
+        text(s, c.label, { x: tenantBox.tx, y: cy, w: 0.85, h: rowH, fontSize: 9.5, color: C.text1, valign: 'middle', objectName: `Category ${i + 1} label` })
+        meter(s, tenantBox.tx + 0.9, cy + (rowH - 0.14) / 2, tenantBox.tw - 1.55, c.pct, C.accent2, `Category ${i + 1}`)
+        text(s, pctText(c.pct), { x: tenantBox.tx + tenantBox.tw - 0.6, y: cy, w: 0.6, h: rowH, fontSize: 9.5, bold: true, color: C.text2, align: 'right', valign: 'middle', objectName: `Category ${i + 1} value` })
+        cy += rowH
+      })
+    }
     const inv = [[fmt(m.posture.estate), 'Azure resources in the estate', m.excluded ? `Managed resource groups matching ${m.excluded} are excluded.` : 'No managed resource group exclusion was configured.'], [fmt(m.posture.assessed), 'Resources assessed by Defender for Cloud', 'Distinct resources in assessment records at collection.'], m.posture.rules ? [fmt(m.posture.rules.enabled), 'Analytics rules active in Sentinel', `Of ${fmt(m.posture.rules.total)} rules across ${plural(m.workspaces.length, 'workspace', 'workspaces')}.`] : [fmt(m.posture.telemetryTables), 'Telemetry tables collected', 'Distinct data types reaching the workspaces.']]
     const iw = (CW - 0.6) / 3, iy = TOP + ch2 + 0.3
     inv.forEach(([v, l, sub], i) => stat(s, X0 + i * (iw + 0.3), iy, iw, BOTTOM - iy, v, l, sub, `Inventory ${i + 1}`))

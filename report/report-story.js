@@ -1,6 +1,6 @@
 /* The story behind the EBR deck, derived from the report model: outcome KPIs, wins, the watch list,
-   decisions needed, foundational drift, the posture matrix, the Now, Next and Later roadmap and the
-   takeaway subtitles. Pure, so the HTML can adopt it later. Rules are in
+   the items that need action, foundational gaps, the posture matrix, the Now, Next and Later roadmap and
+   the takeaway subtitles. Pure, so the HTML can adopt it later. Rules are in
    docs/plans/2026-10-12-ebr-deck-restructure-design.md.
 
    Copy rules hold here too: alerts not incidents, no semicolons or arrows, open alert counts and
@@ -102,49 +102,64 @@
     s.readShort = shortDate(p.PostureReadDate) || m.readDate
 
     // Response speed. A median shows only at the floor or above. Otherwise the 90th percentile carries
-    // the story when it is within one hour.
+    // the story when it is within one hour. The 90th percentile is creation to recorded close, so it reads
+    // as nine in ten alerts triaged and closed, as the HTML tile words it, never as investigated or
+    // resolved (Oct 14, 2026).
     const timing = m.timing || []
     const speedRow = timing.find(r => r.scope === 'High') && timing.find(r => r.scope === 'High').n >= 5 ? timing.find(r => r.scope === 'High') : timing.find(r => r.scope === 'All')
     s.speed = null
     if (speedRow) {
       const who = speedRow.scope === 'High' ? 'high-severity alerts' : 'alerts'
-      if (speedRow.median) s.speed = { value: speedRow.median.value, label: `median time to close, ${speedRow.scope === 'High' ? 'high severity' : 'all severities'}`, sub: `${plural(speedRow.n, 'alert', 'alerts')} closed${speedRow.p90 && speedRow.p90.minutes <= 60 ? `. 90% within ${speedRow.p90.value}` : ''}.`, line: `${sentence(who)} closed in a median of ${speedRow.median.value}.`, row: speedRow }
-      else if (speedRow.p90 && speedRow.p90.minutes <= 60) s.speed = { value: speedRow.p90.value, label: `time for 90% of ${who} to close`, sub: `${plural(speedRow.n, 'alert', 'alerts')} closed ${s.periodPhrase}.`, line: `90% of ${who} closed within ${speedRow.p90.value}.`, row: speedRow }
+      const nineInTen = speedRow.p90 && speedRow.p90.minutes <= 60 ? `Nine in ten triaged and closed within ${speedRow.p90.value}` : ''
+      if (speedRow.median) s.speed = { value: speedRow.median.value, label: `median time to close, ${speedRow.scope === 'High' ? 'high severity alerts' : 'all alerts'}`, sub: `${plural(speedRow.n, 'alert', 'alerts')} closed.${nineInTen ? ` ${nineInTen}.` : ''}`, kpiSub: nineInTen || `${plural(speedRow.n, 'alert', 'alerts')} closed`, line: `${sentence(who)} closed in a median of ${speedRow.median.value}.`, row: speedRow }
+      else if (speedRow.p90 && speedRow.p90.minutes <= 60) s.speed = { value: speedRow.p90.value, label: `time for 90% of ${who} to close`, sub: `${plural(speedRow.n, 'alert', 'alerts')} closed ${s.periodPhrase}.`, kpiSub: `${plural(speedRow.n, 'alert', 'alerts')} closed ${s.periodPhrase}`, line: `90% of ${who} closed within ${speedRow.p90.value}.`, row: speedRow }
     }
 
-    // Score movement. Only a gain is a headline. A decline stays with the presenter notes.
+    // Score movement. Only a gain is a headline. The posture chart shows the monthly trend in either direction.
     const score = m.tenantScore || m.cloudScore
     const scoreName = m.tenantScore ? 'Microsoft Secure Score' : 'Defender for Cloud secure score'
     const gain = score && score.delta && score.delta.points > 0 ? score.delta : null
-    const firstPct = m.cloudScore && gain && !m.tenantScore ? m.cloudScore.trend[0]?.pct : null
 
     // Drift and controls.
     const measured = tier => m.controls.filter(c => c.tier === tier && c.mark)
     const enforced = tier => measured(tier).filter(c => c.mark === 'E')
     // Foundational gaps: every foundational control below E, except one that needs a license the client holds,
-    // which goes to Later through the catalog with its ask.
-    s.drift = m.controls.filter(c => c.tier === 'foundational' && below(c) && !c.needsLicense).map(safe)
+    // which goes to Later through the catalog with its ask. One MFA gap: the admin portal policy is part of the
+    // same Conditional Access work as MFA at sign-in, so when both read below E the gaps panel, the roadmap and
+    // the summary name the sign-in gap once, with the admin portal reading folded into its figure line. The
+    // counts still cover every control, and the register in the appendix keeps both rows (Oct 14, 2026).
+    s.driftControls = m.controls.filter(c => c.tier === 'foundational' && below(c) && !c.needsLicense).map(safe)
+    const mfaGap = s.driftControls.find(c => /^Multifactor authentication required at sign-in/.test(c.label))
+    const portalGap = s.driftControls.find(c => /^Multifactor authentication at admin portal/.test(c.label))
+    if (mfaGap && portalGap) {
+      mfaGap.folded = [portalGap]
+      mfaGap.detail = [mfaGap.detail, `admin portals ${(portalGap.detail || portalGap.valueText).toLowerCase()}`].filter(Boolean).join(' · ')
+    }
+    s.drift = s.driftControls.filter(c => c !== portalGap || !mfaGap)
     s.licensed = m.controls.filter(c => c.tier === 'foundational' && below(c) && c.needsLicense).map(safe)
     s.ungathered = m.controls.filter(ungathered).map(safe)
     s.foundational = { enforced: enforced('foundational').length, measured: measured('foundational').length }
     s.defense = { enforced: enforced('defense').length, measured: measured('defense').length }
 
     // Outcome KPIs: alerts, impact, speed, score. Scope figures such as resources assessed are inputs, not outcomes.
+    // The alert KPI carries the period, or the automation line, as the HTML tile does. The detection count stays
+    // on the operations slide, where the chart explains it.
     const kpis = []
-    if (m.alerts) kpis.push({ value: fmt(m.alerts.triaged), label: 'Alerts triaged', sub: m.detections ? `${plural(m.detections.total, 'detection', 'detections')} correlated` : m.period.label, area: 'alerts' })
-    if (m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0) kpis.push({ value: `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, label: 'Confirmed threats with exfiltration or impact', sub: m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`, area: 'threat' })
+    if (m.alerts) kpis.push({ value: fmt(m.alerts.triaged), label: 'Alerts triaged', sub: m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} resolved by automation rules` : m.period.label, area: 'alerts' })
+    // Tactic-qualified: the count is of tactics recorded on the alert (the model names the scope), never a verified outcome.
+    if (m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0) kpis.push({ value: `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, label: `True positives that reached ${m.alerts.flaggedScope}`, sub: m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`, area: 'threat' })
     else if (m.alerts && m.alerts.truePositives !== null) kpis.push({ value: fmt(m.alerts.truePositives), label: 'Confirmed threats investigated', sub: 'Each closed to a documented disposition', area: 'threat' })
-    if (s.speed) kpis.push({ value: s.speed.value, label: sentence(s.speed.label), sub: s.speed.sub.replace(/\.$/, ''), area: 'response' })
-    if (score) kpis.push({ value: pctText(score.value), label: scoreName, sub: gain ? `Up ${fmt(gain.points)} points since ${gain.since}` : `Read ${s.readShort}`, area: 'posture' })
+    if (s.speed) kpis.push({ value: s.speed.value, label: sentence(s.speed.label), sub: s.speed.kpiSub, area: 'response' })
+    if (score) kpis.push({ value: pctText(score.value), label: scoreName, sub: gain ? `Up ${fmt(gain.points)} points since ${gain.since}, from ${pctText(gain.from)}` : `Read ${s.readShort}`, area: 'posture' })
     if (kpis.length < 4 && s.foundational.measured) kpis.push({ value: `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)}`, label: 'Foundational controls enforced', sub: 'Across five pillars', area: 'controls' })
     s.kpis = kpis.slice(0, 4)
 
     // Wins, at most one per area, up to six. A verified configuration reads In force with its own label.
     const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null && (c.boolean || c.total >= MIN_SAMPLE) ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || sub), source: c.source } : null }
     const candidates = [
-      m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? { area: 'threat', eyebrow: 'Threat outcomes', value: `0 of ${fmt(m.alerts.truePositives)}`, label: m.alerts.truePositives === 1 ? 'confirmed threat reached exfiltration or impact' : 'confirmed threats reached exfiltration or impact', sub: `${m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`} by the SOC ${s.periodPhrase}.`, source: m.alerts.source } : null,
+      m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? { area: 'threat', eyebrow: 'Threat outcomes', value: `0 of ${fmt(m.alerts.truePositives)}`, label: `${m.alerts.truePositives === 1 ? 'confirmed threat' : 'confirmed threats'} reached ${m.alerts.flaggedScope}`, sub: `${m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`} by the SOC ${s.periodPhrase}.`, source: m.alerts.source } : null,
       s.speed ? { area: 'response', eyebrow: 'Response speed', value: s.speed.value, label: s.speed.label, sub: s.speed.sub, source: s.speed.row.source } : null,
-      gain ? { area: 'posture', eyebrow: 'Posture', value: `+${fmt(gain.points)} pts`, label: firstPct !== null && firstPct !== undefined ? `secure score, ${pctText(firstPct)} in ${gain.since} to ${pctText(score.value)}` : `${scoreName} since ${gain.since}`, sub: score.note, source: score.source } : null,
+      gain ? { area: 'posture', eyebrow: 'Posture', value: `+${fmt(gain.points)} pts`, label: `${scoreName}, ${pctText(gain.from)} in ${gain.since} to ${pctText(score.value)}`, sub: `Calculated by Microsoft, read ${score.read || s.readShort}.`, source: score.source } : null,
       winAt(/^Multifactor authentication required at sign-in/, 'identity', 'users challenged for MFA at sign-in', 'Members who signed in over the last 30 days.', 'multifactor authentication required at sign-in by Conditional Access policy', 'An enabled policy for all users on every application.'),
       winAt(/^Operating system findings/, 'endpoint', 'machines patched inside the agreed cadence', 'No critical or security patch past the cadence at collection.') || winAt(/^Azure virtual machines reporting/, 'endpoint', 'Azure virtual machines reporting to endpoint detection', 'Seen in the last 7 days.'),
       m.mailRemoved > 0 && find(/^Malicious mail removed/)?.mark === 'E' ? { area: 'data', eyebrow: 'Email protection', value: fmt(m.mailRemoved), label: 'malicious messages removed after delivery', sub: 'Zero-hour auto purge and automated remediation, last 30 days.', source: find(/^Malicious mail removed/).source } : winAt(/^Managed disks/, 'data', 'managed disks encrypted at rest', 'Platform or customer managed keys, at collection.'),
@@ -157,14 +172,16 @@
     // The roadmap: every below-E control mapped to a catalog item, drift first in Now.
     const items = { now: [], next: [], later: [] }
     const prio = id => m.priorities.find(x => x.id === id)
-    if (s.drift.length) items.now.push({ key: 'drift', title: 'Close foundational gaps', evidence: `${plural(s.drift.length, 'control', 'controls')} below the baseline: ${list(s.drift.map(c => c.detail ? `${c.short} (${c.detail})` : c.short))}`, controls: s.drift, owner: 'Atmosera' })
+    if (s.drift.length) items.now.push({ key: 'drift', title: 'Close foundational gaps', evidence: `${plural(s.driftControls.length, 'control', 'controls')} below the baseline: ${list(s.drift.map(c => c.detail ? `${c.short} (${c.detail})` : c.short))}`, controls: s.driftControls, owner: 'Atmosera' })
     const crit = prio('BKL.1')
     if (m.criticalCves > 0) items.now.push({ key: 'critical', title: 'Critical vulnerability remediation', evidence: `${plural(m.criticalCves, 'critical exploitable finding', 'critical exploitable findings')}, scheduled with owners inside the patch cadence`, controls: [], priority: crit })
-    const pw = m.passwordless && m.passwordless.retiring > 0 ? m.passwordless : null
+    // The MFA method update: users still on text message or voice move to a stronger method before Microsoft
+    // retires those methods. Never framed as a passwordless programme (Oct 14, 2026).
+    const pw = m.mfaMethods && m.mfaMethods.retiring > 0 ? m.mfaMethods : null
     s.deadlineDays = days(p.PostureReadDate, RETIREMENT.date)
     s.deadlineShort = shortDate(RETIREMENT.date)
-    if (pw) items[s.deadlineDays !== null && s.deadlineDays <= 180 ? 'now' : 'next'].push({ key: 'passkeys', title: 'Passkeys, first wave', evidence: `${plural(pw.retiring, 'user', 'users')} on text message or voice, ahead of ${shortDate(RETIREMENT.date)}`, controls: [], priority: prio('IA.2') })
-    const mapped = new Set(s.drift.map(c => c.label))
+    if (pw) items[s.deadlineDays !== null && s.deadlineDays <= 180 ? 'now' : 'next'].push({ key: 'methods', title: 'MFA method update', evidence: `${plural(pw.retiring, 'user', 'users')} on text message or voice, ahead of ${shortDate(RETIREMENT.date)}`, controls: [], priority: prio('IA.2') })
+    const mapped = new Set(s.driftControls.map(c => c.label))
     const other = []
     for (const c of m.controls.filter(c => below(c) && !mapped.has(c.label))) {
       const entry = CATALOG.find(e => e.match.test(c.label))
@@ -177,7 +194,7 @@
     // Priorities with no below-E control behind them (AI resources outside workload protection, for example) still belong on the roadmap.
     for (const pr of m.priorities.filter(x => ['DR.2', 'DR.13', 'DR.6'].includes(x.id))) {
       const entry = CATALOG.find(e => e.priority === pr.id || (pr.id === 'DR.6' && e.key === 'logging'))
-      if (entry && !items[entry.horizon].some(i => i.key === entry.key) && !s.drift.some(c => entry.match.test(c.label))) items[entry.horizon].push({ key: entry.key, title: entry.title, controls: [], priority: pr })
+      if (entry && !items[entry.horizon].some(i => i.key === entry.key) && !s.driftControls.some(c => entry.match.test(c.label))) items[entry.horizon].push({ key: entry.key, title: entry.title, controls: [], priority: pr })
     }
     if (other.length) items.next.push({ key: 'other', title: 'Other controls', controls: other.map(safe) })
     const evidenceOf = item => item.evidence || (item.controls.length === 1 && item.priority ? item.priority.evidence
@@ -189,20 +206,21 @@
     const available = m.cloudScore ? Number((m.cloudScore.max - m.cloudScore.current).toFixed(2)) : null
     s.headroom = headroom.length && available ? `Vulnerability and configuration remediation hold ${fmt(Number(headroom.reduce((n, c) => n + c.remaining, 0).toFixed(2)))} of the ${fmt(available)} secure score points still available.` : ''
 
-    // Decisions needed: passkey window, read access, then approvals for items whose controls read N.
+    // Decisions needed: the MFA method update, read access, then approvals for items whose controls read N.
+    // Each ask carries a kind, so the executive summary can leave the read access ask to the closing slide.
     const asks = []
-    if (pw) asks.push({ lead: plural(pw.retiring, 'user', 'users'), title: 'Approve a passkey change window', body: `Moves ${plural(pw.retiring, 'text message and voice user', 'text message and voice users')} before ${RETIREMENT.label}.`, short: `Approve a passkey change window before ${shortDate(RETIREMENT.date)}` })
+    if (pw) asks.push({ kind: 'methods', lead: plural(pw.retiring, 'user', 'users'), title: 'Move users off text message and voice MFA', body: `${plural(pw.retiring, 'user needs', 'users need')} to update their MFA method before ${RETIREMENT.label}, when Microsoft retires text message and voice sign-in.`, short: `need to update their MFA method before ${shortDate(RETIREMENT.date)}` })
     // Read access is asked for only where the collector was not permitted to read the evidence. Service
     // errors and packs that only need recollection are Atmosera's to resolve.
     const gap = id => (data.manifest || []).some(r => r.ResultId === id && (r.AccessGap === true || String(r.AccessGap).toLowerCase() === 'true'))
     const unread = s.ungathered.filter(c => gap(c.id))
-    if (unread.length) asks.push({ lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
+    if (unread.length) asks.push({ kind: 'access', lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
     // An item that holds a foundational control (one that needs a license, routed through the catalog) is asked
     // for ahead of the defense in depth items, whatever its horizon.
     const askItems = HORIZONS.flatMap(h => items[h.key]).map((item, i) => ({ item, i })).sort((a, b) => (a.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) - (b.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) || a.i - b.i).map(x => x.item)
     for (const item of askItems) {
       const entry = CATALOG.find(e => e.key === item.key)
-      if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N')) asks.push({ lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
+      if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N')) asks.push({ kind: 'approval', lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
     }
     s.asks = asks.slice(0, 4)
 
@@ -214,15 +232,16 @@
     ].filter(Boolean).slice(0, 3)
     const watch = []
     if (m.criticalCves > 0) watch.push({ value: fmt(m.criticalCves), label: m.criticalCves === 1 ? 'critical exploitable vulnerability open' : 'critical exploitable vulnerabilities open' })
-    const belowCount = s.drift.length + s.licensed.length
+    const belowCount = s.driftControls.length + s.licensed.length
     if (belowCount) watch.push({ value: fmt(belowCount), label: belowCount === 1 ? 'foundational control reads below enforced' : 'foundational controls read below enforced' })
     const singular = label => [['Members who', 'Member who'], ['Members', 'Member'], ['Users', 'User'], ['Devices', 'Device'], ['AI service resources', 'AI service resource'], ['Resources', 'Resource'], ['Virtual machines', 'Virtual machine'], ['Workload subnets', 'Workload subnet'], ['Key Vaults', 'Key Vault'], ['Storage accounts', 'Storage account'], ['Critical exploitable findings', 'Critical exploitable finding']].reduce((l, [many, one]) => l.startsWith(many + ' ') ? one + l.slice(many.length) : l, label)
     for (const h of (m.hardening || []).filter(x => x.rank < 99 && !['BKL.1', 'IA.2'].includes(x.id))) {
       const label = h.value === 1 ? singular(h.label) : h.label
-      if (watch.length < 3) watch.push({ value: fmt(h.value), label: label.charAt(0).toLowerCase() + label.slice(1) })
+      if (watch.length < 3) watch.push({ value: h.of ? `${fmt(h.value)} of ${fmt(h.of)}` : fmt(h.value), label: label.charAt(0).toLowerCase() + label.slice(1) })
     }
     s.watch = watch.slice(0, 3)
-    s.summaryAsks = s.asks.slice(0, 3).map(a => ({ value: a.lead, label: a.short }))
+    // Items that need action from the client. Read access is Atmosera's to arrange and stays on the closing slide.
+    s.summaryAsks = s.asks.filter(a => a.kind !== 'access').slice(0, 3).map(a => ({ value: a.lead, label: a.short }))
 
     // Posture matrix: per pillar, foundational and defense in depth counts and a headline measure.
     const LEADS = { 'Identity and access': [/^Multifactor authentication required at sign-in/, /^Multifactor authentication at admin portal/], 'Endpoint and workload': [/^Azure virtual machines reporting/, /^Operating system findings/], 'Network and boundary': [/^Encryption in transit/, /^Workload subnets/], 'Data protection': [/^Managed disks/, /^Secure transfer/], 'Detection and response': [/^Alerts closed with a documented/, /^Analytics rules/] }
@@ -257,16 +276,16 @@
     })
 
     // Takeaway subtitles, one sentence built from each slide's lead metric.
-    const threatLine = m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? (m.alerts.truePositives === 1 ? 'The confirmed threat did not reach exfiltration or impact' : `${m.alerts.truePositives === 2 ? 'Neither' : 'None of the'} confirmed ${m.alerts.truePositives === 2 ? 'threat' : 'threats'} reached exfiltration or impact`) : null
+    const threatLine = m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? (m.alerts.truePositives === 1 ? `The confirmed threat did not reach ${m.alerts.flaggedScope}` : `${m.alerts.truePositives === 2 ? 'Neither' : 'None of the'} confirmed ${m.alerts.truePositives === 2 ? 'threat' : 'threats'} reached ${m.alerts.flaggedScope}`) : null
     const parts = [threatLine, gain ? `secure score rose ${fmt(gain.points)} points` : null, !threatLine && s.foundational.measured && s.foundational.enforced === s.foundational.measured ? 'every measured foundational control is enforced' : null].filter(Boolean)
     s.takeaways = {
       summary: parts.length ? `${sentence(parts.join(', and '))}.` : m.alerts ? `${fmt(m.alerts.triaged)} alerts triaged ${s.periodPhrase}.` : 'Readings are completed in the review.',
       wins: `${sentence(word(s.wins.length))} ${s.wins.length === 1 ? 'outcome' : 'outcomes'} ${m.period.valid ? `from ${m.period.label}` : ''}, one from each part of the service, each traced to collected evidence.`.replace(/\s+,/, ','),
       operations: m.alerts ? `${fmt(m.alerts.triaged)} alerts triaged ${s.periodPhrase}.${s.speed ? ` ${s.speed.line}` : ''}` : 'Alert readings are completed in the review.',
       threats: m.threats ? `${m.alerts && m.alerts.truePositives ? `${sentence(plural(m.alerts.truePositives, 'confirmed threat was', 'confirmed threats were'))} investigated and closed.` : 'Confirmed threats were investigated and closed.'}${threatLine ? ` ${sentence(threatLine)}.` : ''}` : '',
-      posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced.${belowCount ? ` ${sentence(word(belowCount))} ${belowCount === 1 ? 'reads' : 'read'} below the baseline${s.licensed.length ? `, ${s.drift.length ? `${word(s.drift.length)} first on the roadmap and ` : ''}${word(s.licensed.length)} waiting on licensing` : ` and ${belowCount === 1 ? 'is' : 'are'} first on the roadmap`}.` : ' None reads below the baseline.'}` : 'Control readings are completed in the review.',
+      posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced.${belowCount ? ` ${sentence(word(belowCount))} ${belowCount === 1 ? 'reads' : 'read'} below the baseline${s.licensed.length ? `, ${s.driftControls.length ? `${word(s.driftControls.length)} first on the roadmap and ` : ''}${word(s.licensed.length)} waiting on licensing` : ` and ${belowCount === 1 ? 'is' : 'are'} first on the roadmap`}.` : ' None reads below the baseline.'}` : 'Control readings are completed in the review.',
       roadmap: 'Every control below enforced is sequenced into three horizons by risk and by what each needs from your team.',
-      passwordless: pw ? `Microsoft retires text message and voice sign-in on ${RETIREMENT.label}. ${plural(pw.retiring, 'user still relies', 'users still rely')} on it.` : '',
+      methods: pw ? `Microsoft retires text message and voice sign-in on ${RETIREMENT.label}. ${plural(pw.retiring, 'user still relies', 'users still rely')} on it.` : '',
       decisions: s.asks.length ? `${sentence(word(s.asks.length))} ${s.asks.length === 1 ? 'item needs' : 'items need'} approval or access from your team to keep the roadmap on schedule.` : 'No approvals or access are needed before the next review.',
       // The grounding slides added Oct 14, 2026: measured outcomes by pillar and the priority workstreams.
       pillars: (() => { const n = s.matrix.filter(r => r.foundational.measured && r.foundational.enforced === r.foundational.measured).length; return n ? `${sentence(word(n))} of five pillars ${n === 1 ? 'has' : 'have'} every measured foundational control enforced. Each statement is earned by the evidence collected ${s.readShort}.` : `Each statement is earned by the evidence collected ${s.readShort}. The pillars that read lower are sequenced on the roadmap.` })(),
@@ -275,7 +294,7 @@
     return s
   }
 
-  const api = { buildStory, CATALOG, HORIZONS }
+  const api = { buildStory, CATALOG, HORIZONS, shortName: short }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.EbrStory = api
 })(typeof globalThis !== 'undefined' ? globalThis : this)
