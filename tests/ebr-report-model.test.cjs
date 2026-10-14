@@ -757,7 +757,7 @@ test('MFA at sign-in and admin portal MFA read In force from the Conditional Acc
   assert.deepEqual([scoped.value, scoped.mark, scoped.boolean, scoped.pct, scoped.good, scoped.total, scoped.ratioText], ['Mostly enforced', 'P', true, 75, 150, 200, '150 of 200'])
   assert.match(m.priorities.find(x => x.id === 'IA.1').evidence, /applies to selected users, applications or conditions only\. 50 of 200 members showed no multifactor authentication/)
   assert.ok(m.hardening.some(h => h.id === 'IA.1' && h.value === 50))
-  assert.ok(m.presenter.some(n => n.title === 'MFA at sign-in' && /reads mostly enforced from the Conditional Access policy, because the enabled policy covers selected users only/.test(n.text)))
+  assert.ok(m.presenter.some(n => n.title === 'MFA at sign-in' && /reads mostly enforced from the Conditional Access policy, because the enabled policy applies to selected users, applications or conditions only and the sign-in ratio/.test(n.text)))
   assert.deepEqual([m.controls.find(c => c.id === 'IA.1-ADMINPORTAL').value, m.controls.find(c => c.id === 'IA.1-ADMINPORTAL').ratioText], ['Mostly enforced', '19 of 20'])
   assert.equal(m.pillars[0].headline, 'Multifactor authentication covers most sign-ins, with full coverage sequenced')
   assert.ok(m.tierSummary.foundational.enforced < m.tierSummary.foundational.measured, 'mostly enforced is not counted as enforced')
