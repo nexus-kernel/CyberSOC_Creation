@@ -245,6 +245,31 @@ class HistoryTests(unittest.TestCase):
         with self.assertRaises(budget.Blocked):
             history.summary_rows(summary(commit=SHA[:7]), REPO, failing)
 
+    def test_recorded_abbreviation_binding_survives_summary_edits(self):
+        collision = SHA[:7] + 'c' * 33
+        self.api.commits[SHA[:7]] = {'sha': SHA}
+        self.state['pending'] = {'kind': 'Code Review', 'head': SHA, 'nonce': 'n', 'comment': 12}
+        first = summary(commit=SHA[:7])
+        self.api.events.append(event(2, body=first))
+        state = self.history.sync(pr(), self.state)
+        self.assertEqual(state['commits'], {SHA[:7]: SHA})
+        # A same-named ref now points at a crafted prefix collision that holds the next reservation.
+        self.api.commits[SHA[:7]] = {'sha': collision}
+        state['pending'] = {'kind': 'Code Review', 'head': collision, 'nonce': 'm', 'comment': 13}
+        edited = first + f'\n| Security Review | **Running** | `{SHA[:7]}` | Manual request |'
+        self.api.events.append(event(3, action='edited', body=edited, old=first))
+        state = self.history.sync(pr(), state)
+        self.assertEqual([row['head'] for row in state['rounds'].values()], [SHA])
+        self.assertEqual(state['pending']['head'], collision)
+        self.assertEqual(state['latest']['Security Review']['head'], SHA)
+        self.assertEqual(self.api.calls.count(f'repos/{REPO}/commits/{SHA[:7]}'), 1)
+
+    def test_corrupt_persisted_binding_blocks_without_resolution(self):
+        for bound in ('c' * 40, SHA[:7], SHA.upper(), 7):
+            with self.subTest(bound=bound), self.assertRaises(budget.Blocked):
+                history.summary_rows(summary(commit=SHA[:7]), REPO, self.api, {SHA[:7]: bound})
+        self.assertFalse([call for call in self.api.calls if '/commits/' in call])
+
 
 class MemoryJournal:
     def __init__(self, state=None):
