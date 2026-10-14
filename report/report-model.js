@@ -323,12 +323,21 @@
     const caFlows = array(results['IA.8-CA'])
     const caFlow = name => caFlows.find(r => r.Flow === name && bool(r.PolicyRead) && String(r.PolicyState) !== 'Unknown') || null
     const enforcedState = f => ['Enforced', 'Security defaults'].includes(String(f.PolicyState))
+    // A scoped policy is described from the reason the evaluator recorded. A policy scoped to selected applications
+    // never reads as requiring the control on every application: the application phrase is dropped from the sentence.
+    const scopedText = (f, what, verb) => {
+      const base = what.replace(/ on (?:every|the Microsoft admin) (?:application|portals)$/, '')
+      return ({
+        'Conditions': `The enabled Conditional Access policy that ${verb} ${what} applies under selected conditions only, such as a platform, risk level, device filter or location.`,
+        'Users': `The enabled Conditional Access policy that ${verb} ${what} applies to selected users only.`,
+        'Applications': `The enabled Conditional Access policy that ${verb} ${base} applies to selected applications only.`,
+        'UsersAndApplications': `The enabled Conditional Access policy that ${verb} ${base} applies to selected users and selected applications only.`
+      })[String(f.ScopeReason)] || `The enabled Conditional Access policy that ${verb} ${what} applies to selected users, applications or conditions only.`
+    }
     const policyText = (f, what, verb = 'blocks', who = 'for all users') => ({
       'Enforced': `An enabled Conditional Access policy ${verb} ${what} ${who}.`,
       'Security defaults': `Security defaults ${verb === 'blocks' ? 'block' : 'require'} ${what}.`,
-      'Scoped': String(f.ScopeReason) === 'Conditions' ? `The enabled Conditional Access policy that ${verb} ${what} applies under selected conditions only, such as a platform, risk level, device filter or location.`
-        : String(f.ScopeReason) === 'Users' ? `The enabled Conditional Access policy that ${verb} ${what} applies to selected users or applications only.`
-        : `The enabled Conditional Access policy that ${verb} ${what} applies to selected users, applications or conditions only.`,
+      'Scoped': scopedText(f, what, verb),
       'Report-only': `The Conditional Access policy that ${verb} ${what} runs in report-only mode.`,
       'None': `No Conditional Access policy ${verb} ${what}.`
     })[String(f.PolicyState)] || ''
@@ -353,7 +362,7 @@
       : !member && has('IA.1') ? notApplicable('IA.1', mfaLabel, F.identity, 'No member sign-ins were recorded in the last 30 days, so there is no evidence either way.')
       : evaluated === 0 ? notApplicable('IA.1', mfaLabel, F.identity, 'Every member sign-in in the last 30 days reused a device session that no Conditional Access policy checked, so the logs hold no evidence either way.')
       : control('IA.1', mfaLabel, F.identity, member?.UsersChallenged, evaluated ?? member?.UsersSignedIn, mfaNote, unevaluated !== null ? { population: 'Members whose sign-ins in the last 30 days could be evaluated.' } : {})
-    const scopedHow = f => String(f?.ScopeReason) === 'Conditions' ? 'applies under selected conditions only' : String(f?.ScopeReason) === 'Users' ? 'applies to selected users or applications only' : 'applies to selected users, applications or conditions only'
+    const scopedHow = f => ({ Conditions: 'applies under selected conditions only', Users: 'applies to selected users only', Applications: 'applies to selected applications only', UsersAndApplications: 'applies to selected users and selected applications only' })[String(f?.ScopeReason)] || 'applies to selected users, applications or conditions only'
     if (mfaFlow && mfaRatio && mfaRatio.pct < E_THRESHOLD) presenter('MFA at sign-in', `The control reads ${mfa.value.toLowerCase()} from the Conditional Access policy${mfa.value === MOSTLY_VALUE ? `, because the enabled policy ${scopedHow(mfaFlow)} and the sign-in ratio stands at or above 50 percent` : ''}. The sign-in logs show ${fmt(mfaRatio.good)} of ${fmt(mfaRatio.total)} members with multifactor authentication in the last 30 days${unevaluated !== null ? ', among members whose sign-ins could be evaluated' : ''}. Be ready to explain the difference, for example exclusions, service accounts or sign-ins made before the policy existed.`)
     if (legacyMfaQuery) presenter('MFA coverage query', 'This pack was collected before IA.1 recognised MFA satisfied by external identity provider claims. In a federated tenant the member figure can read far below true coverage. Recollect with the current collector before presenting identity coverage.')
     else if (member && !evidenceQuery && externalMfa > 0) presenter('MFA coverage query', 'This pack was collected before collector 1.12.0. In a federated tenant, members whose only sign-ins reused a device session that no policy checked read here as missing multifactor authentication, although the logs hold no evidence either way. Recollect with the current collector before presenting identity coverage.')
@@ -529,7 +538,8 @@
     // Azure Arc-enabled servers carry an Azure resource ID, so Defender for Endpoint counts them in the Azure scope
     // beside the native virtual machines. DR.2 lists them as hybrid compute machines.
     const arcServers = count(rows('DR.2').find(r => /hybridcompute\/machines/i.test(String(r.ResourceType ?? '')))?.Resources) ?? 0
-    const arcText = arcServers > 0 ? ` Azure Arc-enabled servers carry an Azure resource ID and are included, ${fmt(arcServers)} at collection.` : ''
+    // The DR.2 count is inventory context only: the measure holds the Arc-enabled servers Defender for Endpoint saw.
+    const arcText = arcServers > 0 ? ` Azure Arc-enabled servers carry an Azure resource ID, so those Defender for Endpoint has seen count here beside the native virtual machines. Resource Graph lists ${fmt(arcServers)} Arc-enabled servers at collection.` : ''
     const edrLabel = 'Azure virtual machines reporting to endpoint detection'
     const edrNote = `Azure virtual machines seen in the last 7 days that are onboarded to Defender for Endpoint or covered by another endpoint detection product, against the machines eligible for endpoint detection.${arcText} Workstations, laptops and other endpoints that are not Azure resources are not part of this measure.${reconciliation ? ' ' + reconciliation : ''}`
     const noAzureVms = has('EW.1') && !azureVms.length

@@ -775,7 +775,16 @@ test('MFA at sign-in and admin portal MFA read In force from the Conditional Acc
   assert.ok(build(p).presenter.some(n => n.title === 'MFA at sign-in' && /because the enabled policy applies under selected conditions only and the sign-in ratio/.test(n.text)), 'the presenter note names the same scoping')
   p.results['IA.8-CA'] = flows('Scoped').map(f => ({ ...f, ScopeReason: 'Users' }))
   c = build(p).controls.find(x => x.id === 'IA.1')
-  assert.match(c.note, /applies to selected users or applications only\. 150 of 200/)
+  assert.match(c.note, /^The enabled Conditional Access policy that requires multifactor authentication on every application applies to selected users only\. 150 of 200/)
+  // A policy scoped to selected applications never reads as requiring MFA on every application.
+  p.results['IA.8-CA'] = flows('Scoped').map(f => ({ ...f, ScopeReason: 'Applications' }))
+  c = build(p).controls.find(x => x.id === 'IA.1')
+  assert.match(c.note, /^The enabled Conditional Access policy that requires multifactor authentication applies to selected applications only\. 150 of 200/)
+  assert.ok(!/every application/.test(c.note))
+  assert.ok(!/every application/.test(build(p).priorities.find(x => x.id === 'IA.1').evidence))
+  assert.ok(build(p).presenter.some(n => n.title === 'MFA at sign-in' && /because the enabled policy applies to selected applications only/.test(n.text)))
+  p.results['IA.8-CA'] = flows('Scoped').map(f => ({ ...f, ScopeReason: 'UsersAndApplications' }))
+  assert.match(build(p).controls.find(x => x.id === 'IA.1').note, /that requires multifactor authentication applies to selected users and selected applications only\./)
   // Without a policy inventory the sign-in ratio grades the control as before.
   delete p.results['IA.8-CA']
   m = build(p)
@@ -801,7 +810,7 @@ test('Arc-enabled servers are named in the endpoint notes and reconcile the inve
   put(p, 'EW.1-EDR', [{ VMs: 21, DefenderExtension: 15, ThirdPartyEdr: 0, Appliances: 0 }])
   put(p, 'DR.2', [{ Plan: 'VirtualMachines', ResourceType: 'microsoft.compute/virtualmachines', Resources: 21, Covered: 21 }, { Plan: 'VirtualMachines', ResourceType: 'microsoft.hybridcompute/machines', Resources: 72, Covered: 72 }])
   const m = build(p)
-  assert.match(m.controls.find(c => c.label === 'Azure virtual machines reporting to endpoint detection').note, /Azure Arc-enabled servers carry an Azure resource ID and are included, 72 at collection\./)
+  assert.match(m.controls.find(c => c.label === 'Azure virtual machines reporting to endpoint detection').note, /Azure Arc-enabled servers carry an Azure resource ID, so those Defender for Endpoint has seen count here beside the native virtual machines\. Resource Graph lists 72 Arc-enabled servers at collection\./)
   const review = m.review.find(n => n.title === 'Azure virtual machine inventory')
   assert.match(review.text, /^EW\.1-EDR: 21 Azure virtual machines in Resource Graph and 72 Azure Arc-enabled servers \(DR\.2\) against 92 seen by Defender for Endpoint/)
   assert.match(review.text, /Arc-enabled servers carry an Azure resource ID, so Defender for Endpoint counts them in the Azure scope\. The remaining difference/)
