@@ -199,6 +199,26 @@ class RequestReactionTests(unittest.TestCase):
                 self.request["body"] = body
                 self.assert_dispatch(False, "No fresh Codex thumbs-up")
 
+    def test_signoff_must_follow_completion_in_a_later_second(self):
+        for source in ['pr', 'code_request']:
+            for completed, reacted, allowed in [
+                ('07:05:00Z', '07:04:59Z', False),
+                ('07:05:00Z', '07:05:00Z', False),
+                ('07:05:00.100Z', '07:05:00.900Z', False),
+                ('07:05:00.900Z', '07:05:00.100Z', False),
+                ('07:05:00.900Z', '08:05:00.999+01:00', False),
+                ('07:05:00.900Z', '07:05:01Z', True),
+            ]:
+                with self.subTest(source=source, completed=completed, reacted=reacted):
+                    self.data = fixture()
+                    self.data['summary']['body'] = self.data['summary']['body'].replace(
+                        '07:00:00Z', completed)
+                    reaction = dict(user=BOT, content='+1', created_at='2026-10-14T' + reacted)
+                    self.request['body'] = '@codex review'
+                    self.data['reactions'] = [reaction] if source == 'pr' else []
+                    self.request_reactions = [reaction] if source == 'code_request' else []
+                    self.assert_dispatch(allowed, 'No fresh Codex thumbs-up')
+
     def test_fresh_code_review_request_signoff_clears_resolved_findings(self):
         self.data["summary"]["body"] = self.data["summary"]["body"].replace("07:00:00Z", "07:05:00Z")
         for body in ("@codex review", "@CoDeX \n ReViEw"):
@@ -377,7 +397,7 @@ class ApiAndDispatchTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_automatic_events_do_not_repeat_ci_for_the_same_commit(self):
-        prior = {"id": 1, "head_sha": "b" * 40, "head_branch": "main", "event": "workflow_dispatch",
+        prior = {"id": 1, "run_attempt": 1, "head_sha": "b" * 40, "head_branch": "main", "event": "workflow_dispatch",
                  "display_title": f"Reviewed CI / PR #1 / {SHA}"}
         with patch.object(gate, "check", return_value=fixture()["pr"]), \
              patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 1, "workflow_runs": [prior]}], [{"total_count": 0, "workflow_runs": []}]]), \

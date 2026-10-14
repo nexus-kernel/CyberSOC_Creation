@@ -16,7 +16,7 @@ SHA = 'a' * 40
 
 class AdmissionTests(unittest.TestCase):
     def run_record(self, run_id=20, **values):
-        record = dict(id=run_id, display_title=f'Reviewed CI / PR #1 / {SHA}',
+        record = dict(id=run_id, run_attempt=1, display_title=f'Reviewed CI / PR #1 / {SHA}',
                       head_branch='main', event='workflow_dispatch', status='in_progress', conclusion=None)
         record.update(values)
         return record
@@ -83,6 +83,18 @@ class AdmissionTests(unittest.TestCase):
 
     def test_native_rerun_cannot_reuse_admission(self):
         self.denied(context={'GITHUB_RUN_ATTEMPT': '2'})
+
+    def test_success_then_rejected_native_rerun_cannot_authorize_new_execution(self):
+        # GitHub retains the run ID but replaces its conclusion on attempt 2.
+        prior = self.run_record(10, status='completed', conclusion='success')
+        prior.update(run_attempt=2, conclusion='failure')
+        for mode in ['--once', '--retry-failed']:
+            self.denied(previous=[prior], mode=mode)
+            self.denied(legacy_previous=[prior], mode=mode)
+
+    def test_current_run_attempt_must_be_verified_before_exclusion(self):
+        for attempt in [None, True, '1', 0, 2]:
+            self.denied(current=[self.run_record(run_attempt=attempt)])
 
     def test_cannot_supply_or_spoof_current_run_identity(self):
         for context in [{'GITHUB_RUN_ID': ''}, {'GITHUB_RUN_ID': '10'},

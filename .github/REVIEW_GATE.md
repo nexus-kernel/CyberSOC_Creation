@@ -33,7 +33,9 @@ additional fixes does not imply sign-off for the new head.
 The controller requires an open, non-draft, same-repository, mergeable PR;
 exactly one Codex summary authenticated by login, Bot type and user ID 199175422;
 completed Code Review (and any Security Review) for the current full SHA; and a
-fresh authenticated Codex thumbs-up after Code Review completion. Abbreviated
+fresh authenticated Codex thumbs-up strictly after Code Review completion.
+Completion and reaction timestamps must fall in different seconds; fractional
+values or timezone offsets cannot establish ordering within the same second. Abbreviated
 SHAs are resolved by GitHub. Human reactions, stale reviews and security-only or
 mixed request reactions cannot sign off Code Review. New running-review reactions
 or newer Codex findings block clearance.
@@ -116,7 +118,13 @@ on later pages) prevents another dispatch. **Any prior matching success** preven
 another test run, even if a newer direct admission was rejected and concluded
 failure. This prevents denied requests from laundering a prior success into a
 retryable latest failure. Both automatic/manual execution recheck these guards.
-Unknown statuses/conclusions cannot authorize retry. Before either guarded mode
+Unknown statuses/conclusions cannot authorize retry. Every matching run in either
+workflow history must have integer `run_attempt == 1`, including the current
+admission run before it is excluded. Missing or malformed attempt metadata and
+native reruns fail closed: the run's latest conclusion can conceal a successful
+earlier attempt. This deliberately blocks even an unsuccessful native rerun;
+prior-attempt retrieval is not implemented. Use a new commit with fresh clearance
+instead of deleting history or bypassing admission. Before either guarded mode
 can dispatch, every history page must report the same nonnegative integer
 `total_count`, every run must have a unique positive integer ID and classifiable
 identity, and the returned run count must equal that total. Missing, malformed,

@@ -27,7 +27,7 @@ class ManualRetryTests(unittest.TestCase):
             self.addCleanup(isolation.stop)
 
     def prior(self, **updates):
-        run = {'id': 10, 'head_branch': 'main', 'event': 'workflow_dispatch',
+        run = {'id': 10, 'run_attempt': 1, 'head_branch': 'main', 'event': 'workflow_dispatch',
                'display_title': f'Reviewed CI / PR #1 / {SHA}',
                'status': 'completed', 'conclusion': 'failure'}
         run.update(updates)
@@ -60,6 +60,27 @@ class ManualRetryTests(unittest.TestCase):
                 result, _, post, _ = self.invoke([{'total_count': 1, 'workflow_runs': [self.prior(conclusion=conclusion)]}], mode='--once')
                 self.assertEqual(result, 0)
                 post.assert_not_called()
+
+    def test_native_rerun_cannot_launder_success_into_retryable_failure(self):
+        prior = self.prior(conclusion='success')
+        prior.update(run_attempt=2, conclusion='failure')
+        for mode in ['--once', '--retry-failed']:
+            result, _, post, _ = self.invoke(
+                [{'total_count': 1, 'workflow_runs': [prior]}], mode=mode)
+            self.assertEqual(result, 1)
+            post.assert_not_called()
+
+    def test_uncertain_attempt_history_blocks_launch(self):
+        for attempt in [None, True, False, '1', 0, -1, 1.0, 2, 1000]:
+            for mode in ['--once', '--retry-failed']:
+                with self.subTest(attempt=attempt, mode=mode):
+                    prior = self.prior(run_attempt=attempt)
+                    if attempt is None:
+                        prior.pop('run_attempt')
+                    result, _, post, _ = self.invoke(
+                        [{'total_count': 1, 'workflow_runs': [prior]}], mode=mode)
+                    self.assertEqual(result, 1)
+                    post.assert_not_called()
 
     def test_manual_first_run_is_allowed(self):
         result, check, post, _ = self.invoke([{'total_count': 0, 'workflow_runs': []}])

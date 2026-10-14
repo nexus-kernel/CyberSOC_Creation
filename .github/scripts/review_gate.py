@@ -147,7 +147,8 @@ def evaluate(pr, summary, reactions, reviews, threads, expected_sha=None):
             for kind in r.get("review_types", ["Code Review"])) for r in bot_reactions):
         raise AwaitingSignoff("Codex still indicates a review is running.")
     clean = [r for r in bot_reactions if r["content"] == "+1"
-             and timestamp(r["created_at"]) >= completed["Code Review"]]
+             # Completion and reaction APIs only prove ordering across seconds.
+             and timestamp(r["created_at"]).replace(microsecond=0) > completed["Code Review"]]
     if not clean:
         raise AwaitingSignoff("No fresh Codex thumbs-up sign-off after the latest completed Code Review.")
     signed_off = max(timestamp(r["created_at"]) for r in clean)
@@ -306,6 +307,12 @@ def matching_runs(repo, branch, number, sha):
             seen.add(run["id"])
             if (run["display_title"] == title and run["head_branch"] == branch
                     and run["event"] == "workflow_dispatch"):
+                # The run endpoint exposes only the latest attempt's conclusion.
+                # A rejected native rerun can overwrite an earlier success.
+                # Without verified prior-attempt history, never authorize another
+                # execution, even when the latest conclusion looks retryable.
+                if type(run.get("run_attempt")) is not int or run["run_attempt"] != 1:
+                    raise Blocked("CI attempt history is uncertain; native reruns cannot authorize retries.")
                 runs.append(dict(run, history_workflow=workflow))
     return runs
 

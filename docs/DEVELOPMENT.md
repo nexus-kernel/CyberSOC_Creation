@@ -195,3 +195,25 @@ clearance, normal retries, old-identity history and capped controller history.
 No hosted dispatch was run. Current-run visibility can transiently block admission;
 missing history fails closed. Any prior success now prevents a later failed
 admission from authorizing another test run of that SHA.
+
+## Native-attempt and completion-order regression fixes
+
+PR #2's two P2 findings were reproduced with mocked GitHub responses before
+the fixes. A successful run followed by a rejected native attempt retains the
+same run ID but exposes failure as its latest conclusion. Matching histories now
+require a verified first attempt; any native rerun or uncertain attempt metadata
+blocks launch and admission under both workflow identities. This is deliberately
+conservative rather than fetching prior attempts. Ordinary first-attempt
+failed/cancelled/timed-out manual retries remain supported.
+
+Sign-off now requires a strictly later second than Code Review completion, for
+both PR and request-comment reactions. Tests include equal seconds, fractional
+values in either order, equivalent timezone offsets, and a following-second
+positive control. The new regressions failed before the fix.
+
+Validation: 102 gate tests, 238 Pester tests and 72 Node tests with synthetic
+evidence passed without skips. npm ci succeeded with the writable .dev-cache/npm
+cache; the default home cache was not writable. Shell syntax and diff whitespace
+checks passed. Workflow definitions and token scopes were unchanged. Hosted
+dispatch, tenant operations, repository settings and review-thread resolution
+were not performed. Current-head independent review remains required.
