@@ -5,7 +5,9 @@
 
    Copy rules hold here too: alerts not incidents, no semicolons or arrows, open alert counts and
    severity increases never appear (they stay in the presenter notes), medians under the 20 minute
-   floor are never shown, and containment is never claimed. */
+   floor are never shown, and containment is never claimed. A foundational control below E is a gap
+   against the baseline, never drift or a regression: the evidence shows the current reading only
+   (Oct 14, 2026). */
 (function (root) {
   'use strict'
   const R = typeof module !== 'undefined' && module.exports ? require('./report-model.js') : root.EbrReport
@@ -18,6 +20,9 @@
   const shortDate = v => /^\d{4}-\d{2}-\d{2}$/.test(isoDay(v)) ? new Date(isoDay(v) + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : ''
   const list = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
   const sentence = text => { const t = clean(text); return t ? t.charAt(0).toUpperCase() + t.slice(1) : '' }
+  // A ratio control with fewer resources than this never leads a pillar or stands as a win: "2 of 2" is
+  // accurate but carries no weight beside the figures around it (Oct 14, 2026).
+  const MIN_SAMPLE = 10
 
   // Short names for the controls, used in grouped roadmap items, the drift panel and the asks.
   const SHORT = [
@@ -37,7 +42,7 @@
     [/^Managed disks/, 'disk encryption at rest'], [/^Safe Links/, 'Safe Links'], [/^Safe Attachments/, 'Safe Attachments'], [/^Malicious mail removed/, 'post-delivery removal'],
     [/^Zero-hour auto purge/, 'zero-hour auto purge'], [/^Collaboration sharing/, 'sharing settings'], [/^Endpoint disk encryption/, 'endpoint disk encryption'],
     [/^Azure Backup/, 'VM backup'], [/^Endpoint sensors active/, 'endpoint sensors'], [/^Cloud workload protection/, 'workload protection'],
-    [/^Domain controller telemetry/, 'domain controller telemetry'], [/^Alerts closed with a documented/, 'documented dispositions'], [/^Defender for Identity sensors/, 'Defender for Identity sensors'],
+    [/^Domain controller telemetry/, 'domain controller telemetry'], [/^Alerts closed with a documented/, 'documented dispositions'], [/^Defender for Identity sensors/, 'Defender for Identity'],
     [/^Audit logging initiative/, 'audit logging initiative'], [/^Analytics rules/, 'analytics rules'], [/^Threat intelligence/, 'threat intelligence'], [/^Diagnostic logging/, 'diagnostic logging']
   ]
   const short = c => (SHORT.find(([re]) => re.test(c.label)) || [null, c.label.charAt(0).toLowerCase() + c.label.slice(1)])[1]
@@ -62,7 +67,9 @@
     { key: 'vmplatform', horizon: 'later', title: 'Encryption at host and Trusted Launch', match: /^(Encryption at host|Platform integrity)/ },
     { key: 'pim', horizon: 'later', title: 'Privileged role eligibility', match: /^Privileged roles/ },
     { key: 'allowlist', horizon: 'later', title: 'Application allow-listing', match: /^Application allow-listing/ },
-    { key: 'sharing', horizon: 'later', title: 'Collaboration sharing boundaries', match: /^Collaboration sharing/ }
+    { key: 'sharing', horizon: 'later', title: 'Collaboration sharing boundaries', match: /^Collaboration sharing/ },
+    // Foundational, but it needs a license and sensors from the client, so it is never Atmosera's 30 day fix.
+    { key: 'mdi', horizon: 'later', title: 'Defender for Identity deployment', match: /^Defender for Identity sensors/, ask: { title: 'Approve Defender for Identity licensing', body: 'Licensing and a sensor on each domain controller, so identity attacks on the directory are detected.' } }
   ]
   const HORIZONS = [
     { key: 'now', label: 'Now', when: 'Next 30 days' },
@@ -75,11 +82,15 @@
     const below = c => !!c.mark && c.mark !== 'E'
     const ungathered = c => c.measured === false && !c.na
     const ratio = c => c.mark && !c.boolean && c.good !== null && c.total !== null
+    const weighty = c => ratio(c) && c.total >= MIN_SAMPLE
     const find = re => m.controls.find(c => re.test(c.label))
     const ofText = c => `${fmt(c.good)} of ${fmt(c.total)}`
     const valueText = c => c.na ? 'N/A' : ungathered(c) ? 'Not gathered' : c.boolean ? c.value : c.total > 9999 ? pctText(c.pct) : c.value
+    // The figure beside a control on the gap panel and the roadmap: the ratio behind a Mostly enforced policy, or
+    // what a partially covered control is missing, such as the resource types outside workload protection.
+    const detailText = c => [c.ratioText, c.gap].filter(Boolean).join(' · ')
     // Copies of controls carry valueText in place of the model's value, so no story field reads (null).
-    const safe = c => ({ ...c, value: valueText(c), valueText: valueText(c), short: short(c) })
+    const safe = c => ({ ...c, value: valueText(c), valueText: valueText(c), detail: detailText(c), short: short(c) })
     const s = { groups: GROUPS, horizons: HORIZONS }
 
     // Period. A calendar quarter gets a label, and "this quarter" in the takeaways.
@@ -110,7 +121,10 @@
     // Drift and controls.
     const measured = tier => m.controls.filter(c => c.tier === tier && c.mark)
     const enforced = tier => measured(tier).filter(c => c.mark === 'E')
-    s.drift = m.controls.filter(c => c.tier === 'foundational' && below(c)).map(safe)
+    // Foundational gaps: every foundational control below E, except one that needs a license the client holds,
+    // which goes to Later through the catalog with its ask.
+    s.drift = m.controls.filter(c => c.tier === 'foundational' && below(c) && !c.needsLicense).map(safe)
+    s.licensed = m.controls.filter(c => c.tier === 'foundational' && below(c) && c.needsLicense).map(safe)
     s.ungathered = m.controls.filter(ungathered).map(safe)
     s.foundational = { enforced: enforced('foundational').length, measured: measured('foundational').length }
     s.defense = { enforced: enforced('defense').length, measured: measured('defense').length }
@@ -126,7 +140,7 @@
     s.kpis = kpis.slice(0, 4)
 
     // Wins, at most one per area, up to six. A verified configuration reads In force with its own label.
-    const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || sub), source: c.source } : null }
+    const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null && (c.boolean || c.total >= MIN_SAMPLE) ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || sub), source: c.source } : null }
     const candidates = [
       m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? { area: 'threat', eyebrow: 'Threat outcomes', value: `0 of ${fmt(m.alerts.truePositives)}`, label: m.alerts.truePositives === 1 ? 'confirmed threat reached exfiltration or impact' : 'confirmed threats reached exfiltration or impact', sub: `${m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`} by the SOC ${s.periodPhrase}.`, source: m.alerts.source } : null,
       s.speed ? { area: 'response', eyebrow: 'Response speed', value: s.speed.value, label: s.speed.label, sub: s.speed.sub, source: s.speed.row.source } : null,
@@ -143,7 +157,7 @@
     // The roadmap: every below-E control mapped to a catalog item, drift first in Now.
     const items = { now: [], next: [], later: [] }
     const prio = id => m.priorities.find(x => x.id === id)
-    if (s.drift.length) items.now.push({ key: 'drift', title: 'Close foundational drift', evidence: `${plural(s.drift.length, 'control', 'controls')}: ${list(s.drift.map(c => c.short))}`, controls: s.drift, owner: 'Atmosera' })
+    if (s.drift.length) items.now.push({ key: 'drift', title: 'Close foundational gaps', evidence: `${plural(s.drift.length, 'control', 'controls')} below the baseline: ${list(s.drift.map(c => c.detail ? `${c.short} (${c.detail})` : c.short))}`, controls: s.drift, owner: 'Atmosera' })
     const crit = prio('BKL.1')
     if (m.criticalCves > 0) items.now.push({ key: 'critical', title: 'Critical vulnerability remediation', evidence: `${plural(m.criticalCves, 'critical exploitable finding', 'critical exploitable findings')}, scheduled with owners inside the patch cadence`, controls: [], priority: crit })
     const pw = m.passwordless && m.passwordless.retiring > 0 ? m.passwordless : null
@@ -168,7 +182,7 @@
     if (other.length) items.next.push({ key: 'other', title: 'Other controls', controls: other.map(safe) })
     const evidenceOf = item => item.evidence || (item.controls.length === 1 && item.priority ? item.priority.evidence
       : item.controls.length === 1 && item.controls[0].boolean && item.controls[0].note ? item.controls[0].note
-      : item.controls.length ? item.controls.map(c => `${sentence(c.short)} ${c.valueText}`).join(' · ') : item.priority ? item.priority.evidence : '')
+      : item.controls.length ? item.controls.map(c => `${sentence(c.short)} ${c.valueText}${c.detail ? `, ${c.detail}` : ''}`).join(' · ') : item.priority ? item.priority.evidence : '')
     s.roadmap = HORIZONS.map(h => ({ ...h, items: items[h.key].map(i => ({ ...i, evidence: clean(evidenceOf(i)) })) }))
     s.unmapped = other.map(c => c.label)
     const headroom = m.posture && m.posture.scoreControls ? m.posture.scoreControls.filter(c => /vulnerabilit|security configuration/i.test(c.label)) : []
@@ -183,7 +197,10 @@
     const gap = id => (data.manifest || []).some(r => r.ResultId === id && (r.AccessGap === true || String(r.AccessGap).toLowerCase() === 'true'))
     const unread = s.ungathered.filter(c => gap(c.id))
     if (unread.length) asks.push({ lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
-    for (const h of HORIZONS) for (const item of items[h.key]) {
+    // An item that holds a foundational control (one that needs a license, routed through the catalog) is asked
+    // for ahead of the defense in depth items, whatever its horizon.
+    const askItems = HORIZONS.flatMap(h => items[h.key]).map((item, i) => ({ item, i })).sort((a, b) => (a.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) - (b.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) || a.i - b.i).map(x => x.item)
+    for (const item of askItems) {
       const entry = CATALOG.find(e => e.key === item.key)
       if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N')) asks.push({ lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
     }
@@ -197,8 +214,9 @@
     ].filter(Boolean).slice(0, 3)
     const watch = []
     if (m.criticalCves > 0) watch.push({ value: fmt(m.criticalCves), label: m.criticalCves === 1 ? 'critical exploitable vulnerability open' : 'critical exploitable vulnerabilities open' })
-    if (s.drift.length) watch.push({ value: fmt(s.drift.length), label: s.drift.length === 1 ? 'foundational control has drifted below enforced' : 'foundational controls have drifted below enforced' })
-    const singular = label => [['Members', 'Member'], ['Users', 'User'], ['Devices', 'Device'], ['AI service resources', 'AI service resource'], ['Resources', 'Resource'], ['Virtual machines', 'Virtual machine'], ['Workload subnets', 'Workload subnet'], ['Key Vaults', 'Key Vault'], ['Storage accounts', 'Storage account'], ['Critical exploitable findings', 'Critical exploitable finding']].reduce((l, [many, one]) => l.startsWith(many + ' ') ? one + l.slice(many.length) : l, label)
+    const belowCount = s.drift.length + s.licensed.length
+    if (belowCount) watch.push({ value: fmt(belowCount), label: belowCount === 1 ? 'foundational control reads below enforced' : 'foundational controls read below enforced' })
+    const singular = label => [['Members who', 'Member who'], ['Members', 'Member'], ['Users', 'User'], ['Devices', 'Device'], ['AI service resources', 'AI service resource'], ['Resources', 'Resource'], ['Virtual machines', 'Virtual machine'], ['Workload subnets', 'Workload subnet'], ['Key Vaults', 'Key Vault'], ['Storage accounts', 'Storage account'], ['Critical exploitable findings', 'Critical exploitable finding']].reduce((l, [many, one]) => l.startsWith(many + ' ') ? one + l.slice(many.length) : l, label)
     for (const h of (m.hardening || []).filter(x => x.rank < 99 && !['BKL.1', 'IA.2'].includes(x.id))) {
       const label = h.value === 1 ? singular(h.label) : h.label
       if (watch.length < 3) watch.push({ value: fmt(h.value), label: label.charAt(0).toLowerCase() + label.slice(1) })
@@ -208,13 +226,25 @@
 
     // Posture matrix: per pillar, foundational and defense in depth counts and a headline measure.
     const LEADS = { 'Identity and access': [/^Multifactor authentication required at sign-in/, /^Multifactor authentication at admin portal/], 'Endpoint and workload': [/^Azure virtual machines reporting/, /^Operating system findings/], 'Network and boundary': [/^Encryption in transit/, /^Workload subnets/], 'Data protection': [/^Managed disks/, /^Secure transfer/], 'Detection and response': [/^Alerts closed with a documented/, /^Analytics rules/] }
-    const UNIT = { 'MFA at sign-in': 'users on MFA at sign-in', 'admin portal MFA': 'admins on MFA', 'Azure VM endpoint detection': 'Azure VMs on endpoint detection', 'patch cadence': 'patched in cadence', 'HTTPS-only web apps': 'web apps HTTPS-only', 'subnet segmentation': 'subnets segmented', 'disk encryption at rest': 'disks encrypted at rest', 'storage secure transfer': 'with secure transfer', 'documented dispositions': 'closures documented', 'analytics rules': 'rules enabled' }
+    const UNIT = { 'MFA at sign-in': 'users on MFA at sign-in', 'admin portal MFA': 'admins on MFA', 'Azure VM endpoint detection': 'Azure VMs on endpoint detection', 'patch cadence': 'patched in cadence', 'HTTPS-only web apps': 'web apps HTTPS-only', 'subnet segmentation': 'subnets segmented', 'disk encryption at rest': 'disks encrypted at rest', 'storage secure transfer': 'with secure transfer', 'documented dispositions': 'closures documented', 'analytics rules': 'rules enabled',
+      'real-time anti-malware': 'VMs with real-time anti-malware', 'vulnerability assessment': 'VMs under vulnerability assessment', 'tamper protection': 'VMs with tamper protection', 'host firewall': 'VMs with host firewall', 'endpoint sensors': 'sensors active', 'Azure SQL TLS': 'SQL servers on TLS 1.2', 'App Service TLS 1.2': 'App Service configs on TLS 1.2', 'storage TLS 1.2': 'storage accounts on TLS 1.2', 'Key Vault soft delete': 'vaults with soft delete', 'Key Vault purge protection': 'vaults with purge protection', 'workload protection': 'resources with workload protection', 'diagnostic logging': 'resources with diagnostic logging', 'public blob containers': 'containers private', 'anonymous blob access': 'accounts with anonymous access off' }
     s.matrix = GROUPS.map(g => {
       const inG = m.controls.filter(c => c.group === g)
       const tierCount = t => { const ms = inG.filter(c => c.tier === t && c.mark); return { enforced: ms.filter(c => c.mark === 'E').length, measured: ms.length, pct: ms.length ? 100 * ms.filter(c => c.mark === 'E').length / ms.length : null } }
-      const leads = (LEADS[g] || []).map(re => inG.find(c => re.test(c.label))).filter(c => c && ratio(c))
-      const fallback = inG.filter(c => ratio(c) && !leads.includes(c)).slice(0, 2 - leads.length)
-      return { group: g, foundational: tierCount('foundational'), defense: tierCount('defense'), measure: [...leads, ...fallback].slice(0, 2).map(c => `${ofText(c)} ${UNIT[short(c)] || short(c)}`).join(' · '), ungathered: inG.filter(ungathered).length }
+      const leads = (LEADS[g] || []).map(re => inG.find(c => re.test(c.label))).filter(c => c && weighty(c))
+      const fallback = inG.filter(c => weighty(c) && !leads.includes(c)).slice(0, 2 - leads.length)
+      let measure = [...leads, ...fallback].slice(0, 2).map(c => `${ofText(c)} ${UNIT[short(c)] || short(c)}`).join(' · ')
+      // A pillar whose graded controls are all policy readings takes its measure from the pillar page: the sign-in
+      // ratio behind the MFA policy and the callout, so the matrix never reads "completed in the review" beside real
+      // figures. The minimum population applies there too, and a callout that repeats the measure is left out.
+      const page = (m.pillars || []).find(p => p.name === g)
+      if (!measure && page && !inG.some(ratio)) {
+        const pageMeasure = page.measure && page.measure.total >= MIN_SAMPLE ? `${fmt(page.measure.good)} of ${fmt(page.measure.total)}` : ''
+        const calloutSmall = page.callout && /^(\d[\d,]*) of (\d[\d,]*)$/.test(page.callout.value) && Number(page.callout.value.replace(/^.* of /, '').replace(/,/g, '')) < MIN_SAMPLE
+        const callout = page.callout && !calloutSmall && page.callout.value !== pageMeasure ? `${page.callout.value} ${page.callout.label}` : ''
+        measure = [pageMeasure ? `${pageMeasure} ${page.measure.label.charAt(0).toLowerCase() + page.measure.label.slice(1)}` : '', callout].filter(Boolean).join(' · ')
+      }
+      return { group: g, foundational: tierCount('foundational'), defense: tierCount('defense'), measure, ungathered: inG.filter(ungathered).length }
     })
 
     // The register: every control, with a value that is never null.
@@ -234,10 +264,13 @@
       wins: `${sentence(word(s.wins.length))} ${s.wins.length === 1 ? 'outcome' : 'outcomes'} ${m.period.valid ? `from ${m.period.label}` : ''}, one from each part of the service, each traced to collected evidence.`.replace(/\s+,/, ','),
       operations: m.alerts ? `${fmt(m.alerts.triaged)} alerts triaged ${s.periodPhrase}.${s.speed ? ` ${s.speed.line}` : ''}` : 'Alert readings are completed in the review.',
       threats: m.threats ? `${m.alerts && m.alerts.truePositives ? `${sentence(plural(m.alerts.truePositives, 'confirmed threat was', 'confirmed threats were'))} investigated and closed.` : 'Confirmed threats were investigated and closed.'}${threatLine ? ` ${sentence(threatLine)}.` : ''}` : '',
-      posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced.${s.drift.length ? ` ${sentence(word(s.drift.length))} ${s.drift.length === 1 ? 'has' : 'have'} drifted and ${s.drift.length === 1 ? 'is' : 'are'} first on the roadmap.` : ' None has drifted.'}` : 'Control readings are completed in the review.',
+      posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced.${belowCount ? ` ${sentence(word(belowCount))} ${belowCount === 1 ? 'reads' : 'read'} below the baseline${s.licensed.length ? `, ${s.drift.length ? `${word(s.drift.length)} first on the roadmap and ` : ''}${word(s.licensed.length)} waiting on licensing` : ` and ${belowCount === 1 ? 'is' : 'are'} first on the roadmap`}.` : ' None reads below the baseline.'}` : 'Control readings are completed in the review.',
       roadmap: 'Every control below enforced is sequenced into three horizons by risk and by what each needs from your team.',
       passwordless: pw ? `Microsoft retires text message and voice sign-in on ${RETIREMENT.label}. ${plural(pw.retiring, 'user still relies', 'users still rely')} on it.` : '',
-      decisions: s.asks.length ? `${sentence(word(s.asks.length))} ${s.asks.length === 1 ? 'item needs' : 'items need'} approval or access from your team to keep the roadmap on schedule.` : 'No approvals or access are needed before the next review.'
+      decisions: s.asks.length ? `${sentence(word(s.asks.length))} ${s.asks.length === 1 ? 'item needs' : 'items need'} approval or access from your team to keep the roadmap on schedule.` : 'No approvals or access are needed before the next review.',
+      // The grounding slides added Oct 14, 2026: measured outcomes by pillar and the priority workstreams.
+      pillars: (() => { const n = s.matrix.filter(r => r.foundational.measured && r.foundational.enforced === r.foundational.measured).length; return n ? `${sentence(word(n))} of five pillars ${n === 1 ? 'has' : 'have'} every measured foundational control enforced. Each statement is earned by the evidence collected ${s.readShort}.` : `Each statement is earned by the evidence collected ${s.readShort}. The pillars that read lower are sequenced on the roadmap.` })(),
+      priorities: m.priorities.length ? `${sentence(word(m.priorities.length))} ${m.priorities.length === 1 ? 'workstream' : 'workstreams'} sequenced from the collected evidence, ${m.priorities.length > 3 ? 'the first three' : 'each'} with the action and the outcome we verify at the next review.` : ''
     }
     return s
   }

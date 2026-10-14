@@ -54,6 +54,9 @@ function Get-EbrCaPolicyFacts {
         AllUsers      = (Get-EbrCaList $u 'includeUsers') -contains 'All'
         Roles         = (Get-EbrCaList $u 'includeRoles').Count -gt 0
         AllApps       = $includeApps -contains 'All'
+        # A policy that targets a user action such as security information registration carries no application
+        # and governs no application sign-in (Oct 14, 2026).
+        AnyApps       = $includeApps.Count -gt 0
         AdminPortals  = $includeApps -contains 'MicrosoftAdminPortals'
         Block         = $grants -contains 'block'
         Mfa           = ($grants -contains 'mfa') -or ($null -ne (Get-EbrCaValue $g 'authenticationStrength'))
@@ -88,6 +91,7 @@ function ConvertFrom-EbrCaFlatPolicy {
         AllUsers      = [string]$Row.IncludeUsers -eq 'All'
         Roles         = [string]$Row.IncludeUsers -match '\broles?\b'
         AllApps       = [string]$Row.IncludeApplications -eq 'All'
+        AnyApps       = [bool]([string]$Row.IncludeApplications).Trim()
         AdminPortals  = [string]$Row.IncludeApplications -match 'Microsoft Admin Portals'
         Block         = $grants -contains 'block'
         Mfa           = ($grants -contains 'mfa') -or [bool]([string]$Row.AuthStrength)
@@ -112,11 +116,14 @@ function Get-EbrCaFlowDefinitions {
         @{ Flow = 'Legacy authentication'; Control = 'IA.3'; SignIns = $true; Defaults = $true
            Match = { param($f) $f.Block -and $f.Legacy }
            Covers = { param($f) $f.AllUsers -and $f.AllApps -and -not $f.Narrowed } }
-        # MFA at sign-in: MFA required on all apps for all users, not narrowed to a platform, risk level,
-        # device filter or location (1.14.0). Security defaults require MFA for all users too.
+        # MFA at sign-in: any enabled policy that requires MFA on cloud apps counts (Oct 14, 2026), so one that
+        # selects its applications reads Scoped rather than None, while one that targets a user action only and
+        # no application does not count. It covers the tenant when it applies to all users on all apps and is not
+        # narrowed to a platform, risk level, device filter or location (1.14.0). Security defaults require MFA
+        # for all users too.
         @{ Flow = 'MFA at sign-in'; Control = 'IA.1'; SignIns = $false; Defaults = $true
-           Match = { param($f) $f.Mfa -and $f.AllApps -and -not $f.LegacyOnly }
-           Covers = { param($f) $f.AllUsers -and -not $f.Narrowed } }
+           Match = { param($f) $f.Mfa -and $f.AnyApps -and -not $f.LegacyOnly }
+           Covers = { param($f) $f.AllUsers -and $f.AllApps -and -not $f.Narrowed } }
         # Admin portals: MFA required on the admin portals, or on all apps, for all users or for the admin roles.
         @{ Flow = 'Admin portals'; Control = 'IA.1-ADMINPORTAL'; SignIns = $false; Defaults = $true
            Match = { param($f) $f.Mfa -and ($f.AllApps -or $f.AdminPortals) -and -not $f.LegacyOnly }
@@ -168,6 +175,17 @@ function Get-EbrCaEvaluation {
         elseif (@($matching | Where-Object State -eq 'enabledForReportingButNotEnforced').Count) { 'Report-only' }
         else { 'None' }
         $excluded = @($covering | ForEach-Object { $_.ExcludeUsers + $_.ExcludeGroups + $_.ExcludeRoles } | Sort-Object -Unique)
+        # Why a Scoped flow is scoped (Oct 14, 2026), from the enabled policies nothing narrows: Applications when
+        # one applies to all users but selected applications, Users when one applies to all applications but selected
+        # users, UsersAndApplications when every such policy selects both, and Conditions when every enabled policy
+        # is narrowed by a platform, risk level, device filter or location. The report words the policy sentence from it.
+        $narrowedOf = { param($f) if ($d.RawOnly) { [bool]$f.NarrowedOther } else { [bool]$f.Narrowed } }
+        $plain = @($enabled | Where-Object { -not (& $narrowedOf $_) })
+        $scopeReason = if ($state -ne 'Scoped') { '' }
+        elseif (-not $plain.Count) { 'Conditions' }
+        elseif (@($plain | Where-Object { $_.AllUsers }).Count) { 'Applications' }
+        elseif (@($plain | Where-Object { $_.AllApps -or $_.AdminPortals }).Count) { 'Users' }
+        else { 'UsersAndApplications' }
         $rows = @()
         if ($d.SignIns -and $detailRead) {
             $rows = @(foreach ($s in @($SignIns | Where-Object { $null -ne $_ -and [string]$_.Flow -eq $d.Flow })) {
@@ -211,6 +229,7 @@ function Get-EbrCaEvaluation {
                 AccountsExcluded    = @($ex | ForEach-Object { $_.UserId } | Sort-Object -Unique).Count
                 SucceededUngoverned = & $sumOf $un
                 AccountsUngoverned  = @($un | ForEach-Object { $_.UserId } | Sort-Object -Unique).Count
+                ScopeReason         = $scopeReason
             })
     }
     [pscustomobject]@{ Flows = $flows.ToArray(); SignIns = $classified.ToArray() }

@@ -2,11 +2,15 @@
    New-EbrSecurityReport.ps1 beside the HTML. It reads the same embedded data and runs the same report
    model, then the story layer (report-story.js) for the wins, decisions, drift and roadmap.
 
-   Structure (docs/plans/2026-10-12-ebr-deck-restructure-design.md): cover, executive summary, wins,
-   security operations, confirmed threats (only when there are examples), control posture, hardening
-   roadmap, passwordless transition, decisions needed, then the control register as an appendix.
-   Brief keeps the cover, summary, wins, roadmap, passwordless and decisions. Detailed adds the two
-   Microsoft score slides to the appendix.
+   Structure (docs/plans/2026-10-12-ebr-deck-restructure-design.md, grounding slides added Oct 14, 2026):
+   cover, executive summary, wins, security operations, confirmed threats (only when there are examples),
+   control posture, measured outcomes by pillar, hardening roadmap, priority workstreams, passwordless
+   transition, decisions needed, then the appendix: the control register, scope and evidence. Brief keeps
+   the cover, summary, wins, roadmap, passwordless and decisions. Detailed adds the two Microsoft score
+   slides to the appendix.
+
+   A foundational control below E is a gap against the baseline. The deck never says it was configured at
+   build, drifted or regressed, because the evidence holds the current reading only.
 
    Speaker notes are talking points built only from text the client already sees in the HTML. The
    presenter notes (open alert counts, severity increases, automation share, the evidence review) are
@@ -29,6 +33,8 @@ const st = buildStory(m, data)
 const TOP = 1.75, BOTTOM = 7.0
 const balanced = m.depth !== 'brief', detailed = m.depth === 'detailed'
 const notesOf = parts => parts.flat(3).map(clean).filter(Boolean).join('\n\n')
+const sentence = t => { const v = clean(t); return v ? v.charAt(0).toUpperCase() + v.slice(1) : '' }
+const list = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 const scopeMeta = `Posture read ${m.readDate} · ${plural(m.subscriptions, 'subscription', 'subscriptions')} · ${plural(m.workspaces.length, 'Sentinel workspace', 'Sentinel workspaces')}`
 
 async function main() {
@@ -245,30 +251,63 @@ async function main() {
     // Drift panel.
     const px = X0 + mw + 0.4, pw = CW - mw - 0.4
     card(s, px, TOP, pw, BOTTOM - TOP, 'Drift panel')
-    text(s, [{ text: 'Foundational drift', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: st.drift.length ? 'Configured at build, now reading below enforced. Atmosera schedules each fix first.' : 'No foundational drift. Every measured foundational control reads E.', options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }], { x: px + 0.3, y: TOP + 0.25, w: pw - 0.6, h: 1.0, objectName: 'Drift heading' })
-    let dy = TOP + 1.25
-    // Even slots: two label lines and the figure line, three label lines only when the label needs them.
-    // Items stop above the legend. Any that do not fit are counted and stay in the register.
+    text(s, [{ text: 'Foundational gaps', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: st.drift.length ? 'Below the baseline at collection. Atmosera schedules each fix first.' : st.licensed.length ? 'Every foundational control Atmosera can fix reads E. The one below needs licensing.' : 'No foundational gaps. Every measured foundational control reads E.', options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }], { x: px + 0.3, y: TOP + 0.25, w: pw - 0.6, h: 1.0, objectName: 'Drift heading' })
+    let dy = TOP + 1.1
+    // Each item takes the lines its label and figure line need. Items stop above the legend and the tail line
+    // (the gaps left in the register, and any control that needs a license), so nothing overlaps.
+    const itemW = pw - 1.1, tailTop = BOTTOM - 0.6 - 0.62
     const shown = []
     for (const c of st.drift) {
-      // About 30 characters of 13 pt bold fit on a line of the panel.
-      const h = (c.label.length > 60 ? 3 : 2) * 0.22 + 0.28
-      if (dy + h > BOTTOM - 0.6) break
+      // The figure line carries the ratio behind a Mostly enforced policy and what a control is missing, such as
+      // the resource types outside workload protection, ahead of the pillar name.
+      const figure = `${c.valueText}${c.detail ? `, ${c.detail}` : ''} · ${c.group}`
+      const h = (Math.min(3, lines(c.label, itemW, 13, true)) + lines(figure, itemW, 12)) * 0.21 + 0.08
+      if (dy + h > tailTop) break
       const i = shown.length
       rule(s, px + 0.3, dy - 0.08, pw - 0.6, HEX.track, 0.75, `Drift ${i + 1} rule`)
       markChip(s, c.mark, px + 0.3, dy + 0.04, 0.36, 0.3, 12, `Drift ${i + 1} mark`)
-      text(s, [{ text: c.label, options: { fontSize: 13, bold: true, color: C.text2, breakLine: true } }, { text: `${c.valueText} · ${c.group}`, options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 2 } }], { x: px + 0.8, y: dy, w: pw - 1.1, h, objectName: `Drift ${i + 1}` })
+      text(s, [{ text: c.label, options: { fontSize: 13, bold: true, color: C.text2, breakLine: true } }, { text: figure, options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 2 } }], { x: px + 0.8, y: dy, w: itemW, h, objectName: `Drift ${i + 1}` })
       shown.push(c)
       dy += h + 0.1
     }
-    if (st.drift.length > shown.length) text(s, `${plural(st.drift.length - shown.length, 'more drifted control is', 'more drifted controls are')} in the register.`, { x: px + 0.3, y: dy, w: pw - 0.6, h: 0.3, fontSize: 12, color: C.accent6, objectName: 'Drift more' })
-    text(s, 'E enforced, 90% or more · P partial, 50 to 89% · N not yet enforced, below 50%', { x: px + 0.3, y: BOTTOM - 0.55, w: pw - 0.6, h: 0.42, fontSize: 11, color: C.accent6, objectName: 'Mark legend' })
+    const tail = [
+      st.drift.length > shown.length ? `${plural(st.drift.length - shown.length, 'more foundational gap is', 'more foundational gaps are')} in the register.` : '',
+      st.licensed.length ? `${sentence(list(st.licensed.map(c => c.short)))} ${st.licensed.length === 1 ? 'needs' : 'need'} licensing and ${st.licensed.length === 1 ? 'sits' : 'sit'} in Later.` : ''
+    ].filter(Boolean).join(' ')
+    if (tail) text(s, tail, { x: px + 0.3, y: tailTop, w: pw - 0.6, h: 0.6, fontSize: 11, color: C.accent6, valign: 'bottom', objectName: 'Drift tail' })
+    text(s, 'E enforced, 90% or more · P partial, 50 to 89%, or a scoped policy whatever its ratio · N not yet enforced, below 50%', { x: px + 0.3, y: BOTTOM - 0.55, w: pw - 0.6, h: 0.42, fontSize: 11, color: C.accent6, objectName: 'Mark legend' })
     s.addNotes(notesOf([
-      'Foundational controls are configured at build and expected to stay enforced. One that reads below E is drift. Atmosera owns the fix and sets a fix date at this review, and it is first on the roadmap. Defense in depth controls are layered on afterward, and each waits on something your team approves, schedules or licenses.',
-      'E means 90 percent or more of in-scope resources, P 50 to 89 percent and N below 50 percent.',
+      'Foundational controls are the baseline the service holds every environment to, and each is expected to read enforced at every review. One that reads below E is a gap against that baseline. Atmosera owns the fix and sets a fix date at this review, and it is first on the roadmap. Defense in depth controls are layered on top, and each waits on something your team approves, schedules or licenses. Every reading describes the state at collection, not a change since the last review.',
+      'E means 90 percent or more of in-scope resources, P 50 to 89 percent and N below 50 percent. A policy that stops short of every user on every application in every condition reads P however high the sign-in ratio behind it.',
       st.ungathered.length ? `${plural(st.ungathered.length, 'control', 'controls')} could not be graded from the collected evidence and ${st.ungathered.length === 1 ? 'is' : 'are'} listed in the appendix.` : '',
       m.pillars.map(p => `${p.name}. ${p.headline}. ${p.narrative}`)
     ]))
+
+    // 5b. Measured outcomes by pillar: the headline each pillar earned, the narrative behind it, the lead
+    // measure and the callout, as the HTML pillar page shows them. A narrative that would not fit its row is
+    // cut at a sentence end, and the full text goes to the speaker notes.
+    if (m.pillars.length) {
+      s = content('Operations and posture', 'Measured outcomes by pillar', st.takeaways.pillars)
+      const prow = (BOTTOM - TOP) / m.pillars.length, nameW = 1.9, storyX = X0 + nameW + 0.2, storyW = 6.3, measX = storyX + storyW + 0.3, measW = CW - nameW - 0.2 - storyW - 0.3
+      const sentences = t => clean(t).split(/(?<=\.)\s+(?=[A-Z0-9])/).filter(Boolean)
+      m.pillars.forEach((p, i) => {
+        const y = TOP + i * prow
+        if (i) rule(s, X0, y - 0.04, CW, HEX.track, 0.75, `${p.name} outcome rule`)
+        const reg = st.matrix.find(r => r.group === p.name)
+        text(s, [{ text: p.name, options: { fontSize: 14, bold: true, color: C.text2, breakLine: true } }, { text: reg && reg.foundational.measured ? `${reg.foundational.enforced} of ${reg.foundational.measured} foundational enforced` : 'Readings completed in the review', options: { fontSize: 10, color: C.accent6, paraSpaceBefore: 3 } }], { x: X0, y: y + 0.06, w: nameW, h: prow - 0.12, objectName: `${p.name} outcome name` })
+        const room = prow - 0.14, headH = lines(p.headline, storyW, 11, true) * 0.18
+        let parts = sentences(p.narrative), body = parts.join(' ')
+        while (parts.length > 1 && headH + lines(body, storyW, 10) * 0.165 + 0.05 > room) { parts = parts.slice(0, -1); body = parts.join(' ') }
+        text(s, [{ text: p.headline, options: { fontSize: 11, bold: true, color: C.text2, breakLine: true } }, { text: body, options: { fontSize: 10, color: C.text1, paraSpaceBefore: 3 } }], { x: storyX, y: y + 0.06, w: storyW, h: prow - 0.12, objectName: `${p.name} outcome story` })
+        if (p.measure) {
+          text(s, p.measure.label, { x: measX, y: y + 0.06, w: measW, h: 0.22, fontSize: 10, color: C.accent6, objectName: `${p.name} measure label` })
+          meter(s, measX, y + 0.36, measW - 1.15, p.measure.pct, p.measure.mark === 'E' ? C.accent3 : p.measure.mark === 'N' ? C.accent4 : C.accent2, `${p.name} outcome`)
+          text(s, `${fmt(p.measure.good)} of ${fmt(p.measure.total)}`, { x: measX + measW - 1.1, y: y + 0.26, w: 1.1, h: 0.32, fontSize: 13, bold: true, color: C.text2, align: 'right', valign: 'middle', objectName: `${p.name} measure value` })
+        }
+        if (p.callout) text(s, [{ text: p.callout.value, options: { fontSize: 14, bold: true, color: C.accent2 } }, { text: `  ${p.callout.label}`, options: { fontSize: 10, color: C.accent6 } }], { x: measX, y: y + (p.measure ? 0.64 : 0.08), w: measW, h: 0.4, valign: 'middle', objectName: `${p.name} callout` })
+      })
+      s.addNotes(notesOf(['Each pillar leads with the statement its strongest measure earned. The pillars that read lower need change inside the environment, and each of those items is sequenced on the roadmap.', m.pillars.map(p => `${p.name}. ${p.headline}. ${p.narrative} Evidence ${p.source}`)]))
+    }
   }
 
   // 6. Hardening roadmap: Now, Next and Later.
@@ -305,8 +344,35 @@ async function main() {
     text(s, [{ text: lead, options: { bold: true, color: C.accent2 } }, { text: rest, options: { color: C.text1 } }], { x: X0 + 2.05 + i * sw, y: stripY, w: sw - 0.1, h: 0.7, fontSize: 12, valign: 'middle', objectName: `Step ${i + 1}` })
   })
   s.addNotes(notesOf([`Priorities reflect the evidence collected ${m.readDate}. Horizons are proposed for agreement today. Every enforcement is staged in audit or report-only mode, reviewed with your team, then turned on.`,
-    st.drift.length ? 'Closing foundational drift is Atmosera\'s work, with a fix date set at this review.' : '',
+    st.drift.length ? 'Closing the foundational gaps is Atmosera\'s work, with a fix date set at this review.' : '',
     m.priorities.map(p => `${p.title}. ${p.action} Outcome: ${p.success}`), st.headroom]))
+
+  // 6b. Priority workstreams: the first three priorities with their evidence, the action and the outcome, as
+  // the HTML roadmap page shows them, then the rest in one line.
+  if (balanced && m.priorities.length) {
+    s = content('Roadmap and decisions', 'Priority workstreams', st.takeaways.priorities)
+    const top = m.priorities.slice(0, 3), rest = m.priorities.slice(3), pcw = (CW - 0.6) / 3, alsoH = rest.length ? 0.7 : 0, pch = BOTTOM - TOP - (rest.length ? alsoH + 0.25 : 0)
+    top.forEach((p, i) => {
+      const x = X0 + i * (pcw + 0.3)
+      card(s, x, TOP, pcw, pch, `Priority ${i + 1} card`)
+      rule(s, x, TOP, pcw, i ? C.accent2 : C.text2, 2.5, `Priority ${i + 1} rule`)
+      // 11 pt unless the three blocks would run past the card, then 10 pt.
+      const bodyW = pcw - 0.6
+      const need = size => 0.75 + [p.evidence, p.action, p.success].reduce((n, t) => n + 0.3 + lines(t, bodyW, size) * (size / 72 * 1.2), 0)
+      const size = need(11) <= pch - 0.4 ? 11 : 10
+      const block = (head, body) => [{ text: head.toUpperCase(), options: { fontSize: 9, bold: true, color: C.accent2, charSpacing: 1.2, breakLine: true, paraSpaceBefore: 8 } }, { text: body, options: { fontSize: size, color: C.text1, breakLine: true, paraSpaceBefore: 2 } }]
+      text(s, [
+        { text: `${String(i + 1).padStart(2, '0')}   ${i === 0 ? 'FIRST WORKSTREAM' : 'SEQUENCED'}`, options: { fontSize: 10, bold: true, color: C.accent6, charSpacing: 1.2, breakLine: true } },
+        { text: p.title, options: { fontSize: 16, bold: true, color: C.text2, breakLine: true, paraSpaceBefore: 4 } },
+        ...block('Evidence', p.evidence), ...block('Action', p.action), ...block('Outcome', p.success)
+      ], { x: x + 0.3, y: TOP + 0.2, w: bodyW, h: pch - 0.35, objectName: `Priority ${i + 1}` })
+    })
+    if (rest.length) {
+      card(s, X0, BOTTOM - alsoH, CW, alsoH, 'Also sequenced card')
+      text(s, [{ text: 'ALSO SEQUENCED   ', options: { fontSize: 10, bold: true, color: C.text2, charSpacing: 1.5 } }, { text: rest.map((p, i) => `${String(i + 4).padStart(2, '0')} ${p.title}`).join('   ·   '), options: { fontSize: 11, color: C.text1 } }], { x: X0 + 0.25, y: BOTTOM - alsoH, w: CW - 0.5, h: alsoH, valign: 'middle', objectName: 'Also sequenced' })
+    }
+    s.addNotes(notesOf([`Priorities reflect the evidence collected ${m.readDate}. Each one names the evidence, the action and the outcome we verify at the next review.`, m.priorities.map(p => `${p.title}. ${p.evidence} ${p.action} Outcome: ${p.success}`)]))
+  }
 
   // 7. Passwordless transition
   const pwd = m.passwordless && m.passwordless.retiring > 0 ? m.passwordless : null
@@ -364,12 +430,13 @@ async function main() {
   // Appendix: the control register, two pillars per slide, and on A3 how we grade.
   if (balanced) {
     pres.addSection({ title: 'Appendix' })
-    const legend = 'E enforced, 90% or more · P partial, 50 to 89% · N not yet enforced · – not gathered'
+    const legend = 'E enforced, 90% or more · P partial, 50 to 89%, or a scoped policy whatever its ratio · N not yet enforced · – not gathered'
+    const VALUE_W = 1.55
     const registerSize = (regs, w) => {
-      const labelW = w - 0.55 - 1.3
+      const labelW = w - 0.55 - VALUE_W
       const fits = size => regs.every(reg => {
         const tiers = [reg.foundational, reg.defense].filter(r => r.length)
-        const need = tiers.reduce((n, rows) => n + rows.reduce((k, c) => k + Math.min(2, lines(c.label, labelW, size)) * (size === 12 ? 0.215 : 0.2) + 0.08, 0), 0)
+        const need = tiers.reduce((n, rows) => n + rows.reduce((k, c) => k + (Math.min(2, lines(c.label, labelW, size)) + (c.detail ? lines(c.detail, labelW, size - 1) : 0)) * (size === 12 ? 0.215 : 0.2) + 0.08, 0), 0)
         return need <= 7.2 - TOP - 0.45 - tiers.length * 0.52
       })
       return fits(12) ? 12 : 11
@@ -378,7 +445,7 @@ async function main() {
       text(sl, reg.group, { x, y: TOP - 0.05, w: w * 0.62, h: 0.4, fontSize: 18, bold: true, color: C.text2, objectName: `${reg.group} register heading` })
       text(sl, reg.summary, { x: x + w * 0.5, y: TOP - 0.05, w: w * 0.5, h: 0.4, fontSize: 11, color: C.accent6, align: 'right', valign: 'middle', objectName: `${reg.group} register summary` })
       const tiers = [['foundational', 'Foundational', reg.foundational], ['defense', 'Defense in depth', reg.defense]].filter(([, , rows]) => rows.length)
-      const labelW = w - 0.55 - 1.3
+      const labelW = w - 0.55 - VALUE_W
       const lineH = size === 12 ? 0.215 : 0.2
       let y = TOP + 0.45
       tiers.forEach(([key, label, rows]) => {
@@ -388,10 +455,12 @@ async function main() {
         rule(sl, x, y + 0.33, w, C.text2, 1, `${reg.group} ${key} rule`)
         y += 0.42
         rows.forEach(c => {
-          const h = Math.min(2, lines(c.label, labelW, size)) * lineH + 0.07
+          // A control with a detail line (the ratio behind a Mostly enforced policy, or the resource types a
+          // partially covered control is missing) carries it under the label.
+          const h = (Math.min(2, lines(c.label, labelW, size)) + (c.detail ? lines(c.detail, labelW, size - 1) : 0)) * lineH + 0.07
           markChip(sl, c.chip, x, y + (h - 0.26) / 2, 0.36, 0.26, size, `${c.label} chip`)
-          text(sl, c.label, { x: x + 0.48, y, w: labelW, h, fontSize: size, color: C.text1, valign: 'middle', objectName: `${c.label} register label` })
-          text(sl, c.valueText, { x: x + w - 1.3, y, w: 1.3, h, fontSize: size, bold: !!c.mark, color: c.mark ? C.text2 : C.accent6, align: 'right', valign: 'middle', objectName: `${c.label} register value` })
+          text(sl, c.detail ? [{ text: c.label, options: { fontSize: size, color: C.text1, breakLine: true } }, { text: c.detail, options: { fontSize: size - 1, color: C.accent6 } }] : c.label, { x: x + 0.48, y, w: labelW, h, fontSize: size, color: C.text1, valign: 'middle', objectName: `${c.label} register label` })
+          text(sl, c.valueText, { x: x + w - VALUE_W, y, w: VALUE_W, h, fontSize: size, bold: !!c.mark, color: c.mark ? C.text2 : C.accent6, align: 'right', valign: 'middle', objectName: `${c.label} register value` })
           rule(sl, x, y + h + 0.005, w, HEX.track, 0.5, `${c.label} register rule`)
           y += h + 0.01
         })
@@ -423,8 +492,71 @@ async function main() {
     })
     const dh = Math.min(1.15, BOTTOM - gy - 0.1)
     card(s, gx, gy + 0.1, half, dh, 'Tier definitions card')
-    text(s, [{ text: 'Foundational', options: { bold: true, color: C.text2 } }, { text: ' controls are set at build and should hold at E. Below E is drift.', options: { color: C.text1, breakLine: true } }, { text: 'Defense in depth', options: { bold: true, color: C.text2, paraSpaceBefore: 6 } }, { text: ' controls are layered on, each waiting on your approval, schedule or license.', options: { color: C.text1 } }], { x: gx + 0.25, y: gy + 0.1, w: half - 0.5, h: dh, fontSize: 12, valign: 'middle', objectName: 'Tier definitions' })
+    text(s, [{ text: 'Foundational', options: { bold: true, color: C.text2 } }, { text: ' controls are the baseline and should hold at E. Below E is a gap, first on the roadmap.', options: { color: C.text1, breakLine: true } }, { text: 'Defense in depth', options: { bold: true, color: C.text2, paraSpaceBefore: 6 } }, { text: ' controls are layered on top, each waiting on your approval, schedule or license.', options: { color: C.text1 } }], { x: gx + 0.25, y: gy + 0.1, w: half - 0.5, h: dh, fontSize: 12, valign: 'middle', objectName: 'Tier definitions' })
     s.addNotes(notesOf([regNotes([st.register[4]]), 'Posture is reported for the whole tenant, not for Azure resources alone, and never as a single vendor percentage. Vendor benchmark readings are context, not the objective. Microsoft widened what counts as an assessed resource during 2026, so score movement can reflect measurement changes as well as control changes.']))
+
+    // Appendix A4: scope and evidence. What the readings cover, over which period and sources, and the controls
+    // this collection could not grade with what each needs. Reasons stay at the category level on the slide.
+    s = content('Appendix', 'Scope and evidence', 'Appendix A4 · What the readings cover, and the controls this collection could not grade')
+    const gapOf = id => (data.manifest || []).some(r => r.ResultId === id && (r.AccessGap === true || String(r.AccessGap).toLowerCase() === 'true'))
+    const retention = [...new Set(m.workspaces.map(w => fmt(w.RetentionDays)))]
+    const facts = [
+      ['Alert period', m.period.label],
+      ['Configuration and scores', `Read ${m.readDate}`],
+      ['Identity and endpoint lookbacks', 'Last 30 days. Endpoint sensors and onboarding, last 7 days.'],
+      ['Subscriptions in scope', fmt(m.subscriptions)],
+      ['Sentinel workspaces', `${fmt(m.workspaces.length)}${retention.length ? `, retention ${list(retention)} days` : ''}`],
+      ['Alerts', m.ticketed ? 'Sentinel records that opened a ticket with the managed security service. Informational severity is excluded.' : 'Sentinel records triaged by the managed security service.'],
+      ['Detections', 'Records from Sentinel, Defender for Cloud and the Defender services correlated into those alerts.'],
+      ['Device measures', 'Azure virtual machines. The Defender for Endpoint and Update Manager measures also count Azure Arc-enabled servers. Trusted Launch, encryption at host and backup read native virtual machines only. Workstations and network appliances stay out.'],
+      ['Status marks', 'Read at collection. A control below E is a gap against the baseline, not a change since the last review.']
+    ]
+    eyebrow(s, 'What the readings cover', X0, TOP - 0.05, half, C.text2, 'Scope')
+    rule(s, X0, TOP + 0.3, half, C.text2, 1, 'Scope rule')
+    let fy = TOP + 0.42
+    facts.forEach(([k, v], i) => {
+      const h = Math.max(0.28, lines(v, half - 2.4, 11) * 0.185 + 0.1)
+      text(s, k, { x: X0, y: fy, w: 2.3, h, fontSize: 11, bold: true, color: C.text2, objectName: `Scope ${i + 1} label` })
+      text(s, v, { x: X0 + 2.4, y: fy, w: half - 2.4, h, fontSize: 11, color: C.text1, objectName: `Scope ${i + 1} value` })
+      rule(s, X0, fy + h, half, HEX.track, 0.5, `Scope ${i + 1} rule`)
+      fy += h + 0.05
+    })
+    const ux = X0 + half + 0.4
+    eyebrow(s, 'Not graded in this collection', ux, TOP - 0.05, half, C.text2, 'Ungathered')
+    rule(s, ux, TOP + 0.3, half, C.text2, 1, 'Ungathered rule')
+    const naControls = m.controls.filter(c => c.na)
+    const whyOf = c => c.na ? 'No activity or configuration to judge it by' : gapOf(c.id) ? 'Needs read access from your team' : 'Not available from the sources read in this collection'
+    const notGraded = [...st.ungathered, ...naControls]
+    if (!notGraded.length) text(s, 'Every control was gathered and graded in this collection.', { x: ux, y: TOP + 0.45, w: half, h: 0.4, fontSize: 12, color: C.accent6, objectName: 'Ungathered empty' })
+    // One column of entries, then as many continuation slides of two columns as the rest need. Nothing is
+    // dropped: a partial collection can leave dozens of controls ungraded.
+    const entryH = c => Math.min(2, lines(c.label, half - 0.5, 11)) * 0.185 + 0.26
+    const fillColumn = (sl, x, from, prefix) => {
+      let y = TOP + 0.42, i = from
+      while (i < notGraded.length) {
+        const c = notGraded[i], h = entryH(c)
+        if (y + h > BOTTOM) break
+        markChip(sl, c.na ? 'N/A' : '–', x, y + 0.03, 0.36, 0.26, 11, `${prefix} ${i + 1} chip`)
+        text(sl, [{ text: c.label, options: { fontSize: 11, color: C.text1, breakLine: true } }, { text: `${whyOf(c)} · ${c.group}`, options: { fontSize: 9.5, color: C.accent6, paraSpaceBefore: 1 } }], { x: x + 0.48, y, w: half - 0.48, h, objectName: `${prefix} ${i + 1}` })
+        rule(sl, x, y + h, half, HEX.track, 0.5, `${prefix} ${i + 1} rule`)
+        y += h + 0.05
+        i++
+      }
+      return i
+    }
+    const scopeNotes = notesOf([`Alert activity covers ${m.period.label}. Identity and endpoint readings use the source lookback, generally the last 30 days. Configuration and score readings are from ${m.readDate}.`, `Sentinel workspaces: ${m.workspaces.map(w => `${w.Name}, ${fmt(w.RetentionDays)} days retention`).join('. ')}.`, st.ungathered.length ? `Not gathered: ${st.ungathered.map(c => c.label).join('. ')}.` : 'Every control was gathered.'])
+    let next = fillColumn(s, ux, 0, 'Ungathered')
+    if (next < notGraded.length) text(s, `Continued on the next slide, ${plural(notGraded.length - next, 'more control', 'more controls')}.`, { x: ux, y: BOTTOM - 0.3, w: half, h: 0.3, fontSize: 10, color: C.accent6, align: 'right', objectName: 'Ungathered continued' })
+    s.addNotes(scopeNotes)
+    for (let page = 2; next < notGraded.length; page++) {
+      s = content('Appendix', 'Scope and evidence, continued', `Appendix A4 · Controls this collection could not grade, continued`)
+      eyebrow(s, 'Not graded in this collection', X0, TOP - 0.05, CW, C.text2, `Ungathered page ${page}`)
+      rule(s, X0, TOP + 0.3, CW, C.text2, 1, `Ungathered page ${page} rule`)
+      next = fillColumn(s, X0, next, `Ungathered page ${page} left`)
+      if (next < notGraded.length) next = fillColumn(s, ux, next, `Ungathered page ${page} right`)
+      if (next < notGraded.length) text(s, `Continued on the next slide, ${plural(notGraded.length - next, 'more control', 'more controls')}.`, { x: ux, y: BOTTOM - 0.3, w: half, h: 0.3, fontSize: 10, color: C.accent6, align: 'right', objectName: `Ungathered page ${page} continued` })
+      s.addNotes(scopeNotes)
+    }
   }
 
   // Appendix A4 and A5, Detailed only: the two Microsoft scores and where the next points are.
@@ -433,7 +565,7 @@ async function main() {
       card(sl, x, y, w, h, `${name} card`)
       text(sl, [{ text: value, options: { fontSize: size, bold: true, color: C.accent2, breakLine: true } }, { text: label, options: { fontSize: 15, bold: true, color: C.text2, breakLine: !!sub, paraSpaceBefore: 4 } }, ...(sub ? [{ text: sub, options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }] : [])], { x: x + 0.3, y: y + 0.25, w: w - 0.6, h: h - 0.4, objectName: name })
     }
-    s = content('Appendix', 'Tenant and cloud security posture', 'Appendix A4 · Microsoft calculates both scores. We report them as context, not as the objective.')
+    s = content('Appendix', 'Tenant and cloud security posture', 'Appendix A5 · Microsoft calculates both scores. We report them as context, not as the objective.')
     const cw2 = (CW - 0.3) / 2, ch2 = 2.95
     const scoreCard = (x, eye, score, body, name) => {
       card(s, x, TOP, cw2, ch2, `${name} card`)
@@ -453,7 +585,7 @@ async function main() {
     inv.forEach(([v, l, sub], i) => stat(s, X0 + i * (iw + 0.3), iy, iw, BOTTOM - iy, v, l, sub, `Inventory ${i + 1}`))
     s.addNotes(notesOf(['Microsoft calculates both scores. We report them as benchmark and context, and we do not manage the environment to them.', `Tenant-wide sign-in readings use ${m.tenantWorkspace}. Alert metrics come from one combined query across the workspaces, and workspace medians and distinct counts are never added together.`, `Sentinel workspaces: ${m.workspaces.map(w => `${w.Name}, ${fmt(w.RetentionDays)} days retention`).join('. ')}.`]))
 
-    s = content('Appendix', 'Where the next points are', 'Appendix A5 · Microsoft score controls ranked by the points still available')
+    s = content('Appendix', 'Where the next points are', 'Appendix A6 · Microsoft score controls ranked by the points still available')
     const sc = m.posture.scoreControls.slice(0, 8), leftW = 7.3
     if (sc.length) s.addChart(pres.charts.BAR, [{ name: 'Score control', labels: sc.map(c => `${c.label} (${fmt(c.remaining)} ${c.remaining === 1 ? 'pt' : 'pts'})`), values: sc.map(c => c.pct) }], {
       x: X0, y: TOP, w: leftW, h: BOTTOM - TOP, barDir: 'bar', chartColors: [HEX.accent2], barGapWidthPct: 40, valAxisMinVal: 0, valAxisMaxVal: 100, valAxisHidden: true,

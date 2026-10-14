@@ -289,8 +289,13 @@ $data = [ordered]@{
     depth = $Depth.ToLowerInvariant()
     parameters = $parameters | Select-Object ClientName, WindowStart, WindowEnd, RecentStart, PostureReadDate, ManagedRgPattern, TicketPattern, AlertScope, Subscriptions, Workspaces, TenantWideTables, DefenderApi, GraphApi, PatchCadenceDays, PatchExclusionTagPattern, EdrVendorPattern
     # AccessGap marks evidence that the collector's token was not permitted to read, so the deck can ask
-    # for read access. Service errors and missing tables are not access gaps. Only the flag is embedded.
-    manifest = @($manifest | Select-Object ResultId, Status, Rows, ReadTimeUtc, @{ Name = 'AccessGap'; Expression = { [string]$_.Detail -match 'token (lacks|cannot read)|Needs [A-Za-z]+(\.[A-Za-z]+)*\.Read|could not be read|Insufficient privileges|Authorization_RequestDenied|\b403\b' } })
+    # for read access. Service errors and missing tables are not access gaps. A service that answers that
+    # the tenant is not onboarded or not licensed (Defender for Identity returns that as a 403) is not an
+    # access gap either: NotOnboarded marks it, so the control reads Not in force instead of asking for
+    # read access. Only the flags are embedded.
+    manifest = @($manifest | Select-Object ResultId, Status, Rows, ReadTimeUtc,
+        @{ Name = 'NotOnboarded'; Expression = { [string]$_.Detail -match '(?i)tenant is not onboarded|not onboarded to|not licensed|after license is purchased' } },
+        @{ Name = 'AccessGap'; Expression = { ([string]$_.Detail -match 'token (lacks|cannot read)|Needs [A-Za-z]+(\.[A-Za-z]+)*\.Read|could not be read|Insufficient privileges|Authorization_RequestDenied|\b403\b') -and -not ([string]$_.Detail -match '(?i)tenant is not onboarded|not onboarded to|not licensed|after license is purchased') } })
     results = $results
     issues = @($issues)
     context = $context
