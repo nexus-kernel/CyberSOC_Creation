@@ -772,6 +772,7 @@ test('MFA at sign-in and admin portal MFA read In force from the Conditional Acc
   let c = build(p).controls.find(x => x.id === 'IA.1')
   assert.deepEqual([c.value, c.mark], ['Mostly enforced', 'P'])
   assert.match(c.note, /^The enabled Conditional Access policy that requires multifactor authentication on every application applies under selected conditions only, such as a platform, risk level, device filter or location\. 150 of 200/)
+  assert.ok(build(p).presenter.some(n => n.title === 'MFA at sign-in' && /because the enabled policy applies under selected conditions only and the sign-in ratio/.test(n.text)), 'the presenter note names the same scoping')
   p.results['IA.8-CA'] = flows('Scoped').map(f => ({ ...f, ScopeReason: 'Users' }))
   c = build(p).controls.find(x => x.id === 'IA.1')
   assert.match(c.note, /applies to selected users or applications only\. 150 of 200/)

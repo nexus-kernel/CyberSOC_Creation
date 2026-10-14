@@ -112,11 +112,13 @@ function Get-EbrCaFlowDefinitions {
         @{ Flow = 'Legacy authentication'; Control = 'IA.3'; SignIns = $true; Defaults = $true
            Match = { param($f) $f.Block -and $f.Legacy }
            Covers = { param($f) $f.AllUsers -and $f.AllApps -and -not $f.Narrowed } }
-        # MFA at sign-in: MFA required on all apps for all users, not narrowed to a platform, risk level,
-        # device filter or location (1.14.0). Security defaults require MFA for all users too.
+        # MFA at sign-in: any enabled policy that requires MFA on cloud apps counts (Oct 14, 2026), so one that
+        # selects its applications reads Scoped rather than None. It covers the tenant when it applies to all
+        # users on all apps and is not narrowed to a platform, risk level, device filter or location (1.14.0).
+        # Security defaults require MFA for all users too.
         @{ Flow = 'MFA at sign-in'; Control = 'IA.1'; SignIns = $false; Defaults = $true
-           Match = { param($f) $f.Mfa -and $f.AllApps -and -not $f.LegacyOnly }
-           Covers = { param($f) $f.AllUsers -and -not $f.Narrowed } }
+           Match = { param($f) $f.Mfa -and -not $f.LegacyOnly }
+           Covers = { param($f) $f.AllUsers -and $f.AllApps -and -not $f.Narrowed } }
         # Admin portals: MFA required on the admin portals, or on all apps, for all users or for the admin roles.
         @{ Flow = 'Admin portals'; Control = 'IA.1-ADMINPORTAL'; SignIns = $false; Defaults = $true
            Match = { param($f) $f.Mfa -and ($f.AllApps -or $f.AdminPortals) -and -not $f.LegacyOnly }
