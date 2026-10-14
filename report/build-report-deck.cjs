@@ -694,7 +694,7 @@ async function main() {
     }
     const movement = (sc, color) => ({ text: sc.delta && sc.delta.points > 0 ? `Up ${fmt(sc.delta.points)} points since ${sc.delta.since}, from ${pctText(sc.delta.from)}.` : 'Reported as current state.', options: { bold: !!(sc.delta && sc.delta.points > 0), color: sc.delta && sc.delta.points > 0 ? C.accent3 : color, breakLine: true, paraSpaceBefore: 4 } })
     const cs = m.cloudScore
-    const cloudTrend = cs && cs.delta && cs.trend.length >= 2 ? cs.trend : null
+    const cloudTrend = cs && cs.trend.length >= 2 ? cs.trend : null
     scoreCard(X0, 'DEFENDER FOR CLOUD · AZURE RESOURCE ESTATE', cs ? cs.value : null, cs ? [
       { text: pctText(cs.value), options: { fontSize: 24, bold: true, color: C.text2, breakLine: true } },
       movement(cs, C.accent6),

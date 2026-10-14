@@ -761,7 +761,7 @@
     // Scores and posture.
     const cloud = one('POS.1')
     const scoreValid = cloud && num(cloud.Current) !== null && num(cloud.Max) > 0 && cloud.Current <= cloud.Max
-    const trendRows = rows('POS.7').filter(r => validDate(iso(r.Month)) && num(r.Percent) !== null).sort((a, b) => iso(a.Month).localeCompare(iso(b.Month)))
+    const trendRows = rows('POS.7').filter(r => validDate(iso(r.Month)) && num(r.Percent) !== null && Number(r.Percent) <= 100).sort((a, b) => iso(a.Month).localeCompare(iso(b.Month)))
     if (scoreValid) {
       const value = pct(cloud.Current, cloud.Max)
       const first = trendRows[0], last = trendRows[trendRows.length - 1]
@@ -772,7 +772,7 @@
       // The movement is stated in percentage points with the starting percentage (from), never as points available.
       const delta = trendRows.length >= 2 && value >= Number(first.Percent) ? { points: Number((value - Number(first.Percent)).toFixed(1)), since: monthLabel(first.Month), from: Number(first.Percent) } : null
       m.cloudScore = { value, current: Number(cloud.Current), max: Number(cloud.Max), subscriptions: count(cloud.Subscriptions), delta, trend: trendRows.map(r => ({ label: monthLabel(r.Month), pct: Number(r.Percent) })), note: `Secure score across ${plural(cloud.Subscriptions, 'subscription', 'subscriptions')}, calculated by Microsoft.`, source: source('POS.1') }
-      if (trendRows.length >= 2 && !delta) presenter('Defender for Cloud score movement', `The continuous export shows ${pctText(first.Percent)} in ${monthLabel(first.Month)} and ${pctText(last.Percent)} in ${monthLabel(last.Month)}. The report presents the current score with the Microsoft measurement model explainer and does not print a decline.`)
+      if (trendRows.length >= 2 && !delta) presenter('Defender for Cloud score movement', `The continuous export shows ${pctText(first.Percent)} in ${monthLabel(first.Month)} and ${pctText(last.Percent)} in ${monthLabel(last.Month)}. The report shows the monthly trend, including declines, beside the current score. Changes in the measurement model, scope or weighting can move the score without a change in the underlying controls.`)
       if (count(cloud.Subscriptions) !== m.subscriptions) presenter('Score subscription scope', `The cloud score covers ${fmt(cloud.Subscriptions)} of ${fmt(m.subscriptions)} in-scope subscriptions.`)
     } else unmeasured('POS.1', 'Defender for Cloud score', state('POS.1'))
     // Tenant Secure Score: the reviewed context file wins, otherwise the Graph reading (POS.6) with movement from the 90-day trend.

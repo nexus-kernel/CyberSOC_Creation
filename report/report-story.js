@@ -115,7 +115,7 @@
       else if (speedRow.p90 && speedRow.p90.minutes <= 60) s.speed = { value: speedRow.p90.value, label: `time for 90% of ${who} to close`, sub: `${plural(speedRow.n, 'alert', 'alerts')} closed ${s.periodPhrase}.`, kpiSub: `${plural(speedRow.n, 'alert', 'alerts')} closed ${s.periodPhrase}`, line: `90% of ${who} closed within ${speedRow.p90.value}.`, row: speedRow }
     }
 
-    // Score movement. Only a gain is a headline. A decline stays with the presenter notes.
+    // Score movement. Only a gain is a headline. The posture chart shows the monthly trend in either direction.
     const score = m.tenantScore || m.cloudScore
     const scoreName = m.tenantScore ? 'Microsoft Secure Score' : 'Defender for Cloud secure score'
     const gain = score && score.delta && score.delta.points > 0 ? score.delta : null
