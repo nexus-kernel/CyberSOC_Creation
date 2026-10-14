@@ -78,7 +78,7 @@ test('slide text follows the copy rules and speaker notes never carry the presen
   const incident = { Threat: 'Multi-stage incident involving Initial access and Execution on one endpoint', Severity: 'High', Tactics: 'InitialAccess,Execution', Created: '2026-08-01', ExfilOrImpactTactic: false }
   const { data, out } = deck('detailed', [...examples, incident])
   const m = build(data)
-  assert.ok(m.presenter.some(n => n.title === 'Foundational drift'), 'the fixture raises a presenter note')
+  assert.ok(m.presenter.some(n => n.title === 'Foundational controls below E'), 'the fixture raises a presenter note')
   const { slides, notes } = await read(out)
   const all = slides.join(' ')
   assert.ok(all.includes('Multi-stage alert involving Initial access and Execution on one endpoint'), 'the incident title reads as an alert')
@@ -87,7 +87,32 @@ test('slide text follows the copy rules and speaker notes never carry the presen
   assert.ok(all.includes('Example'))
   const spoken = notes.join(' ')
   for (const n of [...m.presenter, ...m.review]) assert.ok(!spoken.includes(n.text), `speaker notes carry the presenter note "${n.title}"`)
-  assert.ok(!/Foundational drift|foundational controls? reads? below E:|Prepared answers|Evidence review/.test(spoken))
+  assert.ok(!/Foundational controls below E|foundational controls? reads? below E:|Prepared answers|Evidence review/.test(spoken))
+  // The evidence holds the current reading only, so the deck never says a control was configured at build, drifted or regressed.
+  assert.ok(!/\bat build\b|\bdrift|\bregress|\bsince the last review\b(?! )/i.test(all.replace(/not a change since the last review/g, '')), all.match(/.{0,50}(at build|drift|regress).{0,50}/i)?.[0])
+  assert.ok(!/\bat build\b|\bdrift|\bregress/i.test(spoken), spoken.match(/.{0,50}(at build|drift|regress).{0,50}/i)?.[0])
+})
+test('the grounding slides appear at balanced depth and carry the pillar narratives, the priority workstreams and the scope', async () => {
+  const { data, out } = deck('balanced', examples)
+  const m = build(data)
+  const { slides, notes } = await read(out)
+  const pillars = slides.find(s => s.startsWith('Measured outcomes by pillar'))
+  assert.ok(pillars, 'the pillar outcomes slide')
+  for (const p of m.pillars) assert.ok(pillars.includes(p.name) && pillars.includes(p.headline), p.name)
+  // Figures and dates are glued with non-breaking spaces on the slide, so the comparison reads them as spaces.
+  const plain = s => s.replace(/\u00A0/g, ' ')
+  const work = plain(slides.find(s => s.startsWith('Priority workstreams')) || '')
+  assert.ok(work, 'the priority workstreams slide')
+  for (const p of m.priorities.slice(0, 3)) assert.ok(work.includes(p.title) && work.includes(p.action) && work.includes(p.success), p.title)
+  assert.ok(/EVIDENCE.*ACTION.*OUTCOME/.test(work))
+  const scope = slides.find(s => s.startsWith('Scope and evidence'))
+  assert.ok(scope && scope.includes('Appendix A4') && plain(scope).includes(m.period.label), 'the scope slide names the period')
+  assert.ok(scope.includes('NOT GRADED IN THIS COLLECTION'))
+  const brief = await read(deck('brief', examples).out)
+  assert.ok(!brief.slides.some(s => /Measured outcomes by pillar|Priority workstreams|Scope and evidence/.test(s)), 'brief keeps the short deck')
+  const detailed = await read(deck('detailed', examples).out)
+  assert.ok(detailed.slides.some(s => /Appendix A5/.test(s)) && detailed.slides.some(s => /Appendix A6/.test(s)), 'the score slides follow the scope slide')
+  assert.ok(notes.some(n => n.includes(m.pillars[0].narrative)), 'the full narrative is spoken')
 })
 test('chart workbooks carry valid table ranges so Keynote and Quick Look draw the charts', async () => {
   // pptxgenjs 4.0.1 writes ref="A1:D4'" into each chart's embedded table. Apple's importer then
