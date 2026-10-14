@@ -273,13 +273,15 @@ async function main() {
       // A short table leaves the slide empty, so the room below it carries what the confirmed threats add up to
       // (the outcome cards) and how every confirmed threat is handled (the strip). Five long titles leave no
       // room, and the slide then holds the table alone (Oct 14, 2026).
+      // The outcome cards stay tactic-qualified: the OUT.4 flag marks an exfiltration, collection or impact tactic,
+      // not a verified outcome or a notification, and the severity count comes from the model, counted per alert
+      // before grouping.
       const tp = m.alerts ? m.alerts.truePositives : null
-      const shownAlerts = m.threats.examples.reduce((n, t) => n + t.alerts, 0) + m.threats.moreAlerts
-      const highAlerts = m.threats.examples.filter(t => t.severity === 'High').reduce((n, t) => n + t.alerts, 0)
+      const high = m.threats.severities.High
       const outcomeCards = [
         tp !== null && tp > 0 ? [fmt(tp), tp === 1 ? 'Confirmed threat' : 'Confirmed threats', `Investigated and closed by the SOC ${st.periodPhrase}.`] : null,
-        m.alerts && m.alerts.flaggedKnown && tp > 0 ? [`${fmt(m.alerts.flagged)} of ${fmt(tp)}`, 'Resulted in data exfiltration or impact', m.alerts.flagged === 0 ? 'None reached the exfiltration or impact stage.' : 'Reported to your team under the agreed notification process.'] : null,
-        shownAlerts > 0 ? [fmt(highAlerts), highAlerts === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(shownAlerts, 'confirmed alert', 'confirmed alerts')} grouped above, each closed to a documented disposition.`] : null,
+        m.alerts && m.alerts.flaggedKnown && tp > 0 ? [`${fmt(m.alerts.flagged)} of ${fmt(tp)}`, 'Reached exfiltration or impact', m.alerts.flagged === 0 ? 'None carried an exfiltration or impact tactic.' : `${plural(m.alerts.flagged, 'alert carried', 'alerts carried')} an exfiltration or impact tactic in Sentinel.`] : null,
+        m.threats.alerts > 0 ? [fmt(high), high === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(m.threats.alerts, 'confirmed alert', 'confirmed alerts')} grouped above, each closed as a true positive.`] : null,
         st.speed ? [st.speed.value, sentence(st.speed.label), st.speed.sub] : null
       ].filter(Boolean).slice(0, 4)
       const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages every alert and confirms its severity'], ['3 Investigate', ' scope, attack stage and impact are established'], ['4 Resolve', ' closed with a documented disposition, and referred to your team where action is needed']]

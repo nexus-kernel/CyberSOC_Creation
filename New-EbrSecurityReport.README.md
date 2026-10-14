@@ -90,7 +90,7 @@ Rules the deck follows:
 - A ratio control with fewer than 10 resources, such as 2 of 2 machines patched, never stands as a win or leads a pillar in the posture matrix. The control itself still reads in the register.
 - Read access is asked for only where the collector's token was not permitted to read the evidence (the `AccessGap` flag the builder derives from the manifest detail). Service errors are Atmosera's to resolve and never become an ask. A service that answers that the tenant is not onboarded or not licensed sets `NotOnboarded` instead, so the control reads Not in force where the collection shows domain controllers (NB.10 devices or DR.4 events). Without that positive evidence it stays ungathered: NB.10 reads Azure virtual machines only and DR.4 needs Defender for Identity telemetry, so an empty read never proves a cloud-only tenant.
 - The deck never prints `(null)`. Ungathered controls read "Not gathered" with a dash chip.
-- Containment is never claimed. The threat outcome reads "reached exfiltration or impact" from the OUT.4 tactic flag, and the executive KPI reads "True positives that resulted in data exfiltration or impact".
+- Containment is never claimed. The threat outcome reads "reached exfiltration or impact" from the OUT.4 tactic flag, which marks an exfiltration, collection or impact tactic and never a verified outcome or a notification, so the executive KPI reads "True positives that reached exfiltration or impact". The 90th percentile is creation to recorded close, so it reads "Nine in ten triaged and closed within", never investigated or resolved.
 - The hardening count of members without MFA is written against the same members as the MFA at sign-in control, for example "14 of 194" beside a control reading "180 of 194", so the two reconcile at a glance.
 
 Charts are native PowerPoint charts, so they stay editable. Speaker notes are talking points built only from text the client already sees in the HTML, such as pillar narratives and control descriptions. The presenter notes are never copied in, so the deck can be sent to the client after the review.
@@ -159,7 +159,7 @@ Copy `report/context.example.json`, enter the exact client and tenant from the p
 }
 ```
 
-`ServiceStartDate` enables the "Months of managed security" tile. `Previous` and `PreviousReadDate` add the tenant score movement line. `Categories` are percentages and add the category bars on the posture page. A delivered item needs a title, outcome, reference and a completion date inside the alert period. Incomplete entries appear in the evidence review instead of on the client page. The generator checks structure and date scope but cannot verify the referenced ticket or portal capture. It accepts no overrides for computed metrics.
+`ServiceStartDate` enables the "Months of managed security" tile. `Previous` and `PreviousReadDate` add the tenant score movement line, in percentage points with each reading over its own maximum. Add `PreviousMax` when the earlier reading had a different maximum, since Microsoft widens the maximum over time. Without it the current maximum stands in. `Categories` are percentages and add the category bars on the posture page. A delivered item needs a title, outcome, reference and a completion date inside the alert period. Incomplete entries appear in the evidence review instead of on the client page. The generator checks structure and date scope but cannot verify the referenced ticket or portal capture. It accepts no overrides for computed metrics.
 
 ## Presenter notes
 

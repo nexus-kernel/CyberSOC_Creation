@@ -102,14 +102,15 @@
     s.readShort = shortDate(p.PostureReadDate) || m.readDate
 
     // Response speed. A median shows only at the floor or above. Otherwise the 90th percentile carries
-    // the story when it is within one hour. The 90th percentile reads as nine in ten alerts triaged,
-    // investigated and resolved, as the HTML tile words it (Oct 14, 2026).
+    // the story when it is within one hour. The 90th percentile is creation to recorded close, so it reads
+    // as nine in ten alerts triaged and closed, as the HTML tile words it, never as investigated or
+    // resolved (Oct 14, 2026).
     const timing = m.timing || []
     const speedRow = timing.find(r => r.scope === 'High') && timing.find(r => r.scope === 'High').n >= 5 ? timing.find(r => r.scope === 'High') : timing.find(r => r.scope === 'All')
     s.speed = null
     if (speedRow) {
       const who = speedRow.scope === 'High' ? 'high-severity alerts' : 'alerts'
-      const nineInTen = speedRow.p90 && speedRow.p90.minutes <= 60 ? `Nine in ten triaged, investigated and resolved within ${speedRow.p90.value}` : ''
+      const nineInTen = speedRow.p90 && speedRow.p90.minutes <= 60 ? `Nine in ten triaged and closed within ${speedRow.p90.value}` : ''
       if (speedRow.median) s.speed = { value: speedRow.median.value, label: `median time to close, ${speedRow.scope === 'High' ? 'high severity alerts' : 'all alerts'}`, sub: `${plural(speedRow.n, 'alert', 'alerts')} closed.${nineInTen ? ` ${nineInTen}.` : ''}`, kpiSub: nineInTen || `${plural(speedRow.n, 'alert', 'alerts')} closed`, line: `${sentence(who)} closed in a median of ${speedRow.median.value}.`, row: speedRow }
       else if (speedRow.p90 && speedRow.p90.minutes <= 60) s.speed = { value: speedRow.p90.value, label: `time for 90% of ${who} to close`, sub: `${plural(speedRow.n, 'alert', 'alerts')} closed ${s.periodPhrase}.`, kpiSub: `${plural(speedRow.n, 'alert', 'alerts')} closed ${s.periodPhrase}`, line: `90% of ${who} closed within ${speedRow.p90.value}.`, row: speedRow }
     }
@@ -145,7 +146,8 @@
     // on the operations slide, where the chart explains it.
     const kpis = []
     if (m.alerts) kpis.push({ value: fmt(m.alerts.triaged), label: 'Alerts triaged', sub: m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} resolved by automation rules` : m.period.label, area: 'alerts' })
-    if (m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0) kpis.push({ value: `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, label: 'True positives that resulted in data exfiltration or impact', sub: m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`, area: 'threat' })
+    // Tactic-qualified: the OUT.4 flag marks an exfiltration, collection or impact tactic, never a verified outcome.
+    if (m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0) kpis.push({ value: `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, label: 'True positives that reached exfiltration or impact', sub: m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`, area: 'threat' })
     else if (m.alerts && m.alerts.truePositives !== null) kpis.push({ value: fmt(m.alerts.truePositives), label: 'Confirmed threats investigated', sub: 'Each closed to a documented disposition', area: 'threat' })
     if (s.speed) kpis.push({ value: s.speed.value, label: sentence(s.speed.label), sub: s.speed.kpiSub, area: 'response' })
     if (score) kpis.push({ value: pctText(score.value), label: scoreName, sub: gain ? `Up ${fmt(gain.points)} points since ${gain.since}, from ${pctText(gain.from)}` : `Read ${s.readShort}`, area: 'posture' })

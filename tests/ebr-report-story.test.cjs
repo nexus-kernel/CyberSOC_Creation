@@ -70,7 +70,7 @@ test('the story carries the wins, asks and takeaways the review asked for, worde
   const { s } = story(quarterPack())
   assert.equal(s.quarter, 'Q3 2026')
   assert.deepEqual(s.kpis.map(k => k.value), ['615', '0 of 2', '36 min', '59.7%'])
-  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'True positives that resulted in data exfiltration or impact', 'Time for 90% of high-severity alerts to close', 'Defender for Cloud secure score'])
+  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'True positives that reached exfiltration or impact', 'Time for 90% of high-severity alerts to close', 'Defender for Cloud secure score'])
   assert.equal(s.kpis[0].sub, 'Jul 1 to Sep 30, 2026', 'the alert KPI carries the period, not the detection count')
   assert.equal(s.kpis[3].sub, 'Up 6.1 points since Jul 2026, from 53.6%')
   assert.deepEqual(s.wins.map(w => w.eyebrow), ['Threat outcomes', 'Response speed', 'Posture', 'Identity', 'Patching', 'Email protection'])
@@ -193,14 +193,15 @@ test('the confirmed threats takeaway counts the threats, adds the exfiltration l
   assert.equal(none.m.threats, null, 'rows without a title give no examples')
   assert.equal(none.s.takeaways.threats, '')
 })
-test('a median at the floor reads as nine in ten triaged, investigated and resolved, and names high severity alerts', () => {
+test('a median at the floor reads as nine in ten triaged and closed, never investigated or resolved, and names high severity alerts', () => {
   const p = quarterPack()
   p.results['OUT.2'][0].MedianCloseMin = 22; p.results['OUT.2-ANALYST'][0].MedianCloseMin = 22
   const { s } = story(p)
   assert.equal(s.speed.value, '22 min')
   assert.equal(s.speed.label, 'median time to close, high severity alerts')
-  assert.equal(s.speed.sub, '208 alerts closed. Nine in ten triaged, investigated and resolved within 36 min.')
-  assert.equal(s.kpis[2].sub, 'Nine in ten triaged, investigated and resolved within 36 min')
+  assert.equal(s.speed.sub, '208 alerts closed. Nine in ten triaged and closed within 36 min.')
+  assert.equal(s.kpis[2].sub, 'Nine in ten triaged and closed within 36 min')
+  assert.ok(!/investigated and resolved|resulted in/.test(JSON.stringify([s.kpis, s.wins, s.takeaways])), 'closure time and tactic flags never read as verified outcomes')
   assert.equal(s.kpis[2].label, 'Median time to close, high severity alerts')
 })
 test('MFA at sign-in and MFA at the admin portals below E together read as one gap outside the appendix', () => {

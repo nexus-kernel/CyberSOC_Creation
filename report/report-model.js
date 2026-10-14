@@ -176,7 +176,10 @@
       if (groups.length) {
         const shown = groups.slice(0, 5), more = groups.slice(5)
         const alertsIn = gs => gs.reduce((n, g) => n + g.alerts, 0)
-        m.threats = { examples: shown.map(({ latest, ...g }) => g), more: more.length, moreAlerts: alertsIn(more), source: source('OUT.4', 'Confirmed threats with an attack stage, grouped by alert title.') }
+        // Severity is counted per alert before grouping and before the five-group cut, since a group carries its
+        // highest severity while its count covers every severity in it.
+        const severities = Object.fromEntries(['High', 'Medium', 'Low', 'Informational'].map(k => [k, examples.filter(r => sevName(r.Severity) === k).length]))
+        m.threats = { examples: shown.map(({ latest, ...g }) => g), more: more.length, moreAlerts: alertsIn(more), alerts: examples.length, severities, source: source('OUT.4', 'Confirmed threats with an attack stage, grouped by alert title.') }
         presenter('Confirmed threat examples', `The examples use alert titles as Sentinel recorded them, with incident written as alert. Titles that carry an email address, IP address, host or domain name, path, GUID, ticket reference or machine-style name are withheld automatically. Check that no title shown names a person, account or machine, or implies containment, before the review. The table shows ${plural(alertsIn(shown), 'confirmed alert', 'confirmed alerts')} in ${plural(shown.length, 'group', 'groups')}.${more.length ? ` ${fmt(m.threats.moreAlerts)} more ${m.threats.moreAlerts === 1 ? 'sits' : 'sit'} in ${plural(more.length, 'further group', 'further groups')}.` : ''}`)
       }
       if (withheld) presenter('Confirmed threat titles withheld', `${plural(withheld, 'confirmed alert is', 'confirmed alerts are')} left out of the examples because ${withheld === 1 ? 'its title may identify' : 'their titles may identify'} an account, address, host or other internal detail, could not be screened, or ${withheld === 1 ? 'carries' : 'carry'} no title or date. The tickets and the pack's OUT.4 result carry the detail.`)
@@ -213,7 +216,7 @@
       m.response = {
         cohort: selected.cohort, scope: selected.scope, analyst: selected.analyst, n: selected.n, key: selected.key,
         median: { value: duration(selected.median), minutes: selected.median, label: selected.scope === 'High' ? 'Median time to close, high severity alerts' : 'Median time to close, all alerts', note: `Creation to recorded close.${sample}`, source: source(selected.id) },
-        p90: chosen ? { value: duration(selected.p90), minutes: selected.p90, label: selected.scope === 'High' ? '90th percentile close, high severity alerts' : '90th percentile close, all alerts', note: `Nine in ten alerts triaged, investigated and resolved within this time.${sample}`, source: source(selected.id) } : null,
+        p90: chosen ? { value: duration(selected.p90), minutes: selected.p90, label: selected.scope === 'High' ? '90th percentile close, high severity alerts' : '90th percentile close, all alerts', note: `Nine in ten alerts triaged and closed within this time.${sample}`, source: source(selected.id) } : null,
         small: selected.n < 20
       }
     }
@@ -771,14 +774,20 @@
     const graphTenant = pos6 && num(pos6.Current) !== null && num(pos6.Max) > 0 && validDate(iso(pos6.ReadDate)) ? {
       Current: Number(pos6.Current), Max: Number(pos6.Max), ReadDate: iso(pos6.ReadDate), Source: source('POS.6'),
       Categories: { Identity: pos6.IdentityPct, Device: pos6.DevicePct, Apps: pos6.AppsPct, Data: pos6.DataPct },
-      ...(trend6.length >= 2 && Number(trend6[0].Current) <= Number(pos6.Current) ? { Previous: Number(trend6[0].Current), PreviousReadDate: iso(trend6[0].Date) } : {})
+      ...(trend6.length >= 2 ? { Previous: Number(trend6[0].Current), PreviousMax: num(trend6[0].Max) > 0 ? Number(trend6[0].Max) : null, PreviousReadDate: iso(trend6[0].Date) } : {})
     } : null
     const tenant = context.TenantScore || graphTenant
     if (tenant && num(tenant.Current) !== null && num(tenant.Max) > 0 && tenant.Current <= tenant.Max && validDate(tenant.ReadDate) && clean(tenant.Source)) {
       const categories = ['Identity', 'Device', 'Apps', 'Data'].filter(k => num(tenant.Categories?.[k]) !== null && tenant.Categories[k] <= 100).map(k => ({ label: k, pct: Number(tenant.Categories[k]) }))
-      // Movement in percentage points of the maximum, with the starting percentage, so both scores read the same way.
-      const previous = num(tenant.Previous) !== null && validDate(tenant.PreviousReadDate) && tenant.Previous <= tenant.Current ? { points: Number((100 * (tenant.Current - tenant.Previous) / tenant.Max).toFixed(1)), since: monthLabel(tenant.PreviousReadDate), from: pct(tenant.Previous, tenant.Max) } : null
-      m.tenantScore = { value: pct(tenant.Current, tenant.Max), current: Number(tenant.Current), max: Number(tenant.Max), read: date(tenant.ReadDate), delta: previous, categories, note: `Secure score for the Microsoft 365 tenant, calculated by Microsoft. Read ${date(tenant.ReadDate)}.`, source: clean(tenant.Source) }
+      // Movement in percentage points, each snapshot over its own maximum, so both scores read the same way. The
+      // earlier reading keeps the maximum recorded with it (POS.6-TREND Max, or PreviousMax in the context file),
+      // because Microsoft widens the maximum over time. A context reading without PreviousMax is taken against the
+      // current maximum. A percentage that has not risen prints no movement line.
+      const value = pct(tenant.Current, tenant.Max)
+      const previousMax = num(tenant.PreviousMax) > 0 ? Number(tenant.PreviousMax) : Number(tenant.Max)
+      const previousPct = num(tenant.Previous) !== null && tenant.Previous <= previousMax ? pct(tenant.Previous, previousMax) : null
+      const previous = previousPct !== null && validDate(tenant.PreviousReadDate) && previousPct <= value ? { points: Number((value - previousPct).toFixed(1)), since: monthLabel(tenant.PreviousReadDate), from: previousPct } : null
+      m.tenantScore = { value, current: Number(tenant.Current), max: Number(tenant.Max), read: date(tenant.ReadDate), delta: previous, categories, note: `Secure score for the Microsoft 365 tenant, calculated by Microsoft. Read ${date(tenant.ReadDate)}.`, source: clean(tenant.Source) }
     } else note('Microsoft tenant Secure Score', 'Add a dated portal reading through the context file to show the tenant score beside the Defender for Cloud score. Optional Previous and PreviousReadDate fields add the movement line.')
     const high = rows('POS.4').find(r => /High/i.test(r.Severity))
     // POS.5 carries every assigned standard. The Microsoft cloud security benchmark is the one reported, so a preview
@@ -875,7 +884,9 @@
     else if (m.posture.estate !== null) tile('Azure resources in the estate', fmt(m.posture.estate), 'Under managed security coverage', source('P0.5'))
     if (m.alerts) tile('Alerts triaged', fmt(m.alerts.triaged), m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} resolved by automation rules` : m.alerts.truePositives > 0 ? `${plural(m.alerts.truePositives, 'confirmed threat', 'confirmed threats')}, all investigated` : m.detections ? `Across ${m.detections.sources}` : m.period.label, m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
-    if (m.response) tile(m.response.median.label, m.response.median.value, m.response.p90 ? `Nine in ten triaged, investigated and resolved within ${m.response.p90.value}` : m.response.analyst ? 'Analyst-handled alerts' : m.response.cohort.split(',')[0], m.response.median.source)
+    // The 90th percentile is creation to recorded close, so the line claims triage and closure, never investigation
+    // completion or resolution quality, which the evidence does not hold.
+    if (m.response) tile(m.response.median.label, m.response.median.value, m.response.p90 ? `Nine in ten triaged and closed within ${m.response.p90.value}` : m.response.analyst ? 'Analyst-handled alerts' : m.response.cohort.split(',')[0], m.response.median.source)
     else if (m.alerts && m.alerts.truePositives !== null) tile('Confirmed threats investigated', fmt(m.alerts.truePositives), m.alerts.flaggedKnown && m.alerts.flagged === 0 ? 'None recorded exfiltration or impact' : 'Each closed to a documented disposition', m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
     if (m.tenantScore) tile('Microsoft tenant Secure Score', pctText(m.tenantScore.value), m.tenantScore.delta ? `Up ${fmt(m.tenantScore.delta.points)} points since ${m.tenantScore.delta.since}, from ${pctText(m.tenantScore.delta.from)}` : `Read ${m.tenantScore.read}`, m.tenantScore.source, m.tenantScore.delta ? 'up' : '')
@@ -887,7 +898,8 @@
       row('outcomes', 'Alerts triaged', fmt(m.alerts.triaged), 'OUT.1')
       if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts resolved and closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
       if (m.alerts.truePositives !== null) row('outcomes', 'Confirmed threats investigated', fmt(m.alerts.truePositives), 'OUT.1')
-      if (m.alerts.flaggedKnown) row('outcomes', 'True positives that resulted in data exfiltration or impact', `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
+      // Tactic-qualified: the OUT.4 flag marks an exfiltration, collection or impact tactic, not a verified outcome.
+      if (m.alerts.flaggedKnown) row('outcomes', 'True positives that reached exfiltration or impact', `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
     }
     if (m.response) {
       row('outcomes', m.response.median.label, m.response.median.value, 'OUT.2')

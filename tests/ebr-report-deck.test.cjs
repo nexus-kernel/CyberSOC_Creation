@@ -262,8 +262,13 @@ test('a short confirmed threats table is followed by the outcome cards and the h
   const { data, out } = deck('balanced', examples)
   const { slides, notes } = await read(out)
   const slide = slides.find(s => s.startsWith('Confirmed threats') && s.includes('Log4Shell'))
-  for (const t of ['Confirmed threats', 'Investigated and closed by the SOC', 'Resulted in data exfiltration or impact', 'None reached the exfiltration or impact stage.', 'High severity alert', 'EVERY CONFIRMED THREAT', '1 Detect', '2 Triage', '3 Investigate', '4 Resolve']) assert.ok(slide.includes(t), t)
-  assert.ok(!/\bcontain(ed|ment)\b/i.test(slide), 'containment is never claimed')
+  for (const t of ['Confirmed threats', 'Investigated and closed by the SOC', 'Reached exfiltration or impact', 'None carried an exfiltration or impact tactic.', '1 High severity alert', 'Of the 2 confirmed alerts grouped above', 'EVERY CONFIRMED THREAT', '1 Detect', '2 Triage', '3 Investigate', '4 Resolve']) assert.ok(slide.includes(t), t)
+  assert.ok(!/\bcontain(ed|ment)\b|resulted in|notification process/i.test(slide), 'containment, verified outcomes and notifications are never claimed')
+  // One High and nine Low alerts under one title: the group reads High, the card counts one High alert of ten.
+  const mixed = [{ Threat: 'Suspicious sign-in detected', Severity: 'High', Tactics: 'InitialAccess', Created: '2026-08-01', ExfilOrImpactTactic: true }, ...Array.from({ length: 9 }, (_, i) => ({ Threat: 'Suspicious sign-in detected', Severity: 'Low', Tactics: 'InitialAccess', Created: `2026-08-0${i + 1}`, ExfilOrImpactTactic: false }))]
+  const mixedSlide = (await read(deck('balanced', mixed).out)).slides.find(s => s.startsWith('Confirmed threats')).replace(/\u00A0/g, ' ')
+  assert.ok(mixedSlide.includes('1 High severity alert') && mixedSlide.includes('Of the 10 confirmed alerts grouped above') && !mixedSlide.includes('10 High severity alerts'), mixedSlide.match(/.{0,20}High severity alert.{0,40}/)?.[0])
+  assert.ok(mixedSlide.includes('1 of 3') && mixedSlide.includes('1 alert carried an exfiltration or impact tactic in Sentinel.'), 'a flagged alert reads as a tactic, not an outcome')
   const m = build(data)
   for (const n of [...m.presenter, ...m.review]) assert.ok(!notes.join(' ').includes(n.text), `speaker notes carry "${n.title}"`)
 })

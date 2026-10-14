@@ -1082,3 +1082,34 @@ test('every client-facing string keeps to the copy rules: no semicolons, arrows 
   assert.ok(!/[\u{1F300}-\u{1FAFF}☀-➿]/u.test(text), 'emoji')
   assert.ok(!/[<>]/.test(text), text.match(/.{0,60}[<>].{0,60}/)?.[0])
 })
+test('tenant score movement compares each snapshot against its own maximum', () => {
+  const p = pack()
+  put(p, 'POS.6', [{ ReadDate: '2026-10-10', Current: 450, Max: 1000, Percent: 45 }])
+  put(p, 'POS.6-TREND', [{ Date: '2026-07-15', Current: 400, Max: 800, Percent: 50 }, { Date: '2026-10-10', Current: 450, Max: 1000, Percent: 45 }])
+  assert.equal(build(p).tenantScore.delta, null, 'a wider maximum that lowers the percentage prints no gain')
+  p.results['POS.6-TREND'][0] = { Date: '2026-07-15', Current: 320, Max: 800, Percent: 40 }
+  assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 })
+  // The context file takes PreviousMax, and without it the current maximum stands in.
+  p.context = { TenantScore: { Current: 450, Max: 1000, ReadDate: '2026-10-01', Source: 'Portal reading', Previous: 400, PreviousMax: 800, PreviousReadDate: '2026-07-10' } }
+  assert.equal(build(p).tenantScore.delta, null)
+  delete p.context.TenantScore.PreviousMax
+  assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 })
+})
+test('confirmed threat severities are counted per alert before grouping, so a mixed group never reads as all high', () => {
+  const p = pack(); alerts(p)
+  put(p, 'OUT.4', [{ Threat: 'Suspicious sign-in detected', Severity: 'High', Tactics: 'InitialAccess', Created: '2026-08-01', ExfilOrImpactTactic: false }, ...Array.from({ length: 9 }, (_, i) => ({ Threat: 'Suspicious sign-in detected', Severity: 'Low', Tactics: 'InitialAccess', Created: `2026-08-0${i + 1}`, ExfilOrImpactTactic: false }))])
+  const m = build(p)
+  assert.deepEqual([m.threats.examples[0].severity, m.threats.examples[0].alerts], ['High', 10])
+  assert.deepEqual(m.threats.severities, { High: 1, Medium: 0, Low: 9, Informational: 0 })
+  assert.equal(m.threats.alerts, 10)
+})
+test('the nine in ten line describes closure only, with automated and unclassified closures in the cohort', () => {
+  const p = pack(); alerts(p, { auto: 20 })
+  p.results['OUT.2'][1].AutoClosed = 4
+  p.results['OUT.1'][0].ClosedUnclassified = 5
+  const m = build(p)
+  assert.equal(m.response.p90.note, 'Nine in ten alerts triaged and closed within this time. Based on 30 closed alerts.')
+  assert.equal(m.headline.find(t => /Median time to close/.test(t.label)).sub, 'Nine in ten triaged and closed within 45 min')
+  assert.ok(!/investigated|resolved/.test(JSON.stringify([m.response, m.headline.find(t => /Median time/.test(t.label))])), 'closure time never reads as investigation or resolution')
+  assert.ok(m.tiers.outcomes.every(r => !/resulted in/.test(r.label)))
+})
