@@ -88,7 +88,17 @@ Unknown event types fail closed. Automatic events never repeat a matching PR/SHA
 Manual requests allow the first run, or retry a latest completed failure,
 cancellation or timeout. Any active matching run (including queued/waiting runs
 on later pages) prevents another dispatch; latest success is not repeated.
-Unknown statuses/conclusions cannot authorize retry. All review checks still
+Unknown statuses/conclusions cannot authorize retry. Before either guarded mode
+can dispatch, every history page must report the same nonnegative integer
+`total_count`, every run must have a unique positive integer ID and classifiable
+identity, and the returned run count must equal that total. Missing, malformed,
+duplicated or inconsistent history fails closed. Because GitHub caps this
+[event/branch-filtered endpoint](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-workflow)
+at 1,000 results, a total of **1,000 or more blocks dispatch in both modes**, even
+when all returned pages appear internally consistent. This intentionally trades
+availability at the boundary for duplicate protection; do not delete run history
+or use bare dispatch to bypass it. A future completeness-preserving retrieval
+strategy needs separate implementation and validation. All review checks still
 apply. A reaction/thread resolution arriving after the short sign-off wait needs
 a manual clearance request: those changes are not issue-comment events.
 

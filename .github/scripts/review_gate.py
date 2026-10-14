@@ -240,6 +240,42 @@ def get_default_branch(repo):
     return branch
 
 
+def complete_run_history(pages):
+    """Validate completeness before using filtered history to authorize a run."""
+    if not isinstance(pages, list) or not pages:
+        raise Blocked("Cannot verify existing CI dispatches.")
+    runs, seen, total = [], set(), None
+    for page in pages:
+        if not isinstance(page, dict) or not isinstance(page.get("workflow_runs"), list):
+            raise Blocked("Cannot verify existing CI dispatches.")
+        count = page.get("total_count")
+        if type(count) is not int or count < 0:
+            raise Blocked("Missing or invalid CI history total_count.")
+        # GitHub caps this event/branch-filtered endpoint at 1,000 results.
+        # At the boundary, even a capped total_count is not completeness proof.
+        if count >= 1000:
+            raise Blocked("CI history reaches the 1,000-result cap; completeness is uncertain.")
+        if total is not None and count != total:
+            raise Blocked("CI history total_count changed across pages.")
+        total = count
+        if len(page["workflow_runs"]) > 100 or (not page["workflow_runs"] and
+                                              (count != 0 or len(pages) != 1)):
+            raise Blocked("Unexpected CI history page size.")
+        for run in page["workflow_runs"]:
+            if not isinstance(run, dict) or type(run.get("id")) is not int or run["id"] < 1:
+                raise Blocked("Missing or invalid CI history run identity.")
+            if run["id"] in seen:
+                raise Blocked("Duplicate CI history run identity; pagination is uncertain.")
+            if any(not isinstance(run.get(key), str) or not run[key]
+                   for key in ("display_title", "head_branch", "event")):
+                raise Blocked("Cannot classify a CI history run.")
+            seen.add(run["id"])
+            runs.append(run)
+    if len(runs) != total:
+        raise Blocked("CI history is incomplete or inconsistent with total_count.")
+    return runs
+
+
 def retry_is_allowed(runs):
     """Manual retries need a finished unsuccessful latest run and no active copy."""
     for run in runs:
@@ -303,15 +339,9 @@ def main(argv=None):
                 title = f"Reviewed CI / PR #{args.pr} / {sha}"
                 branch = quote(default_branch, safe="")
                 pages = gh_api(f"repos/{args.repo}/actions/workflows/reviewed-ci.yml/runs?event=workflow_dispatch&branch={branch}&per_page=100", paginate=True)
-                if not isinstance(pages, list) or not pages:
-                    raise Blocked("Cannot verify existing CI dispatches.")
-                existing = []
-                for page in pages:
-                    if not isinstance(page, dict) or not isinstance(page.get("workflow_runs"), list):
-                        raise Blocked("Cannot verify existing CI dispatches.")
-                    existing.extend(run for run in page["workflow_runs"]
-                                    if run["display_title"] == title and run["head_branch"] == default_branch
-                                    and run["event"] == "workflow_dispatch")
+                existing = [run for run in complete_run_history(pages)
+                            if run["display_title"] == title and run["head_branch"] == default_branch
+                            and run["event"] == "workflow_dispatch"]
                 if existing and (args.once or not retry_is_allowed(existing)):
                     print("CI already exists for this commit; automatic duplicate, active run, or successful latest run was not repeated.")
                     return 0
