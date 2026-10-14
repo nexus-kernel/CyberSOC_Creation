@@ -761,6 +761,9 @@ test('MFA at sign-in and admin portal MFA read In force from the Conditional Acc
   assert.deepEqual([m.controls.find(c => c.id === 'IA.1-ADMINPORTAL').value, m.controls.find(c => c.id === 'IA.1-ADMINPORTAL').ratioText], ['Mostly enforced', '19 of 20'])
   assert.equal(m.pillars[0].headline, 'Multifactor authentication covers most sign-ins, with full coverage sequenced')
   assert.ok(m.tierSummary.foundational.enforced < m.tierSummary.foundational.measured, 'mostly enforced is not counted as enforced')
+  // The policy caps the grade at P however high the ratio: 95 percent under a scoped policy is still Mostly enforced.
+  put(p, 'IA.1', [{ UserType: 'Member', UsersSignedIn: 200, UsersChallenged: 190 }])
+  assert.deepEqual([build(p).controls.find(c => c.id === 'IA.1').value, build(p).controls.find(c => c.id === 'IA.1').mark, build(p).controls.find(c => c.id === 'IA.1').pct], ['Mostly enforced', 'P', 95])
   // Below half, a scoped policy still reads Not in force. Report-only and absent policies do too.
   put(p, 'IA.1', [{ UserType: 'Member', UsersSignedIn: 200, UsersChallenged: 90 }])
   m = build(p)

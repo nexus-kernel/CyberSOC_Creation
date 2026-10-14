@@ -275,10 +275,10 @@ async function main() {
       st.licensed.length ? `${sentence(list(st.licensed.map(c => c.short)))} ${st.licensed.length === 1 ? 'needs' : 'need'} licensing and ${st.licensed.length === 1 ? 'sits' : 'sit'} in Later.` : ''
     ].filter(Boolean).join(' ')
     if (tail) text(s, tail, { x: px + 0.3, y: tailTop, w: pw - 0.6, h: 0.6, fontSize: 11, color: C.accent6, valign: 'bottom', objectName: 'Drift tail' })
-    text(s, 'E enforced, 90% or more · P partial, 50 to 89% · N not yet enforced, below 50%', { x: px + 0.3, y: BOTTOM - 0.55, w: pw - 0.6, h: 0.42, fontSize: 11, color: C.accent6, objectName: 'Mark legend' })
+    text(s, 'E enforced, 90% or more · P partial, 50 to 89%, or a policy scoped short of every user · N not yet enforced, below 50%', { x: px + 0.3, y: BOTTOM - 0.55, w: pw - 0.6, h: 0.42, fontSize: 11, color: C.accent6, objectName: 'Mark legend' })
     s.addNotes(notesOf([
       'Foundational controls are the baseline the service holds every environment to, and each is expected to read enforced at every review. One that reads below E is a gap against that baseline. Atmosera owns the fix and sets a fix date at this review, and it is first on the roadmap. Defense in depth controls are layered on top, and each waits on something your team approves, schedules or licenses. Every reading describes the state at collection, not a change since the last review.',
-      'E means 90 percent or more of in-scope resources, P 50 to 89 percent and N below 50 percent.',
+      'E means 90 percent or more of in-scope resources, P 50 to 89 percent and N below 50 percent. A policy that stops short of every user reads P however high the sign-in ratio behind it.',
       st.ungathered.length ? `${plural(st.ungathered.length, 'control', 'controls')} could not be graded from the collected evidence and ${st.ungathered.length === 1 ? 'is' : 'are'} listed in the appendix.` : '',
       m.pillars.map(p => `${p.name}. ${p.headline}. ${p.narrative}`)
     ]))
@@ -430,7 +430,7 @@ async function main() {
   // Appendix: the control register, two pillars per slide, and on A3 how we grade.
   if (balanced) {
     pres.addSection({ title: 'Appendix' })
-    const legend = 'E enforced, 90% or more · P partial, 50 to 89% · N not yet enforced · – not gathered'
+    const legend = 'E enforced, 90% or more · P partial, 50 to 89%, or a policy scoped short of every user · N not yet enforced · – not gathered'
     const VALUE_W = 1.55
     const registerSize = (regs, w) => {
       const labelW = w - 0.55 - VALUE_W
