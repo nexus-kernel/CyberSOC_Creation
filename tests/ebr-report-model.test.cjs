@@ -852,8 +852,15 @@ test('the benchmark meter reads the Microsoft cloud security benchmark alone whe
 test('a tenant that is not onboarded to Defender for Identity reads Not in force and needs a license, never read access', () => {
   const p = pack()
   p.manifest.push({ ResultId: 'DR.11', Status: 'UNAVAILABLE', Rows: 0, ReadTimeUtc: '2026-10-08T10:00:00Z', AccessGap: false, NotOnboarded: true })
-  const m = build(p)
-  const c = m.controls.find(x => x.id === 'DR.11')
+  // A cloud-only tenant has nowhere to put a sensor: with no domain controllers in the collection the control is N/A.
+  let m = build(p)
+  let c = m.controls.find(x => x.id === 'DR.11')
+  assert.deepEqual([c.value, c.na, c.mark], ['N/A', true, null])
+  assert.match(c.note, /found no domain controllers/)
+  // Domain controllers in Azure (NB.10) make it a gap that needs a license.
+  put(p, 'NB.10', [{ Scope: 'Azure VM', Devices: 3, Compliant: 0 }])
+  m = build(p)
+  c = m.controls.find(x => x.id === 'DR.11')
   assert.deepEqual([c.value, c.mark, c.tier, c.needsLicense], ['Not in force', 'N', 'foundational', true])
   assert.match(c.note, /not onboarded to Microsoft Defender for Identity/)
   assert.ok(!m.unmeasured.some(u => u.id === 'DR.11'))

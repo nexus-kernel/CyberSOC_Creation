@@ -662,8 +662,14 @@
     if (mdiSensors && count(mdiSensors.Sensors) !== null) control('DR.11', mdiLabel, F.detection, mdiSensors.Healthy, mdiSensors.Sensors, 'Sensors reporting healthy, of sensors registered. A domain controller with no sensor is found by comparing with the directory.')
     // The service answered that the tenant is not onboarded to Defender for Identity (manifest NotOnboarded). That
     // is evidence the control is not in place, not a read the token was refused, so it reads Not in force and
-    // needs a license and sensors rather than read access (Oct 14, 2026).
-    else if (!has('DR.11') && bool(index.get('DR.11')?.NotOnboarded)) inForce('DR.11', mdiLabel, F.detection, false, 'The tenant is not onboarded to Microsoft Defender for Identity, so no sensor reports from a domain controller.').needsLicense = true
+    // needs a license and sensors rather than read access (Oct 14, 2026). Only where the collection shows a
+    // directory estate: domain controllers in Azure (NB.10) or domain controller events (DR.4). A cloud-only
+    // tenant has nowhere to put a sensor, so there the control does not apply.
+    else if (!has('DR.11') && bool(index.get('DR.11')?.NotOnboarded)) {
+      const directoryEstate = rows('NB.10').some(r => count(r.Devices) > 0) || rows('DR.4').some(r => count(r.Events) > 0)
+      if (directoryEstate) inForce('DR.11', mdiLabel, F.detection, false, 'The tenant is not onboarded to Microsoft Defender for Identity, so no sensor reports from a domain controller.').needsLicense = true
+      else notApplicable('DR.11', mdiLabel, F.detection, 'The tenant is not onboarded to Microsoft Defender for Identity and the collection found no domain controllers, so there is nothing for a sensor to protect.')
+    }
     else if (!has('DR.11')) ungathered('DR.11', mdiLabel, F.detection, reason('DR.11'), 'Sensors reporting healthy, of sensors registered.')
     const logPerResource = one('DR.13')
     if (logPerResource && count(logPerResource.Resources) !== null) control('DR.13', 'Diagnostic logging enabled on all platform resources', D.detection, logPerResource.AllHealthy, logPerResource.Resources, 'Resources with every diagnostic and audit logging assessment healthy, of resources with at least one such assessment.')

@@ -116,6 +116,8 @@ test('a tiny population never stands as a win or leads a pillar, and a policy-on
 test('a foundational control that needs a license goes to Later with its ask, not into the foundational gaps', () => {
   const p = quarterPack()
   p.manifest.push({ ResultId: 'DR.11', Status: 'UNAVAILABLE', Rows: 0, ReadTimeUtc: '2026-10-12T10:00:00Z', AccessGap: false, NotOnboarded: true })
+  p.manifest.push({ ResultId: 'NB.10', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' })
+  p.results['NB.10'] = [{ Scope: 'Azure VM', Devices: 3, Compliant: 0 }] // domain controllers in Azure, so the control applies
   const { s } = story(p)
   assert.ok(!s.drift.some(c => c.id === 'DR.11'))
   assert.deepEqual(s.licensed.map(c => c.id), ['DR.11'])
