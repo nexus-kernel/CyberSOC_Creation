@@ -294,19 +294,59 @@ def retry_is_allowed(runs):
     raise Blocked("Latest CI conclusion is not a verified retryable failure.")
 
 
+def matching_runs(repo, branch, number, sha):
+    title = f"Reviewed CI / PR #{number} / {sha}"
+    runs, seen = [], set()
+    # Retain old reviewed-ci history as well as the controller-owned runs.
+    for workflow in ("reviewed-ci.yml", "review-clearance.yml"):
+        pages = gh_api(f"repos/{repo}/actions/workflows/{workflow}/runs?event=workflow_dispatch&branch={quote(branch, safe='')}&per_page=100", paginate=True)
+        for run in complete_run_history(pages):
+            if run["id"] in seen:
+                raise Blocked("Run identity appears under multiple workflow identities.")
+            seen.add(run["id"])
+            if (run["display_title"] == title and run["head_branch"] == branch
+                    and run["event"] == "workflow_dispatch"):
+                runs.append(dict(run, history_workflow=workflow))
+    return runs
+
+
+def exclude_admission_run(runs, repo, branch):
+    """Exclude only the actual running controller invocation, never supplied input."""
+    if (os.environ.get("GITHUB_ACTIONS") != "true"
+            or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+            or os.environ.get("GITHUB_WORKFLOW_REF") !=
+            f"{repo}/.github/workflows/review-clearance.yml@refs/heads/{branch}"):
+        raise Blocked("Admission must execute in the trusted default-branch controller.")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if not re.fullmatch(r"[1-9][0-9]*", run_id):
+        raise Blocked("Cannot identify the current admission run.")
+    current = [run for run in runs if run["id"] == int(run_id)]
+    if (len(current) != 1 or current[0]["history_workflow"] != "review-clearance.yml"
+            or current[0].get("status") not in ("in_progress", "queued", "pending", "waiting", "requested")):
+        raise Blocked("Current admission run is absent or inconsistent in complete history.")
+    return [run for run in runs if run["id"] != int(run_id)]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, help="OWNER/REPOSITORY")
     parser.add_argument("--pr", required=True, type=int)
     parser.add_argument("--expected-sha", help="Require this exact reviewed commit (used by CI).")
+    parser.add_argument("--admit-run", action="store_true", help="Authorize tests within the trusted controller run.")
     parser.add_argument("--dispatch", action="store_true", help="Start CI only after successful clearance.")
     parser.add_argument("--wait-for-signoff", action="store_true", help="Briefly allow the bot's reaction to follow its completed summary.")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="Automatic mode: suppress any prior dispatch for this PR/SHA.")
     mode.add_argument("--retry-failed", action="store_true", help="Manual mode: retry failed/cancelled/timed-out runs, never an active or successful copy.")
     args = parser.parse_args(argv)
-    if args.retry_failed and not args.dispatch:
-        parser.error("--retry-failed requires --dispatch.")
+    if args.dispatch and args.admit_run:
+        parser.error("--dispatch and --admit-run are mutually exclusive.")
+    if args.admit_run and (not args.expected_sha or not (args.once or args.retry_failed)):
+        parser.error("--admit-run requires --expected-sha and a guarded mode.")
+    if args.retry_failed and not (args.dispatch or args.admit_run):
+        parser.error("--retry-failed requires --dispatch or --admit-run.")
+    if args.dispatch and not (args.once or args.retry_failed):
+        parser.error("--dispatch requires --once or --retry-failed.")
     if not re.fullmatch(r"[\w.-]+/[\w.-]+", args.repo) or args.pr < 1:
         parser.error("Expected OWNER/REPOSITORY and a positive PR number.")
     if args.expected_sha and not re.fullmatch(r"[0-9a-f]{40}", args.expected_sha):
@@ -330,30 +370,33 @@ def main(argv=None):
                 time.sleep(5)
         sha = pr["head"]["sha"]
         print(f"Cleared: {args.repo}#{args.pr} at {sha}")
-        if args.dispatch:
+        if args.dispatch or args.admit_run:
             default_branch = default_branch or get_default_branch(args.repo)
             trusted_ref = f"refs/heads/{default_branch}"
-            if args.once or args.retry_failed:
-                # Runs now belong to the trusted branch; their head_sha is not
-                # the tested commit. The trusted workflow names each run by PR/SHA.
-                title = f"Reviewed CI / PR #{args.pr} / {sha}"
-                branch = quote(default_branch, safe="")
-                pages = gh_api(f"repos/{args.repo}/actions/workflows/reviewed-ci.yml/runs?event=workflow_dispatch&branch={branch}&per_page=100", paginate=True)
-                existing = [run for run in complete_run_history(pages)
-                            if run["display_title"] == title and run["head_branch"] == default_branch
-                            and run["event"] == "workflow_dispatch"]
-                if existing and (args.once or not retry_is_allowed(existing)):
-                    print("CI already exists for this commit; automatic duplicate, active run, or successful latest run was not repeated.")
-                    return 0
+            existing = matching_runs(args.repo, default_branch, args.pr, sha)
+            if args.admit_run:
+                existing = exclude_admission_run(existing, args.repo, default_branch)
+            # A denied direct request must not turn an older success into an
+            # apparently retryable latest failure. Any prior success is final.
+            suppressed = existing and (args.once or any(run.get("conclusion") == "success"
+                                                        for run in existing)
+                                       or not retry_is_allowed(existing))
+            if suppressed:
+                if args.admit_run:
+                    raise Blocked("History does not authorize another test run for this commit.")
+                print("CI already exists for this commit; duplicate, active, or successful history was not repeated.")
+                return 0
             check(args.repo, args.pr, sha)
             # The PR SHA is checkout data, never the workflow definition to execute.
-            payload = {"ref": trusted_ref, "inputs": {"pr_number": str(args.pr), "reviewed_sha": sha}}
-            result = subprocess.run(["gh", "api", f"repos/{args.repo}/actions/workflows/reviewed-ci.yml/dispatches",
-                                     "--method", "POST", "--input", "-"], input=json.dumps(payload),
-                                    text=True, capture_output=True, check=False)
-            if result.returncode:
-                raise Blocked("CI dispatch failed; no successful dispatch is confirmed.")
-            print("CI requested. New commits require a new review and clearance.")
+            if args.dispatch:
+                payload = {"ref": trusted_ref, "inputs": {"pr_number": str(args.pr), "reviewed_sha": sha,
+                           "dispatch_mode": "once" if args.once else "retry-failed"}}
+                result = subprocess.run(["gh", "api", f"repos/{args.repo}/actions/workflows/review-clearance.yml/dispatches",
+                                         "--method", "POST", "--input", "-"], input=json.dumps(payload),
+                                        text=True, capture_output=True, check=False)
+                if result.returncode:
+                    raise Blocked("CI dispatch failed; no successful dispatch is confirmed.")
+                print("CI requested through the controller; execution still requires admission.")
         if os.environ.get("GITHUB_OUTPUT"):
             with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
                 output.write(f"sha={sha}\n")

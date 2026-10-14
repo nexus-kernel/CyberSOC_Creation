@@ -37,7 +37,7 @@ class ManualRetryTests(unittest.TestCase):
         pr = {'head': {'sha': SHA}}
         checks = [check_error or pr, late_error or pr]
         with patch.object(gate, 'check', side_effect=checks) as check, \
-             patch.object(gate, 'gh_api', side_effect=[{'default_branch': 'main'}, pages]) as api, \
+             patch.object(gate, 'gh_api', side_effect=[{'default_branch': 'main'}, pages, [{'total_count': 0, 'workflow_runs': []}]]) as api, \
              patch.object(gate.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as post:
             result = gate.main(['--repo', 'owner/repo', '--pr', '1', '--dispatch', mode])
         return result, check, post, api
@@ -51,7 +51,7 @@ class ManualRetryTests(unittest.TestCase):
                 self.assertEqual(check.call_count, 2)
                 self.assertEqual(check.call_args.args, ('owner/repo', 1, SHA))
                 self.assertEqual(json.loads(post.call_args.kwargs['input']), {
-                    'ref': 'refs/heads/main', 'inputs': {'pr_number': '1', 'reviewed_sha': SHA}})
+                    'ref': 'refs/heads/main', 'inputs': {'pr_number': '1', 'reviewed_sha': SHA, 'dispatch_mode': 'retry-failed'}})
                 self.assertTrue(api.call_args.kwargs['paginate'])
 
     def test_automatic_failed_or_cancelled_run_is_not_retried(self):
@@ -83,11 +83,11 @@ class ManualRetryTests(unittest.TestCase):
             self.assertEqual(result, 0)
             post.assert_not_called()
 
-    def test_latest_failure_can_retry_after_older_success(self):
+    def test_later_failed_admission_cannot_erase_older_success(self):
         result, _, post, _ = self.invoke([{'total_count': 2, 'workflow_runs': [self.prior(id=10, conclusion='success')]},
                                          {'total_count': 2, 'workflow_runs': [self.prior(id=20)]}])
         self.assertEqual(result, 0)
-        post.assert_called_once()
+        post.assert_not_called()
 
     def test_unrelated_run_cannot_suppress_manual_retry(self):
         for unrelated in [self.prior(head_branch='feature'), self.prior(event='push'),
@@ -235,7 +235,7 @@ class ManualRetryTests(unittest.TestCase):
             for event, mode, absent in [('workflow_dispatch', '--retry-failed', '--once'),
                                         ('issue_comment', '--once', '--retry-failed')]:
                 env = dict(os.environ, PATH=str(directory)+os.pathsep+os.environ['PATH'],
-                           TRIGGER_EVENT=event, GITHUB_REPOSITORY='owner/repo', PR_NUMBER='1',
+                           TRIGGER_EVENT=event, REVIEWED_SHA='', DISPATCH_MODE='', GITHUB_REPOSITORY='owner/repo', PR_NUMBER='1',
                            CAPTURE_ARGS=str(capture), GITHUB_STEP_SUMMARY=str(directory/'summary'))
                 result = subprocess.run(['bash', '-e', '-c', step['run']], env=env,
                                         text=True, capture_output=True)

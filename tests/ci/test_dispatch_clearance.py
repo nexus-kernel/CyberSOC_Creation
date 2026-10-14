@@ -177,13 +177,15 @@ class RequestReactionTests(unittest.TestCase):
             "repos/owner/repo": {"default_branch": "main"},
             "repos/owner/repo/pulls/1": self.data["pr"],
             "repos/owner/repo/commits/aaaaaaa": {"sha": SHA},
+            "repos/owner/repo/actions/workflows/reviewed-ci.yml/runs?event=workflow_dispatch&branch=main&per_page=100": [{"total_count": 0, "workflow_runs": []}],
+            "repos/owner/repo/actions/workflows/review-clearance.yml/runs?event=workflow_dispatch&branch=main&per_page=100": [{"total_count": 0, "workflow_runs": []}],
         }
-        with patch.object(gate, "gh_api", side_effect=api_responses.__getitem__), \
+        with patch.object(gate, "gh_api", side_effect=lambda endpoint, **kwargs: api_responses[endpoint]), \
              patch.object(gate, "list_api", side_effect=lambda endpoint: copy.deepcopy(responses[endpoint])), \
              patch.object(gate, "review_threads", return_value=self.data["threads"]), \
              patch.object(gate.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run, \
              patch.object(gate.sys, "stderr", new_callable=io.StringIO) as stderr:
-            self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch"]), 0 if allowed else 1)
+            self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch", "--once"]), 0 if allowed else 1)
             if allowed:
                 run.assert_called_once()
             else:
@@ -314,11 +316,11 @@ class RequestReactionTests(unittest.TestCase):
 class ApiAndDispatchTests(unittest.TestCase):
     def test_dispatch_uses_trusted_default_branch_with_reviewed_sha_as_data(self):
         with patch.object(gate, "check", return_value=fixture()["pr"]), \
-             patch.object(gate, "gh_api", return_value={"default_branch": "main"}), \
+             patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 0, "workflow_runs": []}], [{"total_count": 0, "workflow_runs": []}]]), \
              patch.object(gate.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
-            self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch"]), 0)
+            self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch", "--once"]), 0)
             self.assertEqual(json.loads(run.call_args.kwargs["input"]), {
-                "ref": "refs/heads/main", "inputs": {"pr_number": "1", "reviewed_sha": SHA}})
+                "ref": "refs/heads/main", "inputs": {"pr_number": "1", "reviewed_sha": SHA, "dispatch_mode": "once"}})
 
     def test_same_prefix_replacement_commit_cannot_reuse_review(self):
         data = fixture()
@@ -345,7 +347,7 @@ class ApiAndDispatchTests(unittest.TestCase):
                  patch.object(gate, "list_api", side_effect=[[data["summary"]], data["reactions"], []]), \
                  patch.object(gate, "review_threads", return_value=[]), \
                  patch.object(gate.subprocess, "run") as run:
-                self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch"]), 1)
+                self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch", "--once"]), 1)
                 run.assert_not_called()
 
     def test_full_summary_sha_compares_exactly_without_abbreviation_lookup(self):
@@ -369,7 +371,7 @@ class ApiAndDispatchTests(unittest.TestCase):
     def test_reaction_wait_is_bounded_and_never_dispatches_when_still_missing(self):
         with patch.object(gate, "check", side_effect=gate.AwaitingSignoff("Waiting")) as check, \
              patch.object(gate.time, "sleep") as sleep, patch.object(gate.subprocess, "run") as run:
-            self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--wait-for-signoff", "--dispatch"]), 1)
+            self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--wait-for-signoff", "--dispatch", "--once"]), 1)
             self.assertEqual(check.call_count, 3)
             self.assertEqual(sleep.call_count, 2)
             run.assert_not_called()
@@ -378,14 +380,14 @@ class ApiAndDispatchTests(unittest.TestCase):
         prior = {"id": 1, "head_sha": "b" * 40, "head_branch": "main", "event": "workflow_dispatch",
                  "display_title": f"Reviewed CI / PR #1 / {SHA}"}
         with patch.object(gate, "check", return_value=fixture()["pr"]), \
-             patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 1, "workflow_runs": [prior]}]]), \
+             patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 1, "workflow_runs": [prior]}], [{"total_count": 0, "workflow_runs": []}]]), \
              patch.object(gate.subprocess, "run") as run:
             self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch", "--once"]), 0)
             run.assert_not_called()
 
     def test_automatic_event_dispatches_when_no_prior_run_exists(self):
         with patch.object(gate, "check", return_value=fixture()["pr"]), \
-             patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 0, "workflow_runs": []}]]), \
+             patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 0, "workflow_runs": []}], [{"total_count": 0, "workflow_runs": []}]]), \
              patch.object(gate.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
             self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch", "--once"]), 0)
             run.assert_called_once()
@@ -398,7 +400,7 @@ class ApiAndDispatchTests(unittest.TestCase):
             {"head_branch": "main", "event": "push", "display_title": f"Reviewed CI / PR #1 / {SHA}"},
         ):
             with self.subTest(prior=prior), patch.object(gate, "check", return_value=fixture()["pr"]), \
-                 patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 1, "workflow_runs": [dict(prior, id=1)]}]]), \
+                 patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 1, "workflow_runs": [dict(prior, id=1)]}], [{"total_count": 0, "workflow_runs": []}]]), \
                  patch.object(gate.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
                 self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch", "--once"]), 0)
                 run.assert_called_once()
@@ -428,11 +430,11 @@ class ApiAndDispatchTests(unittest.TestCase):
 
     def test_api_failures_block_dispatch(self):
         with patch.object(gate.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="")):
-            self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch"]), 1)
+            self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch", "--once"]), 1)
 
     def test_blocked_review_never_dispatches(self):
         with patch.object(gate, "check", side_effect=gate.Blocked("Unresolved threads")), patch.object(gate.subprocess, "run") as run:
-            self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch"]), 1)
+            self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch", "--once"]), 1)
             run.assert_not_called()
 
     def test_check_only_never_dispatches(self):
@@ -504,14 +506,14 @@ class MigrationSecurityTests(unittest.TestCase):
                 gate.review_threads('owner/repo', 1, SHA, 'b'*40)
 
     def test_late_clearance_change_prevents_dispatch(self):
-        with patch.object(gate, 'check', side_effect=[fixture()['pr'], gate.Blocked('Changed')]) as check, patch.object(gate, 'gh_api', side_effect=[{'default_branch': 'main'}, [{'total_count': 0, 'workflow_runs': []}]]), patch.object(gate.subprocess, 'run') as run:
+        with patch.object(gate, 'check', side_effect=[fixture()['pr'], gate.Blocked('Changed')]) as check, patch.object(gate, 'gh_api', side_effect=[{'default_branch': 'main'}, [{'total_count': 0, 'workflow_runs': []}], [{"total_count": 0, "workflow_runs": []}]]), patch.object(gate.subprocess, 'run') as run:
             self.assertEqual(gate.main(['--repo','owner/repo','--pr','1','--dispatch','--once']), 1)
             self.assertEqual(check.call_args.args, ('owner/repo', 1, SHA))
             run.assert_not_called()
 
     def test_native_rerun_control_never_dispatches(self):
         with patch.dict(gate.os.environ, {'GITHUB_ACTIONS':'true', 'GITHUB_REF':'refs/heads/main', 'GITHUB_RUN_ATTEMPT':'2'}), patch.object(gate, 'gh_api', return_value={'default_branch':'main'}), patch.object(gate, 'check') as check, patch.object(gate.subprocess, 'run') as run:
-            self.assertEqual(gate.main(['--repo','owner/repo','--pr','1','--dispatch']), 1)
+            self.assertEqual(gate.main(['--repo','owner/repo','--pr','1','--dispatch', '--once']), 1)
             check.assert_not_called()
             run.assert_not_called()
 

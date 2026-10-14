@@ -176,3 +176,22 @@ That is separate from hosted GitHub Actions validation, which has not been run.
 The assistant's existing draft-first review automation was separately extended to
 EBR and confirmed enabled by the parent session. Native Codex repository review
 settings remain unverified. No repository settings were changed by this branch.
+
+## Direct-dispatch admission fix validation
+
+The Codex P1 on PR #2 exposed a history-admission bypass, not a missing live
+review check: the previous direct workflow still rejected stale review, but a
+fresh cleared SHA could reach tests without querying run history. Safe mocked
+reproduction confirmed both behaviors. The fix consolidates execution behind
+controller admission and makes the old direct workflow inert. It retains the
+original token scopes for all four execution roles; the test and reporter jobs
+were compared unchanged against the previous remote revision.
+
+Revalidation passed 97 gate/admission tests, 238 Pester tests and 72 Node tests
+(with synthetic evidence), with zero skips. Actionlint, shell syntax and diff
+checks passed. New tests cover direct duplicate/active-run attempts, genuine
+controller launch/admission, current-run exclusion, native reruns, stale/late
+clearance, normal retries, old-identity history and capped controller history.
+No hosted dispatch was run. Current-run visibility can transiently block admission;
+missing history fails closed. Any prior success now prevents a later failed
+admission from authorizing another test run of that SHA.
