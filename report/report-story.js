@@ -146,8 +146,8 @@
     // on the operations slide, where the chart explains it.
     const kpis = []
     if (m.alerts) kpis.push({ value: fmt(m.alerts.triaged), label: 'Alerts triaged', sub: m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} resolved by automation rules` : m.period.label, area: 'alerts' })
-    // Tactic-qualified: the OUT.4 flag marks an exfiltration, collection or impact tactic, never a verified outcome.
-    if (m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0) kpis.push({ value: `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, label: 'True positives that reached exfiltration or impact', sub: m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`, area: 'threat' })
+    // Tactic-qualified: the count is of tactics recorded on the alert (the model names the scope), never a verified outcome.
+    if (m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0) kpis.push({ value: `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, label: `True positives that reached ${m.alerts.flaggedScope}`, sub: m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`, area: 'threat' })
     else if (m.alerts && m.alerts.truePositives !== null) kpis.push({ value: fmt(m.alerts.truePositives), label: 'Confirmed threats investigated', sub: 'Each closed to a documented disposition', area: 'threat' })
     if (s.speed) kpis.push({ value: s.speed.value, label: sentence(s.speed.label), sub: s.speed.kpiSub, area: 'response' })
     if (score) kpis.push({ value: pctText(score.value), label: scoreName, sub: gain ? `Up ${fmt(gain.points)} points since ${gain.since}, from ${pctText(gain.from)}` : `Read ${s.readShort}`, area: 'posture' })
@@ -157,7 +157,7 @@
     // Wins, at most one per area, up to six. A verified configuration reads In force with its own label.
     const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null && (c.boolean || c.total >= MIN_SAMPLE) ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || sub), source: c.source } : null }
     const candidates = [
-      m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? { area: 'threat', eyebrow: 'Threat outcomes', value: `0 of ${fmt(m.alerts.truePositives)}`, label: m.alerts.truePositives === 1 ? 'confirmed threat reached exfiltration or impact' : 'confirmed threats reached exfiltration or impact', sub: `${m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`} by the SOC ${s.periodPhrase}.`, source: m.alerts.source } : null,
+      m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? { area: 'threat', eyebrow: 'Threat outcomes', value: `0 of ${fmt(m.alerts.truePositives)}`, label: `${m.alerts.truePositives === 1 ? 'confirmed threat' : 'confirmed threats'} reached ${m.alerts.flaggedScope}`, sub: `${m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`} by the SOC ${s.periodPhrase}.`, source: m.alerts.source } : null,
       s.speed ? { area: 'response', eyebrow: 'Response speed', value: s.speed.value, label: s.speed.label, sub: s.speed.sub, source: s.speed.row.source } : null,
       gain ? { area: 'posture', eyebrow: 'Posture', value: `+${fmt(gain.points)} pts`, label: `${scoreName}, ${pctText(gain.from)} in ${gain.since} to ${pctText(score.value)}`, sub: `Calculated by Microsoft, read ${score.read || s.readShort}.`, source: score.source } : null,
       winAt(/^Multifactor authentication required at sign-in/, 'identity', 'users challenged for MFA at sign-in', 'Members who signed in over the last 30 days.', 'multifactor authentication required at sign-in by Conditional Access policy', 'An enabled policy for all users on every application.'),
@@ -276,7 +276,7 @@
     })
 
     // Takeaway subtitles, one sentence built from each slide's lead metric.
-    const threatLine = m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? (m.alerts.truePositives === 1 ? 'The confirmed threat did not reach exfiltration or impact' : `${m.alerts.truePositives === 2 ? 'Neither' : 'None of the'} confirmed ${m.alerts.truePositives === 2 ? 'threat' : 'threats'} reached exfiltration or impact`) : null
+    const threatLine = m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? (m.alerts.truePositives === 1 ? `The confirmed threat did not reach ${m.alerts.flaggedScope}` : `${m.alerts.truePositives === 2 ? 'Neither' : 'None of the'} confirmed ${m.alerts.truePositives === 2 ? 'threat' : 'threats'} reached ${m.alerts.flaggedScope}`) : null
     const parts = [threatLine, gain ? `secure score rose ${fmt(gain.points)} points` : null, !threatLine && s.foundational.measured && s.foundational.enforced === s.foundational.measured ? 'every measured foundational control is enforced' : null].filter(Boolean)
     s.takeaways = {
       summary: parts.length ? `${sentence(parts.join(', and '))}.` : m.alerts ? `${fmt(m.alerts.triaged)} alerts triaged ${s.periodPhrase}.` : 'Readings are completed in the review.',

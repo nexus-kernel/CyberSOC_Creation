@@ -138,12 +138,19 @@
       const automation = analystMode ? allRow.AutoClosed : 0
       const triaged = inc.Raised - automation, closed = inc.Closed - automation
       const tp = count(inc.TruePositive)
+      // The collector's ExfilOrImpactTactic flag also fires on a Collection tactic. The builder embeds each row's
+      // tactics, so the count the report presents is the narrower one, alerts whose tactics include Exfiltration or
+      // Impact, and every surface names that scope. A pack whose rows carry no tactics (an older builder, or a
+      // flagged row whose tactics could not be read) keeps the flag count and names the wider scope (Oct 14, 2026).
       const flags = has('OUT.4') ? rows('OUT.4') : null
-      const flagged = flags ? flags.filter(r => r.ExfilOrImpactTactic === true || String(r.ExfilOrImpactTactic).toLowerCase() === 'true').length : null
+      const tacticsOf = r => String(r.Tactics ?? '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
+      const tacticsKnown = !!flags && flags.every(r => 'Tactics' in r && (!bool(r.ExfilOrImpactTactic) || tacticsOf(r).length > 0))
+      const flagged = flags ? (tacticsKnown ? flags.filter(r => tacticsOf(r).some(t => t === 'exfiltration' || t === 'impact')) : flags.filter(r => bool(r.ExfilOrImpactTactic))).length : null
+      const flaggedScope = tacticsKnown ? 'exfiltration or impact' : 'collection, exfiltration or impact'
       m.alerts = {
         triaged, closed, open: inc.Open, raised: inc.Raised, automation: autoValid ? allRow.AutoClosed : null, analystMode, autoShare: autoValid ? pct(allRow.AutoClosed, allRow.Incidents) : null,
         resolvedPct: pct(closed, triaged), truePositives: tp, benign: count(inc.BenignPositive), falsePositives: count(inc.FalsePositive),
-        flagged, flaggedKnown: flagged !== null && tp !== null, unclassified: count(inc.ClosedUnclassified),
+        flagged, flaggedKnown: flagged !== null && tp !== null, flaggedScope, unclassified: count(inc.ClosedUnclassified),
         source: source('OUT.1', m.ticketed ? 'Alerts that opened an Atmosera ticket, informational severity excluded.' : ''), partial: partial('OUT.1')
       }
       if (inc.Open > 0) presenter('Open alerts', `${fmt(inc.Open)} of ${fmt(inc.Raised)} alerts created ${m.period.label} were still open at collection. The report describes these as items referred to the client for action or confirmation under the agreed notification process. Confirm with the SOC lead that this holds before the review, and have the age and severity split ready if asked.`)
@@ -781,12 +788,16 @@
       const categories = ['Identity', 'Device', 'Apps', 'Data'].filter(k => num(tenant.Categories?.[k]) !== null && tenant.Categories[k] <= 100).map(k => ({ label: k, pct: Number(tenant.Categories[k]) }))
       // Movement in percentage points, each snapshot over its own maximum, so both scores read the same way. The
       // earlier reading keeps the maximum recorded with it (POS.6-TREND Max, or PreviousMax in the context file),
-      // because Microsoft widens the maximum over time. A context reading without PreviousMax is taken against the
-      // current maximum. A percentage that has not risen prints no movement line.
+      // because Microsoft widens the maximum over time. A context reading without PreviousMax takes the maximum of
+      // the POS.6-TREND snapshot dated PreviousReadDate. Without either, the movement line is omitted and the
+      // evidence review says why, since a historical percentage over today's maximum is not evidence. A
+      // percentage that has not risen prints no movement line.
       const value = pct(tenant.Current, tenant.Max)
-      const previousMax = num(tenant.PreviousMax) > 0 ? Number(tenant.PreviousMax) : Number(tenant.Max)
-      const previousPct = num(tenant.Previous) !== null && tenant.Previous <= previousMax ? pct(tenant.Previous, previousMax) : null
+      const snapshot = validDate(tenant.PreviousReadDate) ? trend6.find(r => iso(r.Date) === iso(tenant.PreviousReadDate) && num(r.Max) > 0) : null
+      const previousMax = num(tenant.PreviousMax) > 0 ? Number(tenant.PreviousMax) : snapshot ? Number(snapshot.Max) : null
+      const previousPct = previousMax !== null && num(tenant.Previous) !== null && tenant.Previous <= previousMax ? pct(tenant.Previous, previousMax) : null
       const previous = previousPct !== null && validDate(tenant.PreviousReadDate) && previousPct <= value ? { points: Number((value - previousPct).toFixed(1)), since: monthLabel(tenant.PreviousReadDate), from: previousPct } : null
+      if (num(tenant.Previous) !== null && previousMax === null) note('Microsoft tenant Secure Score movement', 'The context file gives a Previous reading without PreviousMax, and no POS.6-TREND snapshot is dated PreviousReadDate, so the movement line is omitted rather than measured against the current maximum. Add PreviousMax, the maximum at that reading, to show it.')
       m.tenantScore = { value, current: Number(tenant.Current), max: Number(tenant.Max), read: date(tenant.ReadDate), delta: previous, categories, note: `Secure score for the Microsoft 365 tenant, calculated by Microsoft. Read ${date(tenant.ReadDate)}.`, source: clean(tenant.Source) }
     } else note('Microsoft tenant Secure Score', 'Add a dated portal reading through the context file to show the tenant score beside the Defender for Cloud score. Optional Previous and PreviousReadDate fields add the movement line.')
     const high = rows('POS.4').find(r => /High/i.test(r.Severity))
@@ -887,7 +898,7 @@
     // The 90th percentile is creation to recorded close, so the line claims triage and closure, never investigation
     // completion or resolution quality, which the evidence does not hold.
     if (m.response) tile(m.response.median.label, m.response.median.value, m.response.p90 ? `Nine in ten triaged and closed within ${m.response.p90.value}` : m.response.analyst ? 'Analyst-handled alerts' : m.response.cohort.split(',')[0], m.response.median.source)
-    else if (m.alerts && m.alerts.truePositives !== null) tile('Confirmed threats investigated', fmt(m.alerts.truePositives), m.alerts.flaggedKnown && m.alerts.flagged === 0 ? 'None recorded exfiltration or impact' : 'Each closed to a documented disposition', m.alerts.source)
+    else if (m.alerts && m.alerts.truePositives !== null) tile('Confirmed threats investigated', fmt(m.alerts.truePositives), m.alerts.flaggedKnown && m.alerts.flagged === 0 ? `None reached ${m.alerts.flaggedScope}` : 'Each closed to a documented disposition', m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
     if (m.tenantScore) tile('Microsoft tenant Secure Score', pctText(m.tenantScore.value), m.tenantScore.delta ? `Up ${fmt(m.tenantScore.delta.points)} points since ${m.tenantScore.delta.since}, from ${pctText(m.tenantScore.delta.from)}` : `Read ${m.tenantScore.read}`, m.tenantScore.source, m.tenantScore.delta ? 'up' : '')
     else if (m.cloudScore) tile('Defender for Cloud secure score', pctText(m.cloudScore.value), m.cloudScore.delta && m.cloudScore.delta.points > 0 ? `Up ${fmt(m.cloudScore.delta.points)} points since ${m.cloudScore.delta.since}, from ${pctText(m.cloudScore.delta.from)}` : 'Classic Defender for Cloud score', m.cloudScore.source, m.cloudScore.delta && m.cloudScore.delta.points > 0 ? 'up' : '')
@@ -898,8 +909,8 @@
       row('outcomes', 'Alerts triaged', fmt(m.alerts.triaged), 'OUT.1')
       if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts resolved and closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
       if (m.alerts.truePositives !== null) row('outcomes', 'Confirmed threats investigated', fmt(m.alerts.truePositives), 'OUT.1')
-      // Tactic-qualified: the OUT.4 flag marks an exfiltration, collection or impact tactic, not a verified outcome.
-      if (m.alerts.flaggedKnown) row('outcomes', 'True positives that reached exfiltration or impact', `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
+      // Tactic-qualified: the count is of tactics recorded on the alert, never a verified outcome.
+      if (m.alerts.flaggedKnown) row('outcomes', `True positives that reached ${m.alerts.flaggedScope}`, `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
     }
     if (m.response) {
       row('outcomes', m.response.median.label, m.response.median.value, 'OUT.2')

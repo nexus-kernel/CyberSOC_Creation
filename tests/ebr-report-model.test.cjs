@@ -276,7 +276,7 @@ test('cloud score uses points, shows a gain only when the trend is not declining
 })
 test('context supplies tenure, tenant score and dated delivery, and rejects malformed entries', () => {
   const p = pack(); alerts(p)
-  p.context = { ServiceStartDate: '2023-08-15', TenantScore: { Current: 45, Max: 100, ReadDate: '2026-10-08', Source: 'Dated portal capture', Previous: 40, PreviousReadDate: '2026-07-10', Categories: { Identity: 60.4, Device: 41.9 } }, Delivered: [{ Title: 'TLS update', Outcome: 'Validated transport setting', Reference: 'CHG-123', CompletedDate: '2026-08-10' }, { Title: 'Planned', Outcome: 'Plan', Reference: 'CHG-124', CompletedDate: '2026-10-20' }] }
+  p.context = { ServiceStartDate: '2023-08-15', TenantScore: { Current: 45, Max: 100, ReadDate: '2026-10-08', Source: 'Dated portal capture', Previous: 40, PreviousMax: 100, PreviousReadDate: '2026-07-10', Categories: { Identity: 60.4, Device: 41.9 } }, Delivered: [{ Title: 'TLS update', Outcome: 'Validated transport setting', Reference: 'CHG-123', CompletedDate: '2026-08-10' }, { Title: 'Planned', Outcome: 'Plan', Reference: 'CHG-124', CompletedDate: '2026-10-20' }] }
   const m = build(p)
   assert.equal(m.service.months, 37)
   assert.equal(m.headline[0].label, 'Months of managed security')
@@ -286,6 +286,13 @@ test('context supplies tenure, tenant score and dated delivery, and rejects malf
   assert.ok(!/of \d+ points/.test(m.tenantScore.note), 'the note never states the points available')
   assert.equal(m.tenantScore.categories.length, 2)
   assert.equal(m.delivered.length, 1)
+  // Without PreviousMax and without a dated snapshot, the movement line is omitted and the evidence review says why.
+  delete p.context.TenantScore.PreviousMax
+  const unqualified = build(p)
+  assert.equal(unqualified.tenantScore.delta, null)
+  assert.ok(unqualified.review.some(n => n.title === 'Microsoft tenant Secure Score movement' && /without PreviousMax/.test(n.text)))
+  assert.ok(!/from 40%/.test(JSON.stringify(unqualified.headline)), 'no historical percentage is asserted over the current maximum')
+  p.context.TenantScore.PreviousMax = 100
   p.context.TenantScore.ReadDate = '2026-02-31'
   p.context.ServiceStartDate = '2027-01-01'
   const bad = build(p)
@@ -1089,10 +1096,17 @@ test('tenant score movement compares each snapshot against its own maximum', () 
   assert.equal(build(p).tenantScore.delta, null, 'a wider maximum that lowers the percentage prints no gain')
   p.results['POS.6-TREND'][0] = { Date: '2026-07-15', Current: 320, Max: 800, Percent: 40 }
   assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 })
-  // The context file takes PreviousMax, and without it the current maximum stands in.
+  // The context file takes PreviousMax. Without it, the POS.6-TREND snapshot dated PreviousReadDate supplies the
+  // maximum, and without that the movement line is omitted rather than taken against the current maximum.
   p.context = { TenantScore: { Current: 450, Max: 1000, ReadDate: '2026-10-01', Source: 'Portal reading', Previous: 400, PreviousMax: 800, PreviousReadDate: '2026-07-10' } }
   assert.equal(build(p).tenantScore.delta, null)
   delete p.context.TenantScore.PreviousMax
+  const omitted = build(p)
+  assert.equal(omitted.tenantScore.delta, null, 'no snapshot is dated Jul 10, so nothing stands in for the maximum')
+  assert.ok(omitted.review.some(n => n.title === 'Microsoft tenant Secure Score movement'))
+  p.context.TenantScore.PreviousReadDate = '2026-07-15'
+  assert.equal(build(p).tenantScore.delta, null, 'the Jul 15 snapshot carries a maximum of 800, so 400 is 50% and no gain prints')
+  p.context.TenantScore.Previous = 320
   assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 })
 })
 test('confirmed threat severities are counted per alert before grouping, so a mixed group never reads as all high', () => {

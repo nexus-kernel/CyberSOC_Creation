@@ -265,10 +265,20 @@ test('a short confirmed threats table is followed by the outcome cards and the h
   for (const t of ['Confirmed threats', 'Investigated and closed by the SOC', 'Reached exfiltration or impact', 'None carried an exfiltration or impact tactic.', '1 High severity alert', 'Of the 2 confirmed alerts grouped above', 'EVERY CONFIRMED THREAT', '1 Detect', '2 Triage', '3 Investigate', '4 Resolve']) assert.ok(slide.includes(t), t)
   assert.ok(!/\bcontain(ed|ment)\b|resulted in|notification process/i.test(slide), 'containment, verified outcomes and notifications are never claimed')
   // One High and nine Low alerts under one title: the group reads High, the card counts one High alert of ten.
-  const mixed = [{ Threat: 'Suspicious sign-in detected', Severity: 'High', Tactics: 'InitialAccess', Created: '2026-08-01', ExfilOrImpactTactic: true }, ...Array.from({ length: 9 }, (_, i) => ({ Threat: 'Suspicious sign-in detected', Severity: 'Low', Tactics: 'InitialAccess', Created: `2026-08-0${i + 1}`, ExfilOrImpactTactic: false }))]
+  const mixed = [{ Threat: 'Suspicious sign-in detected', Severity: 'High', Tactics: 'InitialAccess,Exfiltration', Created: '2026-08-01', ExfilOrImpactTactic: true }, ...Array.from({ length: 9 }, (_, i) => ({ Threat: 'Suspicious sign-in detected', Severity: 'Low', Tactics: 'InitialAccess', Created: `2026-08-0${i + 1}`, ExfilOrImpactTactic: false }))]
   const mixedSlide = (await read(deck('balanced', mixed).out)).slides.find(s => s.startsWith('Confirmed threats')).replace(/\u00A0/g, ' ')
   assert.ok(mixedSlide.includes('1 High severity alert') && mixedSlide.includes('Of the 10 confirmed alerts grouped above') && !mixedSlide.includes('10 High severity alerts'), mixedSlide.match(/.{0,20}High severity alert.{0,40}/)?.[0])
   assert.ok(mixedSlide.includes('1 of 3') && mixedSlide.includes('1 alert carried an exfiltration or impact tactic in Sentinel.'), 'a flagged alert reads as a tactic, not an outcome')
+  // Collection-only true positives: the collector flags them, but no tactic is Exfiltration or Impact, so the card reads none.
+  const collection = Array.from({ length: 3 }, (_, i) => ({ Threat: 'Suspicious inbox rule created', Severity: 'High', Tactics: 'Collection', Created: `2026-08-0${i + 1}`, ExfilOrImpactTactic: true }))
+  const collectionSlide = (await read(deck('balanced', collection).out)).slides.find(s => s.startsWith('Confirmed threats')).replace(/\u00A0/g, ' ')
+  assert.ok(collectionSlide.includes('0 of 3') && collectionSlide.includes('Reached exfiltration or impact') && collectionSlide.includes('None carried an exfiltration or impact tactic.'), collectionSlide.match(/.{0,10}of 3.{0,80}/)?.[0])
+  // Rows without tactics (an older builder) keep the flag count and name the wider scope.
+  const legacy = collection.map(({ Tactics, ...r }) => r)
+  const legacyDeck = await read(deck('balanced', legacy).out)
+  const legacySummary = legacyDeck.slides.find(s => s.startsWith('Executive summary')).replace(/\u00A0/g, ' ')
+  assert.ok(legacySummary.includes('3 of 3') && legacySummary.includes('True positives that reached collection, exfiltration or impact') && legacySummary.includes('Collection, exfiltration or impact'), legacySummary.match(/.{0,20}collection.{0,60}/i)?.[0])
+  assert.ok(!legacyDeck.slides.some(s => /Attack stage/.test(s)), 'rows without tactics have no examples table')
   const m = build(data)
   for (const n of [...m.presenter, ...m.review]) assert.ok(!notes.join(' ').includes(n.text), `speaker notes carry "${n.title}"`)
 })

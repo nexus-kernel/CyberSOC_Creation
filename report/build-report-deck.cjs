@@ -91,7 +91,7 @@ async function main() {
   // How we report posture: the four tiers of the HTML executive summary on a navy band, up to three rows each.
   // Long row labels are shortened for the band. The HTML keeps the full label.
   const TIER_SHORT = [
-    [/^True positives .*exfiltration or impact$/, 'Exfiltration or impact'], [/^Confirmed threats investigated$/, 'Confirmed threats'],
+    [/^True positives that reached collection/, 'Collection, exfiltration or impact'], [/^True positives .*exfiltration or impact$/, 'Exfiltration or impact'], [/^Confirmed threats investigated$/, 'Confirmed threats'],
     [/^Median time to close, high severity alerts$/, 'Median close, high severity'], [/^Median time to close, all alerts$/, 'Median close, all alerts'],
     [/^90th percentile close/, 'Nine in ten closed within'], [/^Detections correlated into alerts$/, 'Detections correlated'],
     [/^Foundational controls enforced$/, 'Foundational controls'], [/^Defense in depth controls enforced$/, 'Defense in depth controls'],
@@ -273,14 +273,16 @@ async function main() {
       // A short table leaves the slide empty, so the room below it carries what the confirmed threats add up to
       // (the outcome cards) and how every confirmed threat is handled (the strip). Five long titles leave no
       // room, and the slide then holds the table alone (Oct 14, 2026).
-      // The outcome cards stay tactic-qualified: the OUT.4 flag marks an exfiltration, collection or impact tactic,
-      // not a verified outcome or a notification, and the severity count comes from the model, counted per alert
-      // before grouping.
+      // The outcome cards stay tactic-qualified: the count is of tactics recorded on the alert, in the scope the model
+      // names (exfiltration or impact, or the wider flag scope for packs without tactics), never a verified outcome or
+      // a notification. The severity count comes from the model, counted per alert before grouping.
       const tp = m.alerts ? m.alerts.truePositives : null
       const high = m.threats.severities.High
+      const scope = m.alerts ? m.alerts.flaggedScope : ''
+      const tactic = `${/^[aeiou]/.test(scope) ? 'an' : 'a'} ${scope} tactic`
       const outcomeCards = [
         tp !== null && tp > 0 ? [fmt(tp), tp === 1 ? 'Confirmed threat' : 'Confirmed threats', `Investigated and closed by the SOC ${st.periodPhrase}.`] : null,
-        m.alerts && m.alerts.flaggedKnown && tp > 0 ? [`${fmt(m.alerts.flagged)} of ${fmt(tp)}`, 'Reached exfiltration or impact', m.alerts.flagged === 0 ? 'None carried an exfiltration or impact tactic.' : `${plural(m.alerts.flagged, 'alert carried', 'alerts carried')} an exfiltration or impact tactic in Sentinel.`] : null,
+        m.alerts && m.alerts.flaggedKnown && tp > 0 ? [`${fmt(m.alerts.flagged)} of ${fmt(tp)}`, sentence(`reached ${scope}`), m.alerts.flagged === 0 ? `None carried ${tactic}.` : `${plural(m.alerts.flagged, 'alert carried', 'alerts carried')} ${tactic} in Sentinel.`] : null,
         m.threats.alerts > 0 ? [fmt(high), high === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(m.threats.alerts, 'confirmed alert', 'confirmed alerts')} grouped above, each closed as a true positive.`] : null,
         st.speed ? [st.speed.value, sentence(st.speed.label), st.speed.sub] : null
       ].filter(Boolean).slice(0, 4)

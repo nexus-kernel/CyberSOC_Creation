@@ -17,7 +17,7 @@ function quarterPack() {
   const timing = [{ Scope: 'High', Incidents: 208, AutoClosed: 0, MedianCloseMin: 7, P90CloseMin: 36 }, { Scope: 'Medium', Incidents: 15, AutoClosed: 0, MedianCloseMin: 178, P90CloseMin: 1302 }, { Scope: 'Low', Incidents: 15, AutoClosed: 0, MedianCloseMin: 99, P90CloseMin: 1608 }, { Scope: 'All', Incidents: 238, AutoClosed: 0, MedianCloseMin: 8, P90CloseMin: 76 }]
   put('OUT.2', timing); put('OUT.2-ANALYST', timing)
   put('OUT.3', [{ Month: '2026-07-01', Total: 105, High: 6, Medium: 14, Low: 85, Informational: 0 }, { Month: '2026-08-01', Total: 163, High: 22, Medium: 20, Low: 121, Informational: 0 }, { Month: '2026-09-01', Total: 347, High: 208, Medium: 7, Low: 132, Informational: 0 }])
-  put('OUT.4', [{ IncidentNumber: 1, Severity: 'High', ExfilOrImpactTactic: false }, { IncidentNumber: 2, Severity: 'High', ExfilOrImpactTactic: false }])
+  put('OUT.4', [{ IncidentNumber: 1, Severity: 'High', Tactics: 'InitialAccess', ExfilOrImpactTactic: false }, { IncidentNumber: 2, Severity: 'High', Tactics: 'Execution', ExfilOrImpactTactic: false }])
   put('OUT.5', [{ ProductName: 'Azure Sentinel', AlertSeverity: 'High', Alerts: 659 }])
   put('P0.1-BY-WORKSPACE', [{ WorkspaceId: 'w1', SourceTable: 'SecurityIncident', EarliestRecord: '2026-01-01', Records: 900 }])
   put('IA.1', [{ UserType: 'Member', UsersSignedIn: 194, UsersChallenged: 180 }])
@@ -146,7 +146,7 @@ test('counts read as natural English', () => {
   p.results['IA.1'] = [{ UserType: 'Member', UsersSignedIn: 194, UsersChallenged: 193 }]
   p.results['IA.2'] = [{ Bucket: 'Retiring: SMS or voice', DistinctUsers: 1 }]
   p.results['OUT.1'][0].TruePositive = 1
-  p.results['OUT.4'] = [{ IncidentNumber: 1, Severity: 'High', ExfilOrImpactTactic: false }]
+  p.results['OUT.4'] = [{ IncidentNumber: 1, Severity: 'High', Tactics: 'InitialAccess', ExfilOrImpactTactic: false }]
   const { s } = story(p)
   assert.equal(s.takeaways.summary.startsWith('The confirmed threat did not reach exfiltration or impact'), true)
   assert.equal(s.asks[0].body, '1 user needs to update their MFA method before February 1, 2027, when Microsoft retires text message and voice sign-in.')
@@ -178,7 +178,7 @@ test('the confirmed threats takeaway counts the threats, adds the exfiltration l
   const withRows = flaggedOne => {
     const p = quarterPack()
     p.results['OUT.4'] = [
-      { Severity: 'High', ExfilOrImpactTactic: flaggedOne, Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Tactics: 'CommandAndControl', Created: '2026-08-18' },
+      { Severity: 'High', ExfilOrImpactTactic: flaggedOne, Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Tactics: flaggedOne ? 'CommandAndControl,Exfiltration' : 'CommandAndControl', Created: '2026-08-18' },
       { Severity: 'Medium', ExfilOrImpactTactic: false, Threat: 'Password spray attack against Microsoft Entra ID application', Tactics: 'CredentialAccess', Created: '2026-07-28' }
     ]
     return story(p)
@@ -189,6 +189,18 @@ test('the confirmed threats takeaway counts the threats, adds the exfiltration l
   const flagged = withRows(true)
   assert.equal(flagged.m.alerts.flagged, 1)
   assert.equal(flagged.s.takeaways.threats, '2 confirmed threats were investigated and closed.')
+  // A Collection tactic sets the collector flag but is not exfiltration or impact, so the count stays narrow.
+  const p = quarterPack()
+  p.results['OUT.4'] = [{ Severity: 'High', ExfilOrImpactTactic: true, Threat: 'Suspicious inbox rule created', Tactics: 'Collection', Created: '2026-08-18' }, { Severity: 'High', ExfilOrImpactTactic: false, Threat: 'Password spray attack', Tactics: 'CredentialAccess', Created: '2026-07-28' }]
+  const collection = story(p)
+  assert.deepEqual([collection.m.alerts.flagged, collection.m.alerts.flaggedScope], [0, 'exfiltration or impact'])
+  assert.equal(collection.s.takeaways.summary, 'Neither confirmed threat reached exfiltration or impact, and secure score rose 6.1 points.')
+  // Rows without tactics keep the flag count and name the wider scope on every surface.
+  p.results['OUT.4'] = p.results['OUT.4'].map(({ Tactics, Threat, Created, ...r }) => r)
+  const wide = story(p)
+  assert.deepEqual([wide.m.alerts.flagged, wide.m.alerts.flaggedScope], [1, 'collection, exfiltration or impact'])
+  assert.equal(wide.s.kpis[1].label, 'True positives that reached collection, exfiltration or impact')
+  assert.ok(!/reached exfiltration or impact/.test(JSON.stringify([wide.s.kpis, wide.s.wins, wide.s.takeaways, wide.m.tiers, wide.m.headline])), 'the narrow wording never appears without tactics')
   const none = story(quarterPack())
   assert.equal(none.m.threats, null, 'rows without a title give no examples')
   assert.equal(none.s.takeaways.threats, '')
