@@ -815,9 +815,9 @@ test('Arc-enabled servers are named in the endpoint notes and reconcile the inve
   const m = build(p)
   assert.match(m.controls.find(c => c.label === 'Azure virtual machines reporting to endpoint detection').note, /Azure Arc-enabled servers carry an Azure resource ID, so those Defender for Endpoint has seen count here beside the native virtual machines\. Resource Graph lists 72 Arc-enabled servers at collection\./)
   const review = m.review.find(n => n.title === 'Azure virtual machine inventory')
-  assert.match(review.text, /^EW\.1-EDR: 21 Azure virtual machines in Resource Graph and 72 Azure Arc-enabled servers \(DR\.2\) against 92 seen by Defender for Endpoint/)
-  assert.match(review.text, /Arc-enabled servers carry an Azure resource ID, so Defender for Endpoint counts them in the Azure scope\. The remaining difference/)
-  p.results['EW.1'][0].Devices = 93
+  assert.match(review.text, /^EW\.1-EDR: 21 Azure virtual machines in Resource Graph against 92 seen by Defender for Endpoint/)
+  assert.match(review.text, /Resource Graph also lists 72 Azure Arc-enabled servers \(DR\.2\), which carry an Azure resource ID and count in the Defender scope but are not in the EW\.1-EDR inventory, so the Arc share of the difference is not reconciled machine by machine\. EW\.1-GAPS explains the native virtual machines/)
+  p.results['EW.1'][0].Devices = 21
   assert.ok(!build(p).review.some(n => n.title === 'Azure virtual machine inventory'), 'an inventory that reconciles raises no note')
 })
 test('the Defender for Cloud score movement is measured to the current score, so the points and the percentage reconcile', () => {
@@ -852,9 +852,15 @@ test('the benchmark meter reads the Microsoft cloud security benchmark alone whe
 test('a tenant that is not onboarded to Defender for Identity reads Not in force and needs a license, never read access', () => {
   const p = pack()
   p.manifest.push({ ResultId: 'DR.11', Status: 'UNAVAILABLE', Rows: 0, ReadTimeUtc: '2026-10-08T10:00:00Z', AccessGap: false, NotOnboarded: true })
-  // A cloud-only tenant has nowhere to put a sensor: with no domain controllers in the collection the control is N/A.
+  // With neither NB.10 nor DR.4 read, cloud-only is not established and the control stays ungathered.
   let m = build(p)
   let c = m.controls.find(x => x.id === 'DR.11')
+  assert.deepEqual([c.value, c.measured], ['(null)', false])
+  assert.ok(m.unmeasured.some(u => u.id === 'DR.11' && /could not read whether domain controllers exist/.test(u.reason)))
+  // A cloud-only tenant has nowhere to put a sensor: NB.10 read with no domain controllers makes the control N/A.
+  put(p, 'NB.10', [], 'EMPTY')
+  m = build(p)
+  c = m.controls.find(x => x.id === 'DR.11')
   assert.deepEqual([c.value, c.na, c.mark], ['N/A', true, null])
   assert.match(c.note, /found no domain controllers/)
   // Domain controllers in Azure (NB.10) make it a gap that needs a license.
