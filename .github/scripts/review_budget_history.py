@@ -35,7 +35,33 @@ def date(value):
     return parsed.astimezone(timezone.utc)
 
 
-def summary_rows(body, repo, call=api):
+def resolve_commit(commit, repo, call=api, bindings=None):
+    """Bind an authenticated summary commit cell to exactly one full SHA.
+
+    GitHub's commits endpoint also accepts branch and tag names, so a ref named
+    like an abbreviation could resolve to an unrelated commit, and a ref moved
+    later to a crafted prefix collision could rebind an already recorded row.
+    The first resolution must be a full lowercase hexadecimal SHA that starts
+    with the abbreviation; it is persisted in ``bindings`` and reused for every
+    later summary revision without another call. A full SHA needs no call. API
+    failures, corrupt bindings and malformed responses fail closed.
+    """
+    if not isinstance(commit, str) or not re.fullmatch('[0-9a-f]{7,40}', commit):
+        raise Blocked('Missing review commit.')
+    if len(commit) == 40:
+        return commit
+    bindings = {} if bindings is None else bindings
+    sha = bindings.get(commit)
+    if sha is None:
+        response = call(f'repos/{repo}/commits/{commit}')
+        sha = response.get('sha') if isinstance(response, dict) else None
+    if not isinstance(sha, str) or not re.fullmatch('[0-9a-f]{40}', sha) or not sha.startswith(commit):
+        raise Blocked('Resolved commit does not match the authenticated review abbreviation.')
+    bindings[commit] = sha
+    return sha
+
+
+def summary_rows(body, repo, call=api, bindings=None):
     allowed_prose = {
         SUMMARY, '## Codex Review Summary',
         'This comment shows the latest Codex review activity on this pull request.',
@@ -65,9 +91,7 @@ def summary_rows(body, repo, call=api):
         commit = re.fullmatch(r'`([0-9a-f]{7,40})`', cells[2])
         if not commit:
             raise Blocked('Missing review commit.')
-        sha = call(f'repos/{repo}/commits/{commit[1]}')['sha'] if len(commit[1]) < 40 else commit[1]
-        if not re.fullmatch('[0-9a-f]{40}', sha):
-            raise Blocked('Invalid resolved commit.')
+        sha = resolve_commit(commit[1], repo, call, bindings)
         completed = re.fullmatch(r'✅ \*\*Completed\*\* <relative-time datetime="([^"]+)">([^<]+)</relative-time>', cells[1])
         if not completed and not re.fullmatch(r'(?:[🔄⏳] )?\*\*(?:Running|Pending|Queued)\*\*', cells[1]):
             raise Blocked('Unclassified summary status/result content.')
@@ -148,8 +172,8 @@ class History:
                    for d in deliveries):
                 raise Blocked('Scoped activity precedes original opening evidence.')
             state = {'hook': hook, 'anchor': start, 'events': [], 'guids': {}, 'summaries': {},
-                     'rounds': {}, 'latest': {}, 'requests': {}, 'writes': {}, 'pending': None,
-                     'created_at': pr['created_at']}
+                     'commits': {}, 'rounds': {}, 'latest': {}, 'requests': {}, 'writes': {},
+                     'pending': None, 'created_at': pr['created_at']}
         else:
             state = deepcopy(previous)
             start = state['anchor']
@@ -194,7 +218,7 @@ class History:
                 raise Blocked('Missing, deleted or out-of-order summary revision.')
             if not body.startswith(SUMMARY):
                 raise Blocked('Summary marker removed.')
-            rows = summary_rows(body, self.repo, self.call)
+            rows = summary_rows(body, self.repo, self.call, state.setdefault('commits', {}))
             for kind, row in rows.items():
                 if row['state'] == 'completed':
                     key = digest([kind, row['head'], row['completed_at']])

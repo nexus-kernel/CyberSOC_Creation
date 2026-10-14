@@ -31,9 +31,10 @@ def pr(draft=False):
             'base': {'sha': 'b' * 40, 'repo': {'full_name': REPO}}}
 
 
-def summary(status='completed', stamp='2026-10-14T02:00:00Z'):
-    value = f'✅ **Completed** <relative-time datetime="{stamp}">{stamp}</relative-time>' if status == 'completed' else '**Running**'
-    return f'{history.SUMMARY}\n| Code Review | {value} | `{SHA}` | Manual request |'
+def summary(status='completed', stamp='2026-10-14T02:00:00Z', commit=SHA):
+    value = (f'✅ **Completed** <relative-time datetime="{stamp}">{stamp}</relative-time>'
+             if status == 'completed' else f'**{status.capitalize()}**')
+    return f'{history.SUMMARY}\n| Code Review | {value} | `{commit}` | Manual request |'
 
 
 def event(identity, kind='issue_comment', action='created', body=None, old=None, user=BOT):
@@ -53,6 +54,7 @@ class DeliveryAPI:
         self.hook = {'id': 1, 'created_at': '2026-10-14T00:00:00Z',
                      'updated_at': '2026-10-14T00:00:00Z', 'active': True, 'events': sorted(history.EVENTS)}
         self.events = [event(1, 'pull_request', 'opened')]
+        self.commits = {}
         self.calls = []
 
     def __call__(self, endpoint, method='GET', payload=None, paginate=False):
@@ -69,6 +71,8 @@ class DeliveryAPI:
             e = next(e for e in self.events if e['id'] == int(endpoint.split('/')[-1]))
             return {**metadata(e), 'request': {'headers': {'X-GitHub-Delivery': e['guid'],
                     'X-GitHub-Event': e['event'], 'X-GitHub-Hook-ID': '1'}, 'payload': deepcopy(e['payload'])}}
+        if endpoint.startswith(f'repos/{REPO}/commits/') and endpoint.rsplit('/', 1)[1] in self.commits:
+            return deepcopy(self.commits[endpoint.rsplit('/', 1)[1]])
         raise AssertionError(endpoint)
 
 
@@ -194,6 +198,77 @@ class HistoryTests(unittest.TestCase):
         self.api.events.append(self.api.events[-1])
         with self.assertRaises(budget.Blocked):
             self.history.sync(pr(), state)
+
+    def test_abbreviated_commit_binds_to_resolved_full_sha_once(self):
+        self.api.commits[SHA[:7]] = {'sha': SHA}
+        self.state['pending'] = {'kind': 'Code Review', 'head': SHA, 'nonce': 'n', 'comment': 12}
+        self.api.events.append(event(2, body=summary(commit=SHA[:7])))
+        state = self.history.sync(pr(), self.state)
+        self.assertEqual([r.head for r in history.rounds(state)], [SHA])
+        self.assertEqual(self.api.calls.count(f'repos/{REPO}/commits/{SHA[:7]}'), 1)
+        self.assertEqual(self.history.sync(pr(), state), state)
+
+    def test_full_sha_rows_skip_resolution(self):
+        self.state['pending'] = {'kind': 'Code Review', 'head': SHA, 'nonce': 'n', 'comment': 12}
+        self.api.events.append(event(2))
+        self.history.sync(pr(), self.state)
+        self.assertFalse([call for call in self.api.calls if '/commits/' in call])
+
+    def test_same_named_ref_cannot_rebind_review_to_reserved_head(self):
+        other = 'c' * 40
+        for status in ('completed', 'Running', 'Pending', 'Queued'):
+            with self.subTest(status=status):
+                api = DeliveryAPI()
+                api.commits[other[:7]] = {'sha': SHA}
+                h = history.History(REPO, 1, REQUESTER, api)
+                state = h.sync(pr(True))
+                state['pending'] = {'kind': 'Code Review', 'head': SHA, 'nonce': 'n', 'comment': 12}
+                api.events.append(event(2, body=summary(status, commit=other[:7])))
+                with self.assertRaises(budget.Blocked):
+                    h.sync(pr(), state)
+
+    def test_resolution_must_extend_abbreviation_in_every_row_state(self):
+        other = 'c' * 40
+        responses = ({'sha': SHA}, {'sha': other[:6] + 'd' * 34}, {'sha': other[:7]}, {'sha': other.upper()},
+                     {'sha': other + '0'}, {'sha': 7}, {'sha': None}, {}, None, [], other)
+        for status in ('completed', 'Running', 'Pending', 'Queued'):
+            body = summary(status, commit=other[:7])
+            for response in responses:
+                with self.subTest(status=status, response=response), self.assertRaises(budget.Blocked):
+                    history.summary_rows(body, REPO, lambda endpoint, **_: response)
+            rows = history.summary_rows(body, REPO, lambda endpoint, **_: {'sha': other})
+            self.assertEqual(rows['Code Review']['head'], other)
+
+    def test_resolution_api_failure_remains_blocked(self):
+        def failing(endpoint, **_):
+            raise budget.Blocked('GitHub API failed; operation may be uncertain: ' + endpoint)
+        with self.assertRaises(budget.Blocked):
+            history.summary_rows(summary(commit=SHA[:7]), REPO, failing)
+
+    def test_recorded_abbreviation_binding_survives_summary_edits(self):
+        collision = SHA[:7] + 'c' * 33
+        self.api.commits[SHA[:7]] = {'sha': SHA}
+        self.state['pending'] = {'kind': 'Code Review', 'head': SHA, 'nonce': 'n', 'comment': 12}
+        first = summary(commit=SHA[:7])
+        self.api.events.append(event(2, body=first))
+        state = self.history.sync(pr(), self.state)
+        self.assertEqual(state['commits'], {SHA[:7]: SHA})
+        # A same-named ref now points at a crafted prefix collision that holds the next reservation.
+        self.api.commits[SHA[:7]] = {'sha': collision}
+        state['pending'] = {'kind': 'Code Review', 'head': collision, 'nonce': 'm', 'comment': 13}
+        edited = first + f'\n| Security Review | **Running** | `{SHA[:7]}` | Manual request |'
+        self.api.events.append(event(3, action='edited', body=edited, old=first))
+        state = self.history.sync(pr(), state)
+        self.assertEqual([row['head'] for row in state['rounds'].values()], [SHA])
+        self.assertEqual(state['pending']['head'], collision)
+        self.assertEqual(state['latest']['Security Review']['head'], SHA)
+        self.assertEqual(self.api.calls.count(f'repos/{REPO}/commits/{SHA[:7]}'), 1)
+
+    def test_corrupt_persisted_binding_blocks_without_resolution(self):
+        for bound in ('c' * 40, SHA[:7], SHA.upper(), 7):
+            with self.subTest(bound=bound), self.assertRaises(budget.Blocked):
+                history.summary_rows(summary(commit=SHA[:7]), REPO, self.api, {SHA[:7]: bound})
+        self.assertFalse([call for call in self.api.calls if '/commits/' in call])
 
 
 class MemoryJournal:

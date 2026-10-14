@@ -82,6 +82,16 @@ completed Code Review consumes round one; Security Review is not counted as Code
 Review. Running/pending/unknown status and uncertain requests prevent another
 request. At three completed Code Reviews no request is sent, including after a push.
 
+Summary commit cells may be abbreviated. GitHub's commits endpoint, which resolves
+them, also accepts branch and tag names, so the response must be a full lowercase
+hexadecimal SHA that starts with the authenticated abbreviation before any row is
+recorded. The first resolution of each abbreviation is persisted in the PR's
+journal state and reused for every later summary revision without another call,
+so a ref later moved to a crafted prefix collision cannot rebind a recorded row,
+and a pending reservation matching the commit it returns cannot attach a review
+to another commit. Full SHAs are recorded without a resolution call; API
+failures, corrupt bindings and missing or malformed responses block.
+
 These are GitHub-delivery continuity guarantees, not a claim to control outside
 requests or prove delivery behavior that GitHub never recorded. Hosted delivery
 ordering/retention and the configured integration schema must be validated before
@@ -274,3 +284,20 @@ activity before the apparent opening blocks enrollment. This closes the history
 gap found during independent review. Current validation: 172 Python, 238 Pester
 and 83 Node tests passed, with zero skips; actionlint, compilation and whitespace
 checks passed.
+
+### Abbreviated commit binding
+
+Summary rows with abbreviated commits previously accepted any well-formed SHA
+returned by GitHub's commits endpoint. Because that endpoint also resolves branch
+and tag names, an identically named ref could attach a review to an unrelated
+commit, including the current head when a matching reservation existed. The
+resolved value must now be a full lowercase hexadecimal SHA that starts with the
+authenticated abbreviation for completed, running, pending and queued rows alike.
+Full SHAs still skip resolution; API failures and malformed or missing responses
+remain blocked. Codex review of that correction found that re-resolving an already
+recorded abbreviation on every summary edit still let a ref moved to a crafted
+prefix collision rebind the old completion to a newly reserved head. The first
+binding of each abbreviation is now persisted per PR and reused without another
+call, and a corrupt persisted binding blocks. The regression tests fail against
+the prior implementations and pass with the corrections. No activation was
+performed.
