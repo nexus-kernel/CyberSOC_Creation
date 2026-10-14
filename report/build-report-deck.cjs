@@ -251,7 +251,7 @@ async function main() {
     // Drift panel.
     const px = X0 + mw + 0.4, pw = CW - mw - 0.4
     card(s, px, TOP, pw, BOTTOM - TOP, 'Drift panel')
-    text(s, [{ text: 'Foundational gaps', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: st.drift.length ? 'Below the baseline at collection. Atmosera schedules each fix first.' : 'No foundational gaps. Every measured foundational control reads E.', options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }], { x: px + 0.3, y: TOP + 0.25, w: pw - 0.6, h: 1.0, objectName: 'Drift heading' })
+    text(s, [{ text: 'Foundational gaps', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: st.drift.length ? 'Below the baseline at collection. Atmosera schedules each fix first.' : st.licensed.length ? 'Every foundational control Atmosera can fix reads E. The one below needs licensing.' : 'No foundational gaps. Every measured foundational control reads E.', options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }], { x: px + 0.3, y: TOP + 0.25, w: pw - 0.6, h: 1.0, objectName: 'Drift heading' })
     let dy = TOP + 1.1
     // Each item takes the lines its label and figure line need. Items stop above the legend and the tail line
     // (the gaps left in the register, and any control that needs a license), so nothing overlaps.
@@ -528,16 +528,35 @@ async function main() {
     const whyOf = c => c.na ? 'No activity or configuration to judge it by' : gapOf(c.id) ? 'Needs read access from your team' : 'Not available from the sources read in this collection'
     const notGraded = [...st.ungathered, ...naControls]
     if (!notGraded.length) text(s, 'Every control was gathered and graded in this collection.', { x: ux, y: TOP + 0.45, w: half, h: 0.4, fontSize: 12, color: C.accent6, objectName: 'Ungathered empty' })
-    let uy = TOP + 0.42
-    notGraded.forEach((c, i) => {
-      const h = Math.min(2, lines(c.label, half - 0.5, 11)) * 0.185 + 0.26
-      if (uy + h > BOTTOM) return
-      markChip(s, c.na ? 'N/A' : '–', ux, uy + 0.03, 0.36, 0.26, 11, `Ungathered ${i + 1} chip`)
-      text(s, [{ text: c.label, options: { fontSize: 11, color: C.text1, breakLine: true } }, { text: `${whyOf(c)} · ${c.group}`, options: { fontSize: 9.5, color: C.accent6, paraSpaceBefore: 1 } }], { x: ux + 0.48, y: uy, w: half - 0.48, h, objectName: `Ungathered ${i + 1}` })
-      rule(s, ux, uy + h, half, HEX.track, 0.5, `Ungathered ${i + 1} rule`)
-      uy += h + 0.05
-    })
-    s.addNotes(notesOf([`Alert activity covers ${m.period.label}. Identity and endpoint readings use the source lookback, generally the last 30 days. Configuration and score readings are from ${m.readDate}.`, `Sentinel workspaces: ${m.workspaces.map(w => `${w.Name}, ${fmt(w.RetentionDays)} days retention`).join('. ')}.`, st.ungathered.length ? `Not gathered: ${st.ungathered.map(c => c.label).join('. ')}.` : 'Every control was gathered.']))
+    // One column of entries, then as many continuation slides of two columns as the rest need. Nothing is
+    // dropped: a partial collection can leave dozens of controls ungraded.
+    const entryH = c => Math.min(2, lines(c.label, half - 0.5, 11)) * 0.185 + 0.26
+    const fillColumn = (sl, x, from, prefix) => {
+      let y = TOP + 0.42, i = from
+      while (i < notGraded.length) {
+        const c = notGraded[i], h = entryH(c)
+        if (y + h > BOTTOM) break
+        markChip(sl, c.na ? 'N/A' : '–', x, y + 0.03, 0.36, 0.26, 11, `${prefix} ${i + 1} chip`)
+        text(sl, [{ text: c.label, options: { fontSize: 11, color: C.text1, breakLine: true } }, { text: `${whyOf(c)} · ${c.group}`, options: { fontSize: 9.5, color: C.accent6, paraSpaceBefore: 1 } }], { x: x + 0.48, y, w: half - 0.48, h, objectName: `${prefix} ${i + 1}` })
+        rule(sl, x, y + h, half, HEX.track, 0.5, `${prefix} ${i + 1} rule`)
+        y += h + 0.05
+        i++
+      }
+      return i
+    }
+    const scopeNotes = notesOf([`Alert activity covers ${m.period.label}. Identity and endpoint readings use the source lookback, generally the last 30 days. Configuration and score readings are from ${m.readDate}.`, `Sentinel workspaces: ${m.workspaces.map(w => `${w.Name}, ${fmt(w.RetentionDays)} days retention`).join('. ')}.`, st.ungathered.length ? `Not gathered: ${st.ungathered.map(c => c.label).join('. ')}.` : 'Every control was gathered.'])
+    let next = fillColumn(s, ux, 0, 'Ungathered')
+    if (next < notGraded.length) text(s, `Continued on the next slide, ${plural(notGraded.length - next, 'more control', 'more controls')}.`, { x: ux, y: BOTTOM - 0.3, w: half, h: 0.3, fontSize: 10, color: C.accent6, align: 'right', objectName: 'Ungathered continued' })
+    s.addNotes(scopeNotes)
+    for (let page = 2; next < notGraded.length; page++) {
+      s = content('Appendix', 'Scope and evidence, continued', `Appendix A4 · Controls this collection could not grade, continued`)
+      eyebrow(s, 'Not graded in this collection', X0, TOP - 0.05, CW, C.text2, `Ungathered page ${page}`)
+      rule(s, X0, TOP + 0.3, CW, C.text2, 1, `Ungathered page ${page} rule`)
+      next = fillColumn(s, X0, next, `Ungathered page ${page} left`)
+      if (next < notGraded.length) next = fillColumn(s, ux, next, `Ungathered page ${page} right`)
+      if (next < notGraded.length) text(s, `Continued on the next slide, ${plural(notGraded.length - next, 'more control', 'more controls')}.`, { x: ux, y: BOTTOM - 0.3, w: half, h: 0.3, fontSize: 10, color: C.accent6, align: 'right', objectName: `Ungathered page ${page} continued` })
+      s.addNotes(scopeNotes)
+    }
   }
 
   // Appendix A4 and A5, Detailed only: the two Microsoft scores and where the next points are.

@@ -101,6 +101,17 @@ test('a tiny population never stands as a win or leads a pillar, and a policy-on
   q.results['IA.8-CA'] = [{ Flow: 'MFA at sign-in', Control: 'IA.1', PolicyRead: true, PolicySource: 'Raw', PolicyState: 'Enforced', EnforcedPolicies: 1, ExcludedIdentities: 0, DetailRead: false }]
   const identity = story(q).s.matrix.find(r => r.group === 'Identity and access')
   assert.equal(identity.measure, '180 of 194 users challenged for MFA at sign-in · 3 users already on phishing-resistant sign-in')
+  // The fallback never bypasses the minimum population, never repeats a control, and never fires for a pillar
+  // that has ratio controls of its own (a two-account storage estate reads no headline measure).
+  const r = quarterPack()
+  r.results['DP.1'] = [{ Accounts: 2, SecureTransfer: 2, MinTls12: 2, AnonymousBlobOff: 2, PublicNetworkOff: 0 }]
+  r.results['DP.2'] = [{ Vaults: 2, SoftDelete: 2, PurgeProtection: 2, RbacAuth: 2 }]
+  delete r.results['DP.7']; r.manifest = r.manifest.filter(x => x.ResultId !== 'DP.7')
+  const data = story(r).s.matrix.find(x => x.group === 'Data protection')
+  assert.equal(data.measure, '', data.measure)
+  q.results['IA.1'] = [{ UserType: 'Member', UsersSignedIn: 4, UsersChallenged: 4 }]
+  q.results['IA.2'] = [{ Bucket: 'Retiring: SMS or voice', DistinctUsers: 40 }, { Bucket: 'Phishing-resistant', DistinctUsers: 3 }]
+  assert.equal(story(q).s.matrix.find(x => x.group === 'Identity and access').measure, '3 users already on phishing-resistant sign-in', 'a tiny sign-in population drops out and the callout stands alone')
 })
 test('a foundational control that needs a license goes to Later with its ask, not into the foundational gaps', () => {
   const p = quarterPack()
@@ -114,6 +125,13 @@ test('a foundational control that needs a license goes to Later with its ask, no
   assert.ok(!s.asks.some(a => /read access/.test(a.title) && /Defender for Identity/.test(a.body)), 'never a read access ask')
   assert.match(s.takeaways.posture, /read below the baseline, (two|three|four) first on the roadmap and one waiting on licensing\./)
   assert.equal(s.watch.find(w => /foundational controls read below enforced/.test(w.label)).value, String(s.drift.length + 1))
+  // With the licensed control as the only foundational gap, nothing claims that every foundational control reads E.
+  const m2 = build(p)
+  for (const c of m2.controls) if (c.tier === 'foundational' && c.mark && c.id !== 'DR.11') Object.assign(c, { mark: 'E', pct: 100 })
+  const only = buildStory(m2, p)
+  assert.deepEqual([only.drift.length, only.licensed.length], [0, 1])
+  assert.match(only.takeaways.posture, /^\d+ of \d+ foundational controls are enforced\. One reads below the baseline, one waiting on licensing\.$/)
+  assert.equal(only.watch.find(w => /foundational control reads below enforced/.test(w.label)).value, '1')
 })
 test('counts read as natural English', () => {
   const p = quarterPack()

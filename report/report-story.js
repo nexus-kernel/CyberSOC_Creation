@@ -234,10 +234,16 @@
       const leads = (LEADS[g] || []).map(re => inG.find(c => re.test(c.label))).filter(c => c && weighty(c))
       const fallback = inG.filter(c => weighty(c) && !leads.includes(c)).slice(0, 2 - leads.length)
       let measure = [...leads, ...fallback].slice(0, 2).map(c => `${ofText(c)} ${UNIT[short(c)] || short(c)}`).join(' · ')
-      // A pillar whose controls are all policy readings takes its measure from the pillar page: the sign-in ratio
-      // behind the MFA policy and the callout, so the matrix never reads "completed in the review" beside real figures.
+      // A pillar whose graded controls are all policy readings takes its measure from the pillar page: the sign-in
+      // ratio behind the MFA policy and the callout, so the matrix never reads "completed in the review" beside real
+      // figures. The minimum population applies there too, and a callout that repeats the measure is left out.
       const page = (m.pillars || []).find(p => p.name === g)
-      if (!measure && page) measure = [page.measure ? `${fmt(page.measure.good)} of ${fmt(page.measure.total)} ${page.measure.label.charAt(0).toLowerCase() + page.measure.label.slice(1)}` : '', page.callout ? `${page.callout.value} ${page.callout.label}` : ''].filter(Boolean).join(' · ')
+      if (!measure && page && !inG.some(ratio)) {
+        const pageMeasure = page.measure && page.measure.total >= MIN_SAMPLE ? `${fmt(page.measure.good)} of ${fmt(page.measure.total)}` : ''
+        const calloutSmall = page.callout && /^(\d[\d,]*) of (\d[\d,]*)$/.test(page.callout.value) && Number(page.callout.value.replace(/^.* of /, '').replace(/,/g, '')) < MIN_SAMPLE
+        const callout = page.callout && !calloutSmall && page.callout.value !== pageMeasure ? `${page.callout.value} ${page.callout.label}` : ''
+        measure = [pageMeasure ? `${pageMeasure} ${page.measure.label.charAt(0).toLowerCase() + page.measure.label.slice(1)}` : '', callout].filter(Boolean).join(' · ')
+      }
       return { group: g, foundational: tierCount('foundational'), defense: tierCount('defense'), measure, ungathered: inG.filter(ungathered).length }
     })
 

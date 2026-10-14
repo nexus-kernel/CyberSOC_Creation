@@ -114,6 +114,34 @@ test('the grounding slides appear at balanced depth and carry the pillar narrati
   assert.ok(detailed.slides.some(s => /Appendix A5/.test(s)) && detailed.slides.some(s => /Appendix A6/.test(s)), 'the score slides follow the scope slide')
   assert.ok(notes.some(n => n.includes(m.pillars[0].narrative)), 'the full narrative is spoken')
 })
+test('the scope appendix lists every ungraded control, continuing onto further slides when one column is not enough', async () => {
+  // The fixture pack leaves most controls ungathered, far more than one column holds.
+  const { data, out } = deck('balanced')
+  const m = build(data)
+  const ungraded = m.controls.filter(c => c.measured === false)
+  assert.ok(ungraded.length > 20, `fixture has ${ungraded.length} ungraded controls`)
+  const { slides } = await read(out)
+  const scope = slides.filter(s => /^Scope and evidence/.test(s))
+  assert.ok(scope.length >= 2, 'the list continues onto a second slide')
+  const all = scope.join(' ').replace(/\u00A0/g, ' ')
+  for (const c of ungraded) assert.ok(all.includes(c.label), `${c.label} is listed`)
+  assert.ok(/Continued on the next slide, \d+ more controls\./.test(all))
+  assert.ok(!scope[scope.length - 1].includes('Continued on the next slide'), 'the last slide does not promise another')
+})
+test('a licensed control as the only foundational gap never reads as every foundational control enforced', async () => {
+  const p = pack('balanced')
+  p.results['DP.2'][0].PurgeProtection = 6 // no other foundational gap
+  p.manifest.push({ ResultId: 'DR.11', Status: 'UNAVAILABLE', Rows: 0, ReadTimeUtc: '2026-10-08T10:00:00Z', AccessGap: false, NotOnboarded: true })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  fs.writeFileSync(dataFile, JSON.stringify(p))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  const { slides } = await read(out)
+  const posture = slides.find(s => s.startsWith('Control posture'))
+  assert.ok(posture, 'the posture slide')
+  assert.ok(!/No foundational gaps|Every measured foundational control reads E/.test(posture), posture.match(/.{0,60}foundational control reads E.{0,20}/)?.[0])
+  assert.ok(/needs licensing and sits in Later/.test(posture))
+  assert.ok(/waiting on licensing/.test(posture))
+})
 test('chart workbooks carry valid table ranges so Keynote and Quick Look draw the charts', async () => {
   // pptxgenjs 4.0.1 writes ref="A1:D4'" into each chart's embedded table. Apple's importer then
   // drops the chart, so writeDeck repairs the range.
