@@ -128,6 +128,24 @@ test('the scope appendix lists every ungraded control, continuing onto further s
   assert.ok(/Continued on the next slide, \d+ more controls\./.test(all))
   assert.ok(!scope[scope.length - 1].includes('Continued on the next slide'), 'the last slide does not promise another')
 })
+test('a register detail that wraps gets a row tall enough for every line', async () => {
+  const p = pack('balanced')
+  p.manifest.push({ ResultId: 'DR.2', Status: 'OK', Rows: 3, ReadTimeUtc: '2026-10-08T10:00:00Z' })
+  p.results['DR.2'] = [{ Plan: 'AI', ResourceType: 'microsoft.cognitiveservices/accounts', Resources: 24, Covered: 0 }, { Plan: 'VirtualMachines', ResourceType: 'microsoft.compute/virtualmachines', Resources: 21, Covered: 19 }, { Plan: 'StorageAccounts', ResourceType: 'microsoft.storage/storageaccounts', Resources: 30, Covered: 29 }]
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  fs.writeFileSync(dataFile, JSON.stringify(p))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  const xml = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).find(x => x.includes('register label') && x.includes('AI services'))
+  assert.ok(xml, 'the detection register slide carries the detail')
+  // Every register label box ends before the next rule under it starts.
+  const boxes = [...xml.matchAll(/name="([^"]*) register label"[\s\S]*?<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"\/>/g)].map(m => ({ label: m[1], y: Number(m[2]), h: Number(m[3]) }))
+  const rules = [...xml.matchAll(/name="([^"]*) register rule"[\s\S]*?<a:off x="\d+" y="(\d+)"\/>/g)].map(m => ({ label: m[1], y: Number(m[2]) }))
+  const gap = boxes.find(b => /Cloud workload protection/.test(b.label)), rule = rules.find(r => /Cloud workload protection/.test(r.label))
+  assert.ok(gap && rule, 'the workload protection row')
+  assert.ok(gap.y + gap.h <= rule.y + 1, 'the box ends at its own rule')
+  assert.ok(gap.h > 2 * 0.2 * 914400, 'the row holds the label and at least two detail lines')
+})
 test('a licensed control as the only foundational gap never reads as every foundational control enforced', async () => {
   const p = pack('balanced')
   p.results['DP.2'][0].PurgeProtection = 6 // no other foundational gap

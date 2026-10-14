@@ -436,7 +436,7 @@ async function main() {
       const labelW = w - 0.55 - VALUE_W
       const fits = size => regs.every(reg => {
         const tiers = [reg.foundational, reg.defense].filter(r => r.length)
-        const need = tiers.reduce((n, rows) => n + rows.reduce((k, c) => k + (Math.min(2, lines(c.label, labelW, size)) + (c.detail ? 1 : 0)) * (size === 12 ? 0.215 : 0.2) + 0.08, 0), 0)
+        const need = tiers.reduce((n, rows) => n + rows.reduce((k, c) => k + (Math.min(2, lines(c.label, labelW, size)) + (c.detail ? lines(c.detail, labelW, size - 1) : 0)) * (size === 12 ? 0.215 : 0.2) + 0.08, 0), 0)
         return need <= 7.2 - TOP - 0.45 - tiers.length * 0.52
       })
       return fits(12) ? 12 : 11
@@ -457,7 +457,7 @@ async function main() {
         rows.forEach(c => {
           // A control with a detail line (the ratio behind a Mostly enforced policy, or the resource types a
           // partially covered control is missing) carries it under the label.
-          const h = (Math.min(2, lines(c.label, labelW, size)) + (c.detail ? 1 : 0)) * lineH + 0.07
+          const h = (Math.min(2, lines(c.label, labelW, size)) + (c.detail ? lines(c.detail, labelW, size - 1) : 0)) * lineH + 0.07
           markChip(sl, c.chip, x, y + (h - 0.26) / 2, 0.36, 0.26, size, `${c.label} chip`)
           text(sl, c.detail ? [{ text: c.label, options: { fontSize: size, color: C.text1, breakLine: true } }, { text: c.detail, options: { fontSize: size - 1, color: C.accent6 } }] : c.label, { x: x + 0.48, y, w: labelW, h, fontSize: size, color: C.text1, valign: 'middle', objectName: `${c.label} register label` })
           text(sl, c.valueText, { x: x + w - VALUE_W, y, w: VALUE_W, h, fontSize: size, bold: !!c.mark, color: c.mark ? C.text2 : C.accent6, align: 'right', valign: 'middle', objectName: `${c.label} register value` })

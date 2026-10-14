@@ -54,6 +54,9 @@ function Get-EbrCaPolicyFacts {
         AllUsers      = (Get-EbrCaList $u 'includeUsers') -contains 'All'
         Roles         = (Get-EbrCaList $u 'includeRoles').Count -gt 0
         AllApps       = $includeApps -contains 'All'
+        # A policy that targets a user action such as security information registration carries no application
+        # and governs no application sign-in (Oct 14, 2026).
+        AnyApps       = $includeApps.Count -gt 0
         AdminPortals  = $includeApps -contains 'MicrosoftAdminPortals'
         Block         = $grants -contains 'block'
         Mfa           = ($grants -contains 'mfa') -or ($null -ne (Get-EbrCaValue $g 'authenticationStrength'))
@@ -88,6 +91,7 @@ function ConvertFrom-EbrCaFlatPolicy {
         AllUsers      = [string]$Row.IncludeUsers -eq 'All'
         Roles         = [string]$Row.IncludeUsers -match '\broles?\b'
         AllApps       = [string]$Row.IncludeApplications -eq 'All'
+        AnyApps       = [bool]([string]$Row.IncludeApplications).Trim()
         AdminPortals  = [string]$Row.IncludeApplications -match 'Microsoft Admin Portals'
         Block         = $grants -contains 'block'
         Mfa           = ($grants -contains 'mfa') -or [bool]([string]$Row.AuthStrength)
@@ -113,11 +117,12 @@ function Get-EbrCaFlowDefinitions {
            Match = { param($f) $f.Block -and $f.Legacy }
            Covers = { param($f) $f.AllUsers -and $f.AllApps -and -not $f.Narrowed } }
         # MFA at sign-in: any enabled policy that requires MFA on cloud apps counts (Oct 14, 2026), so one that
-        # selects its applications reads Scoped rather than None. It covers the tenant when it applies to all
-        # users on all apps and is not narrowed to a platform, risk level, device filter or location (1.14.0).
-        # Security defaults require MFA for all users too.
+        # selects its applications reads Scoped rather than None, while one that targets a user action only and
+        # no application does not count. It covers the tenant when it applies to all users on all apps and is not
+        # narrowed to a platform, risk level, device filter or location (1.14.0). Security defaults require MFA
+        # for all users too.
         @{ Flow = 'MFA at sign-in'; Control = 'IA.1'; SignIns = $false; Defaults = $true
-           Match = { param($f) $f.Mfa -and -not $f.LegacyOnly }
+           Match = { param($f) $f.Mfa -and $f.AnyApps -and -not $f.LegacyOnly }
            Covers = { param($f) $f.AllUsers -and $f.AllApps -and -not $f.Narrowed } }
         # Admin portals: MFA required on the admin portals, or on all apps, for all users or for the admin roles.
         @{ Flow = 'Admin portals'; Control = 'IA.1-ADMINPORTAL'; SignIns = $false; Defaults = $true
