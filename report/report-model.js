@@ -668,13 +668,12 @@
     // directory estate: domain controllers in Azure (NB.10) or domain controller events (DR.4). A cloud-only
     // tenant has nowhere to put a sensor, so there the control does not apply.
     else if (!has('DR.11') && bool(index.get('DR.11')?.NotOnboarded)) {
-      // Cloud-only is a finding, not a default: it needs a read of NB.10 or DR.4 that came back with no domain
-      // controllers. When neither was read, the control stays ungathered.
+      // Domain controllers are positive evidence only: NB.10 reads the ones in Azure and DR.4 reads telemetry that
+      // Defender for Identity itself supplies, so neither can prove that a tenant has none. Without that evidence
+      // the control stays ungathered rather than reading as a gap or as not applicable.
       const directoryEstate = rows('NB.10').some(r => count(r.Devices) > 0) || rows('DR.4').some(r => count(r.Events) > 0)
-      const directoryRead = has('NB.10') || has('DR.4')
       if (directoryEstate) inForce('DR.11', mdiLabel, F.detection, false, 'The tenant is not onboarded to Microsoft Defender for Identity, so no sensor reports from a domain controller.').needsLicense = true
-      else if (directoryRead) notApplicable('DR.11', mdiLabel, F.detection, 'The tenant is not onboarded to Microsoft Defender for Identity and the collection found no domain controllers, so there is nothing for a sensor to protect.')
-      else ungathered('DR.11', mdiLabel, F.detection, 'the tenant is not onboarded to Defender for Identity and the collection could not read whether domain controllers exist (NB.10, DR.4)', 'Sensors reporting healthy, of sensors registered. Whether the tenant has domain controllers could not be read in this collection.')
+      else ungathered('DR.11', mdiLabel, F.detection, 'the tenant is not onboarded to Defender for Identity and the collection holds no evidence of domain controllers (NB.10 reads Azure virtual machines only, DR.4 needs Defender for Identity telemetry)', 'Sensors reporting healthy, of sensors registered. Whether the tenant has domain controllers could not be established in this collection.')
     }
     else if (!has('DR.11')) ungathered('DR.11', mdiLabel, F.detection, reason('DR.11'), 'Sensors reporting healthy, of sensors registered.')
     const logPerResource = one('DR.13')

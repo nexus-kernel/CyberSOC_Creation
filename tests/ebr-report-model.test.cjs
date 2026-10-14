@@ -854,17 +854,16 @@ test('the benchmark meter reads the Microsoft cloud security benchmark alone whe
 test('a tenant that is not onboarded to Defender for Identity reads Not in force and needs a license, never read access', () => {
   const p = pack()
   p.manifest.push({ ResultId: 'DR.11', Status: 'UNAVAILABLE', Rows: 0, ReadTimeUtc: '2026-10-08T10:00:00Z', AccessGap: false, NotOnboarded: true })
-  // With neither NB.10 nor DR.4 read, cloud-only is not established and the control stays ungathered.
+  // Without positive evidence of domain controllers the control stays ungathered: NB.10 reads Azure virtual
+  // machines only and DR.4 needs Defender for Identity telemetry, so an empty read proves nothing.
   let m = build(p)
   let c = m.controls.find(x => x.id === 'DR.11')
   assert.deepEqual([c.value, c.measured], ['(null)', false])
-  assert.ok(m.unmeasured.some(u => u.id === 'DR.11' && /could not read whether domain controllers exist/.test(u.reason)))
-  // A cloud-only tenant has nowhere to put a sensor: NB.10 read with no domain controllers makes the control N/A.
-  put(p, 'NB.10', [], 'EMPTY')
+  assert.ok(m.unmeasured.some(u => u.id === 'DR.11' && /holds no evidence of domain controllers/.test(u.reason)))
+  put(p, 'NB.10', [], 'EMPTY'); put(p, 'DR.4', [], 'EMPTY')
   m = build(p)
   c = m.controls.find(x => x.id === 'DR.11')
-  assert.deepEqual([c.value, c.na, c.mark], ['N/A', true, null])
-  assert.match(c.note, /found no domain controllers/)
+  assert.deepEqual([c.value, c.measured, c.na], ['(null)', false, undefined], 'empty reads are not proof of a cloud-only tenant')
   // Domain controllers in Azure (NB.10) make it a gap that needs a license.
   put(p, 'NB.10', [{ Scope: 'Azure VM', Devices: 3, Compliant: 0 }])
   m = build(p)
