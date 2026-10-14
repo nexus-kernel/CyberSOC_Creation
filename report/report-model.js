@@ -1,0 +1,801 @@
+/* Pure report derivation. Shared by the offline HTML and the regression tests.
+   Vocabulary: Sentinel incidents are presented as alerts. SecurityAlert records are detections. */
+(function (root) {
+  'use strict'
+  const array = value => Array.isArray(value) ? value : value ? [value] : []
+  const num = value => !['number','string'].includes(typeof value) || String(value).trim() === '' ? null : Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null
+  const count = value => num(value) !== null && Number.isInteger(Number(value)) ? Number(value) : null
+  const fmt = value => num(value) === null ? 'Not available' : Number(value).toLocaleString('en-US', { maximumFractionDigits: 1 })
+  const pct = (good, total, digits = 1) => total > 0 ? Number((100 * good / total).toFixed(digits)) : null
+  const pctText = value => value === null ? '' : `${Number(value).toLocaleString('en-US', { maximumFractionDigits: 1 })}%`
+  const clean = value => String(value ?? '').replace(/;/g, '.').replace(/[<>]/g, ' ').replace(/[←-⇿⟰-⟿⤀-⥿]/g, '').replace(/[\u{1f000}-\u{1faff}☀-➿️]/gu, '').replace(/\s+/g, ' ').trim()
+  const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value
+  const iso = value => String(value ?? '').slice(0, 10)
+  const toDate = value => new Date(iso(value) + 'T12:00:00Z')
+  const date = value => validDate(iso(value)) ? toDate(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : 'Date not recorded'
+  const monthLabel = value => validDate(iso(value)) ? toDate(value).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }) : 'Month not recorded'
+  const monthName = value => validDate(iso(value)) ? toDate(value).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }) : 'Month not recorded'
+  const monthSpan = (start, end) => {
+    const a = monthName(start), b = monthName(end)
+    if (a === b) return a
+    return iso(start).slice(0, 4) === iso(end).slice(0, 4) ? `${toDate(start).toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' })} to ${b}` : `${a} to ${b}`
+  }
+  // MITRE ATT&CK tactics in kill-chain order, as Sentinel records them, with the words the report uses.
+  const STAGES = [['PreAttack', 'Pre-attack'], ['Reconnaissance', 'Reconnaissance'], ['ResourceDevelopment', 'Resource development'], ['InitialAccess', 'Initial access'], ['Execution', 'Execution'], ['Persistence', 'Persistence'], ['PrivilegeEscalation', 'Privilege escalation'], ['DefenseEvasion', 'Defense evasion'], ['CredentialAccess', 'Credential access'], ['Discovery', 'Discovery'], ['LateralMovement', 'Lateral movement'], ['Collection', 'Collection'], ['CommandAndControl', 'Command and control'], ['Exfiltration', 'Exfiltration'], ['InhibitResponseFunction', 'Inhibit response function'], ['ImpairProcessControl', 'Impair process control'], ['Impact', 'Impact']]
+  const stageIndex = t => { const i = STAGES.findIndex(([k]) => k.toLowerCase() === t.toLowerCase()); return i < 0 ? STAGES.length : i }
+  const stageLabel = t => STAGES[stageIndex(t)]?.[1] || clean(t).replace(/([a-z])([A-Z])/g, (_, a, b) => `${a} ${b.toLowerCase()}`)
+  const SEV_RANK = { High: 0, Medium: 1, Low: 2, Informational: 3 }
+  const sevName = s => ['High', 'Medium', 'Low', 'Informational'].find(k => k.toLowerCase() === clean(s).toLowerCase()) || 'Not recorded'
+  // Client copy says alerts, never incidents, including inside alert titles such as Multi-stage incident.
+  const alertWords = value => clean(value).replace(/\bincident(s?)\b/gi, w => { const r = w.replace(/incident/i, 'alert'); return w === w.toUpperCase() ? r.toUpperCase() : w[0] === 'I' ? r[0].toUpperCase() + r.slice(1) : r })
+  const span = (start, end) => {
+    if (!validDate(iso(start)) || !validDate(iso(end))) return 'Dates not recorded'
+    const a = toDate(start), b = toDate(end)
+    if (a.getUTCFullYear() === b.getUTCFullYear()) return `${a.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })} to ${b.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })}`
+    return `${date(start)} to ${date(end)}`
+  }
+  const monthsBetween = (start, end) => {
+    const a = toDate(start), b = toDate(end)
+    let months = (b.getUTCFullYear() - a.getUTCFullYear()) * 12 + (b.getUTCMonth() - a.getUTCMonth())
+    if (b.getUTCDate() < a.getUTCDate()) months -= 1
+    return Math.max(0, months)
+  }
+  const sum = (rows, field) => rows.length && rows.every(r => num(r[field]) !== null) ? rows.reduce((n, r) => n + Number(r[field]), 0) : null
+  const duration = value => num(value) === null ? 'Not available' : value < 1 ? 'Under 1 min' : value < 60 ? `${fmt(Math.round(value))} min` : value < 1440 ? `${fmt(Math.round(value / 6) / 10)} hr` : `${fmt(Math.round(value / 144) / 10)} days`
+  // Deck thresholds: E at 90 percent or more, P from 50 to 89, N below 50 (set Oct 11, 2026).
+  const E_THRESHOLD = 90
+  const mark = value => value === null ? null : value >= E_THRESHOLD ? 'E' : value >= 50 ? 'P' : 'N'
+  const bool = value => value === true || String(value ?? '').toLowerCase() === 'true'
+  const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`
+  const RETIREMENT = { date: '2027-02-01', label: 'February 1, 2027' }
+  const MEDIAN_FLOOR = 20
+  const TIERS = { foundational: 'Foundational', defense: 'Defense in depth' }
+  // Network devices and firewall operating systems, which cannot run an endpoint sensor.
+  const NETWORK_DEVICE = /palo ?alto|pan-?os|meraki|fortinet|forti(gate|os)|sonicwall|sonicos|watchguard|check ?point|gaia|barracuda/i
+  const PRODUCTS = {
+    'azure sentinel': 'Sentinel', 'microsoft sentinel': 'Sentinel', 'azure security center': 'Defender for Cloud',
+    'microsoft defender advanced threat protection': 'Defender for Endpoint', 'office 365 advanced threat protection': 'Defender for Office 365',
+    'azure active directory identity protection': 'Identity Protection', 'microsoft 365 defender': 'Defender XDR',
+    'microsoft defender for identity': 'Defender for Identity', 'microsoft cloud app security': 'Defender for Cloud Apps', 'azure advanced threat protection': 'Defender for Identity'
+  }
+  const product = name => PRODUCTS[String(name ?? '').toLowerCase()] || clean(name)
+  const list = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+
+  function build(data) {
+    const p = data.parameters || {}
+    const manifest = array(data.manifest)
+    const results = data.results || {}
+    const context = data.context || {}
+    const index = new Map(manifest.map(r => [r.ResultId, r]))
+    const state = id => clean(index.get(id)?.Status || 'MISSING')
+    const rows = id => ['OK', 'PARTIAL'].includes(state(id)) ? array(results[id]).filter(r => r && typeof r === 'object') : []
+    const one = id => rows(id).length === 1 ? rows(id)[0] : null
+    const has = id => ['OK', 'PARTIAL', 'EMPTY'].includes(state(id))
+    const partial = id => state(id) === 'PARTIAL'
+    const windowValid = validDate(p.WindowStart) && validDate(p.WindowEnd) && p.WindowStart <= p.WindowEnd
+    const readDate = date(p.PostureReadDate)
+    const m = {
+      client: clean(p.ClientName || 'Client security review'),
+      period: { start: p.WindowStart, end: p.WindowEnd, label: span(p.WindowStart, p.WindowEnd), months: windowValid ? monthsBetween(p.WindowStart, p.WindowEnd) + 1 : null, valid: windowValid },
+      readDate,
+      subscriptions: new Set(array(p.Subscriptions).map(s => String(s).toLowerCase())).size,
+      workspaces: [...new Map(array(p.Workspaces).map(w => [String(w.CustomerId || w.ResourceId || w.Name).toLowerCase(), w])).values()],
+      depth: ['brief', 'balanced', 'detailed'].includes(data.depth) ? data.depth : 'balanced',
+      service: null, headline: [], tiers: { outcomes: [], controls: [], hardening: [], benchmark: [] }, tierSummary: null, whatNext: '',
+      response: null, alerts: null, threats: null, detections: null, trend: [], pillars: [], controls: [], priorities: [], delivered: [], passwordless: null,
+      cloudScore: null, tenantScore: null, posture: {}, review: [], presenter: [], unmeasured: [], notApplicable: [], issues: array(data.issues).map(clean),
+      manifest: manifest.map(r => ({ id: clean(r.ResultId), status: clean(r.Status), rows: count(r.Rows), date: date(r.ReadTimeUtc) })),
+      tenantWorkspace: clean(p.TenantWideTables?.SigninLogs || 'Not recorded'),
+      excluded: clean(p.ManagedRgPattern || '')
+    }
+    const source = (id, extra = '') => `${id}. Read ${date(index.get(id)?.ReadTimeUtc)}.${partial(id) ? ' Partial collection scope.' : ''}${extra ? ' ' + extra : ''}`
+    const note = (title, text) => m.review.push({ title: clean(title), text: clean(text) })
+    const presenter = (title, text) => m.presenter.push({ title: clean(title), text: clean(text) })
+    const unmeasured = (id, label, reason) => m.unmeasured.push({ id, label: clean(label), reason: clean(reason) })
+
+    // Service tenure from the reviewed context file.
+    if (validDate(context.ServiceStartDate) && validDate(p.PostureReadDate) && context.ServiceStartDate <= p.PostureReadDate) {
+      m.service = { months: monthsBetween(context.ServiceStartDate, p.PostureReadDate), start: date(context.ServiceStartDate) }
+    } else if (context.ServiceStartDate) note('Service start date', 'The context ServiceStartDate is missing, malformed or later than the posture read date, so the tenure tile is omitted.')
+
+    // Alert population integrity across workspaces.
+    const dup = one('P0.1-XDRDUP')
+    const duplicateCount = count(dup?.InMultipleWorkspaces)
+    const duplicateSafe = m.workspaces.length <= 1 || (state('P0.1-XDRDUP') === 'OK' && duplicateCount === 0)
+    if (!duplicateSafe) {
+      presenter('Alert reconciliation required', duplicateCount > 0 ? `${fmt(duplicateCount)} Defender XDR alerts appear in more than one workspace. Alert totals and response timing are withheld until the combined result is reconciled.` : 'Cross-workspace duplication has not been verified. Alert totals and response timing are withheld until the combined result is reconciled.')
+    }
+    if (dup && count(dup.XdrIncidents) === 0) presenter('Defender XDR scope', 'No Defender XDR alerts reached Sentinel in the collection. Alert figures cover Defender for Cloud, Sentinel analytics and Identity Protection. Endpoint, Office 365 and Identity alerts handled in the Defender portal are not in these counts. Say so if asked, or add portal counts.')
+    if (!windowValid) presenter('Period dates', 'The alert period dates are invalid. Outcome figures are withheld until the pack is corrected.')
+    const reach = rows('P0.1-BY-WORKSPACE')
+    if (reach.length) {
+      const absent = m.workspaces.filter(w => !reach.some(r => (r.WorkspaceId ? String(r.WorkspaceId).toLowerCase() === String(w.CustomerId).toLowerCase() : r.Workspace === w.Name) && /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0)).length
+      const late = reach.filter(r => /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0 && windowValid && validDate(iso(r.EarliestRecord)) && iso(r.EarliestRecord) > p.WindowStart).length
+      if (absent) presenter('Workspace coverage', `${plural(absent, 'workspace holds', 'workspaces hold')} no alert records. Figures describe the workspaces that hold data.`)
+      if (late) presenter('Workspace start dates', `${plural(late, 'workspace starts', 'workspaces start')} after ${date(p.WindowStart)}. Earlier months reflect the workspaces that were already collecting.`)
+    }
+    const alertsAllowed = duplicateSafe && windowValid
+    m.ticketed = !!clean(p.TicketPattern)
+    if (!m.ticketed) presenter('Alert scope', 'This pack was collected before the ticket scope rule. Alert counts include every Sentinel incident, including informational severity and incidents that never opened an Atmosera ticket. Recollect with collector 1.6 or later so only ticketed, non-informational alerts are counted.')
+    else note('Alert scope', `Alerts are Sentinel incidents whose comments reference an Atmosera ticket (pattern ${clean(p.TicketPattern)}). Informational severity is excluded. Detections are limited to those linked to these alerts.`)
+
+    // Detections (SecurityAlert records).
+    const det = rows('OUT.5')
+    const detTotal = windowValid ? sum(det, 'Alerts') : null
+    if (detTotal !== null) {
+      const bySource = [...det.reduce((acc, r) => acc.set(product(r.ProductName), (acc.get(product(r.ProductName)) || 0) + Number(r.Alerts)), new Map())].map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total)
+      m.detections = { total: detTotal, bySource, sources: list(bySource.slice(0, 3).map(s => s.name)), source: source('OUT.5', m.ticketed ? 'Detections linked to ticketed alerts.' : '') }
+    } else unmeasured('OUT.5', 'Detections received', state('OUT.5'))
+
+    // Alerts (Sentinel incidents) and the automation adjustment.
+    const inc = alertsAllowed ? one('OUT.1') : null
+    const incValid = inc && ['Raised','Closed','Open'].every(k => count(inc[k]) !== null) && inc.Closed + inc.Open === inc.Raised
+    const allRow = alertsAllowed ? rows('OUT.2').find(r => r.Scope === 'All') : null
+    const autoValid = allRow && count(allRow.Incidents) !== null && count(allRow.AutoClosed) !== null && allRow.AutoClosed <= allRow.Incidents
+    const autoShare = autoValid && allRow.Incidents > 0 ? allRow.AutoClosed / allRow.Incidents : 0
+    const analystMode = autoValid && autoShare >= 0.5
+    if (incValid) {
+      const automation = analystMode ? allRow.AutoClosed : 0
+      const triaged = inc.Raised - automation, closed = inc.Closed - automation
+      const tp = count(inc.TruePositive)
+      const flags = has('OUT.4') ? rows('OUT.4') : null
+      const flagged = flags ? flags.filter(r => r.ExfilOrImpactTactic === true || String(r.ExfilOrImpactTactic).toLowerCase() === 'true').length : null
+      m.alerts = {
+        triaged, closed, open: inc.Open, raised: inc.Raised, automation: autoValid ? allRow.AutoClosed : null, analystMode, autoShare: autoValid ? pct(allRow.AutoClosed, allRow.Incidents) : null,
+        resolvedPct: pct(closed, triaged), truePositives: tp, benign: count(inc.BenignPositive), falsePositives: count(inc.FalsePositive),
+        flagged, flaggedKnown: flagged !== null && tp !== null, unclassified: count(inc.ClosedUnclassified),
+        source: source('OUT.1', m.ticketed ? 'Alerts that opened an Atmosera ticket, informational severity excluded.' : ''), partial: partial('OUT.1')
+      }
+      if (inc.Open > 0) presenter('Open alerts', `${fmt(inc.Open)} of ${fmt(inc.Raised)} alerts created ${m.period.label} were still open at collection. The report describes these as items referred to the client for action or confirmation under the agreed notification process. Confirm with the SOC lead that this holds before the review, and have the age and severity split ready if asked.`)
+      if (count(inc.ClosedUnclassified) > 0) presenter('Closure classification', `${fmt(inc.ClosedUnclassified)} closed alerts carry no definitive classification. The report counts them as resolved and makes no claim about investigation quality.`)
+      if (analystMode) presenter('Automation share', `${fmt(allRow.AutoClosed)} of ${fmt(allRow.Incidents)} closed alerts (${pctText(m.alerts.autoShare)}) were closed by automation rules. The headline counts exclude them and the automation volume is shown as a supporting line.`)
+      else if (autoValid && autoShare >= 0.25) presenter('Automation share', `${fmt(allRow.AutoClosed)} of ${fmt(allRow.Incidents)} closed alerts (${pctText(m.alerts.autoShare)}) were closed by automation rules. Below the 50 percent threshold, so headline counts include them.`)
+    } else if (alertsAllowed) unmeasured('OUT.1', 'Alerts triaged', inc ? 'the combined result does not reconcile' : state('OUT.1'))
+
+    // Confirmed threat examples (OUT.4). The builder embeds a screened title (Threat), the tactics and the day only.
+    // Every row is an example, withheld or operational. Withheld covers screened out titles, rows the builder could not
+    // screen and staged rows with no title or day. Operational true positives carry no attack stage, such as a service limit warning.
+    const threatRows = alertsAllowed && m.alerts ? rows('OUT.4') : []
+    if (threatRows.length && !threatRows.some(r => 'Threat' in r)) note('Confirmed threat examples', 'The report data predates confirmed threat examples. Regenerate the report with the current builder to show them.')
+    else if (threatRows.length) {
+      const stagesOf = r => [...new Set(String(r.Tactics ?? '').split(',').map(t => t.trim()).filter(Boolean))]
+      const isWithheld = r => clean(r.Threat) === 'Title withheld'
+      const examples = threatRows.filter(r => stagesOf(r).length && clean(r.Threat) && !isWithheld(r) && validDate(iso(r.Created)))
+      const operational = threatRows.filter(r => !stagesOf(r).length && !isWithheld(r)).length
+      const withheld = threatRows.length - examples.length - operational
+      const groups = [...examples.reduce((acc, r) => {
+        const key = alertWords(r.Threat)
+        return acc.set(key, [...(acc.get(key) || []), r])
+      }, new Map())].map(([title, group]) => {
+        const days = group.map(r => iso(r.Created)).sort()
+        // Stages are joined by commas only, since Command and control already carries an and.
+        const stages = [...new Set(group.flatMap(stagesOf).sort((a, b) => stageIndex(a) - stageIndex(b)).map(stageLabel))]
+        const severity = group.map(r => sevName(r.Severity)).sort((a, b) => (SEV_RANK[a] ?? 9) - (SEV_RANK[b] ?? 9))[0]
+        return { title, alerts: group.length, severity, stage: stages.length > 2 ? `${stages.slice(0, 2).join(', ')}, plus ${plural(stages.length - 2, 'more stage', 'more stages')}` : stages.join(', '), when: monthSpan(days[0], days[days.length - 1]), latest: days[days.length - 1] }
+      }).sort((a, b) => (SEV_RANK[a.severity] ?? 9) - (SEV_RANK[b.severity] ?? 9) || b.alerts - a.alerts || b.latest.localeCompare(a.latest) || a.title.localeCompare(b.title, 'en'))
+      if (groups.length) {
+        const shown = groups.slice(0, 5), more = groups.slice(5)
+        const alertsIn = gs => gs.reduce((n, g) => n + g.alerts, 0)
+        m.threats = { examples: shown.map(({ latest, ...g }) => g), more: more.length, moreAlerts: alertsIn(more), source: source('OUT.4', 'Confirmed threats with an attack stage, grouped by alert title.') }
+        presenter('Confirmed threat examples', `The examples use alert titles as Sentinel recorded them, with incident written as alert. Titles that carry an email address, IP address, host or domain name, path, GUID, ticket reference or machine-style name are withheld automatically. Check that no title shown names a person, account or machine, or implies containment, before the review. The table shows ${plural(alertsIn(shown), 'confirmed alert', 'confirmed alerts')} in ${plural(shown.length, 'group', 'groups')}.${more.length ? ` ${fmt(m.threats.moreAlerts)} more ${m.threats.moreAlerts === 1 ? 'sits' : 'sit'} in ${plural(more.length, 'further group', 'further groups')}.` : ''}`)
+      }
+      if (withheld) presenter('Confirmed threat titles withheld', `${plural(withheld, 'confirmed alert is', 'confirmed alerts are')} left out of the examples because ${withheld === 1 ? 'its title may identify' : 'their titles may identify'} an account, address, host or other internal detail, could not be screened, or ${withheld === 1 ? 'carries' : 'carry'} no title or date. The tickets and the pack's OUT.4 result carry the detail.`)
+      if (operational) presenter('Operational true positives', `${plural(operational, 'confirmed alert carries', 'confirmed alerts carry')} no attack stage, for example a service limit warning, and ${operational === 1 ? 'is' : 'are'} left out of the confirmed threat examples. The confirmed threat count still includes ${operational === 1 ? 'it' : 'them'}.`)
+    }
+
+    // Response timing candidate ladder.
+    const recentAvailable = validDate(p.RecentStart) && windowValid && p.RecentStart > p.WindowStart
+    const timingRow = (id, scope) => alertsAllowed ? rows(id).find(r => r.Scope === scope) : null
+    const pick = (baseId, analystId, scope) => {
+      const base = timingRow(baseId, scope), analyst = timingRow(analystId, scope)
+      if (scope === 'All') return { row: analyst, analyst: true, id: analystId }
+      const heavy = base && count(base.Incidents) > 0 && count(base.AutoClosed) !== null && base.AutoClosed / base.Incidents >= 0.5
+      return heavy && analyst ? { row: analyst, analyst: true, id: analystId } : { row: base, analyst: false, id: baseId }
+    }
+    const candidates = [
+      { key: 'high-full', scope: 'High', period: 'full', ...pick('OUT.2', 'OUT.2-ANALYST', 'High') },
+      ...(recentAvailable ? [{ key: 'high-recent', scope: 'High', period: 'recent', ...pick('OUT.2-RECENT', 'OUT.2-RECENT-ANALYST', 'High') }] : []),
+      { key: 'all-full', scope: 'All', period: 'full', ...pick('OUT.2', 'OUT.2-ANALYST', 'All') },
+      ...(recentAvailable ? [{ key: 'all-recent', scope: 'All', period: 'recent', ...pick('OUT.2-RECENT', 'OUT.2-RECENT-ANALYST', 'All') }] : [])
+    ].map(c => {
+      const r = c.row
+      const n = count(r?.Incidents), median = num(r?.MedianCloseMin), p90 = num(r?.P90CloseMin)
+      const periodLabel = c.period === 'recent' ? span(p.RecentStart, p.WindowEnd) : m.period.label
+      const cohort = `${c.scope === 'High' ? 'High severity alerts' : 'All severities'}${c.analyst ? ', excluding automation closures' : ''}, ${periodLabel}`
+      const reason = !r ? 'no result available' : n === null || n < 5 ? `${fmt(n ?? 0)} closed alerts, below the minimum sample of 5` : median === null ? 'no median recorded' : median < MEDIAN_FLOOR ? `median of ${duration(median)} is below the ${MEDIAN_FLOOR} minute floor and is not presented` : p90 === null ? 'no 90th percentile recorded' : p90 > 60 ? `90th percentile of ${duration(p90)} exceeds one hour` : ''
+      return { ...c, n, median, p90, cohort, periodLabel, qualifies: reason === '', medianOnly: !!r && n !== null && n >= 5 && median !== null && median >= MEDIAN_FLOOR, reason }
+    })
+    const chosen = candidates.find(c => c.qualifies) || null
+    const fallback = chosen ? null : candidates.filter(c => c.medianOnly).sort((a, b) => b.n - a.n)[0] || null
+    const selected = chosen || fallback
+    if (selected) {
+      const sample = selected.n < 20 ? ` Based on ${fmt(selected.n)} closed alerts.` : ` Based on ${fmt(selected.n)} closed alerts.`
+      m.response = {
+        cohort: selected.cohort, scope: selected.scope, analyst: selected.analyst, n: selected.n, key: selected.key,
+        median: { value: duration(selected.median), minutes: selected.median, label: selected.scope === 'High' ? 'Median time to close, high severity' : 'Median time to close', note: `Creation to recorded close.${sample}`, source: source(selected.id) },
+        p90: chosen ? { value: duration(selected.p90), minutes: selected.p90, label: selected.scope === 'High' ? '90th percentile close, high severity' : '90th percentile close', note: `Nine in ten alerts closed within this time.${sample}`, source: source(selected.id) } : null,
+        small: selected.n < 20
+      }
+    }
+    m.timingRationale = candidates.map(c => ({ key: c.key, cohort: c.cohort, n: c.n, median: c.median === null ? null : duration(c.median), p90: c.p90 === null ? null : duration(c.p90), status: c === chosen ? 'Selected' : c === fallback ? 'Selected for the median only' : c.reason ? `Not used: ${c.reason}` : 'Not used: an earlier candidate qualified' }))
+    if (!selected && alertsAllowed) unmeasured('OUT.2', 'Response timing', `no candidate cohort produced a median at or above ${MEDIAN_FLOOR} minutes`)
+    // Time to close by severity over the full period, for the deck. The same floor applies: a median under
+    // 20 minutes is never presented, and a severity with fewer than 5 closed alerts carries no timing.
+    m.timing = alertsAllowed ? ['High', 'Medium', 'Low', 'All'].map(scope => {
+      const c = pick('OUT.2', 'OUT.2-ANALYST', scope), r = c.row
+      const n = count(r?.Incidents), median = num(r?.MedianCloseMin), p90 = num(r?.P90CloseMin), enough = n !== null && n >= 5
+      return { scope, n, analyst: c.analyst, source: source(c.id),
+        median: enough && median !== null && median >= MEDIAN_FLOOR ? { value: duration(median), minutes: median } : null,
+        p90: enough && p90 !== null ? { value: duration(p90), minutes: p90 } : null }
+    }).filter(r => r.n !== null) : []
+    if (!recentAvailable && windowValid && m.period.months > 3) presenter('Trailing three month timing', 'This pack has no OUT.2-RECENT result. Rerun the collector (version 1.5 or later) to add the trailing three month timing candidates.')
+
+    // Monthly alert trend.
+    const trend = alertsAllowed ? rows('OUT.3').filter(r => validDate(iso(r.Month)) && iso(r.Month) >= p.WindowStart && iso(r.Month) <= p.WindowEnd && ['Total','High','Medium','Low','Informational'].every(k => count(r[k]) !== null)).sort((a, b) => iso(a.Month).localeCompare(iso(b.Month))) : []
+    m.trend = trend.map(r => ({ month: iso(r.Month), label: monthLabel(r.Month), Total: r.Total, High: r.High, Medium: r.Medium, Low: r.Low, Informational: r.Informational }))
+    m.trendSource = source('OUT.3')
+    if (trend.length >= 2) {
+      const first = trend[0], last = trend[trend.length - 1]
+      if (last.High > first.High) presenter('High severity trend', `High severity alerts rose from ${fmt(first.High)} in ${monthLabel(first.Month)} to ${fmt(last.High)} in ${monthLabel(last.Month)}. The report presents monthly volume as work absorbed by the SOC and draws no trend conclusion. Be ready to explain the drivers, for example new detections, tuning or a campaign.`)
+      if (last.Total > first.Total * 2) presenter('Alert volume', `Monthly alert volume more than doubled between ${monthLabel(first.Month)} and ${monthLabel(last.Month)}. Volume movement is presented as coverage and activity, not as a change in risk.`)
+    }
+
+    // Controls with status marks. control() records a measured ratio. inForce() records a verified configuration.
+    // ungathered() records a control whose evidence could not be collected. It stays on the client page as (null).
+    const NULL_VALUE = '(null)'
+    const ungathered = (id, label, where, reason, note) => {
+      const item = { id, label: clean(label), ...where, good: null, total: null, pct: null, mark: null, value: NULL_VALUE, measured: false, note: clean(note) || 'Evidence for this control was not gathered in this collection.', source: source(id) }
+      m.controls.push(item)
+      unmeasured(id, label, reason)
+      return item
+    }
+    const reason = id => state(id) === 'OK' ? 'the result does not contain a valid reading' : state(id)
+    const control = (id, label, where, good, total, note, extra = {}) => {
+      const ok = count(good) !== null && count(total) !== null && total > 0 && good <= total
+      if (!ok && total === 0 && count(good) === 0) {
+        note && m.review.push({ title: clean(label), text: `${id}: no applicable resources in scope. The control is omitted from the client page.` })
+        return { id, label: clean(label), ...where, good: null, total: null, pct: null, mark: null, value: null, note: clean(note), source: source(id), ...extra }
+      }
+      if (!ok) return { ...ungathered(id, label, where, reason(id), note), ...extra }
+      const item = { id, label: clean(label), ...where, good, total, pct: pct(good, total), mark: mark(pct(good, total)), value: `${fmt(good)} of ${fmt(total)}`, note: clean(note), source: source(id), ...extra }
+      m.controls.push(item)
+      return item
+    }
+    // notApplicable() records a control whose evidence was gathered but holds nothing to judge, for example
+    // no device code sign-ins and no policy inventory. It shows as N/A and never moves a count.
+    const NA_VALUE = 'N/A'
+    const notApplicable = (id, label, where, note) => {
+      const item = { id, label: clean(label), ...where, good: null, total: null, pct: null, mark: null, value: NA_VALUE, measured: false, na: true, note: clean(note), source: source(id) }
+      m.controls.push(item)
+      m.notApplicable.push({ id, label: clean(label) })
+      return item
+    }
+    const inForce = (id, label, where, condition, note) => {
+      if (condition === null) return ungathered(id, label, where, reason(id), note)
+      const item = { id, label: clean(label), ...where, good: null, total: null, pct: condition ? 100 : 0, mark: condition ? 'E' : 'N', value: condition ? 'In force' : 'Not in force', boolean: true, note: clean(note), source: source(id) }
+      m.controls.push(item)
+      return item
+    }
+    // Placement: every control sits in a pillar (group) and a tier. Foundational controls are configured when the
+    // environment is built and are expected at E at every review. Defense in depth controls are the additional
+    // safeguards sequenced afterward. Placement follows docs/MXDR Security Controls Baseline and Hardening.md.
+    const G = { identity: 'Identity and access', endpoint: 'Endpoint and workload', network: 'Network and boundary', data: 'Data protection', detection: 'Detection and response' }
+    const F = Object.fromEntries(Object.entries(G).map(([k, group]) => [k, { group, tier: 'foundational' }]))
+    const D = Object.fromEntries(Object.entries(G).map(([k, group]) => [k, { group, tier: 'defense' }]))
+
+    // Identity and access.
+    const member = rows('IA.1').find(r => String(r.UserType).toLowerCase() === 'member')
+    const externalMfa = count(member?.UsersExternalMfa)
+    const legacyMfaQuery = member && member.UsersExternalMfa === undefined && member.UsersEntraMfa === undefined
+    // Collector 1.12.0 classifies each sign-in by its strongest MFA evidence and leaves Windows logon out.
+    const evidenceQuery = !!member && member.NoMfaOnlyUnevaluated !== undefined
+    // Federated tenants (IA.1-FEDERATION, collector 1.12.0). Most member sign-ins reuse the device session from
+    // Windows logon and never return to the identity provider, and Entra records whether such a session carried
+    // MFA only when a Require MFA policy asks. A member whose only sign-ins were those sessions is not evaluated,
+    // not missing MFA, so the grade leaves them out. Without the Graph read, federated sign-ins in IA.1 decide.
+    const federation = one('IA.1-FEDERATION')
+    const fedDomains = count(federation?.FederatedDomains)
+    const federated = fedDomains > 0 || (!has('IA.1-FEDERATION') && (count(member?.FederatedMfaAtLeastOnce) > 0 || count(member?.FederatedWithoutMfa) > 0))
+    const unevaluated = federated ? count(member?.NoMfaOnlyUnevaluated) : null
+    const evaluated = unevaluated !== null && count(member?.UsersSignedIn) !== null ? member.UsersSignedIn - unevaluated : null
+    const mfaLabel = 'Multifactor authentication required at sign-in'
+    const mfaNote = unevaluated !== null
+      ? `Members with at least one successful sign-in in the last 30 days that carried multifactor authentication, out of the members whose sign-ins could be evaluated.${externalMfa > 0 ? ` ${plural(externalMfa, 'member', 'members')} satisfied it through the federated identity provider.` : ''} Windows logon is left out because a federated Windows logon cannot carry multifactor authentication. Members whose only sign-ins reused a device session that no Conditional Access policy checked are recorded as not evaluated, not as missing multifactor authentication.`
+      : `Members with at least one successful sign-in in the last 30 days that satisfied multifactor authentication.${externalMfa > 0 ? ` ${plural(externalMfa, 'user', 'users')} satisfied it through a federated identity provider claim.` : ''}${evidenceQuery ? ' Windows logon and device registration are left out.' : ''}`
+    const mfa = !member && has('IA.1') ? notApplicable('IA.1', mfaLabel, F.identity, 'No member sign-ins were recorded in the last 30 days, so there is no evidence either way.')
+      : evaluated === 0 ? notApplicable('IA.1', mfaLabel, F.identity, 'Every member sign-in in the last 30 days reused a device session that no Conditional Access policy checked, so the logs hold no evidence either way.')
+      : control('IA.1', mfaLabel, F.identity, member?.UsersChallenged, evaluated ?? member?.UsersSignedIn, mfaNote, unevaluated !== null ? { population: 'Members whose sign-ins in the last 30 days could be evaluated.' } : {})
+    if (legacyMfaQuery) presenter('MFA coverage query', 'This pack was collected before IA.1 recognised MFA satisfied by external identity provider claims. In a federated tenant the member figure can read far below true coverage. Recollect with the current collector before presenting identity coverage.')
+    else if (member && !evidenceQuery && externalMfa > 0) presenter('MFA coverage query', 'This pack was collected before collector 1.12.0. In a federated tenant, members whose only sign-ins reused a device session that no policy checked read here as missing multifactor authentication, although the logs hold no evidence either way. Recollect with the current collector before presenting identity coverage.')
+    // Conditional Access controls. IA.8-CA is evaluated by the report builder from the raw policies and
+    // the per-account sign-in detail, and carries counts only. A successful sign-in by an account the
+    // policy excludes is an approved exception, not a gap. Without a policy inventory and without any
+    // sign-in of the kind, there is no evidence either way and the control reads N/A.
+    const caFlows = array(results['IA.8-CA'])
+    const caFlow = name => caFlows.find(r => r.Flow === name && bool(r.PolicyRead) && String(r.PolicyState) !== 'Unknown') || null
+    const enforcedState = f => ['Enforced', 'Security defaults'].includes(String(f.PolicyState))
+    const policyText = (f, what, verb = 'blocks', who = 'for all users') => ({
+      'Enforced': `An enabled Conditional Access policy ${verb} ${what} ${who}.`,
+      'Security defaults': `Security defaults ${verb === 'blocks' ? 'block' : 'require'} ${what}.`,
+      'Scoped': `The enabled Conditional Access policy that ${verb} ${what} applies to selected users, applications or conditions only.`,
+      'Report-only': `The Conditional Access policy that ${verb} ${what} runs in report-only mode.`,
+      'None': `No Conditional Access policy ${verb} ${what}.`
+    })[String(f.PolicyState)] || ''
+    const exceptionText = f => {
+      if (!f || !bool(f.DetailRead)) return ''
+      const parts = []
+      if (count(f.SucceededExcluded) > 0) parts.push(`${plural(f.SucceededExcluded, 'successful sign-in', 'successful sign-ins')} came from ${plural(f.AccountsExcluded, 'account', 'accounts')} the policy excludes as approved exceptions.`)
+      if (count(f.SucceededUngoverned) > 0) parts.push(`${plural(f.SucceededUngoverned, 'successful sign-in', 'successful sign-ins')} from ${plural(f.AccountsUngoverned, 'account was', 'accounts were')} not covered by the policy.`)
+      return parts.join(' ')
+    }
+    const noBlockEvidence = 'No attempt reached a Conditional Access block and there is no policy inventory, so there is no evidence either way.'
+    // Location-based sign-in access (IA.4-LOCATION) replaced the share of sign-ins Conditional Access evaluated on
+    // Oct 12, 2026. Graded from the raw policies: an enabled policy with a country or named network condition that
+    // blocks access or requires multifactor authentication, for all users and all resources.
+    const locLabel = 'Location-based sign-in access controls enforced through Conditional Access'
+    const locFlow = caFlow('Location')
+    const locSource = has('IA.8-POLICIES') ? 'IA.8-POLICIES' : 'IA.8'
+    const locControl = locFlow ? inForce('IA.4-LOCATION', locLabel, F.identity, enforcedState(locFlow), policyText(locFlow, 'sign-ins by location', 'restricts'))
+      : ungathered('IA.4-LOCATION', locLabel, F.identity, caFlows.some(r => r.Flow === 'Location') ? 'the policy inventory in this pack predates collector 1.10.0 and does not record location conditions' : reason(locSource), 'An enabled Conditional Access policy blocks sign-ins or requires multifactor authentication by country or named network, for all users and all resources.')
+    locControl.source = `IA.4-LOCATION from ${source(locSource)}`
+    if (locFlow && enforcedState(locFlow) && count(locFlow.ExcludedIdentities) > 0) presenter('Location policy exceptions', `${plural(locFlow.ExcludedIdentities, 'user, group or role is', 'users, groups or roles are')} excluded from the location policy. Confirm each is an approved exception, such as emergency access or a travel group, before presenting the control.`)
+    const legacyLabel = 'Legacy authentication blocked'
+    const legacyFlow = caFlow('Legacy authentication')
+    // Unknown is not a legacy protocol. Packs before collector 1.10.0 still carry it as an IA.3 row.
+    const legacy = rows('IA.3').filter(r => count(r.Attempts) !== null && count(r.Succeeded) !== null && !/^unknown$/i.test(String(r.ClientAppUsed ?? '')))
+    const legacyAttempts = legacy.length ? sum(legacy, 'Attempts') : 0, legacySucceeded = legacy.length ? sum(legacy, 'Succeeded') : 0
+    // Only error 53003 is a Conditional Access block. Attempts that failed without one (a wrong password, a locked
+    // account, a security defaults block logged as 530035) are never presented as blocked (Oct 14, 2026).
+    const legacyBlocked = legacy.reduce((n, r) => n + (count(r.BlockedByCa) ?? 0), 0)
+    const legacyFailedEarly = Math.max(0, legacyAttempts - legacySucceeded - legacyBlocked)
+    // Without per-account detail (packs before collector 1.10.0), a policy that blocks the flow for all users
+    // and all apps means every successful sign-in came from an account outside its scope.
+    const outsideScope = f => f && !bool(f.DetailRead) && String(f.PolicyState) === 'Enforced'
+    const outsideText = n => n > 0 ? `${plural(n, 'successful sign-in', 'successful sign-ins')} came from ${n === 1 ? 'an account' : 'accounts'} outside the policy scope.` : ''
+    const legacyActivity = !has('IA.3') ? '' : legacyAttempts === 0 ? 'No legacy protocol sign-in attempts in the last 30 days.'
+      : `${plural(legacyAttempts, 'legacy protocol attempt', 'legacy protocol attempts')} in the last 30 days${legacyBlocked > 0 ? `. Conditional Access stopped ${fmt(legacyBlocked)} and` : ','} ${legacySucceeded > 0 ? `${fmt(legacySucceeded)} succeeded` : 'none succeeded'}.`
+    // A pack without the BlockedByCa column cannot tell blocks from other failures, so it raises no note.
+    if (legacyFailedEarly > 0 && legacy.every(r => count(r.BlockedByCa) !== null)) presenter('Legacy sign-ins that failed without a Conditional Access block', legacyFlow && String(legacyFlow.PolicyState) === 'Security defaults'
+      ? `${plural(legacyFailedEarly, 'legacy protocol attempt', 'legacy protocol attempts')} failed without a Conditional Access block. Security defaults record their own block as error 530035, which this pack does not count separately, so these failures cannot be split between security defaults blocks and wrong passwords.`
+      : `${plural(legacyFailedEarly, 'legacy protocol attempt', 'legacy protocol attempts')} failed without a Conditional Access block, most often on a wrong password or a locked account. They are not presented as blocked. A large number points to password spraying against legacy endpoints.`)
+    let legacyControl
+    if (legacyFlow) {
+      // The policy configuration decides the status. Sign-ins show whether any account got past it.
+      legacyControl = inForce('IA.3', legacyLabel, F.identity, enforcedState(legacyFlow), [policyText(legacyFlow, 'legacy authentication'), legacyActivity, exceptionText(legacyFlow), outsideScope(legacyFlow) ? outsideText(legacySucceeded) : ''].filter(Boolean).join(' '))
+      if (enforcedState(legacyFlow) && bool(legacyFlow.DetailRead) && count(legacyFlow.SucceededUngoverned) > 0) presenter('Legacy sign-ins outside the block policy', `${plural(legacyFlow.SucceededUngoverned, 'successful legacy sign-in', 'successful legacy sign-ins')} in the last 30 days were not evaluated by the enabled block policy. They most likely predate the policy. Confirm before presenting the control. The SecOps worklist names the accounts.`)
+    } else if (!has('IA.3')) legacyControl = ungathered('IA.3', legacyLabel, F.identity, reason('IA.3'), 'An enabled Conditional Access policy or security defaults block legacy authentication for all users, with approved exceptions only.')
+    else if (legacyAttempts === 0) legacyControl = notApplicable('IA.3', legacyLabel, F.identity, 'No legacy protocol sign-in attempts in the last 30 days and no Conditional Access policy inventory, so there is no evidence either way.')
+    else if (legacySucceeded > 0) {
+      legacyControl = inForce('IA.3', legacyLabel, F.identity, false, legacyActivity)
+      presenter('Legacy authentication exclusions not checked', `${plural(legacySucceeded, 'legacy protocol sign-in', 'legacy protocol sign-ins')} succeeded, but this pack has no Conditional Access policy inventory, so accounts excluded from the block policy could not be told apart from a gap. Recollect with collector 1.10.0 or later and Policy.Read.All before presenting the control.`)
+    } else if (legacyBlocked > 0) legacyControl = inForce('IA.3', legacyLabel, F.identity, true, legacyActivity)
+    else legacyControl = notApplicable('IA.3', legacyLabel, F.identity, `${legacyActivity} ${noBlockEvidence}`)
+    const phish = rows('IA.9').filter(r => r.Enabled === true || String(r.Enabled).toLowerCase() === 'true')
+    const advancedPhish = phish.some(r => [r.EnableTargetedUserProtection, r.EnableOrganizationDomainsProtection, r.EnableMailboxIntelligenceProtection, r.EnableSpoofIntelligence].every(v => v === true || String(v).toLowerCase() === 'true'))
+    // Foundational: the Microsoft default anti-phishing policy is enabled, so every mailbox has baseline spoof protection.
+    // Packs collected before the IsDefault field was selected read any enabled policy as the baseline.
+    const phishKnowsDefault = rows('IA.9').some(r => r.IsDefault !== undefined && r.IsDefault !== null)
+    const basicPhish = phishKnowsDefault ? phish.some(r => bool(r.IsDefault)) : phish.length > 0
+    inForce('IA.9', 'Anti-phishing policy applied to every mailbox', F.identity, has('IA.9') ? basicPhish : null, 'The Microsoft default anti-phishing policy is enabled, so every mailbox carries baseline spoof protection.')
+    // Defense in depth: a custom or preset policy adds impersonation and mailbox intelligence protection.
+    inForce('IA.9', 'Advanced anti-phishing policy applied', D.identity, has('IA.9') ? advancedPhish : null, 'An enabled anti-phishing policy with impersonation, mailbox intelligence and spoof protection.')
+    const roles = one('IA.6-SUB')
+    const adminPortal = rows('IA.1-ADMINPORTAL').find(r => String(r.UserType).toLowerCase() === 'member')
+    const portalLabel = 'Multifactor authentication at admin portal sign-in'
+    const portalFlow = caFlow('Admin portals')
+    const portalPolicy = portalFlow ? policyText(portalFlow, 'multifactor authentication on the Microsoft admin portals', 'requires', 'for administrators') : ''
+    // Same rule as IA.1: in a federated tenant, members whose only portal sign-ins were unevaluated sessions are left out.
+    const portalUnevaluated = federated ? count(adminPortal?.NoMfaOnlyUnevaluated) : null
+    const portalUsers = count(adminPortal?.Users)
+    const portalTotal = portalUnevaluated !== null && portalUsers !== null ? portalUsers - portalUnevaluated : portalUsers
+    const portalSkipped = portalUnevaluated > 0 ? ' Members whose only portal sign-ins reused a session that no Conditional Access policy checked are recorded as not evaluated.' : ''
+    if (adminPortal && portalTotal > 0) control('IA.1-ADMINPORTAL', portalLabel, F.identity, adminPortal.UsersChallenged, portalTotal, `Members who signed in to a Microsoft admin portal in the last 30 days and satisfied multifactor authentication on at least one of those sign-ins.${portalSkipped}${portalPolicy ? ' ' + portalPolicy : ''}`)
+    else if (!has('IA.1-ADMINPORTAL')) ungathered('IA.1-ADMINPORTAL', portalLabel, F.identity, reason('IA.1-ADMINPORTAL'), 'Members who signed in to a Microsoft admin portal in the last 30 days and satisfied multifactor authentication.')
+    else if (portalFlow) inForce('IA.1-ADMINPORTAL', portalLabel, F.identity, enforcedState(portalFlow), `${portalUsers > 0 ? 'Every member sign-in to a Microsoft admin portal in the last 30 days reused a session that no policy checked' : 'No member signed in to a Microsoft admin portal in the last 30 days'}, so the policy configuration decides the status. ${portalPolicy}`)
+    else notApplicable('IA.1-ADMINPORTAL', portalLabel, F.identity, `${portalUsers > 0 ? 'Every member sign-in to a Microsoft admin portal in the last 30 days reused a session that no policy checked' : 'No member signed in to a Microsoft admin portal in the last 30 days'} and no Conditional Access policy inventory, so there is no evidence either way.`)
+    // Collector 1.13.0 counts a sign-in as MFA when an earlier sign-in in the same session carried direct MFA.
+    // Members whose only MFA evidence is that inference are named in the presenter notes, never on the client page.
+    const sessionLinked = count(member?.MfaSessionLinkedOnly)
+    const sessionLinkedText = sessionLinked > 0 ? `${plural(sessionLinked, 'member counts', 'members count')} as covered only by inference from an earlier MFA sign-in in the same session, not from MFA recorded on their own sign-ins.` : ''
+    if (sessionLinkedText && !federated) presenter('MFA inferred from the session', sessionLinkedText)
+    if (federated) {
+      const provider = String(federation?.Provider ?? '').split(', ').filter(p => p && !['Other', 'Unknown'].includes(p))
+      const behavior = String(federation?.MfaBehavior ?? '')
+      presenter('Federated sign-in and MFA', [
+        `The tenant is federated${provider.length ? ` with ${list(provider)}` : ''}${fedDomains > 0 ? ` (${plural(fedDomains, 'domain', 'domains')})` : ', as the federated sign-ins in IA.1 show. The federated domains themselves could not be read'}.`,
+        'Windows logon on hybrid-joined devices gets its token through WS-Trust, which cannot carry multifactor authentication, so the measure leaves it out.',
+        'Most member sign-ins then reuse the device session and never return to the identity provider. Entra records whether a reused session carried MFA only when a Conditional Access policy with the Require multifactor authentication grant asks, so reused sessions are not evaluated rather than missing MFA.',
+        unevaluated !== null && count(member?.UsersSignedIn) !== null ? `${fmt(unevaluated)} of ${fmt(member.UsersSignedIn)} members signed in only through such sessions in the last 30 days and are left out of the grade.` : '',
+        sessionLinkedText,
+        portalUnevaluated > 0 ? `At the admin portals, ${plural(portalUnevaluated, 'member was', 'members were')} left out the same way.` : '',
+        count(member?.FederatedMfaAtLeastOnce) > 0 ? `${plural(member.FederatedMfaAtLeastOnce, 'member', 'members')} showed MFA asserted by the identity provider at least once, which confirms that it performs MFA and that Entra accepts the claim.` : '',
+        count(member?.FederatedWithoutMfa) > 0 ? `${plural(member.FederatedWithoutMfa, 'member', 'members')} signed in through the identity provider without an MFA assertion. Whether that is acceptable depends on its sign-on policy.` : '',
+        /rejectMfaByFederatedIdp/.test(behavior) ? 'Entra is set to reject MFA performed by the identity provider (rejectMfaByFederatedIdp), so a Require MFA policy would not count it.'
+          : /enforceMfaByFederatedIdp/.test(behavior) ? 'When a policy requires MFA, Entra sends the member back to the identity provider for it (enforceMfaByFederatedIdp).'
+          : /acceptIfMfaDoneByFederatedIdp/.test(behavior) ? 'Entra accepts MFA performed by the identity provider and prompts with its own MFA when the provider did none (acceptIfMfaDoneByFederatedIdp).' : '',
+        'A report-only Conditional Access policy with the Require multifactor authentication grant for all members would record on every sign-in whether the session already carried MFA, without prompting anyone.'
+      ].filter(Boolean).join(' '))
+    }
+    const deviceCode = one('IA.3-DEVICECODE')
+    const deviceLabel = 'Device code flow sign-ins blocked'
+    const deviceFlow = caFlow('Device code')
+    const deviceAttempts = count(deviceCode?.Attempts) ?? 0, deviceSucceeded = count(deviceCode?.Succeeded) ?? 0
+    const deviceActivity = deviceAttempts === 0 ? 'No device code sign-ins in the last 30 days.'
+      : outsideScope(deviceFlow) && deviceSucceeded > 0 ? `${plural(deviceAttempts, 'device code attempt', 'device code attempts')} in the last 30 days. ${deviceSucceeded === deviceAttempts ? (deviceSucceeded === 1 ? 'It succeeded from an account' : `All ${fmt(deviceSucceeded)} succeeded from accounts`) : `The ${fmt(deviceSucceeded)} that succeeded came from accounts`} outside the policy scope.`
+      : `${plural(deviceAttempts, 'device code attempt', 'device code attempts')} in the last 30 days, ${deviceSucceeded > 0 ? fmt(deviceSucceeded) : 'none'} succeeded.`
+    const notItemized = [outsideScope(deviceFlow) && deviceSucceeded > 0 ? `${plural(deviceSucceeded, 'device code sign-in', 'device code sign-ins')}` : '', outsideScope(legacyFlow) && legacySucceeded > 0 ? `${plural(legacySucceeded, 'legacy protocol sign-in', 'legacy protocol sign-ins')}` : ''].filter(Boolean)
+    if (notItemized.length) presenter('Conditional Access exceptions not itemized', `${list(notItemized)} succeeded while an enabled policy blocks the flow for all users, so the accounts are outside the policy scope, either excluded or signing in before the policy existed. This pack has no per-account sign-in detail. Recollect with collector 1.10.0 or later to have the SecOps worklist name the accounts and confirm each exclusion before presenting the controls.`)
+    if (deviceFlow) {
+      // The policy configuration decides the status. Sign-ins show whether any account got past it.
+      inForce('IA.3-DEVICECODE', deviceLabel, F.identity, enforcedState(deviceFlow), [policyText(deviceFlow, 'device code flow'), deviceActivity, exceptionText(deviceFlow)].filter(Boolean).join(' '))
+      if (enforcedState(deviceFlow) && bool(deviceFlow.DetailRead) && count(deviceFlow.SucceededUngoverned) > 0) presenter('Device code sign-ins outside the block policy', `${plural(deviceFlow.SucceededUngoverned, 'successful device code sign-in', 'successful device code sign-ins')} in the last 30 days were not evaluated by the enabled block policy. They most likely predate the policy. Confirm before presenting the control. The SecOps worklist names the accounts.`)
+    } else if (!has('IA.3-DEVICECODE')) ungathered('IA.3-DEVICECODE', deviceLabel, F.identity, reason('IA.3-DEVICECODE'), 'Device code flow sign-ins blocked by Conditional Access.')
+    else if (deviceAttempts === 0) notApplicable('IA.3-DEVICECODE', deviceLabel, F.identity, 'No device code sign-ins in the last 30 days and no Conditional Access policy inventory, so there is no evidence either way.')
+    else if (deviceSucceeded > 0) {
+      inForce('IA.3-DEVICECODE', deviceLabel, F.identity, false, deviceActivity)
+      presenter('Device code exclusions not checked', `${plural(deviceSucceeded, 'device code sign-in', 'device code sign-ins')} succeeded, but this pack has no Conditional Access policy inventory, so accounts excluded from the block policy could not be told apart from a gap. Recollect with collector 1.10.0 or later and Policy.Read.All before presenting the control.`)
+    } else if (count(deviceCode?.BlockedByCa) > 0) inForce('IA.3-DEVICECODE', deviceLabel, F.identity, true, `${plural(deviceAttempts, 'device code attempt', 'device code attempts')} in the last 30 days. Conditional Access stopped ${fmt(deviceCode.BlockedByCa)} and none succeeded.`)
+    else notApplicable('IA.3-DEVICECODE', deviceLabel, F.identity, `${deviceActivity} ${noBlockEvidence}`)
+    const ia6 = one('IA.6')
+    const pimLabel = 'Privileged roles held through eligibility rather than standing assignment'
+    const pimNote = 'Privileged Entra role assignments that are eligible through Privileged Identity Management, against eligible plus standing assignments.'
+    const pimUnread = ia6 && String(ia6.PimRead ?? '') === 'NoPermission'
+    const pim = pimUnread ? ungathered('IA.6', pimLabel, D.identity, 'PIM eligibility needs RoleManagement.Read.Directory, which the Graph token lacked', `${fmt(ia6.Standing)} active privileged assignments were read, but eligibility was not visible, so the share is not graded.`)
+      : ia6 && count(ia6.Standing) !== null && count(ia6.Eligible) !== null ? control('IA.6', pimLabel, D.identity, ia6.Eligible, ia6.Standing + ia6.Eligible, pimNote)
+      : (has('IA.6') ? null : control('IA.6', pimLabel, D.identity, null, null, pimNote))
+    const risk = one('IA.11')
+    inForce('IA.11', 'Identity Protection sign-in and user risk policies enforced', D.identity, has('IA.11') ? (risk ? bool(risk.InForce) : false) : null, risk && !bool(risk.InForce) ? `Sign-in risk policy for all users: ${bool(risk.SignInRiskAllUsers) ? 'yes' : 'no'}. User risk policy for all users: ${bool(risk.UserRiskAllUsers) ? 'yes' : 'no'}.` : 'An enabled Conditional Access policy with a sign-in risk condition and one with a user risk condition both include all users.')
+    const consent = one('IA.13')
+    const governedKnown = consent && String(consent.Governed ?? '').trim() !== ''
+    inForce('IA.13', 'Application consent governed by administrative approval', D.identity, has('IA.13') ? (governedKnown ? bool(consent.Governed) : null) : null, consent ? (governedKnown ? `User consent: ${clean(consent.UserConsent)}. Admin consent request workflow ${bool(consent.AdminConsentWorkflow) ? 'on' : 'off'}.` : `User consent: ${clean(consent.UserConsent)}. The admin consent request workflow could not be read, so the control is not graded.`) : 'Users cannot consent, or only to low-risk permissions from verified publishers, and the admin consent request workflow is on.')
+    const methods = rows('IA.2')
+    const retiring = methods.find(r => /SMS or voice/i.test(r.Bucket))
+    const resistant = methods.find(r => /Phishing-resistant/i.test(r.Bucket))
+    const authenticator = methods.find(r => /Authenticator/i.test(r.Bucket))
+
+    // Network virtual appliances (P0.6-APPLIANCES, collector 1.10.0) leave the VM measures they cannot take.
+    const appliances = count(one('P0.6-APPLIANCES')?.Appliances) ?? 0
+    const applianceText = appliances > 0 ? ` ${plural(appliances, 'network virtual appliance is', 'network virtual appliances are')} excluded because the vendor image cannot take this control.` : ''
+    if (appliances > 0) note('Network virtual appliances', `P0.6-APPLIANCES: ${plural(appliances, 'machine runs', 'machines run')} a marketplace firewall or network appliance image. They are excluded from Trusted Launch, encryption at host, Azure Backup and the agent-based Defender for Cloud recommendations. The SecOps worklist names them.`)
+
+    // Endpoint and workload.
+    const devices = rows('EW.1'), azureVms = devices.filter(r => r.Scope === 'Azure VM')
+    const onboarded = sum(devices, 'Onboarded'), eligible = sum(devices, 'CanBeOnboarded')
+    const edr = control('EW.1', 'Endpoint detection and response deployed', F.endpoint, onboarded, onboarded !== null && eligible !== null ? onboarded + eligible : null, 'Devices seen in the last 30 days that are onboarded, against onboarded plus onboarding-eligible devices.')
+    const vmOnboarded = sum(azureVms, 'Onboarded'), vmEligible = sum(azureVms, 'CanBeOnboarded')
+    // The standards edition (data.standard) lists every row a client page can show, including this conditional one.
+    const vmEdr = azureVms.length || data.standard ? control('EW.1', 'Azure virtual machines reporting to endpoint detection', F.endpoint, vmOnboarded, vmOnboarded !== null && vmEligible !== null ? vmOnboarded + vmEligible : null, 'Azure virtual machines seen in the last 30 days.') : null
+    // Sensor health is read on Azure virtual machines only (Oct 12, 2026). Workstations, laptops and network devices
+    // such as Palo Alto, Meraki, Fortinet and SonicWall firewalls stay out. Collector 1.11.0 drops network devices at
+    // the source. The platform test also covers older packs.
+    const sensorRows = azureVms.filter(r => !NETWORK_DEVICE.test(String(r.OSPlatform ?? '')))
+    const noAzureVms = has('EW.1') && !sensorRows.length
+    const sensors = control('EW.1', 'Endpoint sensors active on Azure virtual machines', F.detection, noAzureVms ? 0 : sum(sensorRows, 'SensorActive'), noAzureVms ? 0 : sum(sensorRows, 'Onboarded'), 'Active sensors among onboarded Azure virtual machines seen in the last 30 days. Workstations and network devices such as firewalls are not part of this measure.')
+    const rtp = rows('EW.3').filter(r => /real-time protection/i.test(r.ConfigurationName) && count(r.Devices) !== null && count(r.Compliant) !== null)
+    const antimalware = rtp.length ? control('EW.3', 'Real-time anti-malware protection enabled', F.endpoint, sum(rtp, 'Compliant'), sum(rtp, 'Devices'), 'Devices compliant with the real-time protection configuration checks, all platforms.') : (has('EW.3') ? null : control('EW.3', 'Real-time anti-malware protection enabled', F.endpoint, null, null, 'Devices compliant with the real-time protection configuration checks, all platforms.'))
+    const va = rows('DR.5')
+    const vaControl = control('DR.5', 'Vulnerability assessment running on onboarded devices', D.endpoint, sum(va, 'Assessed'), sum(va, 'Onboarded'), 'Onboarded devices with a vulnerability assessment result.')
+    const ew7 = one('EW.7')
+    const trusted = control('EW.7', 'Platform integrity through Trusted Launch', D.endpoint, ew7?.TrustedLaunchOrCvm, ew7?.VMs, `Azure virtual machines deployed with Trusted Launch or confidential computing.${applianceText}`)
+    const encRows = rows('DP.4')
+    const encryption = control('DP.4', 'Encryption at host on virtual machines', D.endpoint, sum(encRows, 'WithEncryptionAtHost'), sum(encRows, 'Resources'), `Virtual machine and scale set resources with the encryption at host setting. Disk encryption alternatives are reviewed separately.${applianceText}`)
+    // Per-device secure configuration measures: Scope rows summed. EMPTY means no device had an applicable check, so the control is omitted.
+    const deviceControl = (id, label, where, note) => {
+      const r = rows(id).filter(x => count(x.Devices) !== null && count(x.Compliant) !== null)
+      return r.length ? control(id, label, where, sum(r, 'Compliant'), sum(r, 'Devices'), note) : (has(id) ? null : control(id, label, where, null, null, note))
+    }
+    const tamper = deviceControl('EW.15', 'Tamper protection enforced on onboarded devices', F.endpoint, 'Onboarded devices seen in the last 30 days with tamper protection on.')
+    const firewall = deviceControl('EW.16', 'Host firewall enforced through endpoint policy', F.endpoint, 'Onboarded devices with Microsoft Defender Firewall on for every profile.')
+    const credential = deviceControl('EW.12', 'Credential protection enforced', D.endpoint, 'Onboarded Windows devices with LSA protection on and WDigest credential caching off.')
+    const rdp = deviceControl('EW.14', 'Remote Desktop hardened with TLS and Network Level Authentication', D.endpoint, 'Onboarded Windows devices requiring TLS and Network Level Authentication for Remote Desktop.')
+    const ew10 = one('EW.10')
+    const cadenceText = count(p.PatchCadenceDays) ? ` of ${plural(p.PatchCadenceDays, 'day', 'days')}` : ''
+    const patch = ew10 && count(ew10.Machines) !== null ? control('EW.10', 'Operating system findings remediated within the patch cadence', F.endpoint, ew10.WithinCadence, ew10.Machines, `Machines assessed by Update Manager with no critical or security patch older than the agreed cadence${cadenceText}.`) : (has('EW.10') ? null : control('EW.10', 'Operating system findings remediated within the patch cadence', F.endpoint, null, null, 'Machines assessed by Update Manager with no critical or security patch older than the agreed cadence.'))
+    const appControl = one('EW.13')
+    if (has('EW.13')) inForce('EW.13', 'Application allow-listing policy assigned', D.endpoint, appControl ? count(appControl.Assigned) > 0 : false, appControl && count(appControl.Policies) > 0 ? `${plural(appControl.Policies, 'App Control for Business policy', 'App Control for Business policies')}, ${fmt(appControl.Assigned)} assigned.` : 'No App Control for Business policy is defined in Intune.')
+    else ungathered('EW.13', 'Application allow-listing policy assigned', D.endpoint, reason('EW.13'), 'An App Control for Business policy assigned in Intune.')
+
+    // Network and boundary.
+    const nb4 = one('NB.4'), nb1 = one('NB.1'), nb5 = one('NB.5'), nb6 = one('NB.6'), dp1 = one('DP.1')
+    const https = control('NB.4', 'Encryption in transit enforced on published web apps', F.network, nb4?.HttpsOnly, nb4?.Sites, 'Web and function apps with the HTTPS-only setting.')
+    const segmentation = control('NB.1', 'Workload subnets protected by segmentation', D.network, nb1?.Segmented, nb1?.WorkloadSubnets, 'Workload subnets with a network security group or a route through the firewall.')
+    const sqlTls = control('NB.6', 'Transport encryption enforced on Azure SQL', F.network, nb6?.MinTls12, nb6?.Servers, 'Azure SQL servers requiring TLS 1.2 or newer.')
+    const appTls = control('NB.5', 'App Service minimum TLS 1.2', F.network, nb5?.MinTls12, nb5?.Configs, 'App Service configurations requiring TLS 1.2 or newer.')
+    const publicOff = control('DP.1', 'Storage accounts closed to public networks', D.network, dp1?.PublicNetworkOff, dp1?.Accounts, 'Storage accounts with public network access disabled.')
+    const anon = control('DP.1', 'Anonymous blob access disabled', F.network, dp1?.AnonymousBlobOff, dp1?.Accounts, 'Storage accounts with account-level anonymous access disabled.')
+    // Container level (DP.1-CONTAINERS, collector 1.11.0): the container's own access level, read in every account,
+    // so a container stays closed even if the account-level setting is relaxed later.
+    const dp1c = one('DP.1-CONTAINERS')
+    const containerLabel = 'Blob containers closed to anonymous access'
+    const containerNote = 'Blob containers set to private at the container level, read in every storage account, so they stay closed even if the account-level setting is relaxed.'
+    const containers = dp1c && count(dp1c.Containers) !== null ? control('DP.1-CONTAINERS', containerLabel, D.network, dp1c.PrivateContainers, dp1c.Containers, containerNote) : (has('DP.1-CONTAINERS') ? null : control('DP.1-CONTAINERS', containerLabel, D.network, null, null, containerNote))
+    if (dp1c && count(dp1c.ExposedContainers) > 0) presenter('Blob containers readable anonymously', `${plural(dp1c.ExposedContainers, 'blob container is', 'blob containers are')} readable anonymously today in ${plural(dp1c.AccountsExposed, 'storage account', 'storage accounts')}, because the container is set to public and the account setting allows it. The SecOps worklist names them. Confirm whether each one serves public content by design before presenting.`)
+    if (dp1c && count(dp1c.AccountsUnread) > 0) note('Blob containers not read', `DP.1-CONTAINERS: the containers of ${plural(dp1c.AccountsUnread, 'storage account', 'storage accounts')} could not be listed and are not counted. The collector detail names the error.`)
+    const netProtect = deviceControl('NB.8', 'Network protection active for egress and DNS monitoring', F.network, 'Onboarded Windows devices with network protection in block mode. The Sentinel tunneling and beaconing rules are confirmed in the review worksheet.')
+    const ldap = deviceControl('NB.10', 'Directory traffic signed and channel-bound', D.network, 'Domain controllers requiring LDAP server signing and channel binding.')
+    const ntlm = deviceControl('NB.11', 'NTLMv2 enforced with LM and NTLM refused', D.network, 'Onboarded Windows devices sending NTLMv2 responses only.')
+    const boundary = windowValid ? rows('OUT.6') : []
+    const boundaryCount = boundary.length ? sum(boundary, 'Alerts') : (has('OUT.6') ? 0 : null)
+
+    // Data protection.
+    const dp2 = one('DP.2'), dp3 = rows('DP.3')
+    const transfer = control('DP.1', 'Secure transfer required on storage accounts', F.data, dp1?.SecureTransfer, dp1?.Accounts, 'Storage accounts configured to require secure transfer.')
+    const tls = control('DP.1', 'Storage minimum TLS 1.2', F.data, dp1?.MinTls12, dp1?.Accounts, 'Storage accounts requiring TLS 1.2 or newer.')
+    const softDelete = control('DP.2', 'Key Vault soft delete', F.data, dp2?.SoftDelete, dp2?.Vaults, 'Vaults able to recover deleted secrets, keys and certificates.')
+    const purge = control('DP.2', 'Key Vault purge protection', F.data, dp2?.PurgeProtection, dp2?.Vaults, 'Vaults protected against permanent deletion during the retention period.')
+    const rbac = control('DP.2', 'Key Vault access governed by role-based access control', D.data, dp2?.RbacAuth, dp2?.Vaults, 'Vaults using the Azure RBAC permission model.')
+    const disks = dp3.filter(r => count(r.Disks) !== null)
+    const diskTotal = sum(disks, 'Disks'), diskEncrypted = disks.length ? disks.filter(r => /EncryptionAtRest|Encrypted|Customer|Platform/i.test(String(r.EncryptionType))).reduce((n, r) => n + Number(r.Disks), 0) : null
+    control('DP.3', 'Managed disks encrypted at rest', F.data, diskEncrypted, diskTotal, 'Managed disks encrypted with platform or customer managed keys.')
+    const vmTotal = sum(encRows, 'Resources'), noBackup = count(one('DP.5b')?.VmsWithoutBackup)
+    const backup = control('DP.5b', 'Azure Backup protecting virtual machines', D.data, vmTotal !== null && noBackup !== null ? Math.max(0, vmTotal - noBackup) : null, vmTotal, `Virtual machines with a protected backup item. Pooled session hosts may be excluded by agreement.${applianceText}`)
+    const safeLinks = rows('IA.9-SAFELINKS'), safeAttach = rows('IA.9-SAFEATTACH')
+    inForce('IA.9-SAFELINKS', 'Safe Links scanning on mail, Teams and Office', F.data, has('IA.9-SAFELINKS') ? safeLinks.some(r => [r.EnableSafeLinksForEmail, r.EnableSafeLinksForTeams, r.EnableSafeLinksForOffice].every(v => v === true || String(v).toLowerCase() === 'true')) : null, 'At least one Safe Links policy covers mail, Teams and Office.')
+    inForce('IA.9-SAFEATTACH', 'Safe Attachments blocking malicious files', F.data, has('IA.9-SAFEATTACH') ? safeAttach.some(r => (r.Enable === true || String(r.Enable).toLowerCase() === 'true') && /block|dynamic|replace/i.test(String(r.Action))) : null, 'At least one enabled Safe Attachments policy blocks or replaces malicious attachments.')
+    const zap = rows('DP.7').filter(r => /ZAP|Remediation/i.test(String(r.ActionType)))
+    const mailRemoved = zap.length ? sum(zap, 'Succeeded') : null
+    m.mailRemoved = mailRemoved
+    if (zap.length) inForce('DP.7', 'Malicious mail removed after delivery', F.data, mailRemoved > 0, `${fmt(mailRemoved)} post-delivery removals succeeded in the last 30 days.`)
+    else if (!has('DP.7')) ungathered('DP.7', 'Malicious mail removed after delivery', F.data, reason('DP.7'), 'Post-delivery removals of malicious mail in the last 30 days.')
+    const zapRows = rows('DP.7-ZAP')
+    if (has('DP.7-ZAP')) inForce('DP.7-ZAP', 'Zero-hour auto purge enabled for malware, spam and phishing', F.data, zapRows.length > 0 && zapRows.every(r => /malware/i.test(String(r.Kind)) ? bool(r.ZapEnabled) : (bool(r.PhishZapEnabled) && bool(r.SpamZapEnabled))), 'Every malware and content filter policy keeps zero-hour auto purge on.')
+    else ungathered('DP.7-ZAP', 'Zero-hour auto purge enabled for malware, spam and phishing', F.data, reason('DP.7-ZAP'), 'Every malware and content filter policy keeps zero-hour auto purge on.')
+    const sharing = one('DP.8')
+    if (has('DP.8')) inForce('DP.8', 'Collaboration sharing boundaries defined', D.data, sharing ? !/externalUserAndGuestSharing/i.test(String(sharing.SharingCapability)) : false, sharing ? `Tenant sharing level ${clean(sharing.SharingCapability)}${/allowList/i.test(String(sharing.DomainRestrictionMode)) ? ' with an allowed domain list' : ''}.` : 'Tenant sharing settings were not returned.')
+    else ungathered('DP.8', 'Collaboration sharing boundaries defined', D.data, reason('DP.8'), 'Tenant sharing level below anyone links, with domain restrictions where agreed.')
+    const intuneEncrypted = rows('DP.10').filter(r => /^(Windows|macOS)$/i.test(String(r.OperatingSystem)) && count(r.Devices) !== null && count(r.Encrypted) !== null)
+    const bitlocker = rows('EW.3').filter(r => /BitLocker-supported drives/i.test(String(r.ConfigurationName)) && count(r.Devices) !== null && count(r.Compliant) !== null)
+    if (intuneEncrypted.length) control('DP.10', 'Endpoint disk encryption enforced on managed devices', D.data, sum(intuneEncrypted, 'Encrypted'), sum(intuneEncrypted, 'Devices'), 'Intune-managed Windows and macOS devices reported as encrypted.')
+    else if (bitlocker.length) control('DP.10', 'Endpoint disk encryption enforced on managed devices', D.data, sum(bitlocker, 'Compliant'), sum(bitlocker, 'Devices'), 'Onboarded Windows devices passing the BitLocker drive encryption check. Intune encryption state was not available, so the endpoint configuration check stands in.', { source: source('EW.3') })
+    else if (!has('DP.10')) ungathered('DP.10', 'Endpoint disk encryption enforced on managed devices', D.data, reason('DP.10'), 'Managed Windows and macOS devices reported as encrypted.')
+
+    // Detection and response.
+    const plan = control('DR.2', 'Cloud workload protection across the resource estate', F.detection, sum(rows('DR.2'), 'Covered'), sum(rows('DR.2'), 'Resources'), 'Eligible resources on a Standard Defender for Cloud plan. Subscription plan configuration, estimated.', { estimate: true })
+    const aiRow = rows('DR.2').find(r => r.Plan === 'AI')
+    // DR.6 counts assessment entries and duplicated DR.13, so it no longer has a control row (Oct 12, 2026).
+    // Diagnostic logging is graded per resource by DR.13 in defense in depth. DR.6 remains a fallback for the backlog.
+    const logging = rows('DR.6').filter(r => count(r.Healthy) !== null && count(r.Unhealthy) !== null)
+    const rules = rows('DR.9').filter(r => /All workspaces/i.test(String(r.Scope)))
+    const ruleTotal = count(rules.find(r => /^Total rules$/i.test(r.Metric))?.Value), ruleEnabled = count(rules.find(r => /^Enabled rules$/i.test(r.Metric))?.Value)
+    const ruleControl = ruleTotal !== null ? control('DR.9', 'Analytics rules enabled in Sentinel', D.detection, ruleEnabled, ruleTotal, 'Enabled analytics rules across all workspaces.') : ungathered('DR.9', 'Analytics rules enabled in Sentinel', D.detection, reason('DR.9'), 'Enabled analytics rules across all workspaces.')
+    const ti = one('DR.7')
+    inForce('DR.7', 'Threat intelligence indicators ingested tenant-wide', D.detection, has('DR.7') ? count(ti?.Indicators) > 0 : null, ti ? `${fmt(ti.Indicators)} indicators available for matching.` : has('DR.7') ? 'No threat intelligence table recorded.' : 'Threat intelligence indicators available for matching in the workspace.')
+    const dc = rows('DR.4')
+    if (has('DR.4')) inForce('DR.4', 'Domain controller telemetry collected continuously', F.detection, dc.length > 0 && sum(dc, 'Events') > 0, dc.length ? `${plural(dc.length, 'domain controller', 'domain controllers')} reporting.` : 'No domain controller events recorded.')
+    else ungathered('DR.4', 'Domain controller telemetry collected continuously', F.detection, reason('DR.4'), 'Domain controller security events arriving in the workspace.')
+    const triage = one('DR.10')
+    if (triage && count(triage.Closed) !== null) control('DR.10', 'Alerts closed with a documented disposition', F.detection, triage.Documented, triage.Closed, 'Alerts closed in the last 30 days that carry a classification and a closing comment.')
+    else if (!has('DR.10')) ungathered('DR.10', 'Alerts closed with a documented disposition', F.detection, reason('DR.10'), 'Alerts closed in the last 30 days that carry a classification and a closing comment.')
+    const mdiSensors = one('DR.11')
+    if (mdiSensors && count(mdiSensors.Sensors) !== null) control('DR.11', 'Defender for Identity sensors healthy on domain controllers', F.detection, mdiSensors.Healthy, mdiSensors.Sensors, 'Sensors reporting healthy, of sensors registered. A domain controller with no sensor is found by comparing with the directory.')
+    else if (!has('DR.11')) ungathered('DR.11', 'Defender for Identity sensors healthy on domain controllers', F.detection, reason('DR.11'), 'Sensors reporting healthy, of sensors registered.')
+    const logPerResource = one('DR.13')
+    if (logPerResource && count(logPerResource.Resources) !== null) control('DR.13', 'Diagnostic logging enabled on all platform resources', D.detection, logPerResource.AllHealthy, logPerResource.Resources, 'Resources with every diagnostic and audit logging assessment healthy, of resources with at least one such assessment.')
+    else if (!has('DR.13')) ungathered('DR.13', 'Diagnostic logging enabled on all platform resources', D.detection, reason('DR.13'), 'Resources with every diagnostic and audit logging assessment healthy.')
+    const initiative = rows('DR.6-INITIATIVE').filter(r => count(r.Resources) !== null && count(r.Compliant) !== null)
+    if (initiative.length) control('DR.6-INITIATIVE', 'Audit logging initiative compliant across its resources', F.detection, sum(initiative, 'Compliant'), sum(initiative, 'Resources'), 'Resources compliant with the ATMO-MXDR diagnostic logging initiative, summed across its policies.')
+    else if (has('DR.6-INITIATIVE')) note('Audit logging initiative', 'DR.6-INITIATIVE: the ATMO-MXDR diagnostic logging initiative is not assigned in these subscriptions, so the control is omitted from the client page.')
+    else ungathered('DR.6-INITIATIVE', 'Audit logging initiative compliant across its resources', F.detection, reason('DR.6-INITIATIVE'), 'Resources compliant with the ATMO-MXDR diagnostic logging initiative.')
+    const groups = one('DR.12')
+    if (groups && count(groups.Devices) !== null) note('Attack disruption readiness', `DR.12: ${fmt(groups.Devices)} onboarded devices across ${plural(groups.Groups, 'device group', 'device groups')}. Confirm the automation level of each group in the Defender portal before grading attack disruption.`)
+    const mgmt = one('IA.14')
+    if (mgmt && count(mgmt.Users) !== null) note('Azure management plane access', `IA.14: ${plural(mgmt.Users, 'user', 'users')} signed in to Azure management in the last 30 days. Compare with the privileged role holders in the worksheet before grading the management plane control.`)
+    const telemetry = rows('DR.3').length
+
+    // Backlog counts for the hardening tier.
+    const critical = rows('BKL.1').filter(r => /Critical/i.test(r.VulnerabilitySeverityLevel))
+    const criticalCves = has('BKL.1') ? (sum(critical, 'ExploitableCves') ?? 0) : null
+    const exploitable = has('BKL.1') ? (sum(rows('BKL.1'), 'ExploitableCves') ?? 0) : null
+    m.criticalCves = criticalCves
+    const hardening = []
+    const harden = (label, value, id, rank, roadmap) => { if (count(value) !== null && value > 0) hardening.push({ label: clean(label), value, id, rank, roadmap }) }
+    harden('Critical exploitable findings open', criticalCves, 'BKL.1', 1)
+    harden('Virtual machines pending host encryption', encryption.total !== null ? encryption.total - encryption.good : null, 'DP.4', 8)
+    harden('Users on a retiring MFA method', count(retiring?.DistinctUsers), 'IA.2', 3)
+    const logPerResourceValid = logPerResource && count(logPerResource.Resources) !== null && count(logPerResource.AllHealthy) !== null
+    const logGap = logPerResourceValid ? { n: logPerResource.Resources - logPerResource.AllHealthy, id: 'DR.13', text: n => `${fmt(n)} platform resources are missing at least one diagnostic or audit log setting.` }
+      : logging.length ? { n: sum(logging, 'Unhealthy'), id: 'DR.6', text: n => `${fmt(n)} assessment entries report platform resources without diagnostic or audit logging.` } : null
+    harden('Resources without diagnostic logging', logGap ? logGap.n : null, logGap ? logGap.id : 'DR.13', 7)
+    harden('AI service resources without workload protection', aiRow ? count(aiRow.Resources) - count(aiRow.Covered) : null, 'DR.2', 6)
+    harden('Workload subnets without segmentation', segmentation.total !== null ? segmentation.total - segmentation.good : null, 'NB.1', 12)
+    harden('Key Vaults without purge protection', purge.total !== null ? purge.total - purge.good : null, 'DP.2', 11)
+    harden('Storage accounts open to public networks', publicOff.total !== null ? publicOff.total - publicOff.good : null, 'DP.1', 10)
+    harden('Virtual machines without Azure Backup', backup.total !== null ? backup.total - backup.good : null, 'DP.5b', 9)
+    harden('Devices pending endpoint onboarding', edr.total !== null ? edr.total - edr.good : null, 'EW.1', 4)
+    harden('Members without a recorded MFA requirement', mfa.total !== null ? mfa.total - mfa.good : null, 'IA.1', 2)
+    harden('Open alerts referred for client action', m.alerts?.open ?? null, 'OUT.1', 99)
+    m.hardening = hardening.sort((a, b) => a.rank - b.rank)
+
+    // Priorities, ranked by a fixed sequence. Open alerts are never a priority.
+    const priority = (rank, title, evidence, action, success, id) => m.priorities.push({ rank, title: clean(title), evidence: clean(evidence), action: clean(action), success: clean(success), id, source: source(id) })
+    if (criticalCves > 0) priority(1, 'Critical vulnerability remediation', `${fmt(criticalCves)} critical exploitable findings are open across operating system and application software. The same finding can appear on several device groups.`, 'Validate the affected workloads and business impact, then schedule remediation or compensating controls with the owners inside the regular patch cadence.', 'Critical exploitable findings resolved or covered by an approved treatment plan.', 'BKL.1')
+    if (mfa.pct !== null && mfa.pct < E_THRESHOLD) {
+      if (unevaluated !== null) priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} members whose sign-ins could be evaluated showed no multifactor authentication in the last 30 days. Members whose only sign-ins reused a device session that no policy checked are not part of this figure.`, 'Deploy a report-only Conditional Access policy requiring multifactor authentication for all members to measure session coverage, confirm the identity provider sign-on rules, then move to enforcement in waves.', 'Every member sign-in evaluated by policy and covered by multifactor authentication, with documented exceptions.', 'IA.1')
+      else priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} active members signed in without a recorded multifactor requirement in the last 30 days.`, 'Confirm exclusions and service accounts, pilot the Conditional Access change in report-only mode, then move to enforcement in waves.', 'Every intended user covered by validated policy, with documented exceptions.', 'IA.1')
+    }
+    if (count(retiring?.DistinctUsers) > 0) priority(3, 'Passwordless transition', `${plural(retiring.DistinctUsers, 'user', 'users')} signed in with text message or voice in the last 30 days. Microsoft retires these methods on ${RETIREMENT.label}.`, 'Enable passkeys under change control, register the affected users first in guided waves, then govern service and shared accounts.', `${RETIREMENT.label} arrives as a non-event. No blocked sign-ins and phishing-resistant sign-in as the default.`, 'IA.2')
+    if (edr.pct !== null && edr.pct < E_THRESHOLD) priority(4, 'Endpoint coverage', `${fmt(edr.total - edr.good)} of ${fmt(edr.total)} onboarding-eligible devices are not yet reporting to endpoint detection.`, 'Confirm ownership and operating state, complete onboarding and verify sensor health.', 'Every eligible device reports through an active sensor.', 'EW.1')
+    if (antimalware && antimalware.pct !== null && antimalware.pct < E_THRESHOLD) priority(5, 'Anti-malware configuration', `${fmt(antimalware.total - antimalware.good)} of ${fmt(antimalware.total)} devices do not meet the real-time protection configuration checks.`, 'Apply the endpoint security baseline to the affected platforms and verify through the configuration assessment.', 'Real-time protection enforced on every onboarded device.', 'EW.3')
+    if (plan.pct !== null && plan.pct < E_THRESHOLD || (aiRow && count(aiRow.Resources) - count(aiRow.Covered) > 0)) priority(6, 'Workload protection scope', `${plan.total !== null && plan.total - plan.good > 0 ? `${plural(plan.total - plan.good, 'eligible resource is', 'eligible resources are')} outside Standard plan coverage.` : ''}${aiRow && count(aiRow.Resources) - count(aiRow.Covered) > 0 ? ` ${plural(count(aiRow.Resources) - count(aiRow.Covered), 'AI service resource is', 'AI service resources are')} not yet covered.` : ''}`, 'Validate resource-level coverage in Defender for Cloud and agree the intended protection scope, including AI services.', 'Every agreed resource has workload protection or a documented exception.', 'DR.2')
+    if (logGap && logGap.n > 0) priority(7, 'Diagnostic logging coverage', logGap.text(logGap.n), 'Prioritize the workloads that matter most, then enable the required logs with the agreed destination and retention.', 'The agreed telemetry reaches the workspace and supports the intended detections.', logGap.id)
+    if (encryption.pct !== null && encryption.pct < E_THRESHOLD) priority(8, 'Encryption at host', `${fmt(encryption.total - encryption.good)} of ${fmt(encryption.total)} virtual machine resources do not have encryption at host enabled.`, 'Confirm existing disk encryption, workload support and maintenance windows, then enable in planned batches.', 'Each workload has a confirmed encryption approach or an approved exception.', 'DP.4')
+    if (backup.pct !== null && backup.pct < E_THRESHOLD) priority(9, 'Backup coverage', `${fmt(backup.total - backup.good)} of ${fmt(backup.total)} virtual machines have no protected backup item.`, 'Confirm which machines are persistent, exclude pooled session hosts by agreement, then extend the backup policy.', 'Every persistent virtual machine carries a backup policy.', 'DP.5b')
+    if ((transfer.pct !== null && transfer.pct < E_THRESHOLD) || (tls.pct !== null && tls.pct < E_THRESHOLD) || (publicOff.pct !== null && publicOff.pct < E_THRESHOLD) || (appTls.pct !== null && appTls.pct < E_THRESHOLD)) priority(10, 'Transport encryption and exposure', `${transfer.pct !== null && transfer.pct < E_THRESHOLD ? `${fmt(transfer.total - transfer.good)} storage accounts allow insecure transfer. ` : ''}${tls.pct !== null && tls.pct < E_THRESHOLD ? `${fmt(tls.total - tls.good)} storage accounts do not require TLS 1.2. ` : ''}${publicOff.pct !== null && publicOff.pct < E_THRESHOLD ? `${fmt(publicOff.total - publicOff.good)} storage accounts remain reachable from public networks. ` : ''}${appTls.pct !== null && appTls.pct < E_THRESHOLD ? `${fmt(appTls.total - appTls.good)} App Service configurations accept TLS below 1.2.` : ''}`, 'Check application compatibility, then stage secure transfer, TLS 1.2 and private connectivity in agreed batches.', 'The agreed storage and App Service scope requires secure transfer, TLS 1.2 and private access.', 'DP.1')
+    if ((purge.pct !== null && purge.pct < E_THRESHOLD) || (rbac.pct !== null && rbac.pct < E_THRESHOLD)) priority(11, 'Key protection', `${purge.pct !== null && purge.pct < E_THRESHOLD ? `${fmt(purge.total - purge.good)} of ${fmt(purge.total)} vaults lack purge protection. ` : ''}${rbac.pct !== null && rbac.pct < E_THRESHOLD ? `${fmt(rbac.total - rbac.good)} still use access policies instead of role-based access control.` : ''}`, 'Review retention requirements and application dependencies, then approve purge protection and the RBAC permission model.', 'Secret and key stores protected against deletion and governed by roles.', 'DP.2')
+    if (segmentation.pct !== null && segmentation.pct < E_THRESHOLD) priority(12, 'Network segmentation', `${fmt(segmentation.total - segmentation.good)} of ${fmt(segmentation.total)} workload subnets have no network security group or firewall route.`, 'Apply segmentation to the workload subnets without it, starting with internet-facing and production ranges.', 'Every workload subnet is protected by platform, firewall or segmented controls.', 'NB.1')
+    if (trusted.pct !== null && trusted.pct < E_THRESHOLD) priority(13, 'Platform integrity', `${fmt(trusted.total - trusted.good)} of ${fmt(trusted.total)} virtual machines run without Trusted Launch.`, 'Enable Secure Boot and virtual TPM on supported machines during planned maintenance.', 'Supported virtual machines run with platform integrity enforced.', 'EW.7')
+    m.priorities.sort((a, b) => a.rank - b.rank)
+    if (!m.priorities.length) priority(20, 'Baseline validation', 'The collected evidence does not identify an open hardening item.', 'Confirm the intended control scope with the client and complete any outstanding portal readings.', 'An agreed, evidence-backed baseline for the next review.', 'P0.1')
+
+    // Passwordless transition.
+    if (count(retiring?.DistinctUsers) > 0 || count(resistant?.DistinctUsers) > 0) {
+      m.passwordless = { retiring: count(retiring?.DistinctUsers) ?? 0, resistant: count(resistant?.DistinctUsers) ?? 0, authenticator: count(authenticator?.DistinctUsers) ?? 0, deadline: RETIREMENT.label, source: source('IA.2', 'Methods used in successful sign-ins, last 30 days.') }
+    }
+
+    // Scores and posture.
+    const cloud = one('POS.1')
+    const scoreValid = cloud && num(cloud.Current) !== null && num(cloud.Max) > 0 && cloud.Current <= cloud.Max
+    const trendRows = rows('POS.7').filter(r => validDate(iso(r.Month)) && num(r.Percent) !== null).sort((a, b) => iso(a.Month).localeCompare(iso(b.Month)))
+    if (scoreValid) {
+      const value = pct(cloud.Current, cloud.Max)
+      const first = trendRows[0], last = trendRows[trendRows.length - 1]
+      const delta = trendRows.length >= 2 && Number(last.Percent) >= Number(first.Percent) ? { points: Number((Number(last.Percent) - Number(first.Percent)).toFixed(1)), since: monthLabel(first.Month) } : null
+      m.cloudScore = { value, current: Number(cloud.Current), max: Number(cloud.Max), subscriptions: count(cloud.Subscriptions), delta, trend: trendRows.map(r => ({ label: monthLabel(r.Month), pct: Number(r.Percent) })), note: `${fmt(cloud.Current)} of ${fmt(cloud.Max)} points across ${plural(cloud.Subscriptions, 'subscription', 'subscriptions')}.`, source: source('POS.1') }
+      if (trendRows.length >= 2 && !delta) presenter('Defender for Cloud score movement', `The continuous export shows ${pctText(first.Percent)} in ${monthLabel(first.Month)} and ${pctText(last.Percent)} in ${monthLabel(last.Month)}. The report presents the current score with the Microsoft measurement model explainer and does not print a decline.`)
+      if (count(cloud.Subscriptions) !== m.subscriptions) presenter('Score subscription scope', `The cloud score covers ${fmt(cloud.Subscriptions)} of ${fmt(m.subscriptions)} in-scope subscriptions.`)
+    } else unmeasured('POS.1', 'Defender for Cloud score', state('POS.1'))
+    // Tenant Secure Score: the reviewed context file wins, otherwise the Graph reading (POS.6) with movement from the 90-day trend.
+    const pos6 = one('POS.6')
+    const trend6 = rows('POS.6-TREND').filter(r => validDate(iso(r.Date)) && num(r.Current) !== null).sort((a, b) => iso(a.Date).localeCompare(iso(b.Date)))
+    const graphTenant = pos6 && num(pos6.Current) !== null && num(pos6.Max) > 0 && validDate(iso(pos6.ReadDate)) ? {
+      Current: Number(pos6.Current), Max: Number(pos6.Max), ReadDate: iso(pos6.ReadDate), Source: source('POS.6'),
+      Categories: { Identity: pos6.IdentityPct, Device: pos6.DevicePct, Apps: pos6.AppsPct, Data: pos6.DataPct },
+      ...(trend6.length >= 2 && Number(trend6[0].Current) <= Number(pos6.Current) ? { Previous: Number(trend6[0].Current), PreviousReadDate: iso(trend6[0].Date) } : {})
+    } : null
+    const tenant = context.TenantScore || graphTenant
+    if (tenant && num(tenant.Current) !== null && num(tenant.Max) > 0 && tenant.Current <= tenant.Max && validDate(tenant.ReadDate) && clean(tenant.Source)) {
+      const categories = ['Identity', 'Device', 'Apps', 'Data'].filter(k => num(tenant.Categories?.[k]) !== null && tenant.Categories[k] <= 100).map(k => ({ label: k, pct: Number(tenant.Categories[k]) }))
+      const previous = num(tenant.Previous) !== null && validDate(tenant.PreviousReadDate) && tenant.Previous <= tenant.Current ? { points: Number((tenant.Current - tenant.Previous).toFixed(1)), since: monthLabel(tenant.PreviousReadDate) } : null
+      m.tenantScore = { value: pct(tenant.Current, tenant.Max), current: Number(tenant.Current), max: Number(tenant.Max), read: date(tenant.ReadDate), delta: previous, categories, note: `${fmt(tenant.Current)} of ${fmt(tenant.Max)} points. Read ${date(tenant.ReadDate)}.`, source: clean(tenant.Source) }
+    } else note('Microsoft tenant Secure Score', 'Add a dated portal reading through the context file to show the tenant score beside the Defender for Cloud score. Optional Previous and PreviousReadDate fields add the movement line.')
+    const high = rows('POS.4').find(r => /High/i.test(r.Severity))
+    const bench = rows('POS.5').filter(r => count(r.Passed) !== null && count(r.Failed) !== null)
+    m.posture = {
+      estate: sum(rows('P0.5'), 'Resources'), assessed: count(one('POS.2')?.AssessedResources),
+      highHealthy: high && count(high.Healthy) !== null && count(high.Total) > 0 ? { good: high.Healthy, total: high.Total, pct: pct(high.Healthy, high.Total), source: source('POS.4') } : null,
+      benchmark: bench.length ? { passed: sum(bench, 'Passed'), total: sum(bench, 'Passed') + sum(bench, 'Failed'), pct: pct(sum(bench, 'Passed'), sum(bench, 'Passed') + sum(bench, 'Failed')), source: source('POS.5') } : null,
+      scoreControls: rows('POS.3').filter(r => num(r.Current) !== null && num(r.Max) > 0 && r.Current <= r.Max).map(r => ({ label: clean(r.Control), pct: pct(r.Current, r.Max), remaining: Number((r.Max - r.Current).toFixed(2)), healthy: count(r.Healthy), unhealthy: count(r.Unhealthy) })).sort((a, b) => b.remaining - a.remaining),
+      scoreControlSource: source('POS.3'), telemetryTables: telemetry, rules: ruleTotal !== null ? { total: ruleTotal, enabled: ruleEnabled } : null
+    }
+
+    // Delivered work from the reviewed context file.
+    for (const item of array(context.Delivered)) {
+      if (clean(item.Title) && clean(item.Outcome) && clean(item.Reference) && validDate(item.CompletedDate) && windowValid && item.CompletedDate >= p.WindowStart && item.CompletedDate <= p.WindowEnd) {
+        m.delivered.push({ title: clean(item.Title), outcome: clean(item.Outcome), reference: clean(item.Reference), date: date(item.CompletedDate), pillar: clean(item.Pillar || '') })
+      } else note('Delivery record needs review', 'A delivery entry was omitted because it lacks a title, outcome, reference or a completion date inside the alert period.')
+    }
+    if (!m.delivered.length) note('Delivered work', 'Add completed change references through the context file to show verified delivery on the roadmap page. Planned work is never labeled as delivered.')
+
+    // Pillar outcome rows. Each row leads with a statement earned by the strongest available measure.
+    const band = (c, strong, partialText, weak) => c && c.pct !== null ? (c.pct >= E_THRESHOLD ? strong : c.pct >= 50 ? partialText : weak) : null
+    const measureText = c => c && c.pct !== null ? `${fmt(c.good)} of ${fmt(c.total)}` : null
+    const pillar = (name, headline, narrative, measure, callout, sourceText) => m.pillars.push({ name, headline: clean(headline), narrative: clean(narrative), measure: measure && measure.pct !== null ? { label: clean(measure.label), good: measure.good, total: measure.total, pct: measure.pct, mark: measure.mark } : null, callout: callout ? { value: clean(callout.value), label: clean(callout.label) } : null, source: clean(sourceText) })
+    {
+      const parts = []
+      if (mfa.pct !== null) parts.push(`${pctText(mfa.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied multifactor authentication${externalMfa > 0 ? ', including sign-ins where a federated identity provider supplied the multifactor claim' : ''}.${legacyMfaQuery && mfa.pct < 50 ? ' Multifactor authentication completed through a federated identity provider is confirmed in the review.' : ''}`)
+      if (locControl.boolean && locControl.pct === 100) parts.push('Conditional Access restricts sign-ins by location for every user.')
+      const legacyBlockedInForce = legacyControl && legacyControl.boolean && legacyControl.pct === 100
+      if (legacyBlockedInForce) parts.push('Legacy authentication is blocked.')
+      if (advancedPhish) parts.push('An advanced anti-phishing policy protects every mailbox.')
+      else if (basicPhish) parts.push('The Microsoft default anti-phishing policy covers every mailbox.')
+      const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', 'Multifactor authentication covers most sign-ins, with full coverage sequenced', 'Multifactor coverage is the identity priority on the roadmap') || (locControl.boolean && locControl.pct === 100 ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')
+      pillar(G.identity, headline, parts.join(' ') || 'Sign-in telemetry was not available in this collection. Identity coverage is confirmed from the Entra admin center during the review.', mfa.pct !== null ? { ...mfa, label: 'Users challenged for MFA at sign-in' } : null, m.passwordless && m.passwordless.resistant > 0 ? { value: fmt(m.passwordless.resistant), label: 'users already on phishing-resistant sign-in' } : null, mfa.pct !== null ? mfa.source : legacyBlockedInForce ? legacyControl.source : locControl.source)
+    }
+    {
+      const parts = []
+      if (edr.pct === null && String(p.DefenderApi || '').toLowerCase() !== 'available') parts.push('Endpoint telemetry was not reachable in this collection, so device coverage is confirmed from the Defender portal during the review.')
+      if (edr.pct !== null) parts.push(`Endpoint detection is deployed on ${fmt(edr.good)} of ${fmt(edr.total)} eligible devices seen in the last 30 days${sensors.pct !== null ? `, with ${pctText(sensors.pct)} of onboarded Azure virtual machine sensors active` : ''}.`)
+      if (vaControl.pct !== null) parts.push(`Vulnerability assessment covers ${pctText(vaControl.pct)} of onboarded devices.`)
+      if (encryption.pct !== null) parts.push(encryption.pct >= 50 ? `Encryption at host is enabled on ${fmt(encryption.good)} of ${fmt(encryption.total)} virtual machines${encryption.pct < E_THRESHOLD ? ' and the remainder is sequenced on the roadmap' : ''}.` : `Encryption at host for the ${plural(encryption.total, 'virtual machine', 'virtual machines')} is sequenced on the roadmap.`)
+      const headline = band(edr, 'Every eligible device reports to endpoint detection', 'Most eligible devices report to endpoint detection, with the remainder sequenced', 'Endpoint onboarding is the workload priority on the roadmap') || (encryption.pct !== null ? band(encryption, 'Virtual machines run with encryption at host', 'Encryption at host covers most virtual machines', 'Workload hardening is sequenced on the roadmap') : 'Endpoint readings are confirmed in the review')
+      pillar(G.endpoint, headline, parts.join(' ') || 'Endpoint telemetry was not reachable in this collection. Device coverage is confirmed from the Defender portal during the review.', edr.pct !== null ? { ...edr, label: 'Eligible devices onboarded to endpoint detection' } : encryption, vaControl.pct !== null ? { value: pctText(vaControl.pct), label: 'vulnerability assessment coverage' } : encryption.pct !== null ? { value: `${fmt(encryption.good)} of ${fmt(encryption.total)}`, label: 'virtual machines with encryption at host' } : null, edr.pct !== null ? edr.source : encryption.source)
+    }
+    {
+      const parts = []
+      if (boundaryCount !== null && windowValid) parts.push(boundaryCount > 0 ? `${plural(boundaryCount, 'boundary and egress detection was', 'boundary and egress detections were')} raised and triaged ${m.period.label}.` : `No boundary or egress detections were raised ${m.period.label}.`)
+      if (segmentation.pct !== null) parts.push(`${pctText(segmentation.pct)} of workload subnets have platform, firewall or segmented controls in place${segmentation.pct < E_THRESHOLD ? `, and ${fmt(segmentation.total - segmentation.good)} would benefit from added segmentation` : ''}.`)
+      if (https.pct !== null) parts.push(`${https.pct >= E_THRESHOLD ? 'Every published web app enforces HTTPS' : `${fmt(https.good)} of ${fmt(https.total)} published web apps enforce HTTPS`}.`)
+      const lead = https.pct !== null ? https : segmentation
+      const headline = band(https, 'Encryption in transit enforced on every published service', 'Encryption in transit enforced on most published services', 'Transport hardening is sequenced on the roadmap') || band(segmentation, 'Segmentation enforced across workload subnets', 'Segmentation covers most workload subnets', 'Segmentation is the network priority on the roadmap') || 'Boundary detections investigated to a documented disposition'
+      pillar(G.network, headline, parts.join(' ') || 'Network readings are completed in the review.', segmentation.pct !== null ? { ...segmentation, label: 'Workload subnets segmented' } : https, boundaryCount !== null ? { value: fmt(boundaryCount), label: 'boundary detections triaged' } : https.pct !== null ? { value: measureText(https), label: 'web apps enforcing HTTPS' } : null, lead.source)
+    }
+    {
+      const parts = []
+      if (transfer.pct !== null) parts.push(`${transfer.pct >= E_THRESHOLD ? 'All' : fmt(transfer.good) + ' of ' + fmt(transfer.total)} storage accounts require secure transfer${publicOff.pct !== null && publicOff.pct >= E_THRESHOLD ? ' and refuse public network access' : ''}.`)
+      if (softDelete.pct !== null) parts.push(`Soft delete ${softDelete.pct >= E_THRESHOLD ? 'protects every Key Vault' : `protects ${fmt(softDelete.good)} of ${fmt(softDelete.total)} Key Vaults`}${purge.pct !== null && purge.pct >= E_THRESHOLD ? ' and purge protection is in force' : ''}.`)
+      if (backup.pct !== null) parts.push(backup.pct >= 50 ? `${backup.pct >= E_THRESHOLD ? 'Every' : `${fmt(backup.good)} of ${fmt(backup.total)}`} virtual machine${backup.pct >= E_THRESHOLD ? ' carries' : 's carry'} a backup policy.` : 'Backup coverage for the virtual machine estate is sequenced on the roadmap.')
+      if (mailRemoved !== null && mailRemoved > 0) parts.push(`Malicious mail is removed after delivery, with ${fmt(mailRemoved)} removals in the last 30 days.`)
+      const headline = band(transfer, 'Data in transit and key material are protected', 'Transport protection covers most storage, with the remainder sequenced', 'Data transport hardening is sequenced on the roadmap') || band(softDelete, 'Key material cannot be silently lost', 'Key Vault recovery covers most vaults', 'Key protection is sequenced on the roadmap') || 'Data protection readings are completed in the review'
+      pillar(G.data, headline, parts.join(' ') || 'Data protection readings are completed in the review.', transfer.pct !== null ? { ...transfer, label: 'Storage accounts with secure transfer' } : softDelete, mailRemoved !== null && mailRemoved > 0 ? { value: fmt(mailRemoved), label: 'malicious messages removed after delivery, last 30 days' } : backup.pct !== null && backup.pct >= 90 ? { value: measureText(backup), label: 'virtual machines under Azure Backup' } : softDelete.pct !== null && softDelete.pct >= 90 ? { value: measureText(softDelete), label: 'Key Vaults protected by soft delete' } : transfer.pct !== null ? { value: measureText(transfer), label: 'storage accounts requiring secure transfer' } : null, transfer.pct !== null ? transfer.source : softDelete.source)
+    }
+    {
+      const parts = []
+      if (m.alerts) parts.push(`${fmt(m.alerts.triaged)} alerts ${m.ticketed ? 'opened a ticket with the managed service and were worked to a disposition' : 'were triaged'} ${m.period.label}${m.alerts.analystMode ? `, with ${fmt(m.alerts.automation)} more resolved by automation rules` : ''}.`)
+      if (m.response) parts.push(`${m.response.scope === 'High' ? 'High severity alerts' : 'Alerts'} closed at a median of ${m.response.median.value}${m.response.analyst ? ' once automation closures are set aside' : ''}.`)
+      if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
+      if (ruleControl && ruleControl.pct !== null) parts.push(`${fmt(ruleControl.good)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
+      const headline = m.alerts ? 'Every alert reaches a documented disposition' : band(plan, 'Workload protection covers the resource estate', 'Workload protection covers most of the resource estate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
+      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : ruleControl, m.response ? { value: m.response.median.value, label: `median time to close${m.response.scope === 'High' ? ', high severity' : ''}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, m.alerts ? m.alerts.source : plan.source)
+    }
+
+    // Executive summary tiles and tiers.
+    const tile = (label, value, sub, sourceText, tone = '') => m.headline.push({ label: clean(label), value: clean(value), sub: clean(sub), source: clean(sourceText), tone })
+    if (m.service) tile('Months of managed security', fmt(m.service.months), 'Continuous coverage, not project work', `Service start ${m.service.start}, from the reviewed context file.`)
+    else if (m.posture.assessed !== null) tile('Azure resources assessed by Defender for Cloud', fmt(m.posture.assessed), m.posture.estate !== null ? `Across ${fmt(m.posture.estate)} resources in the estate` : 'Continuous posture assessment', source('POS.2'))
+    else if (m.posture.estate !== null) tile('Azure resources in the estate', fmt(m.posture.estate), 'Under managed security coverage', source('P0.5'))
+    if (m.alerts) tile('Alerts triaged', fmt(m.alerts.triaged), m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} resolved by automation rules` : m.alerts.truePositives > 0 ? `${plural(m.alerts.truePositives, 'confirmed threat', 'confirmed threats')}, all investigated` : m.detections ? `Across ${m.detections.sources}` : m.period.label, m.alerts.source)
+    else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
+    if (m.response) tile(m.response.median.label, m.response.median.value, m.response.p90 ? `Nine in ten closed within ${m.response.p90.value}` : m.response.analyst ? 'Analyst-handled alerts' : m.response.cohort.split(',')[0], m.response.median.source)
+    else if (m.alerts && m.alerts.truePositives !== null) tile('Confirmed threats investigated', fmt(m.alerts.truePositives), m.alerts.flaggedKnown && m.alerts.flagged === 0 ? 'None recorded exfiltration or impact' : 'Each closed to a documented disposition', m.alerts.source)
+    else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
+    if (m.tenantScore) tile('Microsoft tenant Secure Score', pctText(m.tenantScore.value), m.tenantScore.delta ? `Up ${fmt(m.tenantScore.delta.points)} points since ${m.tenantScore.delta.since}` : `Read ${m.tenantScore.read}`, m.tenantScore.source, m.tenantScore.delta ? 'up' : '')
+    else if (m.cloudScore) tile('Defender for Cloud secure score', pctText(m.cloudScore.value), m.cloudScore.delta && m.cloudScore.delta.points > 0 ? `Up ${fmt(m.cloudScore.delta.points)} points since ${m.cloudScore.delta.since}` : 'Classic Defender for Cloud score', m.cloudScore.source, m.cloudScore.delta && m.cloudScore.delta.points > 0 ? 'up' : '')
+    m.headline = m.headline.slice(0, 4)
+
+    const row = (tier, label, value, id) => { if (value !== null && value !== undefined && value !== '' && value !== 'Not available') m.tiers[tier].push({ label: clean(label), value: clean(String(value)), id }) }
+    if (m.alerts) {
+      row('outcomes', 'Alerts triaged', fmt(m.alerts.triaged), 'OUT.1')
+      if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts resolved and closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
+      if (m.alerts.truePositives !== null) row('outcomes', 'Confirmed threats investigated', fmt(m.alerts.truePositives), 'OUT.1')
+      if (m.alerts.flaggedKnown) row('outcomes', 'Confirmed threats with exfiltration or impact recorded', `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
+    }
+    if (m.response) {
+      row('outcomes', m.response.median.label, m.response.median.value, 'OUT.2')
+      if (m.response.p90) row('outcomes', m.response.p90.label, m.response.p90.value, 'OUT.2')
+    }
+    if (m.detections && m.tiers.outcomes.length < 6) row('outcomes', 'Detections correlated into alerts', fmt(m.detections.total), 'OUT.5')
+    // Control tiers. Measured controls only, so an ungathered control never moves a count.
+    const measuredIn = tier => m.controls.filter(c => c.tier === tier && c.measured !== false && c.pct !== null)
+    m.tierSummary = Object.fromEntries([['foundational', TIERS.foundational], ['defense', TIERS.defense]].map(([tier, label]) => {
+      const items = measuredIn(tier)
+      return [tier, { label, enforced: items.filter(c => c.mark === 'E').length, measured: items.length, total: m.controls.filter(c => c.tier === tier).length }]
+    }))
+    const drift = measuredIn('foundational').filter(c => c.mark !== 'E')
+    if (drift.length) presenter('Foundational drift', `${plural(drift.length, 'foundational control reads', 'foundational controls read')} below E: ${list(drift.map(c => `${c.label} (${c.id}, ${c.boolean ? c.value.toLowerCase() : pctText(c.pct)})`))}. The controls baseline expects every foundational control at E at each review, so have a fix date ready for each rather than carrying them on the roadmap.`)
+    if (m.tierSummary.foundational.measured) row('controls', 'Foundational controls enforced', `${fmt(m.tierSummary.foundational.enforced)} of ${fmt(m.tierSummary.foundational.measured)}`, 'TIER.FOUNDATIONAL')
+    if (m.tierSummary.defense.measured) row('controls', 'Defense in depth controls enforced', `${fmt(m.tierSummary.defense.enforced)} of ${fmt(m.tierSummary.defense.measured)}`, 'TIER.DEFENSE')
+    const tierOrder = { E: 0, P: 1, N: 2 }
+    for (const c of [mfa, edr, plan, antimalware, vaControl, transfer, softDelete, https, ruleControl, sensors, backup, segmentation].filter(c => c && c.pct !== null).sort((a, b) => tierOrder[a.mark] - tierOrder[b.mark])) {
+      if (m.tiers.controls.length >= 6) break
+      row('controls', c.label, c.total > 9999 ? pctText(c.pct) : c.value, c.id)
+    }
+    for (const h of m.hardening.filter(h => h.rank < 99).slice(0, 6)) row('hardening', h.label, fmt(h.value), h.id)
+    if (m.cloudScore) row('benchmark', 'Defender for Cloud score', pctText(m.cloudScore.value), 'POS.1')
+    if (m.tenantScore) row('benchmark', 'Microsoft tenant Secure Score', pctText(m.tenantScore.value), 'POS.6')
+    if (m.posture.benchmark) row('benchmark', 'Benchmark controls passed', `${fmt(m.posture.benchmark.passed)} of ${fmt(m.posture.benchmark.total)}`, 'POS.5')
+    if (m.posture.highHealthy) row('benchmark', 'High severity assessments healthy', pctText(m.posture.highHealthy.pct), 'POS.4')
+    if (m.posture.assessed !== null) row('benchmark', 'Resources assessed by Defender for Cloud', fmt(m.posture.assessed), 'POS.2')
+    for (const c of (m.tenantScore?.categories || [])) { if (m.tiers.benchmark.length < 6) row('benchmark', `${c.label} category score`, pctText(c.pct), 'POS.6') }
+    m.whatNext = `The foundational and defense in depth controls we hold this environment to across five pillars, the status of each, ${m.period.months ? `${plural(m.period.months, 'month', 'months')} of measured outcomes` : 'the measured outcomes'}, the sequenced hardening roadmap${m.passwordless && m.passwordless.retiring > 0 ? ` and the ${RETIREMENT.label} passwordless deadline already scoped` : ''}.`
+
+    // Presenter notes and boundaries.
+    const manual = m.manifest.filter(r => r.status === 'MANUAL').map(r => r.id)
+    if (manual.length) note('Manual portal readings', `${manual.join(', ')} are portal readings. Complete them before the review if the related statements are needed.`)
+    const partials = m.manifest.filter(r => r.status === 'PARTIAL' && !r.id.endsWith('-BY-WORKSPACE'))
+    if (partials.length) presenter('Partial collection', `${partials.map(r => r.id).join(', ')} completed with partial scope. Affected figures carry the partial label in their source line.`)
+    if (m.notApplicable.length) note('Controls without evidence either way', `${m.notApplicable.map(u => `${u.label} (${u.id})`).join('. ')}. These read N/A on the controls page because the collection holds no activity or configuration to judge them by. They are excluded from every count.`)
+    if (m.unmeasured.length) note('Controls not measured in this collection', `${m.unmeasured.map(u => `${u.label} (${u.id}: ${u.reason})`).join('. ')}. These appear as (null) on the controls page rather than as measured gaps, and they are excluded from the executive summary tiers.`)
+    if (String(p.DefenderApi || '').toLowerCase() !== 'available' && p.DefenderApi) presenter('Defender API', `Defender Advanced Hunting was not reachable: ${clean(p.DefenderApi)}. Endpoint readings come from the portal for this review.`)
+    note('Presentation boundaries', 'Alert closure does not confirm containment. Detections do not prove triage. No claim of zero data loss, SLA attainment, a control grade or completed hardening is generated from these aggregates.')
+    note('Scope and time', `Alert activity covers ${m.period.label}. Identity and endpoint readings use the source lookback, generally the last 30 days. Azure configuration and score readings reflect ${readDate}.`)
+    for (const issue of m.issues) note('Evidence file', issue)
+    m.coverage = {
+      available: m.manifest.filter(r => ['OK','EMPTY'].includes(r.status) && !r.id.endsWith('-BY-WORKSPACE')).length,
+      total: m.manifest.filter(r => !r.id.endsWith('-BY-WORKSPACE')).length
+    }
+    return m
+  }
+  const api = { build, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A' }
+  if (typeof module !== 'undefined' && module.exports) module.exports = api
+  else root.EbrReport = api
+})(typeof globalThis !== 'undefined' ? globalThis : this)

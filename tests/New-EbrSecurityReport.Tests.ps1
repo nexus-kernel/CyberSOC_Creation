@@ -1,0 +1,235 @@
+BeforeAll {
+    $generator = Join-Path $PSScriptRoot '../New-EbrSecurityReport.ps1'
+    function New-ReportFixture {
+        param([string]$Path)
+        New-Item -ItemType Directory -Path (Join-Path $Path 'results') -Force | Out-Null
+        @{ ClientName = 'Example Client'; TenantId = 'example-tenant'; WindowStart = '2026-07-01'; WindowEnd = '2026-09-30'; RecentStart = '2026-07-01'; PostureReadDate = '2026-10-08'; Subscriptions = @('sub-1'); Workspaces = @() } |
+            ConvertTo-Json -Depth 6 | Set-Content (Join-Path $Path '00-parameters.json')
+        @(
+            [pscustomobject]@{ ResultId = 'OUT.5'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' },
+            [pscustomobject]@{ ResultId = 'NB.1'; Status = 'OK'; Rows = 3; ReadTimeUtc = '2026-10-08T10:00:00Z' },
+            [pscustomobject]@{ ResultId = 'DP.5b'; Status = 'OK'; Rows = 2; ReadTimeUtc = '2026-10-08T10:00:00Z' },
+            [pscustomobject]@{ ResultId = 'OUT.4'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        ) | Export-Csv (Join-Path $Path '00-manifest.csv') -NoTypeInformation
+        '[{"Alerts":12,"ProductName":"Example","AccountUpn":"private@example.test","ClassificationComment":"Internal notes"}]' |
+            Set-Content (Join-Path $Path 'results/OUT.5.json')
+        '[{"Vnet":"v","SubnetName":"secret-subnet-a","SubnetClass":"Workload","Segmented":1},{"Vnet":"v","SubnetName":"secret-subnet-b","SubnetClass":"Workload","Segmented":0},{"Vnet":"v","SubnetName":"gw","SubnetClass":"Gateway","Segmented":0}]' |
+            Set-Content (Join-Path $Path 'results/NB.1.json')
+        '[{"VmName":"secret-vm-1","ProtectionState":""},{"VmName":"secret-vm-2","ProtectionState":""}]' |
+            Set-Content (Join-Path $Path 'results/DP.5b.json')
+        '[{"IncidentNumber":5,"Title":"Secret incident title","Severity":"High","ClassificationComment":"Private comment","ExfilOrImpactTactic":false}]' |
+            Set-Content (Join-Path $Path 'results/OUT.4.json')
+    }
+}
+Describe 'Offline HTML report generation' {
+    BeforeEach {
+        $pack = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        New-ReportFixture $pack
+    }
+    It 'embeds the selected aggregate evidence and assets without changing the evidence' {
+        $before = (Get-FileHash (Join-Path $pack 'results/OUT.5.json')).Hash
+        $file = & $generator -SkipDeck -EvidencePath $pack -Depth Detailed
+        $html = Get-Content $file -Raw
+        $html | Should -Match 'data:image/jpeg;base64,'
+        $html | Should -Match '"depth":"detailed"'
+        $html | Should -Match '"Alerts":12'
+        $html | Should -Match '"RecentStart":"2026-07-01"'
+        $html | Should -Not -Match 'private@example.test|Internal notes|<script src=|<link[^>]*href='
+        (Get-FileHash (Join-Path $pack 'results/OUT.5.json')).Hash | Should -Be $before
+    }
+    It 'embeds the federation provider and MFA behavior but never the federated domains or their URIs' {
+        $m = @(Import-Csv (Join-Path $pack '00-manifest.csv'))
+        $m += [pscustomobject]@{ ResultId = 'IA.1-FEDERATION'; Status = 'OK'; Rows = 2; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m += [pscustomobject]@{ ResultId = 'IA.1'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
+        '[{"Domain":"secret-domain.test","IsRoot":true,"IdentityProvider":"Okta","IssuerUri":"secret-domain.test:exk123","PassiveSignInUri":"https://sso.secret-domain.test/app/office365/exk123/sso/wsfed/passive","ActiveSignInUri":"https://sso.secret-domain.test/x","PreferredAuthenticationProtocol":"wsFed","FederatedIdpMfaBehavior":"enforceMfaByFederatedIdp","ConfigSource":"Read"},{"Domain":"eu.secret-domain.test","IsRoot":false,"IdentityProvider":"","IssuerUri":"","PassiveSignInUri":"","ActiveSignInUri":"","PreferredAuthenticationProtocol":"","FederatedIdpMfaBehavior":"","ConfigSource":"Inherited from secret-domain.test"}]' |
+            Set-Content (Join-Path $pack 'results/IA.1-FEDERATION.json')
+        '[{"UserType":"Member","UsersSignedIn":1414,"UsersChallenged":563,"UsersAlwaysMfa":1,"UsersExternalMfa":563,"UsersEntraMfa":60,"PctChallenged":39.8,"PctAlwaysMfa":0.1,"MfaAtLeastOnce":563,"MfaEveryAppSignIn":1,"CoveredEveryAppSignIn":5,"FederatedMfaAtLeastOnce":563,"FederatedWithoutMfa":2,"NoMfaOnlyUnevaluated":550,"MfaSessionLinkedOnly":31}]' |
+            Set-Content (Join-Path $pack 'results/IA.1.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"IA.1-FEDERATION":\[\{"FederatedDomains":2,"ConfigsRead":1,"Provider":"Okta","MfaBehavior":"enforceMfaByFederatedIdp","MfaBehaviorUnset":0\}\]'
+        $html | Should -Match '"NoMfaOnlyUnevaluated":550,"MfaSessionLinkedOnly":31'
+        $html | Should -Not -Match 'secret-domain|exk123|wsfed'
+    }
+    It 'reduces resource-level results to counts and keeps names, titles and comments out of the report' {
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"WorkloadSubnets":2'
+        $html | Should -Match '"Segmented":1'
+        $html | Should -Match '"VmsWithoutBackup":2'
+        $html | Should -Match '"ExfilOrImpactTactic":false'
+        $html | Should -Not -Match 'secret-subnet|secret-vm|Secret incident title|Private comment|"Title"'
+    }
+    It 'reduces attack disruption results (OUT.7) to a count and never embeds their incident numbers or titles' {
+        '[{"IncidentNumber":9900417,"Title":"Secret disruption title","Severity":"High","CreatedTime":"2026-08-01T00:00:00Z","Classification":"TruePositive"},{"IncidentNumber":9900418,"Title":"Secret disruption title","Severity":"Medium","CreatedTime":"2026-08-02T00:00:00Z","Classification":"TruePositive"}]' |
+            Set-Content (Join-Path $pack 'results/OUT.7.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"OUT.7":\[\{"Incidents":2\}\]'
+        $html | Should -Not -Match '9900417|9900418|Secret disruption title|IncidentNumber'
+    }
+    It 'embeds confirmed threat titles only after screening, with the tactics and the day, and never the comments' {
+        $p = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
+        $p | Add-Member -NotePropertyName TicketPattern -NotePropertyValue '(?i)\bSR\s*\d{3,}'
+        $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
+        @'
+[{"IncidentNumber":110,"Title":"Password spray attack against Microsoft Entra ID application","Severity":"Medium","CreatedTime":"2026-07-28T04:15:35.186Z","ClassificationReason":"SuspiciousActivity","ClassificationComment":"Reviewed activity from IP 2001:db8::1 against pat.doe@contoso.test (per ZD ticket 9900001).","Tactics":"[\"CredentialAccess\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":111,"Title":"Suspicious inbox rule for jane.doe@example.test","Severity":"High","CreatedTime":"2026-08-01T00:00:00Z","ClassificationComment":"x","Tactics":"[\"Collection\"]","ExfilOrImpactTactic":true},
+ {"IncidentNumber":112,"Title":"Sign-in from 203.0.113.53","Severity":"High","CreatedTime":"2026-08-02T00:00:00Z","Tactics":"[\"InitialAccess\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":113,"Title":"Malware on DESKTOP-4F2KQ1","Severity":"High","CreatedTime":"2026-08-03T00:00:00Z","Tactics":"[\"Execution\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":114,"Title":"Beacon to c2.badsite.example","Severity":"High","CreatedTime":"2026-08-04T00:00:00Z","Tactics":"[\"CommandAndControl\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":115,"Title":"Script run from \\\\fs01\\share","Severity":"Low","CreatedTime":"2026-08-05T00:00:00Z","Tactics":"[\"Execution\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":116,"Title":"Malware Scanning will stop soon: 75% of monthly gigabytes scan cap reached","Severity":"Low","CreatedTime":"2026-09-15T13:01:36Z","Tactics":"[]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":117,"Title":"Multi-stage incident involving Initial access and Execution on one endpoint","Severity":"High","CreatedTime":"2026-08-01T00:30:00","Tactics":"[\"InitialAccess\",\"Execution\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":118,"Title":"Suspicious behavior by cmd.exe was observed","Severity":"Medium","CreatedTime":"2026-08-06T23:30:00","Tactics":"[\"Execution\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":119,"Title":"Suspicious sign-in to application 3f2b8c1e-9d4a-4b7e-8c21-5a6f0d9e7b13","Severity":"Medium","CreatedTime":"2026-08-07T00:00:00Z","Tactics":"[\"InitialAccess\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":120,"Title":"Malware on desktop-4f2kq1","Severity":"High","CreatedTime":"2026-08-08T00:00:00Z","Tactics":"[\"Execution\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":121,"Title":"Sensitive file Q3_Payroll_Smith.xlsx shared externally","Severity":"High","CreatedTime":"2026-08-09T00:00:00Z","Tactics":"[\"Exfiltration\"]","ExfilOrImpactTactic":true},
+ {"IncidentNumber":122,"Title":"Sign-in from 2001::1","Severity":"Medium","CreatedTime":"2026-08-10T00:00:00Z","Tactics":"[\"InitialAccess\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":123,"Title":"Escalated from ticket 9900001","Severity":"Medium","CreatedTime":"2026-08-11T00:00:00Z","Tactics":"[\"Persistence\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":124,"Title":"Escalated per ZD 12345","Severity":"Medium","CreatedTime":"2026-08-12T00:00:00Z","Tactics":"[\"Persistence\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":125,"Title":"Follow-up ZD#4521","Severity":"Medium","CreatedTime":"2026-08-13T00:00:00Z","Tactics":"[\"Persistence\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":126,"Title":"Script run from C:/Users/x","Severity":"Low","CreatedTime":"2026-08-14T00:00:00Z","Tactics":"[\"Execution\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":127,"Title":"__LONG__","Severity":"Low","CreatedTime":"2026-08-15T00:00:00Z","Tactics":"[\"Discovery\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":128,"Title":"Escalated as SR 4521","Severity":"Low","CreatedTime":"2026-08-16T00:00:00Z","Tactics":"[\"Discovery\"]","ExfilOrImpactTactic":false},
+ {"IncidentNumber":129,"Title":"Malware detected on FILESERVER01","Severity":"High","CreatedTime":"2026-08-17T00:00:00Z","Tactics":"[\"Execution\"]","ExfilOrImpactTactic":false}]
+'@.Replace('__LONG__', ('Repeated suspicious activity ' * 8).Trim()) | Set-Content (Join-Path $pack 'results/OUT.4.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"Threat":"Password spray attack against Microsoft Entra ID application","Tactics":"CredentialAccess","Created":"2026-07-28"'
+        $html | Should -Match '"Threat":"Multi-stage incident involving Initial access and Execution on one endpoint","Tactics":"InitialAccess,Execution","Created":"2026-08-01"' -Because 'a time with no offset is read as UTC'
+        $html | Should -Match '"Threat":"Suspicious behavior by cmd.exe was observed","Tactics":"Execution","Created":"2026-08-06"' -Because 'a program name is not a host name'
+        ([regex]::Matches($html, '"Threat":"Title withheld"')).Count | Should -Be 16
+        $html | Should -Match '"Threat":"","Tactics":"","Created":"2026-09-15"' -Because 'a true positive with no attack stage carries no title'
+        $html | Should -Match '"Threat":"Title withheld","Tactics":"Discovery","Created":"2026-08-16"' -Because "the pack's own ticket pattern is applied"
+        $html | Should -Match '"Threat":"Title withheld","Tactics":"Execution","Created":"2026-08-17"' -Because 'an all-caps machine name with a digit is withheld'
+        $html | Should -Not -Match 'jane\.doe|203\.0\.113|2001:db8|2001::1|DESKTOP-4F2KQ1|FILESERVER01|badsite|fs01|3f2b8c1e|Payroll|ZD 12345|ZD#4521|C:/Users|Repeated suspicious|SR 4521|Malware Scanning|pat\.doe|contoso|9900001|ClassificationComment|IncidentNumber|"Title"'
+        $html | Should -Not -Match 'An OUT\.4 row could not be screened, so its title was withheld'
+    }
+    It "withholds every confirmed threat title and notes it once when the pack's ticket pattern is not a .NET regular expression" {
+        $p = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
+        $p | Add-Member -NotePropertyName TicketPattern -NotePropertyValue '(?P<ref>SR\d+)'
+        $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
+        '[{"IncidentNumber":130,"Title":"Password spray attack against Microsoft Entra ID application","Severity":"Medium","CreatedTime":"2026-07-28T04:15:35Z","Tactics":"[\"CredentialAccess\"]","ExfilOrImpactTactic":false},{"IncidentNumber":131,"Title":"Suspicious inbox manipulation rule","Severity":"High","CreatedTime":"2026-07-29T00:00:00Z","Tactics":"[\"Collection\"]","ExfilOrImpactTactic":true}]' |
+            Set-Content (Join-Path $pack 'results/OUT.4.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"Severity":"Medium","ExfilOrImpactTactic":false,"Threat":"Title withheld","Tactics":"","Created":""'
+        $html | Should -Match '"Severity":"High","ExfilOrImpactTactic":true,"Threat":"Title withheld","Tactics":"","Created":""' -Because 'the data loss flag survives a row that could not be screened'
+        ([regex]::Matches($html, 'An OUT\.4 row could not be screened, so its title was withheld')).Count | Should -Be 1 -Because 'the review note is added once per report, not once per row'
+        $html | Should -Not -Match 'Entra ID application|inbox manipulation|Unrecognized grouping'
+    }
+    It "screens titles with the collector's default ticket pattern, character for character" {
+        $literal = "(?m)^\`$script:EbrTicketPattern\s*=\s*'([^']+)'"
+        $collector = [regex]::Match((Get-Content (Join-Path $PSScriptRoot '../Get-EbrSecurityEvidence.ps1') -Raw), $literal).Groups[1].Value
+        $report = [regex]::Match((Get-Content $generator -Raw), $literal).Groups[1].Value
+        $collector | Should -Not -BeNullOrEmpty
+        $report | Should -BeExactly $collector
+    }
+    It 'evaluates Conditional Access from the raw policies and sign-in detail and embeds counts only' {
+        $m = @(Import-Csv (Join-Path $pack '00-manifest.csv'))
+        $m += [pscustomobject]@{ ResultId = 'IA.8-POLICIES'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m += [pscustomobject]@{ ResultId = 'IA.8-SIGNINS'; Status = 'OK'; Rows = 2; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m += [pscustomobject]@{ ResultId = 'P0.6-APPLIANCES'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
+        '[{"id":"P1","displayName":"Secret policy name","state":"enabled","conditions":{"users":{"includeUsers":["All"],"excludeUsers":["u1"]},"applications":{"includeApplications":["All"]},"clientAppTypes":["all"],"authenticationFlows":{"transferMethods":"deviceCodeFlow"}},"grantControls":{"builtInControls":["block"]}}]' |
+            Set-Content (Join-Path $pack 'results/IA.8-POLICIES.json')
+        '[{"Flow":"Device code","UserId":"u1","UserPrincipalName":"secret-room@example.test","PolicyResults":"p1=notApplied","SignIns":4},{"Flow":"Device code","UserId":"u2","UserPrincipalName":"secret-user@example.test","PolicyResults":"","SignIns":1}]' |
+            Set-Content (Join-Path $pack 'results/IA.8-SIGNINS.json')
+        '[{"Name":"secret-fw","Publisher":"paloaltonetworks","ResourceId":"/subscriptions/s/x/secret-fw"}]' | Set-Content (Join-Path $pack 'results/P0.6-APPLIANCES.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"Flow":"Device code","Control":"IA.3-DEVICECODE","PolicyRead":true,"PolicySource":"Raw","PolicyState":"Enforced","EnforcedPolicies":1,"ExcludedIdentities":1,"DetailRead":true,"SignIns":5,"SucceededExcluded":4,"AccountsExcluded":1,"SucceededUngoverned":1,"AccountsUngoverned":1'
+        $html | Should -Match '"Flow":"Legacy authentication","Control":"IA.3","PolicyRead":true,"PolicySource":"Raw","PolicyState":"None"'
+        $html | Should -Match '"Appliances":1'
+        $html | Should -Not -Match 'secret-room|secret-user|Secret policy name|secret-fw|"UserId"'
+    }
+    It 'grades location-based access from the raw policies and reads Unknown from the flattened inventory' {
+        $m = @(Import-Csv (Join-Path $pack '00-manifest.csv'))
+        $m += [pscustomobject]@{ ResultId = 'IA.8-POLICIES'; Status = 'OK'; Rows = 2; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
+        '[{"id":"L1","displayName":"Secret country block","state":"enabled","conditions":{"users":{"includeUsers":["All"],"excludeUsers":["u1","u2"]},"applications":{"includeApplications":["All"]},"clientAppTypes":["all"],"locations":{"includeLocations":["All"],"excludeLocations":["loc-us"]}},"grantControls":{"builtInControls":["block"]}},{"id":"L2","displayName":"MFA outside office","state":"enabled","conditions":{"users":{"includeUsers":["g1"]},"applications":{"includeApplications":["All"]},"clientAppTypes":["all"],"locations":{"includeLocations":["All"],"excludeLocations":["AllTrusted"]}},"grantControls":{"builtInControls":["mfa"]}}]' |
+            Set-Content (Join-Path $pack 'results/IA.8-POLICIES.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"Flow":"Location","Control":"IA.4-LOCATION","PolicyRead":true,"PolicySource":"Raw","PolicyState":"Enforced","EnforcedPolicies":1,"ExcludedIdentities":2'
+        $html | Should -Not -Match 'Secret country block|loc-us'
+        $html | Should -Not -Match '"ConditionalAccessStatus"' -Because 'IA.4 no longer feeds the report'
+    }
+    It 'reduces blob container results to counts' {
+        $m = @(Import-Csv (Join-Path $pack '00-manifest.csv'))
+        $m += [pscustomobject]@{ ResultId = 'DP.1-CONTAINERS'; Status = 'PARTIAL'; Rows = 3; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
+        '[{"Account":"secretstore1","AccountAnonymousAccess":"Allowed","Containers":10,"PublicContainers":2,"ExposedContainers":2,"PublicContainerNames":"secret-cont (Blob)","ReadStatus":"OK"},{"Account":"secretstore2","AccountAnonymousAccess":"Disabled","Containers":5,"PublicContainers":1,"ExposedContainers":0,"PublicContainerNames":"old (Container)","ReadStatus":"OK"},{"Account":"secretstore3","Containers":0,"PublicContainers":0,"ExposedContainers":0,"ReadStatus":"HTTP 403"}]' |
+            Set-Content (Join-Path $pack 'results/DP.1-CONTAINERS.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"DP.1-CONTAINERS":\[\{"Accounts":3,"AccountsUnread":1,"Containers":15,"PrivateContainers":12,"ExposedContainers":2,"AccountsExposed":1\}\]'
+        $html | Should -Not -Match 'secretstore|secret-cont'
+    }
+    It 'falls back to the flattened policy inventory for packs before collector 1.10.0' {
+        $m = @(Import-Csv (Join-Path $pack '00-manifest.csv'))
+        $m += [pscustomobject]@{ ResultId = 'IA.8'; Status = 'OK'; Rows = 2; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
+        '[{"Policy":"Block Device Code Flow Enforcement","State":"enabled","IncludeUsers":"All","ExcludeUsers":"12 users","IncludeApplications":"All","ClientAppTypes":"all","AuthenticationFlows":"deviceCodeFlow","Grants":"block","Platforms":"","SignInRiskLevels":"","UserRiskLevels":"","AuthStrength":""},{"Policy":"Block legacy authentication","State":"enabled","IncludeUsers":"All","ExcludeUsers":"1 user, 1 role","IncludeApplications":"All","ClientAppTypes":"exchangeActiveSync,other","AuthenticationFlows":"","Grants":"block","Platforms":"","SignInRiskLevels":"","UserRiskLevels":"","AuthStrength":""}]' |
+            Set-Content (Join-Path $pack 'results/IA.8.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"Flow":"Device code","Control":"IA.3-DEVICECODE","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"Enforced","EnforcedPolicies":1,"ExcludedIdentities":12,"DetailRead":false'
+        $html | Should -Match '"Flow":"Legacy authentication","Control":"IA.3","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"Enforced","EnforcedPolicies":1,"ExcludedIdentities":2'
+        $html | Should -Match '"Flow":"Admin portals","Control":"IA.1-ADMINPORTAL","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"None"'
+        $html | Should -Match '"Flow":"Location","Control":"IA.4-LOCATION","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"Unknown"'
+    }
+    It 'reads legacy authentication and admin MFA as Unknown when no policy is enabled and security defaults were not read' {
+        $m = @(Import-Csv (Join-Path $pack '00-manifest.csv'))
+        $m += [pscustomobject]@{ ResultId = 'IA.8'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
+        '[{"Policy":"Old pilot","State":"disabled","IncludeUsers":"All","IncludeApplications":"All","ClientAppTypes":"exchangeActiveSync,other","Grants":"block"}]' | Set-Content (Join-Path $pack 'results/IA.8.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"Flow":"Legacy authentication","Control":"IA.3","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"Unknown"'
+        $html | Should -Match '"Flow":"Admin portals","Control":"IA.1-ADMINPORTAL","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"Unknown"'
+        $html | Should -Match '"Flow":"Device code","Control":"IA.3-DEVICECODE","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"None"' -Because 'security defaults do not block device code flow'
+    }
+    It 'escapes script terminators in client-controlled strings' {
+        $p = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
+        $p.ClientName = '</script><script>alert(1)</script>'
+        $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
+        $file = & $generator -SkipDeck -EvidencePath $pack
+        $html = Get-Content $file -Raw
+        $html | Should -Not -Match '<script>alert\(1\)</script>'
+        $html | Should -Match '\\u003c/script\\u003e'
+    }
+    It 'continues with a review item when a selected result file is malformed' {
+        '{invalid' | Set-Content (Join-Path $pack 'results/OUT.5.json')
+        $file = & $generator -SkipDeck -EvidencePath $pack
+        Get-Content $file -Raw | Should -Match 'OUT.5 could not be read'
+    }
+    It 'accepts the documented context fields and nothing else' {
+        $ctx = Join-Path $TestDrive 'context.json'
+        '{"ClientName":"Example Client","TenantId":"example-tenant","ServiceStartDate":"2024-01-15","TenantScore":{"Current":45,"Max":100,"ReadDate":"2026-10-08","Source":"Portal"},"Delivered":[],"Raised":999}' | Set-Content $ctx
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack -ContextPath $ctx) -Raw
+        $html | Should -Match '"ServiceStartDate":"2024-01-15"'
+        $html | Should -Not -Match '"Raised":999'
+    }
+    It 'rejects context from a different client' {
+        $ctx = Join-Path $TestDrive 'wrong-client.json'
+        '{"ClientName":"Someone else","TenantId":"example-tenant"}' | Set-Content $ctx
+        { & $generator -SkipDeck -EvidencePath $pack -ContextPath $ctx } | Should -Throw '*must match*'
+    }
+    It 'rejects an unfinished pack rather than emitting a misleading report' {
+        Remove-Item (Join-Path $pack '00-manifest.csv')
+        { & $generator -SkipDeck -EvidencePath $pack } | Should -Throw '*missing 00-manifest.csv*'
+    }
+    It 'writes the PowerPoint edition beside the HTML from the same aggregates, with no names in it' -Skip:(-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        $files = @(& $generator -EvidencePath $pack -Depth Detailed)
+        $files.Count | Should -Be 2
+        $files[0] | Should -Match '03-security-report\.html$'
+        $files[1] | Should -Match '03-security-report\.pptx$'
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($files[1])
+        try {
+            $parts = @($zip.Entries | Where-Object { $_.FullName -match '^ppt/(slides/slide|notesSlides/notesSlide)\d+\.xml$' })
+            @($parts | Where-Object { $_.FullName -match 'slides/slide' }).Count | Should -BeGreaterThan 10
+            $text = ($parts | ForEach-Object { $r = [IO.StreamReader]::new($_.Open()); try { $r.ReadToEnd() } finally { $r.Dispose() } }) -join ' '
+        }
+        finally { $zip.Dispose() }
+        $text | Should -Not -Match 'private@example.test|Internal notes|secret-subnet|secret-vm|Secret incident title|Private comment|object Object'
+    }
+    It 'writes the HTML only with -SkipDeck' {
+        $files = @(& $generator -SkipDeck -EvidencePath $pack)
+        $files.Count | Should -Be 1
+        Test-Path ([IO.Path]::ChangeExtension($files[0], '.pptx')) | Should -BeFalse
+    }
+}

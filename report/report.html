@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Security business review</title>
+<style>__CSS__</style>
+</head>
+<body>
+<a class="skip" href="#report">Skip to report</a>
+<nav class="toolbar" aria-label="Report controls">
+  <a class="wordmark" href="#report">atmosera<span>.</span></a>
+  <div class="controls">
+    <label for="depth">Report depth</label>
+    <select id="depth"><option value="brief">Brief</option><option value="balanced">Balanced</option><option value="detailed">Detailed</option></select>
+    <button id="review-toggle" aria-expanded="false" aria-controls="review">Presenter notes</button>
+    <button id="print">Print report</button>
+  </div>
+</nav>
+<main id="report" tabindex="-1"></main>
+<aside id="review" hidden aria-label="Presenter notes and evidence review"></aside>
+<noscript>This report requires JavaScript to display the embedded evidence. Enable JavaScript and reopen this local file.</noscript>
+<script id="report-data" type="application/json">__DATA__</script>
+<script>__MODEL__</script>
+<script>__RENDER__</script>
+</body>
+</html>

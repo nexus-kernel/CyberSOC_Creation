@@ -1,0 +1,7 @@
+{
+  "ClientName": "Replace with the exact ClientName from 00-parameters.json",
+  "TenantId": "Replace with the TenantId from 00-parameters.json",
+  "ServiceStartDate": null,
+  "TenantScore": null,
+  "Delivered": []
+}
