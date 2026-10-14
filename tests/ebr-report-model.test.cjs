@@ -1127,3 +1127,18 @@ test('the nine in ten line describes closure only, with automated and unclassifi
   assert.ok(!/investigated|resolved/.test(JSON.stringify([m.response, m.headline.find(t => /Median time/.test(t.label))])), 'closure time never reads as investigation or resolution')
   assert.ok(m.tiers.outcomes.every(r => !/resulted in/.test(r.label)))
 })
+test('a score movement that rounds to zero is no gain, so no surface prints up 0 points', () => {
+  const p = pack(); alerts(p)
+  put(p, 'POS.1', [{ Current: 50, Max: 100, Percent: 50, Subscriptions: 1 }])
+  put(p, 'POS.7', [{ Month: '2026-07-01', Current: 50, Max: 100, Percent: 50 }, { Month: '2026-10-01', Current: 50, Max: 100, Percent: 50 }])
+  p.context = { TenantScore: { Current: 450.2, Max: 1000, ReadDate: '2026-10-01', Source: 'Portal reading', Previous: 450, PreviousMax: 1000, PreviousReadDate: '2026-07-10' } }
+  const m = build(p)
+  assert.equal(m.cloudScore.delta, null, 'a flat cloud score prints no gain')
+  assert.deepEqual(m.cloudScore.trend.map(r => r.pct), [50, 50], 'the trend still carries both readings')
+  assert.equal(m.tenantScore.delta, null, 'a tenant movement under 0.05 points prints no gain')
+  const tile = m.headline.find(t => /tenant Secure Score/.test(t.label))
+  assert.deepEqual([tile.sub, tile.tone], ['Read Oct 1, 2026', ''])
+  assert.ok(!/Up 0 points/.test(JSON.stringify([m.headline, m.tiers])), 'no surface reads up 0 points')
+  p.context.TenantScore.Current = 451
+  assert.deepEqual(build(p).tenantScore.delta, { points: 0.1, since: 'Jul 2026', from: 45 })
+})

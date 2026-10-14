@@ -262,8 +262,11 @@ test('a short confirmed threats table is followed by the outcome cards and the h
   const { data, out } = deck('balanced', examples)
   const { slides, notes } = await read(out)
   const slide = slides.find(s => s.startsWith('Confirmed threats') && s.includes('Log4Shell'))
-  for (const t of ['Confirmed threats', 'Investigated and closed by the SOC', 'Reached exfiltration or impact', 'None carried an exfiltration or impact tactic.', '1 High severity alert', 'Of the 2 confirmed alerts grouped above', 'EVERY CONFIRMED THREAT', '1 Detect', '2 Triage', '3 Investigate', '4 Resolve']) assert.ok(slide.includes(t), t)
+  for (const t of ['Confirmed threats', 'Alerts the SOC classified as true positives from', 'Reached exfiltration or impact', 'None carried an exfiltration or impact tactic.', '1 High severity alert', 'Of the 2 confirmed alerts grouped above, at the severity Sentinel recorded.', 'EVERY CONFIRMED THREAT', '1 Detect', '2 Triage', '3 Investigate', '4 Resolve']) assert.ok(slide.includes(t), t)
   assert.ok(!/\bcontain(ed|ment)\b|resulted in|notification process/i.test(slide), 'containment, verified outcomes and notifications are never claimed')
+  // The true positive count and the rows carry no status, so the cards never say the alerts were closed.
+  const between = (a, b) => slide.slice(slide.indexOf(a), slide.indexOf(b))
+  assert.ok(!/\bclosed\b/.test(between('Alerts the SOC classified', 'Reached exfiltration or impact')) && !/\bclosed\b/.test(between('High severity alert', 'Median time to close')), 'no true positive card claims closure')
   // One High and nine Low alerts under one title: the group reads High, the card counts one High alert of ten.
   const mixed = [{ Threat: 'Suspicious sign-in detected', Severity: 'High', Tactics: 'InitialAccess,Exfiltration', Created: '2026-08-01', ExfilOrImpactTactic: true }, ...Array.from({ length: 9 }, (_, i) => ({ Threat: 'Suspicious sign-in detected', Severity: 'Low', Tactics: 'InitialAccess', Created: `2026-08-0${i + 1}`, ExfilOrImpactTactic: false }))]
   const mixedSlide = (await read(deck('balanced', mixed).out)).slides.find(s => s.startsWith('Confirmed threats')).replace(/\u00A0/g, ' ')

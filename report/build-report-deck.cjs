@@ -273,17 +273,19 @@ async function main() {
       // A short table leaves the slide empty, so the room below it carries what the confirmed threats add up to
       // (the outcome cards) and how every confirmed threat is handled (the strip). Five long titles leave no
       // room, and the slide then holds the table alone (Oct 14, 2026).
-      // The outcome cards stay tactic-qualified: the count is of tactics recorded on the alert, in the scope the model
-      // names (exfiltration or impact, or the wider flag scope for packs without tactics), never a verified outcome or
-      // a notification. The severity count comes from the model, counted per alert before grouping.
+      // The outcome cards stay within the evidence: the true positive count (OUT.1) and the rows (OUT.4) are
+      // classifications regardless of status, so the cards never claim closure. The tactic count is of tactics
+      // recorded on the alert, in the scope the model names (exfiltration or impact, or the wider flag scope for
+      // packs without tactics), never a verified outcome or a notification. The severity count comes from the
+      // model, counted per alert before grouping.
       const tp = m.alerts ? m.alerts.truePositives : null
       const high = m.threats.severities.High
       const scope = m.alerts ? m.alerts.flaggedScope : ''
       const tactic = `${/^[aeiou]/.test(scope) ? 'an' : 'a'} ${scope} tactic`
       const outcomeCards = [
-        tp !== null && tp > 0 ? [fmt(tp), tp === 1 ? 'Confirmed threat' : 'Confirmed threats', `Investigated and closed by the SOC ${st.periodPhrase}.`] : null,
+        tp !== null && tp > 0 ? [fmt(tp), tp === 1 ? 'Confirmed threat' : 'Confirmed threats', `${tp === 1 ? 'An alert' : 'Alerts'} the SOC classified as ${tp === 1 ? 'a true positive' : 'true positives'} ${st.periodPhrase}.`] : null,
         m.alerts && m.alerts.flaggedKnown && tp > 0 ? [`${fmt(m.alerts.flagged)} of ${fmt(tp)}`, sentence(`reached ${scope}`), m.alerts.flagged === 0 ? `None carried ${tactic}.` : `${plural(m.alerts.flagged, 'alert carried', 'alerts carried')} ${tactic} in Sentinel.`] : null,
-        m.threats.alerts > 0 ? [fmt(high), high === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(m.threats.alerts, 'confirmed alert', 'confirmed alerts')} grouped above, each closed as a true positive.`] : null,
+        m.threats.alerts > 0 ? [fmt(high), high === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(m.threats.alerts, 'confirmed alert', 'confirmed alerts')} grouped above, at the severity Sentinel recorded.`] : null,
         st.speed ? [st.speed.value, sentence(st.speed.label), st.speed.sub] : null
       ].filter(Boolean).slice(0, 4)
       const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages every alert and confirms its severity'], ['3 Investigate', ' scope, attack stage and impact are established'], ['4 Resolve', ' closed with a documented disposition, and referred to your team where action is needed']]

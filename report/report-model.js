@@ -770,7 +770,9 @@
       // The gate is the current score against the first month: the export can lag the current reading, so its own
       // last point is not the truth about today.
       // The movement is stated in percentage points with the starting percentage (from), never as points available.
-      const delta = trendRows.length >= 2 && value >= Number(first.Percent) ? { points: Number((value - Number(first.Percent)).toFixed(1)), since: monthLabel(first.Month), from: Number(first.Percent) } : null
+      // A movement that rounds to zero is no gain: the score then reads as current state everywhere.
+      const cloudPoints = trendRows.length >= 2 ? Number((value - Number(first.Percent)).toFixed(1)) : null
+      const delta = cloudPoints !== null && cloudPoints > 0 ? { points: cloudPoints, since: monthLabel(first.Month), from: Number(first.Percent) } : null
       m.cloudScore = { value, current: Number(cloud.Current), max: Number(cloud.Max), subscriptions: count(cloud.Subscriptions), delta, trend: trendRows.map(r => ({ label: monthLabel(r.Month), pct: Number(r.Percent) })), note: `Secure score across ${plural(cloud.Subscriptions, 'subscription', 'subscriptions')}, calculated by Microsoft.`, source: source('POS.1') }
       if (trendRows.length >= 2 && !delta) presenter('Defender for Cloud score movement', `The continuous export shows ${pctText(first.Percent)} in ${monthLabel(first.Month)} and ${pctText(last.Percent)} in ${monthLabel(last.Month)}. The report shows the monthly trend, including declines, beside the current score. Changes in the measurement model, scope or weighting can move the score without a change in the underlying controls.`)
       if (count(cloud.Subscriptions) !== m.subscriptions) presenter('Score subscription scope', `The cloud score covers ${fmt(cloud.Subscriptions)} of ${fmt(m.subscriptions)} in-scope subscriptions.`)
@@ -796,7 +798,9 @@
       const snapshot = validDate(tenant.PreviousReadDate) ? trend6.find(r => iso(r.Date) === iso(tenant.PreviousReadDate) && num(r.Max) > 0) : null
       const previousMax = num(tenant.PreviousMax) > 0 ? Number(tenant.PreviousMax) : snapshot ? Number(snapshot.Max) : null
       const previousPct = previousMax !== null && num(tenant.Previous) !== null && tenant.Previous <= previousMax ? pct(tenant.Previous, previousMax) : null
-      const previous = previousPct !== null && validDate(tenant.PreviousReadDate) && previousPct <= value ? { points: Number((value - previousPct).toFixed(1)), since: monthLabel(tenant.PreviousReadDate), from: previousPct } : null
+      // A movement that rounds to zero is no gain, so no surface prints "Up 0 points".
+      const tenantPoints = previousPct !== null ? Number((value - previousPct).toFixed(1)) : null
+      const previous = tenantPoints !== null && tenantPoints > 0 && validDate(tenant.PreviousReadDate) ? { points: tenantPoints, since: monthLabel(tenant.PreviousReadDate), from: previousPct } : null
       if (num(tenant.Previous) !== null && previousMax === null) note('Microsoft tenant Secure Score movement', 'The context file gives a Previous reading without PreviousMax, and no POS.6-TREND snapshot is dated PreviousReadDate, so the movement line is omitted rather than measured against the current maximum. Add PreviousMax, the maximum at that reading, to show it.')
       m.tenantScore = { value, current: Number(tenant.Current), max: Number(tenant.Max), read: date(tenant.ReadDate), delta: previous, categories, note: `Secure score for the Microsoft 365 tenant, calculated by Microsoft. Read ${date(tenant.ReadDate)}.`, source: clean(tenant.Source) }
     } else note('Microsoft tenant Secure Score', 'Add a dated portal reading through the context file to show the tenant score beside the Defender for Cloud score. Optional Previous and PreviousReadDate fields add the movement line.')
