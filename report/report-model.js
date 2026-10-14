@@ -722,7 +722,9 @@
       const first = trendRows[0], last = trendRows[trendRows.length - 1]
       // Movement is measured from the first month of the trend to the current score (POS.1), so the points and the
       // percentage on the page reconcile. The trend's own last month may differ from the current reading by a few tenths.
-      const delta = trendRows.length >= 2 && Number(last.Percent) >= Number(first.Percent) && value >= Number(first.Percent) ? { points: Number((value - Number(first.Percent)).toFixed(1)), since: monthLabel(first.Month) } : null
+      // The gate is the current score against the first month: the export can lag the current reading, so its own
+      // last point is not the truth about today.
+      const delta = trendRows.length >= 2 && value >= Number(first.Percent) ? { points: Number((value - Number(first.Percent)).toFixed(1)), since: monthLabel(first.Month) } : null
       m.cloudScore = { value, current: Number(cloud.Current), max: Number(cloud.Max), subscriptions: count(cloud.Subscriptions), delta, trend: trendRows.map(r => ({ label: monthLabel(r.Month), pct: Number(r.Percent) })), note: `${fmt(cloud.Current)} of ${fmt(cloud.Max)} points across ${plural(cloud.Subscriptions, 'subscription', 'subscriptions')}.`, source: source('POS.1') }
       if (trendRows.length >= 2 && !delta) presenter('Defender for Cloud score movement', `The continuous export shows ${pctText(first.Percent)} in ${monthLabel(first.Month)} and ${pctText(last.Percent)} in ${monthLabel(last.Month)}. The report presents the current score with the Microsoft measurement model explainer and does not print a decline.`)
       if (count(cloud.Subscriptions) !== m.subscriptions) presenter('Score subscription scope', `The cloud score covers ${fmt(cloud.Subscriptions)} of ${fmt(m.subscriptions)} in-scope subscriptions.`)
@@ -743,10 +745,16 @@
     } else note('Microsoft tenant Secure Score', 'Add a dated portal reading through the context file to show the tenant score beside the Defender for Cloud score. Optional Previous and PreviousReadDate fields add the movement line.')
     const high = rows('POS.4').find(r => /High/i.test(r.Severity))
     // POS.5 carries every assigned standard. The Microsoft cloud security benchmark is the one reported, so a preview
-    // edition or the CSPM scaffold never doubles the count. Older packs without a standard name keep every row.
+    // edition beside it or the CSPM scaffold never doubles the count. A tenant that holds only a versioned edition
+    // (the v2 rollout) reports that one edition: the unversioned name first, then a versioned name that is not a
+    // preview, then the latest preview. Older packs without a standard name keep every row.
     const benchAll = rows('POS.5').filter(r => count(r.Passed) !== null && count(r.Failed) !== null)
-    const benchPrimary = benchAll.filter(r => /^Microsoft[- ]cloud[- ]security[- ]benchmark$/i.test(clean(r.Standard)))
-    const bench = benchPrimary.length ? benchPrimary : benchAll
+    const MCSB = /^Microsoft[- ]cloud[- ]security[- ]benchmark/i
+    const benchNames = [...new Set(benchAll.map(r => clean(r.Standard)).filter(n => MCSB.test(n)))]
+    const benchName = benchNames.find(n => /^Microsoft[- ]cloud[- ]security[- ]benchmark$/i.test(n))
+      || benchNames.filter(n => !/preview/i.test(n)).sort().reverse()[0]
+      || benchNames.sort().reverse()[0] || null
+    const bench = benchName ? benchAll.filter(r => clean(r.Standard) === benchName) : benchAll
     m.posture = {
       estate: sum(rows('P0.5'), 'Resources'), assessed: count(one('POS.2')?.AssessedResources),
       highHealthy: high && count(high.Healthy) !== null && count(high.Total) > 0 ? { good: high.Healthy, total: high.Total, pct: pct(high.Healthy, high.Total), source: source('POS.4') } : null,

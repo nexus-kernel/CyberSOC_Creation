@@ -808,6 +808,10 @@ test('the Defender for Cloud score movement is measured to the current score, so
   assert.deepEqual(m.cloudScore.delta, { points: 5.2, since: 'Jul 2026' })
   p.results['POS.1'][0].Current = 120
   assert.equal(build(p).cloudScore.delta, null, 'a current score below the first month shows no gain')
+  // The export can lag the current reading: a last trend point below the first month does not hide a real gain.
+  p.results['POS.1'][0].Current = 132.75
+  p.results['POS.7'][2].Percent = 50
+  assert.deepEqual(build(p).cloudScore.delta, { points: 5.2, since: 'Jul 2026' })
 })
 test('the benchmark meter reads the Microsoft cloud security benchmark alone when a preview edition or another standard is assigned too', () => {
   const p = pack()
@@ -816,6 +820,11 @@ test('the benchmark meter reads the Microsoft cloud security benchmark alone whe
   assert.deepEqual([m.posture.benchmark.passed, m.posture.benchmark.total], [84, 125])
   put(p, 'POS.5', [{ Standard: 'Custom', Passed: 3, Failed: 1 }, { Standard: 'Other', Passed: 2, Failed: 2 }])
   assert.deepEqual([build(p).posture.benchmark.passed, build(p).posture.benchmark.total], [5, 8], 'without the benchmark every standard counts')
+  // A tenant on the v2 rollout alone reports that edition, never the CSPM scaffold or a custom standard beside it.
+  put(p, 'POS.5', [{ Standard: 'Azure-CSPM', Passed: 0, Failed: 1 }, { Standard: 'Custom', Passed: 3, Failed: 1 }, { Standard: 'Microsoft-cloud-security-benchmark-v2-(Preview)', Passed: 29, Failed: 14 }, { Standard: 'Microsoft-cloud-security-benchmark-v2-(Preview)', Passed: 17, Failed: 25 }])
+  assert.deepEqual([build(p).posture.benchmark.passed, build(p).posture.benchmark.total], [46, 85], 'the versioned edition is the benchmark')
+  put(p, 'POS.5', [{ Standard: 'Microsoft-cloud-security-benchmark-v2', Passed: 30, Failed: 10 }, { Standard: 'Microsoft-cloud-security-benchmark-v3-(Preview)', Passed: 5, Failed: 35 }])
+  assert.deepEqual([build(p).posture.benchmark.passed, build(p).posture.benchmark.total], [30, 40], 'a released edition beats a preview')
 })
 test('a tenant that is not onboarded to Defender for Identity reads Not in force and needs a license, never read access', () => {
   const p = pack()
