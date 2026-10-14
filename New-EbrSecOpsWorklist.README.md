@@ -21,8 +21,10 @@ is passed. Offline only. Nothing in the pack is changed.
 |---|---|---|
 | Open alerts | `OUT.1-OPEN` | A ticketed, non-informational alert created in the window and still open at collection. Incident number, severity, age, owner and the Zendesk ticket link (`https://atmosera.zendesk.com/agent/tickets/<number>`, set with `-ZendeskTicketUrl`) |
 | Closed alerts without a documented disposition | `DR.10-GAPS` | Closed in the last 30 days with no classification, Undetermined, or no closing comment |
-| Azure virtual machines not onboarded to endpoint detection | `EW.1-DEVICES` | An Azure VM seen in the last 7 days in any onboarding status other than Onboarded. Endpoints that are not native to Azure, and network virtual appliances, are left out and counted in the status line |
-| Azure virtual machines with an inactive sensor | `EW.1-DEVICES` | An onboarded Azure VM whose sensor state is not Active |
+| Azure virtual machines not onboarded to endpoint detection | `EW.1-DEVICES`, `EW.1-GAPS` | An Azure VM seen in the last 7 days in any onboarding status other than Onboarded that carries no other endpoint detection product. Endpoints that are not native to Azure, and network virtual appliances, are left out and counted in the status line. With a 1.14.0 pack, machines covered by a third-party product, and machines that cannot take a sensor, move to the reason list below and each remaining item carries its reason |
+| Azure virtual machines with an inactive sensor | `EW.1-DEVICES`, `EW.1-GAPS` | An onboarded Azure VM whose sensor state is not Active, with the reason when the pack has one (deallocated at collection, for example) |
+| Azure virtual machines not reporting to Defender for Endpoint, by reason | `EW.1-GAPS` | Every Azure VM that is not onboarded with an active sensor, with the reason the collector established and its evidence: covered by a third-party product (CrowdStrike Falcon, or another product named by `-EdrVendorPattern`), a network virtual appliance, an operating system the sensor does not support, deallocated at collection, discovered only, never discovered by Defender, sensor not active, or not onboarded with no endpoint detection found. A machine covered by a third-party product counts as protected in the client report, so confirm the product is licensed and reporting |
+| Machines left out of the patch measures by tag | `EW.10-EXCLUDED` | A virtual machine or Arc machine whose tags record patching as waived or client owned (`-PatchExclusionTagPattern`). It is left out of the patch cadence and pending patch figures. Confirm each tag is still intended |
 | Device code and legacy sign-ins to review | `IA.8-SIGNINS`, `IA.8-POLICIES` | A successful device code or legacy protocol sign-in in the last 30 days, classified against the Conditional Access block policy: excluded (an approved exception to confirm), not evaluated (usually before the policy existed) or not governed (no enabled block policy applies) |
 | Virtual machines without Azure Backup | `DP.5b` | No Protected item in any vault. Machines sharing a resource group with a pooled AVD host pool (`DP.5c`) carry a note, since they may be excluded by agreement |
 | Backup items stale or not protected | `DP.5-STALE` | Last backup older than 48 hours, or protection state not Protected. Items superseded by a current backup of the same machine (moved, rebuilt or protected in another vault) and deleted resources with protection stopped are left out and counted in the status line. For packs before collector 1.10.0 the finding is inferred from the VM inventory in `EW.7-DETAIL` and `DP.5b` |
@@ -38,7 +40,7 @@ Rows that name a resource in the managed resource group (`ManagedRgPattern` in `
 Each category reports one of four statuses: a count of items, none found, not collected with the
 manifest status, or needs recollection with the collector version that added the source (1.8 for
 `OUT.1-OPEN`, `DR.10-GAPS`, `EW.1-DEVICES` and `DP.5-STALE`, 1.10.0 for `IA.8-SIGNINS` and
-`P0.6-APPLIANCES`, 1.11.0 for `DP.1-CONTAINERS`) when the pack predates it.
+`P0.6-APPLIANCES`, 1.11.0 for `DP.1-CONTAINERS`, 1.14.0 for `EW.1-GAPS` and `EW.10-EXCLUDED`) when the pack predates it.
 
 The Conditional Access classification is shared with the report builder through
 `report/Get-EbrCaEvaluation.ps1`, so the worklist names exactly the accounts the report counts.

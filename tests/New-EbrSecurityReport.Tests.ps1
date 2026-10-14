@@ -233,3 +233,30 @@ Describe 'Offline HTML report generation' {
         Test-Path ([IO.Path]::ChangeExtension($files[0], '.pptx')) | Should -BeFalse
     }
 }
+Describe 'Onboarding gaps and patch exclusions (collector 1.14.0)' {
+    BeforeEach {
+        $pack = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        New-ReportFixture $pack
+        $m = @(Import-Csv (Join-Path $pack '00-manifest.csv'))
+        foreach ($id in 'EW.1-GAPS', 'EW.1-EDR', 'EW.10-EXCLUDED') { $m += [pscustomobject]@{ ResultId = $id; Status = 'OK'; Rows = 2; ReadTimeUtc = '2026-10-08T10:00:00Z' } }
+        $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
+        '[{"DeviceName":"secret-cs-01","VmName":"secret-cs-01","resourceGroup":"app","Reason":"Covered by a third-party endpoint detection product","Product":"CrowdStrike Falcon","Evidence":"Extension CrowdStrike.Falcon/FalconSensorWindows","CountedAs":"CanBeOnboarded","Eligible":true,"Covered":true,"AzureResourceId":"/subscriptions/s/x/secret-cs-01"},{"DeviceName":"secret-cs-02","VmName":"secret-cs-02","resourceGroup":"app","Reason":"Covered by a third-party endpoint detection product","Product":"CrowdStrike Falcon","Evidence":"Reporting through Sentinel","CountedAs":"NotSeen","Eligible":true,"Covered":true,"AzureResourceId":"/subscriptions/s/x/secret-cs-02"},{"DeviceName":"secret-fw","VmName":"secret-fw","resourceGroup":"fw","Reason":"Network virtual appliance, cannot run a sensor","Product":"","Evidence":"","CountedAs":"CanBeOnboarded","Eligible":false,"Covered":false,"AzureResourceId":"/subscriptions/s/x/secret-fw"}]' |
+            Set-Content (Join-Path $pack 'results/EW.1-GAPS.json')
+        '[{"VmId":"/subscriptions/s/x/secret-cs-01","VmName":"secret-cs-01","DefenderExtension":0,"ThirdPartyEdr":true,"Appliance":false},{"VmId":"/subscriptions/s/x/secret-fw","VmName":"secret-fw","DefenderExtension":0,"ThirdPartyEdr":false,"Appliance":true}]' |
+            Set-Content (Join-Path $pack 'results/EW.1-EDR.json')
+        '[{"Name":"secret-legacy","MatchedTag":"\"patching\":\"waived\"","ResourceId":"/subscriptions/s/x/secret-legacy"},{"Name":"secret-legacy-2","MatchedTag":"\"patching\":\"client owned\"","ResourceId":"/subscriptions/s/x/secret-legacy-2"}]' |
+            Set-Content (Join-Path $pack 'results/EW.10-EXCLUDED.json')
+        $p = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
+        $p | Add-Member -NotePropertyName EdrVendorPattern -NotePropertyValue 'crowdstrike|falcon'
+        $p | Add-Member -NotePropertyName PatchExclusionTagPattern -NotePropertyValue '"patch"'
+        $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+    }
+    It 'embeds the gaps as counts by reason and product and never the machine names' {
+        $html | Should -Match '"EW.1-GAPS":\[\{"Reason":"Covered by a third-party endpoint detection product","Product":"CrowdStrike Falcon","Devices":2,"Eligible":true,"Covered":true,"Onboarded":0,"CanBeOnboarded":1,"NotSeen":1,"Other":0\},\{"Reason":"Network virtual appliance, cannot run a sensor","Product":"","Devices":1,"Eligible":false,"Covered":false,"Onboarded":0,"CanBeOnboarded":1,"NotSeen":0,"Other":0\}\]'
+        $html | Should -Match '"EW.1-EDR":\[\{"VMs":2,"DefenderExtension":0,"ThirdPartyEdr":1,"Appliances":1\}\]'
+        $html | Should -Match '"EW.10-EXCLUDED":\[\{"Machines":2\}\]'
+        $html | Should -Match '"EdrVendorPattern":"crowdstrike\|falcon"'
+        $html | Should -Not -Match 'secret-cs|secret-fw|secret-legacy|FalconSensorWindows|"Evidence"|"DeviceName"'
+    }
+}

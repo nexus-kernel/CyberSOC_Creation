@@ -151,3 +151,14 @@ test('titles that are one long token still end above the slide bottom', async ()
   // A 150 character token wraps to four lines at 14 pt, so five of them only fit cut.
   for (const w of subjects) assert.ok(text.some(t => t.startsWith(`${w}_`) && t.endsWith('...') && t.length <= 113), `${w} title is cut`)
 })
+test('every slide and speaker note keeps to the copy rules: no semicolons, arrows or emoji, and the greater-than sign only in navigation steps', async () => {
+  const { out } = deck('detailed', examples)
+  const { slides, notes } = await read(out)
+  const decode = s => s.replace(/&apos;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+  for (const text of [...slides, ...notes].map(decode)) {
+    assert.ok(!/;/.test(text), text.match(/.{0,60};.{0,60}/)?.[0])
+    assert.ok(!/[←-⇿➔➡]|->|=>/.test(text), text.match(/.{0,40}(?:[←-⇿➔➡]|->|=>).{0,40}/)?.[0])
+    assert.ok(!/[\u{1F300}-\u{1FAFF}☀-➿]/u.test(text), 'emoji')
+    assert.ok(!/</.test(text) && !/>/.test(text.replace(/[A-Za-z0-9)] > [A-Za-z]/g, '')), text.match(/.{0,60}[<>].{0,60}/)?.[0])
+  }
+})

@@ -36,6 +36,14 @@ pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -Skip
 `-SkipGraph` restores the pre-1.7 behaviour (Graph items UNAVAILABLE with their portal path).
 `-PatchCadenceDays` is the agreed cadence for EW.10, default 30.
 
+```bash
+pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -EdrVendorPattern 'crowdstrike|falcon' -PatchExclusionTagPattern ''
+```
+
+`-EdrVendorPattern` names the third-party endpoint detection products in the environment (CrowdStrike
+Falcon is in the default), so an Azure virtual machine that runs one is reported as covered rather than
+as not onboarded. `-PatchExclusionTagPattern ''` turns off the tag-based patch exclusion.
+
 ## What it decides for you
 
 | Runbook parameter | How the script sets it | Override |
@@ -47,6 +55,9 @@ pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -Skip
 | Incident reporting window | From the first full month of `SecurityIncident` data in any workspace (P0.1) to the end of the last full month. This gives the maximum reach | `-WindowStart` / `-WindowEnd` (yyyy-MM-dd) |
 | Posture read date | The run date | n/a |
 | Service start date | Not available from any API. The worksheet marks it MANUAL | n/a |
+| Device scope | Every Defender device query (EW.1, EW.1-DEVICES, EW.1-VMS, EW.3, EW.4, EW.5, EW.12, EW.14, EW.15, EW.16, NB.8, NB.10, NB.11, DR.5, DR.12, BKL.1) reads Azure virtual machines only, `isnotempty(AzureResourceId)`. Workstations, laptops and other endpoints that are not Azure resources are never counted (1.14.0) | n/a |
+| Third-party endpoint detection | `crowdstrike|falcon|sentinelone|carbon ?black|cortex ?xdr|cybereason|tanium|trellix|cylance`, matched against virtual machine extension publishers and types (`EW.1-EDR`) and against the Sentinel tables and vendors carrying the product's telemetry (`EW.1-EDR-HOSTS`). An Azure virtual machine that is not onboarded to Defender for Endpoint but carries a matching product is covered, not a gap (`EW.1-GAPS`). Recorded as `EdrVendorPattern` in `00-parameters.json` | `-EdrVendorPattern` (RE2, no double quotes) |
+| Patching waived or client owned | A regular expression against the lowercased JSON of each machine's tags. The default matches a tag whose key or value names patching together with waived or client owned (`Patching=Waived`, `PatchPolicy=Client Owned`, `Maintenance=Patching waived`). Matching machines leave `EW.6` and `EW.10` and are listed in `EW.10-EXCLUDED`. Recorded as `PatchExclusionTagPattern` in `00-parameters.json` | `-PatchExclusionTagPattern` (RE2, `''` turns the exclusion off) |
 
 **Scope safety.** Every subscription must be homed in the client tenant (`homeTenantId` in
 `az account list`), or the script stops before running anything. Resource Graph calls always
@@ -187,7 +198,7 @@ in the pack (`results/<ID>.csv`).
 - `DFC.1-DETAIL`, `EW.7-DETAIL`, `DP.4-DETAIL`: the itemized lists the runbook asks for.
 - `DR.9-RULES`: every analytics rule.
 - `IA.9-RULES`, `IA.9-ATP`, `IA.9-SAFELINKS`, `IA.9-SAFEATTACH`: the remaining IA.9 output, plus Safe Links and Safe Attachments policies for DP-F3.
-- `OUT.1-OPEN`, `DR.10-GAPS`, `EW.1-DEVICES`, `DP.5-STALE` (collector 1.8.0): the row-level lists behind OUT.1 open alerts, DR.10 undocumented closures, EW.1 devices not onboarded or with an inactive sensor, and DP.5 stale backup items. They feed the internal SecOps worklist and are never embedded in the client report.
+- `OUT.1-OPEN`, `DR.10-GAPS`, `EW.1-DEVICES`, `DP.5-STALE` (collector 1.8.0): the row-level lists behind OUT.1 open alerts, DR.10 undocumented closures, EW.1 devices not onboarded or with an inactive sensor, and DP.5 stale backup items. They feed the internal SecOps worklist and are never embedded in the client report. `EW.1-VMS`, `EW.1-EDR`, `EW.1-EDR-HOSTS`, `EW.1-GAPS` and `EW.10-EXCLUDED` (collector 1.14.0) are the same kind of list: the report embeds counts only.
 - Collector 1.10.0:
   - `IA.8-POLICIES` keeps the Conditional Access policies exactly as Graph returned them (with the excluded user, group and role IDs), and `IA.8-DEFAULTS` records whether security defaults are on. `IA.8-SIGNINS` lists every successful device code and legacy protocol sign-in in 30 days per account, with the policyId=result pairs from the sign-in record. The report builder and the SecOps worklist match the two, so a sign-in by an account the block policy excludes is an approved exception rather than a failure. `IA.3` no longer counts the Unknown client app as legacy authentication.
   - `P0.6-APPLIANCES` lists machines on a marketplace firewall, router or SD-WAN image (plan or image publisher matching `$script:EbrAppliancePattern`, recorded as `AppliancePattern` in `00-parameters.json`). They are left out of `EW.7`, `EW.7-DETAIL`, `EW.8`, `DP.4`, `DP.4-DETAIL`, `DP.5b` and the agent, disk, platform integrity and backup rows of `DFC.1` and `DFC.1-DETAIL`. Network recommendations such as management ports still apply to them.
@@ -207,6 +218,13 @@ in the pack (`results/<ID>.csv`).
   - "Session reuse, MFA not evaluated" also takes a sign-in that presents a PRT or refresh token without the "Previously satisfied" step.
   - `IA.1` adds `MfaSessionLinkedOnly`: users whose only MFA evidence is the session inference. The HTML report names it in the presenter notes only.
   - On Shook, Q5 moved 232 of the 1,884 "No MFA evidence, no session reuse" sign-ins to the session rule and 87 to session reuse, so the member figures from 1.12.0 shift.
+- Collector 1.14.0 (October 14, 2026):
+  - Every Defender device query reads Azure virtual machines only: `EW.1`, `EW.1-DEVICES`, `EW.3`, `EW.4`, `EW.5`, the per-device checks (`EW.12`, `EW.14`, `EW.15`, `EW.16`, `NB.8`, `NB.10`, `NB.11`), `DR.5`, `DR.12` and `BKL.1` filter on `isnotempty(AzureResourceId)`. The `Scope` column stays, always `Azure VM`. The report leaves the Other device rows of older packs out as well, so network protection reads as Azure virtual machines in block mode, not the workstation fleet. `EW.1` adds `Unsupported` and `InsufficientInfo`.
+  - `EW.1-VMS` lists every Azure virtual machine Defender has seen in the last 7 days, in any status. `EW.1-EDR` (Resource Graph) lists every Azure virtual machine with the Defender for Endpoint extension, any extension whose publisher or type matches `-EdrVendorPattern`, the Defender for Cloud EDR assessment status, the power state and the appliance flag. `EW.1-EDR-HOSTS` (Log Analytics) lists the hosts reporting to a third-party product through Sentinel in the last 7 days (the `CrowdStrike*` tables and `CommonSecurityLog` by vendor).
+  - `EW.1-GAPS` is derived from those results without a query: one row per Azure virtual machine that is not onboarded with an active sensor, with the reason (covered by a third-party product, network virtual appliance, operating system not supported, deallocated, discovered only, not discovered by Defender, sensor not active, not onboarded with no endpoint detection found), the product, the evidence and whether the machine stays in the onboarding denominator. The report counts a machine covered by CrowdStrike Falcon or another product as protected and writes the reasons under both the onboarding figure and the sensor figure, so the two reconcile on the page. The SecOps worklist names each machine.
+  - `EW.6` and `EW.10` leave out machines whose tags record patching as waived or client owned (`-PatchExclusionTagPattern`), and `EW.10-EXCLUDED` names them. The report note states the count.
+  - `IA.1` and `IA.1-ADMINPORTAL` read In force or Not in force from the Conditional Access policy inventory when the report builder has it (a new MFA at sign-in flow in `report/Get-EbrCaEvaluation.ps1`), with the sign-in ratio in the note.
+  - Every output keeps to the copy rules: no semicolons, arrows or emoji in the worksheet, notes, manifest guidance, worklist, report or deck, and the greater-than sign only in portal navigation steps.
 - Collector 1.13.1 (October 14, 2026):
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.

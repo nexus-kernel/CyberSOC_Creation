@@ -1,6 +1,6 @@
-# EBR Security Evidence Toolkit v1.13.1
+# EBR Security Evidence Toolkit v1.14.0
 
-Packaged 2026-10-14 07:02.
+Packaged 2026-10-14.
 
 ## Prerequisites
 

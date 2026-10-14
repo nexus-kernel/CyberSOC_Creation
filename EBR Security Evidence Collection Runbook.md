@@ -352,7 +352,7 @@ Where Defender for Cloud and a direct ARG property query disagree, quote Defende
 
 | ID | Control | Tier | Measure | Evidence |
 | --- | --- | --- | --- | --- |
-| IA-F1 | Multifactor authentication required for all users | F | Members with MFA evidence over members signing in, 30 days, with reused sessions no policy checked left out in a federated tenant, and the same at admin portal sign-in | IA.1, IA.1-ADMINPORTAL, IA.1-FEDERATION |
+| IA-F1 | Multifactor authentication required for all users | F | An enabled Conditional Access policy requiring MFA on every application for all users, or security defaults, reads In force, and the same for the admin portals. The sign-in evidence (members with MFA over members signing in, 30 days, reused sessions no policy checked left out in a federated tenant) supports the note. Without the policy inventory the sign-in ratio grades the control | IA.8, IA.1, IA.1-ADMINPORTAL, IA.1-FEDERATION |
 | IA-F2 | Privileged role assignments governed and reviewed | F | Eligible against standing privileged Entra assignments, and Azure Owner count | IA.6, IA.7 |
 | IA-F3 | Anti-phishing policy applied to every mailbox | F | Defender for Office anti-phishing points earned of available | POS.6, IA.9 |
 | IA-F4 | Legacy and high-risk authentication protocols blocked | F | Enabled Conditional Access policies that block legacy authentication (or security defaults) and device code flow for all users. Sign-ins show only whether an account got past the policy. Without a policy inventory, In force only when Conditional Access blocks (error 53003) are recorded and no sign-in succeeded | IA.3, IA.3-DEVICECODE, IA.8 |
@@ -798,6 +798,8 @@ authorizationresources
 
 The collector reads `GET /v1.0/identity/conditionalAccess/policies` (needs Policy.Read.All) and writes one row per policy: Policy, State, IncludeUsers, ExcludeUsers, IncludeApplications, ExcludeApplications, UserActions, ClientAppTypes, AuthenticationFlows, SignInRiskLevels, UserRiskLevels, Platforms, Grants, GrantOperator, AuthStrength, Baseline (name starts ATMO-MXDR-CA-) and ModifiedUtc. The consent setting moved to IA.13. IA.8-SUB stays as the sign-in based substitute.
 
+The report builder grades every Conditional Access control from this inventory (`report/Get-EbrCaEvaluation.ps1`), and each reads In force or Not in force on the slide rather than a ratio: MFA required at sign-in (IA.1, since collector 1.14.0: an enabled policy requiring MFA on every application for all users, not narrowed by platform, risk, device filter or location, or security defaults), MFA at admin portal sign-in (IA.1-ADMINPORTAL), legacy authentication blocked (IA.3), device code flow blocked (IA.3-DEVICECODE) and location-based access (IA.4-LOCATION). The sign-in figures from IA.1 and IA.1-ADMINPORTAL support the note under each control and the pillar page. Without the inventory the sign-in ratios grade IA.1 and IA.1-ADMINPORTAL as before.
+
 ```powershell
 Connect-MgGraph -Scopes "Policy.Read.All" -NoWelcome
 
@@ -874,7 +876,7 @@ The default policy covers every mailbox but ships with impersonation protection 
 
 | ID | Control | Tier | Measure | Evidence |
 | --- | --- | --- | --- | --- |
-| EW-F1 | Endpoint detection and response deployed across the fleet | F | Onboarded over onboarded plus can be onboarded, Azure VMs separately | EW.1, DFC.1 |
+| EW-F1 | Azure virtual machines reporting to endpoint detection | F | Onboarded plus machines covered by a third-party product, over the machines eligible for endpoint detection, Azure virtual machines only, with the reason for every machine not reporting | EW.1, EW.1-GAPS, DFC.1 |
 | EW-F2 | Anti-malware active with real-time and cloud-delivered protection | F | Devices compliant on both checks | EW.3 |
 | EW-F3 | Tamper protection enforced so agents cannot be disabled | F | Devices compliant on the tamper protection check | EW.15, EW.3 |
 | EW-F4 | Host firewall enforced centrally through endpoint policy | F | Devices with Defender Firewall on | EW.16, EW.3 |
@@ -890,29 +892,113 @@ The default policy covers every mailbox but ships with impersonation protection 
 
 When P0.4 shows the device tables did not resolve, grade EW-F1, EW-F2 and EW-D1 from the matching Secure Score controls in POS.6 and footnote the substitution, as the DRB deck did.
 
-**EW.1 EDR onboarding and sensor health** (Advanced Hunting)
+**Scope of every device measure (collector 1.14.0).** Every Advanced Hunting query that reads devices (EW.1, EW.1-DEVICES, EW.1-VMS, EW.3, EW.4, EW.5, EW.12, EW.14, EW.15, EW.16, NB.8, NB.10, NB.11, DR.5, DR.12 and BKL.1) covers Azure virtual machines only: `| where isnotempty(AzureResourceId)`. Workstations, laptops and any other endpoint that is not an Azure resource are never counted, in the evidence or in the report. The `Scope` column is kept, always `Azure VM`, so earlier packs and the report read the same columns.
+
+**EW.1 EDR onboarding and sensor health, Azure virtual machines** (Advanced Hunting)
 
 ```kusto
 DeviceInfo
 | where Timestamp between (ago(7d) .. now())
 | summarize arg_max(Timestamp, *) by DeviceId
 | where isnotempty(OSPlatform)
+| where isnotempty(AzureResourceId)   // Azure virtual machines only
 | where not(tostring(column_ifexists("DeviceCategory", "")) contains "network"
             or tostring(column_ifexists("DeviceType", "")) contains "network"
             or tolower(strcat(tostring(column_ifexists("Vendor", "")), " ", tostring(column_ifexists("Model", "")), " ",
                               tostring(OSPlatform), " ", tostring(column_ifexists("OSDistribution", ""))))
                matches regex @"(palo ?alto|pan-?os|meraki|fortinet|forti(gate|os)|sonicwall|sonicos|watchguard|check ?point|gaia|barracuda)")
 | where AzureResourceId !contains "aznativesol0"
-| extend Scope = iff(isnotempty(AzureResourceId), "Azure VM", "Other device")
-| summarize Devices        = count(),
-            Onboarded      = countif(OnboardingStatus == "Onboarded"),
-            CanBeOnboarded = countif(OnboardingStatus == "Can be onboarded"),
-            SensorActive   = countif(SensorHealthState == "Active")
+| extend Scope = "Azure VM"
+| summarize Devices          = count(),
+            Onboarded        = countif(OnboardingStatus == "Onboarded"),
+            CanBeOnboarded   = countif(OnboardingStatus == "Can be onboarded"),
+            Unsupported      = countif(OnboardingStatus == "Unsupported"),
+            InsufficientInfo = countif(OnboardingStatus == "Insufficient info"),
+            SensorActive     = countif(SensorHealthState == "Active")
           by Scope, OSPlatform
-| order by Scope asc, Devices desc
+| order by Devices desc
 ```
 
-The EDR denominator is `Onboarded` plus `CanBeOnboarded`. Devices marked unsupported or with insufficient information are discovered network devices, not fleet endpoints. Since collector 1.11.0 network devices and firewalls (Palo Alto, Meraki, Fortinet, SonicWall and similar) are dropped before counting, because they cannot run a sensor. `SensorActive` feeds DR-F1, which is read on the `Azure VM` rows only: workstations and laptops are not part of the sensor measure.
+The EDR denominator is `Onboarded` plus `CanBeOnboarded`. `Unsupported` and `InsufficientInfo` are context for EW.1-GAPS. Since collector 1.11.0 network devices and firewalls (Palo Alto, Meraki, Fortinet, SonicWall and similar) are dropped before counting, because they cannot run a sensor. `SensorActive` feeds DR-F1, the sensor measure on onboarded Azure virtual machines.
+
+**EW.1-VMS Azure virtual machines known to Defender for Endpoint** (Advanced Hunting, collector 1.14.0)
+
+Every Azure virtual machine Defender has seen in the last 7 days, in any onboarding status, so EW.1-GAPS can tell which machines in Resource Graph Defender has never discovered. Same filters as EW.1, then `| project DeviceId, DeviceName, OSPlatform, OnboardingStatus, SensorHealthState, LastSeen = Timestamp, MachineGroup, AzureResourceId`. Internal: names devices.
+
+**EW.1-EDR Endpoint detection evidence per Azure virtual machine, from Azure** (ARG, collector 1.14.0)
+
+One row per Azure virtual machine with what Azure itself knows about endpoint detection: the Defender for Endpoint extension (`MDE.Windows`, `MDE.Linux`), any extension whose publisher or type names a third-party product, the Defender for Cloud `EDR solution should be installed` assessment status, the power state and whether the image is a network appliance (P0.6-APPLIANCES). The collector takes the product pattern from `-EdrVendorPattern`, which covers CrowdStrike Falcon by default.
+
+```kusto
+resources
+| where type =~ "microsoft.compute/virtualmachines"
+| where id !contains "aznativesol0"
+| project VmId = tolower(id), VmName = name, resourceGroup, subscriptionId,
+          OsType     = tostring(properties.storageProfile.osDisk.osType),
+          PowerState = tostring(properties.extended.instanceView.powerState.code),
+          Appliance  = tolower(strcat(tostring(plan.publisher), " ", tostring(properties.storageProfile.imageReference.publisher), " ", tostring(properties.virtualMachineProfile.storageProfile.imageReference.publisher))) matches regex @"(paloalto|fortinet|checkpoint|barracuda|cisco|sophos|f5-networks|netgate|juniper|citrix|versa-networks|silver-peak|silverpeak|aviatrix|watchguard|forcepoint|kemptech|a10networks|arista|zscaler|cloudflare|vyos|mikrotik|opnsense|riverbed|catonetworks|cradlepoint)"
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.compute/virtualmachines/extensions"
+    | extend VmId = tostring(split(tolower(id), "/extensions/")[0]),
+             Publisher = tostring(properties.publisher), ExtensionType = tostring(properties.type)
+    | extend Product = tolower(strcat(Publisher, " ", ExtensionType, " ", name))
+    | summarize DefenderExtension    = countif(ExtensionType startswith "MDE."),
+                ThirdPartyExtensions = make_set_if(strcat(Publisher, "/", ExtensionType), Product matches regex @"(crowdstrike|falcon|sentinelone|carbon ?black|cortex ?xdr|cybereason|tanium|trellix|cylance)")
+              by VmId
+  ) on VmId
+| join kind=leftouter (
+    securityresources
+    | where type =~ "microsoft.security/assessments"
+    | extend Recommendation = tostring(properties.displayName), Status = tostring(properties.status.code)
+    | where Recommendation has "EDR solution should be installed"
+    | extend VmId = tostring(split(tolower(id), "/providers/microsoft.security/assessments/")[0])
+    | summarize EdrAssessment = make_set(Status) by VmId
+  ) on VmId
+| extend DefenderExtension    = coalesce(DefenderExtension, 0),
+         ThirdPartyExtensions = coalesce(ThirdPartyExtensions, dynamic([])),
+         EdrAssessment        = coalesce(EdrAssessment, dynamic([]))
+| extend ThirdPartyEdr = array_length(ThirdPartyExtensions) > 0
+| project VmId, VmName, resourceGroup, subscriptionId, OsType, PowerState, Appliance, DefenderExtension, ThirdPartyEdr, ThirdPartyExtensions, EdrAssessment
+| order by resourceGroup asc, VmName asc
+```
+
+**EW.1-EDR-HOSTS Hosts reporting to a third-party endpoint detection product through Sentinel** (Log Analytics, collector 1.14.0)
+
+Hosts seen in the last 7 days in the CrowdStrike tables, or in `CommonSecurityLog` with a vendor or product matching the pattern. EMPTY means the workspaces hold no such telemetry, which is a reading, not a gap.
+
+```kusto
+union withsource = SourceTable isfuzzy = true CrowdStrike*, CommonSecurityLog
+| where TimeGenerated > ago(7d)
+| extend Product = tolower(strcat(SourceTable, " ", tostring(column_ifexists("DeviceVendor", "")), " ", tostring(column_ifexists("DeviceProduct", ""))))
+| where Product matches regex @"(crowdstrike|falcon|sentinelone|carbon ?black|cortex ?xdr|cybereason|tanium|trellix|cylance)"
+| extend Host = tolower(case(isnotempty(tostring(column_ifexists("ComputerName", ""))),   tostring(column_ifexists("ComputerName", "")),
+                             isnotempty(tostring(column_ifexists("DeviceName", ""))),     tostring(column_ifexists("DeviceName", "")),
+                             isnotempty(tostring(column_ifexists("SourceHostName", ""))), tostring(column_ifexists("SourceHostName", "")),
+                             isnotempty(tostring(column_ifexists("HostName", ""))),       tostring(column_ifexists("HostName", "")),
+                             tostring(column_ifexists("Computer", ""))))
+| where isnotempty(Host)
+| extend Host = tostring(split(Host, ".")[0])
+| summarize Events = count(), LastSeen = max(TimeGenerated), Sources = make_set(SourceTable) by Host
+| order by Host asc
+```
+
+**EW.1-GAPS Azure virtual machines not reporting to Defender for Endpoint, with the reason** (derived, collector 1.14.0)
+
+No query. The collector builds it from EW.1-VMS, EW.1-DEVICES, EW.1-EDR, EW.1-EDR-HOSTS and P0.6-APPLIANCES: one row per Azure virtual machine that is not onboarded with an active sensor, with the first reason that applies, in this order.
+
+| Reason | Evidence | In the denominator | Counts as protected |
+| --- | --- | --- | --- |
+| Network virtual appliance, cannot run a sensor | P0.6-APPLIANCES, the image publisher in EW.1-EDR, or a firewall operating system | No | No |
+| Covered by a third-party endpoint detection product | A matching extension in EW.1-EDR, the host in EW.1-EDR-HOSTS, or Defender for Cloud reporting an EDR solution installed on a machine Defender for Endpoint says is not onboarded. The product is named, CrowdStrike Falcon for example | Yes | Yes |
+| Operating system not supported by the sensor | OnboardingStatus Unsupported | No | No |
+| Deallocated or stopped at collection | Power state in EW.1-EDR | No | No |
+| Discovered only, insufficient information | OnboardingStatus Insufficient info | No | No |
+| Not discovered by Defender for Endpoint | In Resource Graph, absent from EW.1-VMS | Yes | No |
+| Onboarded, sensor not active | SensorHealthState | Yes | Yes, the sensor measure grades it |
+| Not onboarded, no endpoint detection found | None of the above | Yes | No |
+
+The report reads the counts by reason. The onboarding figure (EW-F1) becomes onboarded plus machines covered by a third-party product, over the machines eligible for endpoint detection, and the note under both the onboarding figure and the sensor figure (DR-F1) states the reasons, so 87 of 87 sensors active beside 87 of 90 reporting is explained on the slide itself. The SecOps worklist names each machine with its evidence.
 
 **EW.3 Security configuration checks, every control in one pass** (Advanced Hunting)
 
@@ -924,10 +1010,11 @@ DeviceTvmSecureConfigurationAssessment
     DeviceInfo
     | where Timestamp between (ago(7d) .. now())
     | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
     | where AzureResourceId !contains "aznativesol0"
   ) on DeviceId
 | join kind=inner DeviceTvmSecureConfigurationAssessmentKB on ConfigurationId
-| extend Scope = iff(isnotempty(AzureResourceId), "Azure VM", "Other device")
+| extend Scope = "Azure VM"
 | summarize Devices   = dcount(DeviceId),
             Compliant = dcountif(DeviceId, tobool(IsCompliant))
           by Scope, ConfigurationId, ConfigurationName
@@ -983,6 +1070,7 @@ DeviceTvmSecureConfigurationAssessment
     | where Timestamp between (ago(7d) .. now())
     | summarize arg_max(Timestamp, DeviceName, OSPlatform, OSVersion, MachineGroup, AzureResourceId)
               by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
     | where AzureResourceId !contains "aznativesol0"
   ) on DeviceId
 | extend ResourceGroup = tostring(split(AzureResourceId, "/")[4]),
@@ -1000,14 +1088,15 @@ Rows with `Configured` at zero sit outside the policy assignment entirely. If th
 DeviceEvents
 | where Timestamp between (ago(30d) .. now())
 | where ActionType startswith "Asr"
-| join kind=leftouter (
+| join kind=inner (
     DeviceInfo
     | where Timestamp between (ago(7d) .. now())
     | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
   ) on DeviceId
 | where AzureResourceId !contains "aznativesol0"
 | extend Mode  = iff(ActionType endswith "Blocked", "Block", "Audit"),
-         Scope = iff(isnotempty(AzureResourceId), "Azure VM", "Other device")
+         Scope = "Azure VM"
 | summarize Events = count(), Devices = dcount(DeviceId) by Scope, ActionType, Mode
 | order by Scope asc, Events desc
 ```
@@ -1023,9 +1112,19 @@ patchassessmentresources
 | where id !contains "aznativesol0"
 | extend MachineId      = tostring(split(tolower(id), "/patchassessmentresults")[0]),
          Classification = tostring(properties.classifications[0])
+| join kind=leftouter (
+    resources
+    | where type in~ ("microsoft.compute/virtualmachines", "microsoft.hybridcompute/machines")
+    | extend PatchExcluded = false
+    | extend PatchExcluded = tolower(tostring(tags)) matches regex @"""[^""]*patch[^""]*""\s*:\s*""[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*""|""[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*patch[^""]*""|""[^""]*patch[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*"""
+    | project MachineId = tolower(id), PatchExcluded
+  ) on MachineId
+| where not(coalesce(PatchExcluded, false))   // patching waived or client owned by tag, see EW.10-EXCLUDED
 | summarize PendingPatches = count(), Machines = dcount(MachineId) by Classification
 | order by PendingPatches desc
 ```
+
+Machines whose tags record patching as waived or client owned leave EW.6 and EW.10 (collector 1.14.0, see EW.10-EXCLUDED).
 
 **EW.7 Trusted Launch, Secure Boot and vTPM** (ARG)
 
@@ -1087,7 +1186,7 @@ patchassessmentresources
 | where type in~ ("microsoft.compute/virtualmachines/patchassessmentresults",
                   "microsoft.hybridcompute/machines/patchassessmentresults")
 | where id !contains "aznativesol0"
-| extend MachineId   = tolower(tostring(split(id, "/patchassessmentresults")[0])),
+| extend MachineId   = tostring(split(tolower(id), "/patchassessmentresults")[0]),
          AssessedUtc = todatetime(properties.lastModifiedDateTime)
 | join kind=leftouter (
     patchassessmentresources
@@ -1102,24 +1201,51 @@ patchassessmentresources
     | summarize OverduePatches = count() by MachineId
   ) on MachineId
 | extend OverduePatches = coalesce(OverduePatches, 0)
+| join kind=leftouter (
+    resources
+    | where type in~ ("microsoft.compute/virtualmachines", "microsoft.hybridcompute/machines")
+    | extend PatchExcluded = false
+    | extend PatchExcluded = tolower(tostring(tags)) matches regex @"""[^""]*patch[^""]*""\s*:\s*""[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*""|""[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*patch[^""]*""|""[^""]*patch[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*"""
+    | project MachineId = tolower(id), PatchExcluded
+  ) on MachineId
+| where not(coalesce(PatchExcluded, false))   // patching waived or client owned by tag, see EW.10-EXCLUDED
 | summarize Machines         = count(),
             WithinCadence    = countif(OverduePatches == 0),
             OverduePatches   = sum(OverduePatches),
             AssessedWithin7d = countif(AssessedUtc > ago(7d))
 ```
 
-`ago(30d)` is the agreed cadence; the collector takes it from `-PatchCadenceDays`. A machine is within cadence when it has no pending Critical or Security patch published more than that long ago. Machines never assessed are not in the denominator, so compare `Machines` with the VM count in DP.4.
+`ago(30d)` is the agreed cadence. The collector takes it from `-PatchCadenceDays`. A machine is within cadence when it has no pending Critical or Security patch published more than that long ago. Machines never assessed are not in the denominator, so compare `Machines` with the VM count in DP.4.
+
+**Patching waived or client owned (collector 1.14.0).** A machine whose tags record patching as waived, or as owned by the client, is not Atmosera's to patch and leaves EW.6 and EW.10. The test is a regular expression against the lowercased JSON of the machine's tags, so both the key and the value are read and the client's own tag names work: `Patching=Waived`, `PatchPolicy=Client Owned` and `Maintenance=Patching waived` all match. The collector takes the pattern from `-PatchExclusionTagPattern`. An empty pattern turns the exclusion off, and the report note states how many machines were left out.
+
+**EW.10-EXCLUDED Machines left out of the patch measures by tag** (ARG, collector 1.14.0)
+
+```kusto
+resources
+| where type in~ ("microsoft.compute/virtualmachines", "microsoft.hybridcompute/machines")
+| where id !contains "aznativesol0"
+| extend TagText = tolower(tostring(tags))
+| extend PatchExcluded = false, MatchedTag = ""
+| extend PatchExcluded = TagText matches regex @"""[^""]*patch[^""]*""\s*:\s*""[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*""|""[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*patch[^""]*""|""[^""]*patch[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*"""
+| extend MatchedTag = extract(@"""[^""]*patch[^""]*""\s*:\s*""[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*""|""[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*patch[^""]*""|""[^""]*patch[^""]*(waiv|client[ _-]?owned|customer[ _-]?owned)[^""]*""", 0, TagText)
+| where PatchExcluded
+| project Name = name, ResourceType = tolower(type), resourceGroup, subscriptionId, MatchedTag, ResourceId = tolower(id)
+| order by resourceGroup asc, Name asc
+```
+
+Internal: names machines. The report embeds the count only, and the SecOps worklist lists each one so a stale tag can be caught.
 
 **Per-device secure configuration measures** (Advanced Hunting)
 
-EW.12, EW.14, EW.15, EW.16, NB.8, NB.10 and NB.11 share one shape. The latest assessment per device and check, applicable checks only, joined to the onboarded fleet for Scope. A device counts as compliant only when every applicable check in its set is compliant. EW.15 is shown in full; the others differ only in the `ConfigurationId` list.
+EW.12, EW.14, EW.15, EW.16, NB.8, NB.10 and NB.11 share one shape. The latest assessment per device and check, applicable checks only, joined to the onboarded Azure virtual machines. A device counts as compliant only when every applicable check in its set is compliant. EW.15 is shown in full. The others differ only in the `ConfigurationId` list.
 
 | ID | Measure | ConfigurationId list |
 | --- | --- | --- |
 | EW.12 | Credential protection per device | "scid-25", "scid-102", "scid-57" (LSA protection, LSA protection on Windows 11 22H2 and later, WDigest off) |
 | EW.14 | Remote Desktop hardening per device | "scid-24", "scid-45" (security level TLS, Network Level Authentication) |
 | EW.15 | Tamper protection per device | "scid-2003" |
-| EW.16 | Host firewall on per device | "scid-2070" (every profile; the hardened profile checks scid-2071 to scid-2073 stay in EW.3 as context) |
+| EW.16 | Host firewall on per device | "scid-2070" (every profile. The hardened profile checks scid-2071 to scid-2073 stay in EW.3 as context) |
 | NB.8 | Network protection per device | "scid-96" |
 | NB.10 | LDAP signing and channel binding on domain controllers | "scid-105", "scid-106" (applicable to domain controllers only, so Devices is the DC count) |
 | NB.11 | NTLMv2 only per device | "scid-72" |
@@ -1135,15 +1261,16 @@ DeviceTvmSecureConfigurationAssessment
     | where Timestamp between (ago(30d) .. now())
     | where OnboardingStatus == "Onboarded"
     | summarize arg_max(Timestamp, AzureResourceId, OSPlatform) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
     | where AzureResourceId !contains "aznativesol0"
   ) on DeviceId
-| extend Scope = iff(isnotempty(AzureResourceId), "Azure VM", "Other device")
+| extend Scope = "Azure VM"
 | summarize Devices = count(), Compliant = countif(Passed == Checks) by Scope
 | extend PctCompliant = round(100.0 * Compliant / Devices, 1)
 | order by Scope asc
 ```
 
-The document numbers tamper protection EW.8 and host firewall EW.9; the collector already uses those IDs for Guest Configuration, so they are EW.15 and EW.16 here. Drive and clipboard redirection for Remote Desktop are not secure configuration checks: read them from Intune or machine configuration.
+The document numbers tamper protection EW.8 and host firewall EW.9. The collector already uses those IDs for Guest Configuration, so they are EW.15 and EW.16 here. Drive and clipboard redirection for Remote Desktop are not secure configuration checks: read them from Intune or machine configuration.
 
 **EW.13 Application allow-listing policies** (Microsoft Graph)
 
@@ -1298,7 +1425,7 @@ Usage
 
 **NB.8, NB.10 and NB.11** (Advanced Hunting)
 
-Per-device measures built from the shared shape above: network protection in block mode (NB.8, scid-96), LDAP server signing and channel binding on domain controllers (NB.10, scid-105 and scid-106), and LAN Manager authentication level NTLMv2 only (NB.11, scid-72). NB.8 reads E only when the Atmosera DNS tunneling and beaconing analytics rules are enabled in Sentinel; count them from DR.9-RULES. NB.10 is out of scope for cloud-only tenants, and Directory Service events 2889 and 3039 name the clients still binding insecurely once that log reaches Sentinel. NTLM-dependent systems show in IdentityLogonEvents through the Defender for Identity connector.
+Per-device measures built from the shared shape above, Azure virtual machines only: network protection in block mode (NB.8, scid-96), LDAP server signing and channel binding on domain controllers (NB.10, scid-105 and scid-106), and LAN Manager authentication level NTLMv2 only (NB.11, scid-72). NB.8 reads E only when the Atmosera DNS tunneling and beaconing analytics rules are enabled in Sentinel. Count them from DR.9-RULES. Since collector 1.14.0 the figure is the Azure virtual machines in block mode, not the whole fleet, so it reads in the tens rather than the thousands on the slide. NB.10 is out of scope for cloud-only tenants, and Directory Service events 2889 and 3039 name the clients still binding insecurely once that log reaches Sentinel. NTLM-dependent systems show in IdentityLogonEvents through the Defender for Identity connector.
 
 ### Data Protection (SOC 2 CC6.7, C1.1, C1.2)
 
@@ -1514,7 +1641,7 @@ Get-MgAdminSharepointSetting |
 
 | ID | Control | Tier | Measure | Evidence |
 | --- | --- | --- | --- | --- |
-| DR-F1 | Endpoint detection sensor reporting on Azure virtual machines | F | Sensor active over onboarded, Azure VM rows only, network devices and firewalls excluded | EW.1 |
+| DR-F1 | Endpoint detection sensor reporting on Azure virtual machines | F | Sensor active over onboarded Azure virtual machines, network devices and firewalls excluded, reconciled with EW-F1 through the EW.1-GAPS reasons | EW.1, EW.1-GAPS |
 | DR-F2 | Every alert triaged to a documented disposition | F | Closed alerts with a classification and a closing comment, alerts linked to an incident | DR.10, OUT.1, DR.1 |
 | DR-F3 | Cloud workload protection enabled across the resource estate | F | Plan-covered resources over plan-eligible resources | DR.2 |
 | DR-F4 | Security telemetry centrally collected and retained | F | Retention days and active data types | P0.2, DR.3 |
@@ -1603,21 +1730,22 @@ IdentityLogonEvents
 
 Compare the list with the sensor inventory at Defender portal > System > Settings > Identities > Sensors. A domain controller missing here, or with a stale `LastEvent`, is the gap.
 
-**DR.5 Vulnerability assessment coverage of onboarded devices** (Advanced Hunting)
+**DR.5 Vulnerability assessment coverage of onboarded Azure virtual machines** (Advanced Hunting)
 
 ```kusto
 DeviceInfo
 | where Timestamp between (ago(7d) .. now())
 | summarize arg_max(Timestamp, OnboardingStatus, AzureResourceId) by DeviceId
 | where OnboardingStatus == "Onboarded"
+| where isnotempty(AzureResourceId)   // Azure virtual machines only
 | where AzureResourceId !contains "aznativesol0"
 | join kind=leftouter (
     DeviceTvmSoftwareInventory
     | distinct DeviceId
     | extend HasInventory = true
   ) on DeviceId
-| summarize Onboarded = count(), Assessed = countif(HasInventory == true)
-          by Scope = iff(isnotempty(AzureResourceId), "Azure VM", "Other device")
+| extend Scope = "Azure VM"
+| summarize Onboarded = count(), Assessed = countif(HasInventory == true) by Scope
 ```
 
 **DR.6 Diagnostic and audit logging gaps** (ARG)
@@ -1694,20 +1822,21 @@ Same alert scope as OUT.1 to OUT.7. Documented over Closed is the DR-F2 figure.
 
 `GET /v1.0/security/identities/sensors` (needs SecurityIdentitiesSensors.Read.All), one row per sensor: Sensor, SensorType, HealthStatus, DeploymentStatus, Version, Domain, OpenHealthIssues, CreatedUtc. Healthy over registered is the figure; a domain controller with no sensor row is the gap, and DR.4 shows which ones emit events. Out of scope for cloud-only tenants.
 
-**DR.12 Onboarded devices by device group** (Advanced Hunting)
+**DR.12 Onboarded Azure virtual machines by device group** (Advanced Hunting)
 
 ```kusto
 DeviceInfo
 | where Timestamp between (ago(30d) .. now())
 | where OnboardingStatus == "Onboarded"
 | summarize arg_max(Timestamp, MachineGroup, OSPlatform, AzureResourceId) by DeviceId
+| where isnotempty(AzureResourceId)   // Azure virtual machines only
 | where AzureResourceId !contains "aznativesol0"
 | extend MachineGroup = iff(isempty(MachineGroup), "(no group)", MachineGroup)
 | summarize Devices = count() by MachineGroup
 | order by Devices desc
 ```
 
-Membership only. The automation level of each group is read at Defender portal > System > Settings > Endpoints > Device groups; there is no documented API for it.
+Membership only. The automation level of each group is read at Defender portal > System > Settings > Endpoints > Device groups. There is no documented API for it.
 
 **DR.13 Diagnostic logging assessments per resource** (ARG)
 
@@ -1936,7 +2065,7 @@ Every Tier 3 tile is already produced by an earlier query except two, so this ph
 | Open security alerts | Active Defender for Cloud alerts plus open Sentinel incidents | BKL.2, OUT.1 |
 | Standing privileged roles | Standing privileged Entra assignments, break-glass excluded | IA.6 |
 
-**BKL.1 Exploitable vulnerabilities open** (Advanced Hunting)
+**BKL.1 Exploitable vulnerabilities open on Azure virtual machines** (Advanced Hunting)
 
 ```kusto
 DeviceTvmSoftwareVulnerabilities
@@ -1949,9 +2078,10 @@ DeviceTvmSoftwareVulnerabilities
     DeviceInfo
     | where Timestamp between (ago(7d) .. now())
     | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
     | where AzureResourceId !contains "aznativesol0"
   ) on DeviceId
-| extend Scope    = iff(isnotempty(AzureResourceId), "Azure VM", "Other device"),
+| extend Scope    = "Azure VM",
          Software = iff(SoftwareName startswith "windows" or SoftwareName contains "linux",
                         "Operating system", "Application")
 | summarize ExploitableCves = dcount(CveId), Devices = dcount(DeviceId)

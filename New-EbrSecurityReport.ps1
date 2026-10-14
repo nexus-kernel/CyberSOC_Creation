@@ -56,7 +56,7 @@ $fields = [ordered]@{
     'IA.9' = @('IsDefault','Enabled','EnableTargetedUserProtection','EnableOrganizationDomainsProtection','EnableMailboxIntelligenceProtection','EnableSpoofIntelligence')
     'IA.9-SAFELINKS' = @('EnableSafeLinksForEmail','EnableSafeLinksForTeams','EnableSafeLinksForOffice')
     'IA.9-SAFEATTACH' = @('Enable','Action','Enabled','Redirect')
-    'EW.1' = @('Scope','OSPlatform','Devices','Onboarded','CanBeOnboarded','SensorActive')
+    'EW.1' = @('Scope','OSPlatform','Devices','Onboarded','CanBeOnboarded','Unsupported','InsufficientInfo','SensorActive')
     'EW.3' = @('Scope','ConfigurationName','Devices','Compliant')
     'EW.7' = @('VMs','TrustedLaunchOrCvm','SecureBootOn','VTpmOn')
     'NB.4' = @('Sites','HttpsOnly')
@@ -181,6 +181,26 @@ $aggregates = [ordered]@{
     'EW.13' = { param($rows) [pscustomobject]@{ Policies = @($rows).Count; Assigned = @($rows | Where-Object { [string]$_.Assigned -eq 'True' }).Count } }
     'DR.12' = { param($rows) [pscustomobject]@{ Groups = @($rows).Count; Devices = (@($rows | ForEach-Object { [int]$_.Devices }) | Measure-Object -Sum).Sum } }
     'P0.6-APPLIANCES' = { param($rows) [pscustomobject]@{ Appliances = @($rows).Count } }
+    # Azure virtual machines not reporting to Defender for Endpoint (collector 1.14.0), counted by reason and
+    # product. Eligible says whether the reason keeps the machine in the onboarding denominator, Covered whether
+    # it counts as protected. CountedAs splits each reason by how EW.1 counted the machine. Never the names.
+    'EW.1-GAPS' = { param($rows) @($rows) | Group-Object { '{0}|{1}' -f (([string]$_.Reason).Trim()), (([string]$_.Product).Trim()) } | Sort-Object Count -Descending | ForEach-Object {
+            $first = $_.Group[0]
+            [pscustomobject]@{
+                Reason = ([string]$first.Reason).Trim(); Product = ([string]$first.Product).Trim(); Devices = $_.Count
+                Eligible = ([string]$first.Eligible -eq 'True'); Covered = ([string]$first.Covered -eq 'True')
+                Onboarded = @($_.Group | Where-Object { [string]$_.CountedAs -eq 'Onboarded' }).Count
+                CanBeOnboarded = @($_.Group | Where-Object { [string]$_.CountedAs -eq 'CanBeOnboarded' }).Count
+                NotSeen = @($_.Group | Where-Object { [string]$_.CountedAs -eq 'NotSeen' }).Count
+                Other = @($_.Group | Where-Object { [string]$_.CountedAs -eq 'Other' }).Count } } }
+    # Azure virtual machine inventory from Resource Graph with its endpoint detection evidence (collector 1.14.0), counts only.
+    'EW.1-EDR' = { param($rows) [pscustomobject]@{
+            VMs = @($rows).Count
+            DefenderExtension = @($rows | Where-Object { [int]$_.DefenderExtension -gt 0 }).Count
+            ThirdPartyEdr = @($rows | Where-Object { [string]$_.ThirdPartyEdr -eq 'True' }).Count
+            Appliances = @($rows | Where-Object { [string]$_.Appliance -eq 'True' }).Count } }
+    # Machines whose tags record patching as waived or client owned (collector 1.14.0), count only.
+    'EW.10-EXCLUDED' = { param($rows) [pscustomobject]@{ Machines = @($rows).Count } }
     # Federated domains (collector 1.12.0). The provider name and MFA behavior only, never the domains or URIs.
     'IA.1-FEDERATION' = { param($rows)
         $read = @($rows | Where-Object { [string]$_.ConfigSource -eq 'Read' })
@@ -267,7 +287,7 @@ if ($ContextPath) {
 $data = [ordered]@{
     version = '2.0.0'
     depth = $Depth.ToLowerInvariant()
-    parameters = $parameters | Select-Object ClientName, WindowStart, WindowEnd, RecentStart, PostureReadDate, ManagedRgPattern, TicketPattern, AlertScope, Subscriptions, Workspaces, TenantWideTables, DefenderApi, GraphApi, PatchCadenceDays
+    parameters = $parameters | Select-Object ClientName, WindowStart, WindowEnd, RecentStart, PostureReadDate, ManagedRgPattern, TicketPattern, AlertScope, Subscriptions, Workspaces, TenantWideTables, DefenderApi, GraphApi, PatchCadenceDays, PatchExclusionTagPattern, EdrVendorPattern
     # AccessGap marks evidence that the collector's token was not permitted to read, so the deck can ask
     # for read access. Service errors and missing tables are not access gaps. Only the flag is embedded.
     manifest = @($manifest | Select-Object ResultId, Status, Rows, ReadTimeUtc, @{ Name = 'AccessGap'; Expression = { [string]$_.Detail -match 'token (lacks|cannot read)|Needs [A-Za-z]+(\.[A-Za-z]+)*\.Read|could not be read|Insufficient privileges|Authorization_RequestDenied|\b403\b' } })

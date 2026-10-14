@@ -25,7 +25,7 @@
     [/^Legacy authentication/, 'legacy authentication blocking'], [/^Anti-phishing policy applied/, 'anti-phishing policy'],
     [/^Multifactor authentication at admin portal/, 'admin portal MFA'], [/^Device code flow/, 'device code blocking'],
     [/^Advanced anti-phishing/, 'advanced anti-phishing'], [/^Privileged roles/, 'PIM eligibility'], [/^Identity Protection/, 'user and sign-in risk policies'],
-    [/^Application consent/, 'app consent workflow'], [/^Endpoint detection and response/, 'endpoint detection'], [/^Azure virtual machines reporting/, 'Azure VM onboarding'],
+    [/^Application consent/, 'app consent workflow'], [/^Azure virtual machines reporting/, 'Azure VM endpoint detection'],
     [/^Real-time anti-malware/, 'real-time anti-malware'], [/^Tamper protection/, 'tamper protection'], [/^Host firewall/, 'host firewall'],
     [/^Operating system findings/, 'patch cadence'], [/^Vulnerability assessment/, 'vulnerability assessment'], [/^Platform integrity/, 'Trusted Launch'],
     [/^Encryption at host/, 'encryption at host'], [/^Credential protection/, 'credential protection'], [/^Remote Desktop/, 'RDP hardening'],
@@ -125,14 +125,14 @@
     if (kpis.length < 4 && s.foundational.measured) kpis.push({ value: `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)}`, label: 'Foundational controls enforced', sub: 'Across five pillars', area: 'controls' })
     s.kpis = kpis.slice(0, 4)
 
-    // Wins, at most one per area, up to six.
-    const winAt = (re, area, label, sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null ? { area, value: c.boolean ? c.value : ofText(c), label, sub: c.population || sub, source: c.source } : null }
+    // Wins, at most one per area, up to six. A verified configuration reads In force with its own label.
+    const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || sub), source: c.source } : null }
     const candidates = [
       m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? { area: 'threat', eyebrow: 'Threat outcomes', value: `0 of ${fmt(m.alerts.truePositives)}`, label: m.alerts.truePositives === 1 ? 'confirmed threat reached exfiltration or impact' : 'confirmed threats reached exfiltration or impact', sub: `${m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`} by the SOC ${s.periodPhrase}.`, source: m.alerts.source } : null,
       s.speed ? { area: 'response', eyebrow: 'Response speed', value: s.speed.value, label: s.speed.label, sub: s.speed.sub, source: s.speed.row.source } : null,
       gain ? { area: 'posture', eyebrow: 'Posture', value: `+${fmt(gain.points)} pts`, label: firstPct !== null && firstPct !== undefined ? `secure score, ${pctText(firstPct)} in ${gain.since} to ${pctText(score.value)}` : `${scoreName} since ${gain.since}`, sub: score.note, source: score.source } : null,
-      winAt(/^Multifactor authentication required at sign-in/, 'identity', 'users challenged for MFA at sign-in', 'Members who signed in over the last 30 days.'),
-      winAt(/^Operating system findings/, 'endpoint', 'machines patched inside the agreed cadence', 'No critical or security patch past the cadence at collection.') || winAt(/^Endpoint detection and response/, 'endpoint', 'devices reporting to endpoint detection', 'Seen in the last 30 days.'),
+      winAt(/^Multifactor authentication required at sign-in/, 'identity', 'users challenged for MFA at sign-in', 'Members who signed in over the last 30 days.', 'multifactor authentication required at sign-in by Conditional Access policy', 'An enabled policy for all users on every application.'),
+      winAt(/^Operating system findings/, 'endpoint', 'machines patched inside the agreed cadence', 'No critical or security patch past the cadence at collection.') || winAt(/^Azure virtual machines reporting/, 'endpoint', 'Azure virtual machines reporting to endpoint detection', 'Seen in the last 7 days.'),
       m.mailRemoved > 0 && find(/^Malicious mail removed/)?.mark === 'E' ? { area: 'data', eyebrow: 'Email protection', value: fmt(m.mailRemoved), label: 'malicious messages removed after delivery', sub: 'Zero-hour auto purge and automated remediation, last 30 days.', source: find(/^Malicious mail removed/).source } : winAt(/^Managed disks/, 'data', 'managed disks encrypted at rest', 'Platform or customer managed keys, at collection.'),
       winAt(/^Alerts closed with a documented/, 'detection', 'alerts closed with a documented disposition', 'Classification and closing comment, last 30 days.'),
       winAt(/^Encryption in transit/, 'network', 'published web apps enforcing HTTPS only', 'At collection.')
@@ -207,8 +207,8 @@
     s.summaryAsks = s.asks.slice(0, 3).map(a => ({ value: a.lead, label: a.short }))
 
     // Posture matrix: per pillar, foundational and defense in depth counts and a headline measure.
-    const LEADS = { 'Identity and access': [/^Multifactor authentication required at sign-in/, /^Multifactor authentication at admin portal/], 'Endpoint and workload': [/^Endpoint detection and response/, /^Operating system findings/], 'Network and boundary': [/^Encryption in transit/, /^Workload subnets/], 'Data protection': [/^Managed disks/, /^Secure transfer/], 'Detection and response': [/^Alerts closed with a documented/, /^Analytics rules/] }
-    const UNIT = { 'MFA at sign-in': 'users on MFA at sign-in', 'admin portal MFA': 'admins on MFA', 'endpoint detection': 'devices on EDR', 'patch cadence': 'patched in cadence', 'HTTPS-only web apps': 'web apps HTTPS-only', 'subnet segmentation': 'subnets segmented', 'disk encryption at rest': 'disks encrypted at rest', 'storage secure transfer': 'with secure transfer', 'documented dispositions': 'closures documented', 'analytics rules': 'rules enabled' }
+    const LEADS = { 'Identity and access': [/^Multifactor authentication required at sign-in/, /^Multifactor authentication at admin portal/], 'Endpoint and workload': [/^Azure virtual machines reporting/, /^Operating system findings/], 'Network and boundary': [/^Encryption in transit/, /^Workload subnets/], 'Data protection': [/^Managed disks/, /^Secure transfer/], 'Detection and response': [/^Alerts closed with a documented/, /^Analytics rules/] }
+    const UNIT = { 'MFA at sign-in': 'users on MFA at sign-in', 'admin portal MFA': 'admins on MFA', 'Azure VM endpoint detection': 'Azure VMs on endpoint detection', 'patch cadence': 'patched in cadence', 'HTTPS-only web apps': 'web apps HTTPS-only', 'subnet segmentation': 'subnets segmented', 'disk encryption at rest': 'disks encrypted at rest', 'storage secure transfer': 'with secure transfer', 'documented dispositions': 'closures documented', 'analytics rules': 'rules enabled' }
     s.matrix = GROUPS.map(g => {
       const inG = m.controls.filter(c => c.group === g)
       const tierCount = t => { const ms = inG.filter(c => c.tier === t && c.mark); return { enforced: ms.filter(c => c.mark === 'E').length, measured: ms.length, pct: ms.length ? 100 * ms.filter(c => c.mark === 'E').length / ms.length : null } }
