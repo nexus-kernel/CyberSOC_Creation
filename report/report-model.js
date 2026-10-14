@@ -775,7 +775,8 @@
     // POS.5 carries every assigned standard. The Microsoft cloud security benchmark is the one reported, so a preview
     // edition beside it or the CSPM scaffold never doubles the count. A tenant that holds only a versioned edition
     // (the v2 rollout) reports that one edition: the unversioned name first, then a versioned name that is not a
-    // preview, then the latest preview. Older packs without a standard name keep every row.
+    // preview, then the latest preview. Named standards that are not the benchmark never stand in for it. Older
+    // packs whose rows carry no standard name keep every row.
     const benchAll = rows('POS.5').filter(r => count(r.Passed) !== null && count(r.Failed) !== null)
     const MCSB = /^Microsoft[- ]cloud[- ]security[- ]benchmark/i
     const benchNames = [...new Set(benchAll.map(r => clean(r.Standard)).filter(n => MCSB.test(n)))]
@@ -785,7 +786,9 @@
     const benchName = benchNames.find(n => /^Microsoft[- ]cloud[- ]security[- ]benchmark$/i.test(n))
       || benchNames.filter(n => !/preview/i.test(n)).sort(byEdition)[0]
       || benchNames.sort(byEdition)[0] || null
-    const bench = benchName ? benchAll.filter(r => clean(r.Standard) === benchName) : benchAll
+    // Without a benchmark edition the meter is left unset. Only legacy rows with no Standard field at all count as
+    // a whole, since those packs recorded the benchmark alone.
+    const bench = benchName ? benchAll.filter(r => clean(r.Standard) === benchName) : benchAll.every(r => !clean(r.Standard)) ? benchAll : []
     m.posture = {
       estate: sum(rows('P0.5'), 'Resources'), assessed: count(one('POS.2')?.AssessedResources),
       highHealthy: high && count(high.Healthy) !== null && count(high.Total) > 0 ? { good: high.Healthy, total: high.Total, pct: pct(high.Healthy, high.Total), source: source('POS.4') } : null,

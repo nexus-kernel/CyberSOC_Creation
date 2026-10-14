@@ -840,7 +840,9 @@ test('the benchmark meter reads the Microsoft cloud security benchmark alone whe
   const m = build(p)
   assert.deepEqual([m.posture.benchmark.passed, m.posture.benchmark.total], [84, 125])
   put(p, 'POS.5', [{ Standard: 'Custom', Passed: 3, Failed: 1 }, { Standard: 'Other', Passed: 2, Failed: 2 }])
-  assert.deepEqual([build(p).posture.benchmark.passed, build(p).posture.benchmark.total], [5, 8], 'without the benchmark every standard counts')
+  assert.equal(build(p).posture.benchmark, null, 'named standards that are not the benchmark never stand in for it')
+  put(p, 'POS.5', [{ Passed: 3, Failed: 1 }, { Passed: 2, Failed: 2 }])
+  assert.deepEqual([build(p).posture.benchmark.passed, build(p).posture.benchmark.total], [5, 8], 'legacy rows with no standard name count as a whole')
   // A tenant on the v2 rollout alone reports that edition, never the CSPM scaffold or a custom standard beside it.
   put(p, 'POS.5', [{ Standard: 'Azure-CSPM', Passed: 0, Failed: 1 }, { Standard: 'Custom', Passed: 3, Failed: 1 }, { Standard: 'Microsoft-cloud-security-benchmark-v2-(Preview)', Passed: 29, Failed: 14 }, { Standard: 'Microsoft-cloud-security-benchmark-v2-(Preview)', Passed: 17, Failed: 25 }])
   assert.deepEqual([build(p).posture.benchmark.passed, build(p).posture.benchmark.total], [46, 85], 'the versioned edition is the benchmark')

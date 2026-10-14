@@ -508,7 +508,7 @@ async function main() {
       ['Sentinel workspaces', `${fmt(m.workspaces.length)}${retention.length ? `, retention ${list(retention)} days` : ''}`],
       ['Alerts', m.ticketed ? 'Sentinel records that opened a ticket with the managed security service. Informational severity is excluded.' : 'Sentinel records triaged by the managed security service.'],
       ['Detections', 'Records from Sentinel, Defender for Cloud and the Defender services correlated into those alerts.'],
-      ['Device measures', 'Azure virtual machines, including Azure Arc-enabled servers. Workstations and network appliances stay out.'],
+      ['Device measures', 'Azure virtual machines. The Defender for Endpoint and Update Manager measures also count Azure Arc-enabled servers. Trusted Launch, encryption at host and backup read native virtual machines only. Workstations and network appliances stay out.'],
       ['Status marks', 'Read at collection. A control below E is a gap against the baseline, not a change since the last review.']
     ]
     eyebrow(s, 'What the readings cover', X0, TOP - 0.05, half, C.text2, 'Scope')
