@@ -270,9 +270,12 @@
       m.notApplicable.push({ id, label: clean(label) })
       return item
     }
-    // A policy control reads In force when the policy covers every user and Not in force when none does. An
-    // enabled policy that covers selected users only (condition 'scoped') reads Mostly enforced, marked P,
-    // when the measured ratio behind it stands at 50 percent or more, and carries that ratio (Oct 14, 2026).
+    // A policy control reads In force when the policy covers every user on every application in every condition,
+    // and Not in force when no enabled policy requires it. An enabled policy that stops short of that, whether it
+    // selects its users or applications or is narrowed by a platform, risk level, device filter or location
+    // (condition 'scoped'), reads Mostly enforced, marked P, when the measured sign-in ratio behind it stands at
+    // 50 percent or more, and carries that ratio (Oct 14, 2026). The grade rests on the measured ratio, and the
+    // note says how the policy is scoped (IA.8-CA ScopeReason, evaluator of Oct 14, 2026 or later).
     const MOSTLY_VALUE = 'Mostly enforced'
     const inForce = (id, label, where, condition, note, ratio = null) => {
       if (condition === null) return ungathered(id, label, where, reason(id), note)
@@ -323,7 +326,9 @@
     const policyText = (f, what, verb = 'blocks', who = 'for all users') => ({
       'Enforced': `An enabled Conditional Access policy ${verb} ${what} ${who}.`,
       'Security defaults': `Security defaults ${verb === 'blocks' ? 'block' : 'require'} ${what}.`,
-      'Scoped': `The enabled Conditional Access policy that ${verb} ${what} applies to selected users, applications or conditions only.`,
+      'Scoped': String(f.ScopeReason) === 'Conditions' ? `The enabled Conditional Access policy that ${verb} ${what} applies under selected conditions only, such as a platform, risk level, device filter or location.`
+        : String(f.ScopeReason) === 'Users' ? `The enabled Conditional Access policy that ${verb} ${what} applies to selected users or applications only.`
+        : `The enabled Conditional Access policy that ${verb} ${what} applies to selected users, applications or conditions only.`,
       'Report-only': `The Conditional Access policy that ${verb} ${what} runs in report-only mode.`,
       'None': `No Conditional Access policy ${verb} ${what}.`
     })[String(f.PolicyState)] || ''
@@ -751,9 +756,12 @@
     const benchAll = rows('POS.5').filter(r => count(r.Passed) !== null && count(r.Failed) !== null)
     const MCSB = /^Microsoft[- ]cloud[- ]security[- ]benchmark/i
     const benchNames = [...new Set(benchAll.map(r => clean(r.Standard)).filter(n => MCSB.test(n)))]
+    // Editions are ordered by their parsed version number (v10 after v9), never by the name as text.
+    const edition = n => { const v = n.match(/v(\d+(?:\.\d+)*)/i); return v ? v[1].split('.').map(Number) : [0] }
+    const byEdition = (a, b) => { const x = edition(a), y = edition(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (y[i] || 0) - (x[i] || 0); if (d) return d } return a.localeCompare(b) }
     const benchName = benchNames.find(n => /^Microsoft[- ]cloud[- ]security[- ]benchmark$/i.test(n))
-      || benchNames.filter(n => !/preview/i.test(n)).sort().reverse()[0]
-      || benchNames.sort().reverse()[0] || null
+      || benchNames.filter(n => !/preview/i.test(n)).sort(byEdition)[0]
+      || benchNames.sort(byEdition)[0] || null
     const bench = benchName ? benchAll.filter(r => clean(r.Standard) === benchName) : benchAll
     m.posture = {
       estate: sum(rows('P0.5'), 'Resources'), assessed: count(one('POS.2')?.AssessedResources),

@@ -168,6 +168,11 @@ function Get-EbrCaEvaluation {
         elseif (@($matching | Where-Object State -eq 'enabledForReportingButNotEnforced').Count) { 'Report-only' }
         else { 'None' }
         $excluded = @($covering | ForEach-Object { $_.ExcludeUsers + $_.ExcludeGroups + $_.ExcludeRoles } | Sort-Object -Unique)
+        # Why a Scoped flow is scoped (Oct 14, 2026): Users when an enabled policy selects its users or applications
+        # and nothing else narrows it, Conditions when every enabled policy is narrowed by a platform, risk level,
+        # device filter or location. The report words the policy sentence from it.
+        $narrowedOf = { param($f) if ($d.RawOnly) { [bool]$f.NarrowedOther } else { [bool]$f.Narrowed } }
+        $scopeReason = if ($state -ne 'Scoped') { '' } elseif (@($enabled | Where-Object { -not (& $narrowedOf $_) }).Count) { 'Users' } else { 'Conditions' }
         $rows = @()
         if ($d.SignIns -and $detailRead) {
             $rows = @(foreach ($s in @($SignIns | Where-Object { $null -ne $_ -and [string]$_.Flow -eq $d.Flow })) {
@@ -211,6 +216,7 @@ function Get-EbrCaEvaluation {
                 AccountsExcluded    = @($ex | ForEach-Object { $_.UserId } | Sort-Object -Unique).Count
                 SucceededUngoverned = & $sumOf $un
                 AccountsUngoverned  = @($un | ForEach-Object { $_.UserId } | Sort-Object -Unique).Count
+                ScopeReason         = $scopeReason
             })
     }
     [pscustomobject]@{ Flows = $flows.ToArray(); SignIns = $classified.ToArray() }

@@ -767,6 +767,14 @@ test('MFA at sign-in and admin portal MFA read In force from the Conditional Acc
   assert.deepEqual([m.controls.find(c => c.id === 'IA.1').value, m.controls.find(c => c.id === 'IA.1').mark, m.controls.find(c => c.id === 'IA.1').ratioText], ['Not in force', 'N', undefined])
   put(p, 'IA.1', [{ UserType: 'Member', UsersSignedIn: 200, UsersChallenged: 150 }])
   for (const state of ['Report-only', 'None']) { p.results['IA.8-CA'] = flows(state); assert.equal(build(p).controls.find(c => c.id === 'IA.1').value, 'Not in force', state) }
+  // The note names how the policy is scoped when the evaluator recorded it, and the grade still rests on the ratio.
+  p.results['IA.8-CA'] = flows('Scoped').map(f => ({ ...f, ScopeReason: 'Conditions' }))
+  let c = build(p).controls.find(x => x.id === 'IA.1')
+  assert.deepEqual([c.value, c.mark], ['Mostly enforced', 'P'])
+  assert.match(c.note, /^The enabled Conditional Access policy that requires multifactor authentication on every application applies under selected conditions only, such as a platform, risk level, device filter or location\. 150 of 200/)
+  p.results['IA.8-CA'] = flows('Scoped').map(f => ({ ...f, ScopeReason: 'Users' }))
+  c = build(p).controls.find(x => x.id === 'IA.1')
+  assert.match(c.note, /applies to selected users or applications only\. 150 of 200/)
   // Without a policy inventory the sign-in ratio grades the control as before.
   delete p.results['IA.8-CA']
   m = build(p)
@@ -825,6 +833,8 @@ test('the benchmark meter reads the Microsoft cloud security benchmark alone whe
   assert.deepEqual([build(p).posture.benchmark.passed, build(p).posture.benchmark.total], [46, 85], 'the versioned edition is the benchmark')
   put(p, 'POS.5', [{ Standard: 'Microsoft-cloud-security-benchmark-v2', Passed: 30, Failed: 10 }, { Standard: 'Microsoft-cloud-security-benchmark-v3-(Preview)', Passed: 5, Failed: 35 }])
   assert.deepEqual([build(p).posture.benchmark.passed, build(p).posture.benchmark.total], [30, 40], 'a released edition beats a preview')
+  put(p, 'POS.5', [{ Standard: 'Microsoft-cloud-security-benchmark-v9', Passed: 1, Failed: 9 }, { Standard: 'Microsoft-cloud-security-benchmark-v10', Passed: 8, Failed: 2 }])
+  assert.deepEqual([build(p).posture.benchmark.passed, build(p).posture.benchmark.total], [8, 10], 'editions compare by version number, not as text')
 })
 test('a tenant that is not onboarded to Defender for Identity reads Not in force and needs a license, never read access', () => {
   const p = pack()
