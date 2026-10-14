@@ -603,6 +603,61 @@ class RecordedCodexFormatTests(unittest.TestCase):
             controller.defer()
         self.assertEqual(api.issues, [])
 
+class CappedSignoffWaitTests(unittest.TestCase):
+    def invoke(self, clean, fallback, *, wait=True):
+        import io
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)/'output'
+            with patch.dict(gate.os.environ, {'GITHUB_ACTIONS': 'false', 'GITHUB_OUTPUT': str(output)}), \
+                    patch.object(gate, 'CAPPED_DEFERRAL_ENABLED', True), \
+                    patch.object(gate, 'check_clean', side_effect=clean) as normal, \
+                    patch.object(runtime, 'check', side_effect=fallback) as capped, \
+                    patch.object(gate.time, 'sleep') as sleep, \
+                    patch.object(gate.sys, 'stderr', new_callable=io.StringIO):
+                result = gate.main(['--repo', REPO, '--pr', '99', '--expected-sha', SHA]
+                                   + (['--wait-for-signoff'] if wait else []))
+                return result, normal.call_count, capped.call_count, sleep.call_args_list, \
+                    output.read_text() if output.exists() else ''
+
+    def test_below_cap_or_missing_receipt_preserves_original_awaiting_exception(self):
+        for reason in ('Code Review budget has not been exhausted.', 'Deferral receipt stale or absent.'):
+            waiting = gate.AwaitingSignoff('Waiting for current-head thumbs-up')
+            with patch.object(gate, 'CAPPED_DEFERRAL_ENABLED', True), \
+                    patch.object(gate, 'check_clean', side_effect=waiting), \
+                    patch.object(runtime, 'check', side_effect=budget.Blocked(reason)), \
+                    self.assertRaises(gate.AwaitingSignoff) as raised:
+                gate.check(REPO, 99, SHA)
+            self.assertIs(raised.exception, waiting)
+
+    def test_fallback_denial_retries_until_clean_signoff_arrives(self):
+        for reason in ('below cap', 'missing receipt'):
+            result, normal, capped, sleeps, output = self.invoke(
+                [gate.AwaitingSignoff('waiting'), pr()], budget.Blocked(reason))
+            self.assertEqual((result, normal, capped, output), (0, 2, 1, f'sha={SHA}\n'))
+            self.assertEqual([c.args for c in sleeps], [(5,)])
+
+    def test_wait_is_bounded_and_no_wait_is_one_attempt(self):
+        for wait, attempts in ((True, 3), (False, 1)):
+            result, normal, capped, sleeps, output = self.invoke(
+                gate.AwaitingSignoff('waiting'), budget.Blocked('missing receipt'), wait=wait)
+            self.assertEqual((result, normal, capped, output), (1, attempts, attempts, ''))
+            self.assertEqual([c.args for c in sleeps], [(5,)] * (attempts-1))
+
+    def test_valid_capped_clearance_returns_immediately_without_waiting(self):
+        result, normal, capped, sleeps, output = self.invoke(
+            gate.AwaitingSignoff('waiting'), [{**pr(), 'clearance_basis': 'capped-deferral'}])
+        self.assertEqual((result, normal, capped, sleeps, output), (0, 1, 1, [], f'sha={SHA}\n'))
+
+    def test_ordinary_failures_remain_terminal(self):
+        result, normal, capped, sleeps, output = self.invoke(
+            gate.Blocked('unresolved threads'), budget.Blocked('critical finding'))
+        self.assertEqual((result, normal, capped, sleeps, output), (1, 1, 1, [], ''))
+        # Malformed fallback evidence is not reclassified as a sign-off delay.
+        result, normal, capped, sleeps, output = self.invoke(
+            gate.AwaitingSignoff('waiting'), ValueError('invalid fallback data'))
+        self.assertEqual((result, normal, capped, sleeps, output), (1, 1, 1, [], ''))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -241,7 +241,7 @@ def check_clean(repo, number, expected_sha=None):
 def check(repo, number, expected_sha=None):
     try:
         return check_clean(repo, number, expected_sha)
-    except Blocked:
+    except Blocked as clean_error:
         if not CAPPED_DEFERRAL_ENABLED:
             raise
         # The alternate basis rechecks every prerequisite from authenticated live
@@ -251,6 +251,10 @@ def check(repo, number, expected_sha=None):
         try:
             return review_budget_runtime.check(repo, number, expected_sha)
         except review_budget_runtime.Blocked as exc:
+            # A denied alternate basis must not consume the clean path's
+            # retryable sign-off delay. main() owns the bounded wait policy.
+            if isinstance(clean_error, AwaitingSignoff):
+                raise clean_error from exc
             raise Blocked(str(exc)) from exc
 
 

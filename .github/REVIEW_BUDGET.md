@@ -224,9 +224,20 @@ PowerShell 7.4.7 was already installed locally. No system changes or credentials
 - All 238 Pester tests passed, zero failed/skipped/inconclusive/not-run.
 - All 83 Node tests passed, zero skipped, using the documented synthetic offline
   evidence fixture to exercise the optional evidence-pack comparison.
-- All 156 Python aggregate gate/policy/runtime tests passed. Actionlint 1.7.7,
+- All 161 Python aggregate gate/policy/runtime tests passed. Actionlint 1.7.7,
   Python compilation and full diff whitespace checks passed. Independent final
   review found no remaining findings for the disabled implementation; the reviewer
-  independently reran all 156 Python tests and whitespace checks.
+  independently reran all 161 Python tests and whitespace checks.
 - Tests use local fixtures/mocks only. No tenant operations, live issue creation,
   review requests, hosted CI dispatch, old-thread resolution or merged-PR backfill.
+
+## Sign-off wait regression
+
+When the clean gate raises `AwaitingSignoff` and capped admission returns a policy
+block (including below-cap or missing receipt), preserve the original retryable
+exception. `--wait-for-signoff` still permits three checks and two five-second
+waits, then fails closed without output. A valid capped receipt can clear
+immediately; ordinary clean-gate or malformed fallback failures do not acquire
+retries. The regression tests failed against the prior implementation and pass
+with the fix. Independent scoped review found no remaining findings. No review
+request or thread resolution was performed as part of the correction.
