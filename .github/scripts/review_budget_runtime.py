@@ -43,6 +43,22 @@ def finding_sections(body, identity, source, resolved, kind='Code Review'):
     """
     if not body.strip():
         return []
+    # Recorded Codex Markdown badge envelope. The alt priority and URL priority
+    # must agree; an unknown host/query/wrapper is not a recognized heading.
+    # Normalization changes presentation only, never the source-object identity.
+    badge_heading = re.compile(
+        r'\*\*<sub><sub>!\[(P[0-3]) Badge\]'
+        r'\(https://img\.shields\.io/badge/\1-[A-Za-z0-9]+\?style=flat\)'
+        r'</sub></sub>  ([^\n]+)\*\*[ \t]*')
+    lines = []
+    for line in body.splitlines():
+        if 'Badge]' in line or '<sub>' in line or re.search(r'!\[P[^\]]*\]', line):
+            match = badge_heading.fullmatch(line)
+            if not match:
+                raise Blocked('Unknown badge heading envelope; cannot classify every finding.')
+            line = f'[{match[1]}] {match[2]}'
+        lines.append(line)
+    body = '\n'.join(lines)
     headings = list(re.finditer(r'(?m)^\s*(?:#{1,6}\s+)?(?:\*\*)?\[(P[0-3])\]\s+([^\n]+)', body))
     if not headings or body[:headings[0].start()].strip():
         raise Blocked('Unclassified review text or unknown priority; manual classification required.')
@@ -55,6 +71,37 @@ def finding_sections(body, identity, source, resolved, kind='Code Review'):
         result.append(Finding(f'{identity}:{index}', source, match[1], resolved, kind,
                               match[2].strip('* ')))
     return result
+
+
+def is_codex_review_notice(body, commit_id):
+    """Exact recorded submission boilerplate, not approval or a review round.
+
+    Allow only whitespace-only line differences and the declared commit prefix.
+    Never apply this exemption to an inline/issue comment or unauthenticated user.
+    """
+    if not isinstance(commit_id, str) or not re.fullmatch(r'[0-9a-f]{40}', commit_id):
+        return False
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if len(lines) != 12:
+        return False
+    commit = re.fullmatch(r'\*\*Reviewed commit:\*\* `([0-9a-f]{7,40})`', lines[2])
+    if not commit or not commit_id.startswith(commit[1]):
+        return False
+    expected = [
+        '### 💡 Codex Review',
+        'Here are some automated review suggestions for this pull request.',
+        lines[2],
+        '<details> <summary>ℹ️ About Codex in GitHub</summary>',
+        '<br/>',
+        '[Your team has set up Codex to review pull requests in this repo](https://chatgpt.com/codex/cloud/settings/general). Reviews are triggered when you',
+        '- Open a pull request for review',
+        '- Mark a draft as ready',
+        '- Comment "@codex review".',
+        'If Codex has suggestions, it will comment; otherwise it will react with 👍.',
+        'Codex can also answer questions or update the PR. Try commenting "@codex address that feedback".',
+        '</details>',
+    ]
+    return lines == expected
 
 
 class Live:
@@ -167,6 +214,9 @@ class Live:
         for (kind, ident), obj in objects.items():
             body = obj.get('body') or ''
             if body.startswith(SUMMARY) and is_bot(obj['user']):
+                continue
+            if (kind == 'review' and is_bot(obj['user']) and obj.get('state') == 'COMMENTED'
+                    and is_codex_review_notice(body, obj.get('commit_id'))):
                 continue
             if kind == 'inline':
                 root = obj.get('in_reply_to_id', ident)

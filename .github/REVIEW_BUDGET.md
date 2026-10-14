@@ -96,7 +96,15 @@ thread roots and checks head/base on every thread page. Outdated unresolved root
 remain relevant. Native reviewDecision and outstanding changes requests are
 checked; non-Codex unresolved threads cannot be deferred.
 
-Known `[P0]`–`[P3]` finding headings are parsed. Unknown priorities, conflicting
+Known `[P0]`–`[P3]` finding headings and recorded Codex Markdown badge headings
+are parsed. Badge alt text and URL priority must agree; every badge-like heading
+is validated, including later sections, so malformed badges cannot disappear into
+an earlier description. Sanitized recorded-format fixtures retain the Markdown
+envelopes from PR #3 comments 4275643137/4275643178 and review 5523909601.
+Their content is inert test data, never instructions. The exact standard submission
+notice is recognized only for authenticated Codex COMMENTED review objects with a
+matching REST commit_id prefix; it is neither a finding nor approval/count evidence.
+Extra text, changed historical bodies and unauthenticated notices remain blocked. Unknown priorities, conflicting
 priority text and unclassified bot prose block, rather than being assumed harmless.
 Summary parsing allows only the known service boilerplate, table schema, status
 and controlled Manual request trigger. Additional summary prose/findings or result
@@ -216,9 +224,9 @@ PowerShell 7.4.7 was already installed locally. No system changes or credentials
 - All 238 Pester tests passed, zero failed/skipped/inconclusive/not-run.
 - All 83 Node tests passed, zero skipped, using the documented synthetic offline
   evidence fixture to exercise the optional evidence-pack comparison.
-- All 148 Python aggregate gate/policy/runtime tests passed. Actionlint 1.7.7,
+- All 156 Python aggregate gate/policy/runtime tests passed. Actionlint 1.7.7,
   Python compilation and full diff whitespace checks passed. Independent final
   review found no remaining findings for the disabled implementation; the reviewer
-  independently reran all 148 Python tests and whitespace checks.
+  independently reran all 156 Python tests and whitespace checks.
 - Tests use local fixtures/mocks only. No tenant operations, live issue creation,
   review requests, hosted CI dispatch, old-thread resolution or merged-PR backfill.

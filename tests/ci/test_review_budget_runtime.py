@@ -523,6 +523,86 @@ class CapDispatchTests(unittest.TestCase):
         self.assertEqual(self.invoke('--dispatch', late=True), (1, '', 2, 0))
         self.assertEqual(self.invoke('--admit-run', late=True), (1, '', 2, 0))
 
+class RecordedCodexFormatTests(unittest.TestCase):
+    def setUp(self):
+        self.recorded = json.loads((Path(__file__).parent/'fixtures/codex_recorded_formats.json').read_text())
+
+    def test_recorded_badge_formats_preserve_priority_title_and_stable_ids(self):
+        for index, item in enumerate(self.recorded['inline']):
+            finding, = runtime.finding_sections(item['body'], f'inline:{index+1}', 'source', False)
+            self.assertEqual((finding.priority, finding.title, finding.identity),
+                             ('P2', f'Synthetic finding {index+1}', f'inline:{index+1}:0'))
+
+    def test_badge_critical_priorities_remain_blockers(self):
+        for priority in ('P0', 'P1'):
+            body = self.recorded['inline'][0]['body'].replace('P2', priority)
+            finding, = runtime.finding_sections(body, 'inline:1', snapshot().findings[0].source, False)
+            with self.assertRaises(budget.Blocked):
+                budget.deferral_candidates(replace(snapshot(), findings=(finding,)))
+
+    def test_later_badge_sections_are_classified_or_blocked_never_swallowed(self):
+        first, second = [item['body'] for item in self.recorded['inline']]
+        findings = runtime.finding_sections(first+'\n\n'+second, 'review:1', 'source', False)
+        self.assertEqual([f.identity for f in findings], ['review:1:0', 'review:1:1'])
+        for malformed in (second.replace('img.shields.io', 'example.invalid'),
+                          second.replace('?style=flat', '?unknown=flat'),
+                          second.replace('<sub>', '<sup>')):
+            with self.subTest(body=malformed), self.assertRaises(budget.Blocked):
+                runtime.finding_sections(first+'\n\n'+malformed, 'review:1', 'source', False)
+
+    def test_unknown_or_conflicting_badges_and_unknown_prose_fail_closed(self):
+        body = self.recorded['inline'][0]['body']
+        for mutated in (body.replace('P2', 'P4'), body.replace('/badge/P2-', '/badge/P1-'),
+                        body.replace('img.shields.io', 'example.invalid'),
+                        body.replace('?style=flat', '?unknown=flat'),
+                        'Unclassified review prose\n'+body, body+'\n[P9] Unknown priority'):
+            with self.subTest(body=mutated), self.assertRaises(budget.Blocked):
+                runtime.finding_sections(mutated, 'inline:1', 'source', False)
+
+    def test_submission_notice_is_exact_and_never_approval(self):
+        notice = self.recorded['review']
+        self.assertTrue(runtime.is_codex_review_notice(notice['body'], notice['commit_id']))
+        for body in (notice['body']+'\n[P1] Hidden finding', 'Unknown prose\n'+notice['body'],
+                     notice['body'].replace('Here are some automated review suggestions for this pull request.',
+                                            'Unclassified review result.'),
+                     notice['body'].replace('aaaaaaaaa', 'bbbbbbbbb')):
+            self.assertFalse(runtime.is_codex_review_notice(body, notice['commit_id']))
+        self.assertFalse(runtime.is_codex_review_notice(notice['body'], None))
+        with self.assertRaises(budget.Blocked):
+            runtime.finding_sections(notice['body'], 'inline:1', 'source', False)
+
+    def setup_live(self, user=BOT):
+        api = LiveAPI()
+        api.inline[0]['body'] = self.recorded['inline'][0]['body']
+        api.state['events'][1]['payload']['comment'] = deepcopy(api.inline[0])
+        review = {'id': 55, 'state': 'COMMENTED', 'user': user,
+                  'html_url': f'https://github.com/{REPO}/pull/99#pullrequestreview-55',
+                  **self.recorded['review']}
+        api.reviews = [review]
+        api.state['events'].append({'event': 'pull_request_review', 'payload': {'review': deepcopy(review)}})
+        journal = MemoryJournal({'version': 1, 'prs': {'99': api.state}, 'locks': {}})
+        live = runtime.Live(REPO, 99, api)
+        return api, runtime.Controller(REPO, 99, journal, FakeHistory(), live)
+
+    def test_authenticated_recorded_submission_and_badge_pass_live_deferral_and_admission(self):
+        api, controller = self.setup_live()
+        controller.defer()
+        self.assertEqual(len(api.issues), 1)
+        self.assertEqual(controller.admit(SHA)['clearance_basis'], 'capped-deferral')
+
+    def test_human_cannot_reuse_boilerplate_exemption(self):
+        api, controller = self.setup_live(HUMAN)
+        with self.assertRaises(budget.Blocked):
+            controller.defer()
+        self.assertEqual(api.issues, [])
+
+    def test_changed_historical_boilerplate_cannot_hide_old_findings(self):
+        api, controller = self.setup_live()
+        controller.journal.state['prs']['99']['events'][-1]['payload']['review']['body'] += '\n[P1] Old finding'
+        with self.assertRaises(budget.Blocked):
+            controller.defer()
+        self.assertEqual(api.issues, [])
+
 
 if __name__ == '__main__':
     unittest.main()
