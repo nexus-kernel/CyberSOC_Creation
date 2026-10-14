@@ -1,0 +1,17 @@
+{
+  "ClientName": "Synthetic validation only",
+  "TenantId": "example-tenant",
+  "WindowStart": "2026-07-01",
+  "WindowEnd": "2026-09-30",
+  "RecentStart": "2026-07-01",
+  "PostureReadDate": "2026-10-08",
+  "Subscriptions": [
+    "synthetic-subscription"
+  ],
+  "Workspaces": [
+    {
+      "Name": "synthetic-workspace",
+      "CustomerId": "synthetic-workspace"
+    }
+  ]
+}

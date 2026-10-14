@@ -1,2 +1,7 @@
 /node_modules/
 /docs/plans/
+
+__pycache__/
+*.pyc
+/.dev-cache/
+/.venv/

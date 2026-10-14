@@ -9,7 +9,10 @@ Packaged 2026-10-14.
 - Node.js 18 or later, for the PowerPoint editions. Without it the HTML report is still written.
 - The ExchangeOnlineManagement module, installed for the current user on the first run unless you pass `-SkipExchange`.
 
-node_modules is bundled, so no npm install is needed.
+For a git checkout, run `npm ci` using the committed lockfile before generating
+PowerPoint files. Release bundles may include node_modules. Developer tests and
+cloud environment setup are documented in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md);
+reviewed CI and bootstrap are documented in [.github/REVIEW_GATE.md](.github/REVIEW_GATE.md).
 
 ## Windows
 

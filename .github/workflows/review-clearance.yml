@@ -1,0 +1,66 @@
+name: Check Codex review clearance
+
+on:
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR whose completed review should be checked again'
+        required: true
+        type: string
+
+concurrency:
+  group: review-clearance-${{ github.event.issue.number || inputs.pr_number }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  actions: write
+
+jobs:
+  clearance:
+    name: Check Codex sign-off and unresolved items
+    # This condition is evaluated before allocating a runner. Human comments and
+    # running-review updates do not start a job. A completed review may have findings;
+    # the API preflight below distinguishes it from a clean sign-off.
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request &&
+       github.event.comment.user.id == 199175422 &&
+       github.event.comment.user.type == 'Bot' &&
+       github.event.comment.user.login == 'chatgpt-codex-connector[bot]' &&
+       startsWith(github.event.comment.body, '<!-- codex-pull-request-review-summary -->') &&
+       contains(github.event.comment.body, '✅ **Completed**') &&
+       !contains(github.event.comment.body, '**Running**')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      # issue_comment runs from the default branch; never execute PR code with
+      # the Actions write permission used to request the separate CI workflow.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Check live review state and request or retry reviewed CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number || inputs.pr_number }}
+          TRIGGER_EVENT: ${{ github.event_name }}
+        run: |
+          case "$TRIGGER_EVENT" in
+            issue_comment) mode=--once ;;
+            workflow_dispatch) mode=--retry-failed ;;
+            *) echo "Unsupported clearance event" >&2; exit 1 ;;
+          esac
+          if python3 .github/scripts/review_gate.py \
+            --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" \
+            --dispatch "$mode" --wait-for-signoff; then
+            echo "Review clearance passed; CI requested or an existing run prevents duplication." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "CI was not requested. See the preflight output for pending review, unresolved items, or API errors." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi

@@ -1,0 +1,8 @@
+[
+  {
+    "Vnet": "example",
+    "SubnetName": "synthetic-private-subnet",
+    "SubnetClass": "Workload",
+    "Segmented": 1
+  }
+]

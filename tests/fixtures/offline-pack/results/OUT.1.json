@@ -1,0 +1,9 @@
+[
+  {
+    "Raised": 100,
+    "Closed": 80,
+    "Open": 20,
+    "TruePositive": 3,
+    "ClosedUnclassified": 5
+  }
+]

@@ -1,0 +1,9 @@
+[
+  {
+    "IncidentNumber": 5,
+    "Title": "Synthetic private title",
+    "Severity": "High",
+    "ClassificationComment": "Synthetic private comment",
+    "ExfilOrImpactTactic": false
+  }
+]

@@ -1,0 +1,20 @@
+name: Cancel obsolete reviewed CI
+
+on:
+  pull_request_target:
+    types: [synchronize, converted_to_draft, closed]
+
+# Concurrency is evaluated by GitHub; this workflow never allocates a runner.
+concurrency:
+  group: reviewed-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  cancel-only:
+    # This workflow only receives PR events, so this job is always skipped.
+    if: github.event_name != 'pull_request_target'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Concurrency cancels the previous reviewed CI run."
