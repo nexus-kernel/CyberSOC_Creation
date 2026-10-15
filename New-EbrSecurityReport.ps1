@@ -282,7 +282,7 @@ if ($ContextPath) {
         throw 'The context client and tenant must match the evidence pack.'
     }
     # Allow only the documented editorial inputs.
-    $context = $context | Select-Object ClientName, TenantId, ServiceStartDate, TenantScore, Delivered, OpenAlertNote
+    $context = $context | Select-Object ClientName, TenantId, ServiceStartDate, TenantScore, Delivered, OpenAlertNote, Impact
 }
 $data = [ordered]@{
     version = '2.0.0'

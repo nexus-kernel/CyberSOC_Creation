@@ -3,5 +3,6 @@
   "TenantId": "Replace with the TenantId from 00-parameters.json",
   "ServiceStartDate": null,
   "TenantScore": null,
-  "Delivered": []
+  "Delivered": [],
+  "Impact": null
 }

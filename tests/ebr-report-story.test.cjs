@@ -70,13 +70,16 @@ test('the story carries the wins, asks and takeaways the review asked for, worde
   const { s } = story(quarterPack())
   assert.equal(s.quarter, 'Q3 2026')
   assert.deepEqual(s.kpis.map(k => k.value), ['615', '0 of 2', '36 min', '59.7%'])
-  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'True positives that reached exfiltration or impact', 'Time for 90% of high-severity alerts to close', 'Defender for Cloud secure score'])
+  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'True positives whose alerts carried an exfiltration or impact tactic', 'Time for 90% of high-severity alerts to close', 'Defender for Cloud secure score'])
+  assert.equal(s.kpis[1].sub, 'Both classified as true positives by the SOC', 'a true positive is a classification, never an investigation or a closure')
   assert.equal(s.kpis[0].sub, 'Jul 1 to Sep 30, 2026', 'the alert KPI carries the period, not the detection count')
   assert.equal(s.kpis[3].sub, 'Up 6.1 points since Jul 2026, from 53.6%')
-  assert.deepEqual(s.wins.map(w => w.eyebrow), ['Threat outcomes', 'Response speed', 'Posture', 'Identity', 'Patching', 'Email protection'])
+  assert.deepEqual(s.wins.map(w => w.eyebrow), ['Confirmed threats', 'Response speed', 'Posture', 'Identity', 'Patching', 'Email protection'])
+  assert.deepEqual([s.wins[0].value, s.wins[0].label, s.wins[0].sub], ['0 of 2', 'confirmed threats carried an exfiltration or impact tactic', 'Both classified as true positives by the SOC this quarter.'])
   assert.equal(new Set(s.wins.map(w => w.area)).size, s.wins.length, 'at most one win per area')
-  assert.equal(s.takeaways.summary, 'Neither confirmed threat reached exfiltration or impact, and secure score rose 6.1 points.')
+  assert.equal(s.takeaways.summary, 'Neither confirmed threat carried an exfiltration or impact tactic, and secure score rose 6.1 points.')
   assert.match(s.takeaways.posture, /foundational controls are enforced\. (Two|Three|Four) read below the baseline and are first on the roadmap\./)
+  assert.ok(!/\breached\b|no impact|did not reach|investigated/i.test(JSON.stringify(s)), 'an outcome verb or an unrecorded impact determination reached the story')
   const spoken = JSON.stringify([s.takeaways, s.roadmap.map(h => h.items.map(i => [i.title, i.evidence])), s.watch, s.wins, s.asks, s.summaryWins, s.matrix])
   assert.ok(!/\bdrift|at build|regress/i.test(spoken), 'the story never claims a regression or a build-time configuration')
   assert.ok(s.takeaways.pillars && s.takeaways.priorities, 'the grounding slides have takeaways')
@@ -148,7 +151,8 @@ test('counts read as natural English', () => {
   p.results['OUT.1'][0].TruePositive = 1
   p.results['OUT.4'] = [{ IncidentNumber: 1, Severity: 'High', Tactics: 'InitialAccess', ExfilOrImpactTactic: false }]
   const { s } = story(p)
-  assert.equal(s.takeaways.summary.startsWith('The confirmed threat did not reach exfiltration or impact'), true)
+  assert.equal(s.takeaways.summary.startsWith('The confirmed threat did not carry an exfiltration or impact tactic'), true)
+  assert.equal(s.kpis[1].sub, 'Classified as a true positive by the SOC')
   assert.equal(s.asks[0].body, '1 user needs to update their MFA method before February 1, 2027, when Microsoft retires text message and voice sign-in.')
   assert.equal(s.takeaways.methods, 'Microsoft retires text message and voice sign-in on February 1, 2027. 1 user still relies on it.')
   assert.ok(s.watch.every(w => !/^1$/.test(w.value) || !/^(members|users|devices|resources) /.test(w.label)), JSON.stringify(s.watch))
@@ -185,25 +189,44 @@ test('the confirmed threats takeaway counts the threats, adds the exfiltration l
   }
   const clean = withRows(false)
   assert.ok(clean.m.threats)
-  assert.equal(clean.s.takeaways.threats, '2 confirmed threats were investigated and closed. Neither confirmed threat reached exfiltration or impact.')
+  assert.equal(clean.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter. Neither confirmed threat carried an exfiltration or impact tactic.')
   const flagged = withRows(true)
   assert.equal(flagged.m.alerts.flagged, 1)
-  assert.equal(flagged.s.takeaways.threats, '2 confirmed threats were investigated and closed.')
+  assert.equal(flagged.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter.')
   // A Collection tactic sets the collector flag but is not exfiltration or impact, so the count stays narrow.
   const p = quarterPack()
   p.results['OUT.4'] = [{ Severity: 'High', ExfilOrImpactTactic: true, Threat: 'Suspicious inbox rule created', Tactics: 'Collection', Created: '2026-08-18' }, { Severity: 'High', ExfilOrImpactTactic: false, Threat: 'Password spray attack', Tactics: 'CredentialAccess', Created: '2026-07-28' }]
   const collection = story(p)
   assert.deepEqual([collection.m.alerts.flagged, collection.m.alerts.flaggedScope], [0, 'exfiltration or impact'])
-  assert.equal(collection.s.takeaways.summary, 'Neither confirmed threat reached exfiltration or impact, and secure score rose 6.1 points.')
+  assert.equal(collection.s.takeaways.summary, 'Neither confirmed threat carried an exfiltration or impact tactic, and secure score rose 6.1 points.')
   // Rows without tactics keep the flag count and name the wider scope on every surface.
   p.results['OUT.4'] = p.results['OUT.4'].map(({ Tactics, Threat, Created, ...r }) => r)
   const wide = story(p)
   assert.deepEqual([wide.m.alerts.flagged, wide.m.alerts.flaggedScope], [1, 'collection, exfiltration or impact'])
-  assert.equal(wide.s.kpis[1].label, 'True positives that reached collection, exfiltration or impact')
-  assert.ok(!/reached exfiltration or impact/.test(JSON.stringify([wide.s.kpis, wide.s.wins, wide.s.takeaways, wide.m.tiers, wide.m.headline])), 'the narrow wording never appears without tactics')
+  assert.equal(wide.s.kpis[1].label, 'True positives whose alerts carried a collection, exfiltration or impact tactic')
+  assert.ok(!/carried an exfiltration or impact tactic/.test(JSON.stringify([wide.s.kpis, wide.s.wins, wide.s.takeaways, wide.m.tiers, wide.m.headline])), 'the narrow wording never appears without tactics')
   const none = story(quarterPack())
   assert.equal(none.m.threats, null, 'rows without a title give no examples')
   assert.equal(none.s.takeaways.threats, '')
+})
+test('a reviewed impact record leads the takeaways, and a confirmed impact withdraws the tactic win', () => {
+  const withImpact = (confirmed, truePositives = 2) => {
+    const p = quarterPack()
+    p.results['OUT.1'][0].TruePositive = truePositives
+    p.results['OUT.4'] = [{ Severity: 'High', ExfilOrImpactTactic: false, Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Tactics: 'CommandAndControl', Created: '2026-08-18' }, { Severity: 'Medium', ExfilOrImpactTactic: false, Threat: 'Password spray attack', Tactics: 'CredentialAccess', Created: '2026-07-28' }]
+    p.context = { Impact: { Confirmed: confirmed, Reviewed: '2026-10-10', Reference: 'CHG-123' } }
+    return story(p)
+  }
+  const clear = withImpact(0)
+  assert.equal(clear.s.takeaways.summary, 'The reviewed investigation records confirm no data exposure or business impact, and secure score rose 6.1 points.')
+  assert.equal(clear.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter. Neither confirmed threat carried an exfiltration or impact tactic. The reviewed investigation records confirm no data exposure or business impact.')
+  assert.equal(clear.s.wins[0].label, 'confirmed threats carried an exfiltration or impact tactic', 'the tactic win stands beside a clean determination')
+  const hit = withImpact(1)
+  assert.equal(hit.s.takeaways.summary, 'The reviewed investigation records confirm data exposure or business impact from 1 of the 2 confirmed threats, and secure score rose 6.1 points.')
+  assert.equal(hit.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter. The reviewed investigation records confirm data exposure or business impact from 1 of the 2 confirmed threats.')
+  assert.ok(!hit.s.wins.some(w => w.area === 'threat'), 'a confirmed impact is no win')
+  assert.equal(hit.s.kpis[1].value, '0 of 2', 'the tactic KPI still reports the recorded tactics')
+  assert.equal(withImpact(1, 1).s.takeaways.threats, 'The SOC classified 1 alert as a true positive this quarter. The reviewed investigation records confirm data exposure or business impact from the confirmed threat.')
 })
 test('a median at the floor reads as nine in ten triaged and closed, never investigated or resolved, and names high severity alerts', () => {
   const p = quarterPack()

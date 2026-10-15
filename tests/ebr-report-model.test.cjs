@@ -79,7 +79,7 @@ test('timing is omitted when no cohort is credible and the tile falls back to co
   for (const id of ['OUT.2', 'OUT.2-ANALYST']) for (const r of p.results[id]) r.MedianCloseMin = 4
   const m = build(p)
   assert.equal(m.response, null)
-  assert.ok(m.headline.some(t => t.label === 'Confirmed threats investigated'))
+  assert.ok(m.headline.some(t => t.label === 'Confirmed threats' && t.sub === 'Alerts the SOC classified as true positives'))
 })
 test('automation closures above half are removed from the headline count and shown as a supporting line', () => {
   const p = pack(); alerts(p, { auto: 50 })
@@ -1108,6 +1108,53 @@ test('tenant score movement compares each snapshot against its own maximum', () 
   assert.equal(build(p).tenantScore.delta, null, 'the Jul 15 snapshot carries a maximum of 800, so 400 is 50% and no gain prints')
   p.context.TenantScore.Previous = 320
   assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 })
+})
+test('the three threat measures stay apart, and only a reviewed context record prints an impact determination', () => {
+  const gate = 'Based on the tactics Sentinel recorded on the alerts, none of the confirmed threats carried an exfiltration or impact tactic. Additional investigation evidence is required to confirm whether any data exposure or business impact occurred.'
+  const p = pack(); alerts(p)
+  for (const id of ['OUT.2', 'OUT.2-ANALYST']) for (const r of p.results[id]) r.MedianCloseMin = 4 // no timing, so the executive tile falls back to the confirmed threats
+  put(p, 'OUT.4', [threat('Log4j vulnerability exploit aka Log4Shell IP IOC', 'High', 'CommandAndControl', '2026-08-18'), threat('Password spray attack', 'Medium', 'CredentialAccess', '2026-08-22')])
+  let m = build(p)
+  assert.deepEqual([m.threatMeasures.malicious.value, m.threatMeasures.malicious.label, m.threatMeasures.incidents, m.threatMeasures.impact, m.impact], [3, 'Confirmed threats', null, null, null])
+  assert.equal(m.impactStatement, gate)
+  assert.equal(m.alerts.tacticPhrase, 'an exfiltration or impact tactic')
+  assert.deepEqual(m.tiers.outcomes.filter(r => r.id !== 'OUT.1').map(r => [r.label, r.value]), [['True positives whose alerts carried an exfiltration or impact tactic', '0 of 3']])
+  assert.deepEqual(m.headline.find(t => t.label === 'Confirmed threats').sub, 'None carried an exfiltration or impact tactic')
+  assert.ok(m.review.some(n => n.title === 'Impact determination' && /no reviewed Impact record/.test(n.text)))
+  assert.match(m.presenter.find(n => n.title === 'Indicator-based true positives').text, /^A true-positive classification on an indicator detection, such as a Log4Shell IP or domain indicator match, confirms that the indicator was observed, not that exploitation or compromise occurred\. .* 1 of the 2 confirmed alerts with an attack stage carries an indicator in the title\./)
+  assert.ok(!/\breached\b|no impact|did not reach/i.test(visible(m) + m.impactStatement), 'an outcome verb or an unrecorded impact determination reached the model')
+  assert.ok(!/investigated/i.test(JSON.stringify([m.headline, m.tiers, m.threats, m.impactStatement])), 'a true positive never reads as investigated')
+  // The flag count reads the same way when a tactic is recorded.
+  put(p, 'OUT.4', [threat('Data staged for transfer', 'High', 'Exfiltration', '2026-08-18'), threat('Password spray attack', 'Medium', 'CredentialAccess', '2026-08-22')])
+  assert.equal(build(p).impactStatement, 'Based on the tactics Sentinel recorded on the alerts, 1 of the 3 confirmed threats carried an exfiltration or impact tactic. Additional investigation evidence is required to confirm whether any data exposure or business impact occurred.')
+  // A reviewed record: the determination prints with its reference and date, and the tier gains a row.
+  p.context = { Impact: { Confirmed: 0, Reviewed: '2026-10-10', Reference: 'CHG-123' } }
+  m = build(p)
+  assert.deepEqual(m.impact, { confirmed: 0, reviewed: 'Oct 10, 2026', reference: 'CHG-123', source: 'Reviewed impact determination CHG-123, Oct 10, 2026, from the reviewed context file.' })
+  assert.equal(m.impactStatement, 'The reviewed investigation records confirm no data exposure or business impact from the 3 confirmed threats (CHG-123, reviewed Oct 10, 2026).')
+  assert.deepEqual(m.threatMeasures.impact, { value: 0, label: 'Confirmed business impact', detail: 'Reviewed Oct 10, 2026, CHG-123', source: m.impact.source })
+  assert.deepEqual(m.tiers.outcomes.find(r => r.id === 'CONTEXT'), { label: 'Confirmed data exposure or business impact', value: '0', id: 'CONTEXT' })
+  assert.equal(m.headline.find(t => t.label === 'Confirmed threats').sub, 'No data exposure or business impact confirmed, reviewed Oct 10, 2026')
+  assert.ok(!m.review.some(n => /^Impact determination/.test(n.title)))
+  p.context.Impact.Confirmed = 2
+  m = build(p)
+  assert.equal(m.impactStatement, 'The reviewed investigation records confirm data exposure or business impact from 2 of the 3 confirmed threats (CHG-123, reviewed Oct 10, 2026).')
+  assert.equal(m.headline.find(t => t.label === 'Confirmed threats').sub, '2 with confirmed data exposure or business impact')
+  // Malformed or inconsistent records are omitted with a review note, and the gate statement returns.
+  put(p, 'OUT.4', [threat('Log4j vulnerability exploit aka Log4Shell IP IOC', 'High', 'CommandAndControl', '2026-08-18'), threat('Password spray attack', 'Medium', 'CredentialAccess', '2026-08-22')])
+  for (const bad of [{ Confirmed: 0 }, { Confirmed: -1, Reviewed: '2026-10-10', Reference: 'CHG-123' }, { Confirmed: 0, Reviewed: '2026-02-31', Reference: 'CHG-123' }, { Confirmed: 4, Reviewed: '2026-10-10', Reference: 'CHG-123' }, 'none']) {
+    p.context = { Impact: bad }
+    m = build(p)
+    assert.equal(m.impact, null, JSON.stringify(bad))
+    assert.equal(m.impactStatement, gate, JSON.stringify(bad))
+    assert.equal(m.review.some(n => n.title === 'Impact determination needs review'), typeof bad === 'object', JSON.stringify(bad))
+  }
+  // A pack whose rows carry no tactics keeps the wider flag scope in the phrase and the statement.
+  put(p, 'OUT.4', [{ Severity: 'High', ExfilOrImpactTactic: true }, { Severity: 'Low', ExfilOrImpactTactic: false }])
+  p.context = null
+  m = build(p)
+  assert.equal(m.alerts.tacticPhrase, 'a collection, exfiltration or impact tactic')
+  assert.equal(m.impactStatement, 'Based on the tactics Sentinel recorded on the alerts, 1 of the 3 confirmed threats carried a collection, exfiltration or impact tactic. Additional investigation evidence is required to confirm whether any data exposure or business impact occurred.')
 })
 test('confirmed threat severities are counted per alert before grouping, so a mixed group never reads as all high', () => {
   const p = pack(); alerts(p)
