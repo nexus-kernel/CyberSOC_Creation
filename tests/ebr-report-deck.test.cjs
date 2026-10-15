@@ -322,7 +322,15 @@ test('a short confirmed threats table is followed by the outcome cards and the h
   const { data, out } = deck('balanced', examples)
   const { slides, notes } = await read(out)
   const slide = slides.find(s => s.startsWith('Confirmed threats') && s.includes('Log4Shell'))
-  for (const t of ['Confirmed threats', 'Alerts the SOC classified as true positives from', 'Carried an exfiltration or impact tactic', 'A tactic Sentinel recorded on the alert, not a verified outcome.', '1 High severity alert', 'Of the 2 confirmed alerts grouped above, at the severity Sentinel recorded.', 'EVERY CONFIRMED THREAT', '1 Detect', '2 Triage', '3 Investigate', '4 Resolve', GATE]) assert.ok(slide.includes(t), t)
+  for (const t of ['Confirmed threats', 'Alerts the SOC classified as true positives from', 'Carried an exfiltration or impact tactic', 'A tactic Sentinel recorded on the alert, not a verified outcome.', '1 High severity alert', 'Of the 2 confirmed alerts grouped above, at the severity Sentinel recorded.', 'EVERY CONFIRMED THREAT', '1 Detect', '2 Triage', '3 Classify', 'the SOC records a true-positive classification on the alert', '4 Impact', 'confirmed only from reviewed investigation records', GATE]) assert.ok(slide.includes(t), t)
+  // The strip and its note name only what the evidence records. A true positive is a classification with no status,
+  // so no confirmed threat reads as investigated, assessed for impact or closed beside the caption that asks for
+  // the investigation evidence.
+  const strip = slide.slice(slide.indexOf('EVERY CONFIRMED THREAT'))
+  const threatNotes = notes.find(n => n.includes('Every confirmed threat follows the same path'))
+  assert.ok(threatNotes, 'the speaker notes describe the handling strip')
+  assert.ok(!/\binvestigated?\b|\bassess|\bclosed\b|\bresolve/i.test(strip), strip)
+  assert.ok(!/\binvestigated?\b|\bassess(es|ed)\b|closed by the SOC|closed with a documented disposition/i.test(threatNotes), threatNotes.match(/.{0,60}(investigat|assess|closed).{0,60}/i)?.[0])
   assert.ok(!/\bcontain(ed|ment)\b|resulted in|notification process/i.test(slide), 'containment, verified outcomes and notifications are never claimed')
   // A tactic recorded on the alert is never an outcome, and without a reviewed impact record no surface rules impact out.
   assert.ok(!/\breached\b|no impact|did not reach/i.test([...slides, ...notes].join(' ')), 'an outcome verb or an unrecorded impact determination reached the deck')
