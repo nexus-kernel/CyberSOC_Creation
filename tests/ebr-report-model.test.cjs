@@ -1119,7 +1119,7 @@ test('the three threat measures stay apart, and only a reviewed context record p
   assert.equal(m.impactStatement, gate)
   assert.equal(m.alerts.tacticPhrase, 'an exfiltration or impact tactic')
   assert.deepEqual(m.tiers.outcomes.filter(r => r.id !== 'OUT.1').map(r => [r.label, r.value]), [['True positives whose alerts carried an exfiltration or impact tactic', '0 of 3']])
-  assert.deepEqual(m.headline.find(t => t.label === 'Confirmed threats').sub, 'None carried an exfiltration or impact tactic')
+  assert.deepEqual([m.headline.find(t => t.label === 'Confirmed threats').sub, m.headline.find(t => t.label === 'Confirmed threats').source], ['None carried an exfiltration or impact tactic', 'OUT.1. Read Oct 8, 2026.'])
   assert.ok(m.review.some(n => n.title === 'Impact determination' && /no reviewed Impact record/.test(n.text)))
   assert.match(m.presenter.find(n => n.title === 'Indicator-based true positives').text, /^A true-positive classification on an indicator detection, such as a Log4Shell IP or domain indicator match, confirms that the indicator was observed, not that exploitation or compromise occurred\. .* 1 of the 2 confirmed alerts with an attack stage carries an indicator in the title\./)
   assert.ok(!/\breached\b|no impact|did not reach/i.test(visible(m) + m.impactStatement), 'an outcome verb or an unrecorded impact determination reached the model')
@@ -1137,6 +1137,7 @@ test('the three threat measures stay apart, and only a reviewed context record p
   assert.deepEqual(m.threatMeasures.impact, { value: 0, label: 'Confirmed business impact', detail: 'Reviewed Oct 10, 2026, CHG-123', source: m.impact.source })
   assert.deepEqual(m.tiers.outcomes.find(r => r.id === 'CONTEXT'), { label: 'Confirmed data exposure or business impact', value: '0', id: 'CONTEXT' })
   assert.equal(m.headline.find(t => t.label === 'Confirmed threats').sub, 'No data exposure or business impact confirmed, reviewed Oct 10, 2026')
+  assert.equal(m.headline.find(t => t.label === 'Confirmed threats').source, `OUT.1. Read Oct 8, 2026. ${m.impact.source}`, 'the tile cites the reviewed record beside OUT.1 when the determination drives its sub-line')
   assert.ok(!m.review.some(n => /^Impact determination/.test(n.title)))
   p.context.Impact.Confirmed = 2
   m = build(p)
