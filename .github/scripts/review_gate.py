@@ -23,6 +23,10 @@ def is_bot(user):
 
 SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
 
+# Activation is a reviewed trusted-default code change, never an input/label or
+# environment toggle. No new permission is granted by this staged integration.
+CAPPED_DEFERRAL_ENABLED = False
+
 
 class Blocked(RuntimeError):
     """The PR is not cleared for CI."""
@@ -198,7 +202,7 @@ def review_threads(repo, number, head, base):
     raise Blocked("Review-thread pagination limit reached.")
 
 
-def check(repo, number, expected_sha=None):
+def check_clean(repo, number, expected_sha=None):
     prefix = f"repos/{repo}"
     pr = gh_api(f"{prefix}/pulls/{number}")
     comments = list_api(f"{prefix}/issues/{number}/comments?per_page=100")
@@ -232,6 +236,26 @@ def check(repo, number, expected_sha=None):
             or fresh.get("mergeable") is not True):
         raise Blocked("PR changed while checking clearance; run the check again.")
     return fresh
+
+
+def check(repo, number, expected_sha=None):
+    try:
+        return check_clean(repo, number, expected_sha)
+    except Blocked as clean_error:
+        if not CAPPED_DEFERRAL_ENABLED:
+            raise
+        # The alternate basis rechecks every prerequisite from authenticated live
+        # evidence. It is used by launch, dispatch recheck, --admit-run, and the
+        # downstream clearance job because all four call this function.
+        import review_budget_runtime
+        try:
+            return review_budget_runtime.check(repo, number, expected_sha)
+        except review_budget_runtime.Blocked as exc:
+            # A denied alternate basis must not consume the clean path's
+            # retryable sign-off delay. main() owns the bounded wait policy.
+            if isinstance(clean_error, AwaitingSignoff):
+                raise clean_error from exc
+            raise Blocked(str(exc)) from exc
 
 
 def get_default_branch(repo):
@@ -376,7 +400,8 @@ def main(argv=None):
                     raise
                 time.sleep(5)
         sha = pr["head"]["sha"]
-        print(f"Cleared: {args.repo}#{args.pr} at {sha}")
+        basis = pr.get('clearance_basis', 'clean-review')
+        print(f"Cleared ({basis}): {args.repo}#{args.pr} at {sha}")
         if args.dispatch or args.admit_run:
             default_branch = default_branch or get_default_branch(args.repo)
             trusted_ref = f"refs/heads/{default_branch}"
