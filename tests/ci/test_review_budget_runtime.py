@@ -245,30 +245,55 @@ class HistoryTests(unittest.TestCase):
         with self.assertRaises(budget.Blocked):
             history.summary_rows(summary(commit=SHA[:7]), REPO, failing)
 
-    def test_recorded_abbreviation_binding_survives_summary_edits(self):
-        collision = SHA[:7] + 'c' * 33
+    def _record_abbreviated_completion(self):
         self.api.commits[SHA[:7]] = {'sha': SHA}
         self.state['pending'] = {'kind': 'Code Review', 'head': SHA, 'nonce': 'n', 'comment': 12}
         first = summary(commit=SHA[:7])
         self.api.events.append(event(2, body=first))
-        state = self.history.sync(pr(), self.state)
-        self.assertEqual(state['commits'], {SHA[:7]: SHA})
+        return first, self.history.sync(pr(), self.state)
+
+    def test_recorded_completion_is_not_resolved_again_after_summary_edits(self):
+        first, state = self._record_abbreviated_completion()
         # A same-named ref now points at a crafted prefix collision that holds the next reservation.
+        collision = SHA[:7] + 'c' * 33
         self.api.commits[SHA[:7]] = {'sha': collision}
         state['pending'] = {'kind': 'Code Review', 'head': collision, 'nonce': 'm', 'comment': 13}
-        edited = first + f'\n| Security Review | **Running** | `{SHA[:7]}` | Manual request |'
+        edited = first + f'\n| Security Review | **Running** | `{collision}` | Manual request |'
         self.api.events.append(event(3, action='edited', body=edited, old=first))
         state = self.history.sync(pr(), state)
         self.assertEqual([row['head'] for row in state['rounds'].values()], [SHA])
         self.assertEqual(state['pending']['head'], collision)
-        self.assertEqual(state['latest']['Security Review']['head'], SHA)
         self.assertEqual(self.api.calls.count(f'repos/{REPO}/commits/{SHA[:7]}'), 1)
 
-    def test_corrupt_persisted_binding_blocks_without_resolution(self):
-        for bound in ('c' * 40, SHA[:7], SHA.upper(), 7):
-            with self.subTest(bound=bound), self.assertRaises(budget.Blocked):
-                history.summary_rows(summary(commit=SHA[:7]), REPO, self.api, {SHA[:7]: bound})
-        self.assertFalse([call for call in self.api.calls if '/commits/' in call])
+    def test_recorded_completion_keeps_its_head_under_a_longer_abbreviation(self):
+        first, state = self._record_abbreviated_completion()
+        # The same completion is re-rendered with eight characters while a same-named ref
+        # targets a crafted eight-character collision that holds the next reservation.
+        collision = SHA[:8] + 'c' * 32
+        self.api.commits[SHA[:8]] = {'sha': collision}
+        state['pending'] = {'kind': 'Code Review', 'head': collision, 'nonce': 'm', 'comment': 13}
+        edited = first.replace(f'`{SHA[:7]}`', f'`{SHA[:8]}`')
+        self.api.events.append(event(3, action='edited', body=edited, old=first))
+        state = self.history.sync(pr(), state)
+        self.assertEqual([row['head'] for row in state['rounds'].values()], [SHA])
+        self.assertEqual(state['pending']['head'], collision)
+        self.assertNotIn(f'repos/{REPO}/commits/{SHA[:8]}', self.api.calls)
+        self.assertEqual(self.history.sync(pr(), state), state)
+
+    def test_recorded_completion_rendered_on_another_commit_blocks(self):
+        first, state = self._record_abbreviated_completion()
+        other = 'c' * 40
+        self.api.commits[other[:7]] = {'sha': other}
+        self.api.commits[SHA[:6] + 'c'] = {'sha': SHA[:6] + 'c' * 34}
+        for cell in (other[:7], other, SHA[:6] + 'c'):
+            with self.subTest(cell=cell):
+                edited = first.replace(f'`{SHA[:7]}`', f'`{cell}`')
+                self.api.events.append(event(3, action='edited', body=edited, old=first))
+                with self.assertRaises(budget.Blocked):
+                    self.history.sync(pr(), state)
+                self.api.events.pop()
+        self.assertEqual([call for call in self.api.calls if '/commits/' in call],
+                         [f'repos/{REPO}/commits/{SHA[:7]}'])
 
 
 class MemoryJournal:

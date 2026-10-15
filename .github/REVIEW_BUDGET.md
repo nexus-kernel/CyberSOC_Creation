@@ -85,12 +85,14 @@ request. At three completed Code Reviews no request is sent, including after a p
 Summary commit cells may be abbreviated. GitHub's commits endpoint, which resolves
 them, also accepts branch and tag names, so the response must be a full lowercase
 hexadecimal SHA that starts with the authenticated abbreviation before any row is
-recorded. The first resolution of each abbreviation is persisted in the PR's
-journal state and reused for every later summary revision without another call,
-so a ref later moved to a crafted prefix collision cannot rebind a recorded row,
-and a pending reservation matching the commit it returns cannot attach a review
-to another commit. Full SHAs are recorded without a resolution call; API
-failures, corrupt bindings and missing or malformed responses block.
+recorded, and a new completion is recorded only with a matching reservation. A
+recorded completion, identified by kind and completion time, is bound to its
+recorded full SHA for the life of the PR: later summary revisions must render a
+commit cell consistent with that SHA, whatever abbreviation length they use, and
+are never resolved again, so a ref later moved to a crafted prefix collision
+cannot rebind the completion to a newly reserved head. An inconsistent cell for a
+recorded completion blocks. Full SHAs are used without a resolution call; API
+failures and missing or malformed responses block.
 
 These are GitHub-delivery continuity guarantees, not a claim to control outside
 requests or prove delivery behavior that GitHub never recorded. Hosted delivery
@@ -295,9 +297,10 @@ resolved value must now be a full lowercase hexadecimal SHA that starts with the
 authenticated abbreviation for completed, running, pending and queued rows alike.
 Full SHAs still skip resolution; API failures and malformed or missing responses
 remain blocked. Codex review of that correction found that re-resolving an already
-recorded abbreviation on every summary edit still let a ref moved to a crafted
-prefix collision rebind the old completion to a newly reserved head. The first
-binding of each abbreviation is now persisted per PR and reused without another
-call, and a corrupt persisted binding blocks. The regression tests fail against
-the prior implementations and pass with the corrections. No activation was
-performed.
+recorded abbreviation on every summary edit, and then that a changed abbreviation
+length escaping a spelling-keyed binding, still let a ref moved to a crafted
+prefix collision rebind the old completion to a newly reserved head. Recorded
+completions are now bound by kind and completion time to their recorded full SHA
+and never resolved again; a commit cell inconsistent with that SHA blocks. The
+regression tests fail against the prior implementations and pass with the
+corrections. No activation was performed.
