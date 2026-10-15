@@ -289,6 +289,10 @@ async function main() {
       // A short table leaves the slide empty, so the room below it carries what the confirmed threats add up to
       // (the outcome cards) and how every confirmed threat is handled (the strip). Five long titles leave no
       // room, and the slide then holds the table alone (Oct 14, 2026).
+      // The strip and its note name only what the evidence records for each confirmed threat: detected, triaged
+      // and classified. Investigation, impact assessment and closure are not recorded (the classification carries
+      // no status), so the last step says impact is confirmed only from reviewed investigation records, which
+      // holds with or without the context Impact record and never contradicts the caption (Oct 15, 2026).
       // The outcome cards stay within the evidence: the true positive count (OUT.1) and the rows (OUT.4) are
       // classifications regardless of status, so the cards never claim closure. The tactic count is of tactics
       // recorded on the alert, in the scope the model names (exfiltration or impact, or the wider flag scope for
@@ -302,7 +306,7 @@ async function main() {
         m.threats && m.threats.alerts > 0 ? [fmt(high), high === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(m.threats.alerts, 'confirmed alert', 'confirmed alerts')} grouped above, at the severity Sentinel recorded.`] : null,
         st.speed ? [st.speed.value, sentence(st.speed.label), st.speed.sub] : null
       ].filter(Boolean).slice(0, 4)
-      const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages every alert and confirms its severity'], ['3 Investigate', ' scope, attack stage and impact are assessed'], ['4 Resolve', ' closed with a documented disposition, and referred to your team where action is needed']]
+      const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages every alert and confirms its severity'], ['3 Classify', ' the SOC records a true-positive classification on the alert'], ['4 Impact', ' confirmed only from reviewed investigation records']]
       const STRIP_H = 0.85, cardTop = TOP + tableH + CAPTION_H + 0.2
       const roomWithStrip = BOTTOM - STRIP_H - 0.25 - cardTop, roomAlone = BOTTOM - cardTop
       const cardH = outcomeCards.length && roomWithStrip >= 1.1 ? Math.min(1.6, roomWithStrip) : outcomeCards.length && roomAlone >= 1.1 ? Math.min(1.6, roomAlone) : 0
@@ -324,11 +328,11 @@ async function main() {
       }
       s.addNotes(notesOf([
         m.threats ? 'These are alerts the SOC confirmed as true positive threats, grouped by alert title, highest severity first.' : '',
-        m.ticketed ? 'Each one opened a ticket with the managed security service and was closed by the SOC.' : '',
+        m.ticketed ? 'Each one opened a ticket with the managed security service.' : '',
         st.takeaways.threats,
         m.impactStatement,
         cardH ? outcomeCards.map(([value, label, sub]) => `${value} ${label.charAt(0).toLowerCase() + label.slice(1)}. ${sub}`) : '',
-        strip ? 'Every confirmed threat follows the same path: detections are correlated into one alert, the SOC triages it and confirms its severity, the investigation assesses scope, attack stage and impact, and the alert is closed with a documented disposition and referred to your team where action is needed.' : ''
+        strip ? 'Every confirmed threat follows the same path: detections are correlated into one alert, the SOC triages it and confirms its severity, and the SOC records a true-positive classification. Data exposure or business impact is confirmed only from reviewed investigation records, never from the classification or the tactics on the alert.' : ''
       ]))
     }
 
