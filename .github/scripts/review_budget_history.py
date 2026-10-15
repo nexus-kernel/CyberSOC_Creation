@@ -35,33 +35,62 @@ def date(value):
     return parsed.astimezone(timezone.utc)
 
 
-def resolve_commit(commit, repo, call=api, bindings=None):
-    """Bind an authenticated summary commit cell to exactly one full SHA.
+def canonical_time(value):
+    """Return the canonical UTC spelling of an accepted timestamp.
+
+    Equivalent timezone-offset and fractional-zero spellings of one instant share
+    one identity, so a re-rendered completion time cannot escape its binding.
+    """
+    return date(value).isoformat().replace('+00:00', 'Z')
+
+
+def recorded_completions(state):
+    """Map each recorded completion (kind, canonical time) to its full SHA.
+
+    Ledger records keep the spelling they were written with; only the lookup key
+    is canonical, so legacy rounds stay recognized without being rewritten. Two
+    records that canonicalize to one identity make lifetime history ambiguous,
+    so they block instead of letting insertion order pick a binding.
+    """
+    recorded = {}
+    for record in state['rounds'].values():
+        identity = (record['kind'], canonical_time(record['completed_at']))
+        if identity in recorded:
+            raise Blocked('Ambiguous recorded completion identity in history.')
+        recorded[identity] = record['head']
+    return recorded
+
+
+def resolve_commit(commit, repo, call=api):
+    """Resolve an authenticated summary commit cell to exactly one full SHA.
 
     GitHub's commits endpoint also accepts branch and tag names, so a ref named
-    like an abbreviation could resolve to an unrelated commit, and a ref moved
-    later to a crafted prefix collision could rebind an already recorded row.
-    The first resolution must be a full lowercase hexadecimal SHA that starts
-    with the abbreviation; it is persisted in ``bindings`` and reused for every
-    later summary revision without another call. A full SHA needs no call. API
-    failures, corrupt bindings and malformed responses fail closed.
+    like an abbreviation could resolve to an unrelated commit. The response must
+    be a full lowercase hexadecimal SHA that starts with the abbreviation; a full
+    SHA needs no call. API failures and malformed responses fail closed. Recorded
+    completions are never resolved again; see summary_rows.
     """
     if not isinstance(commit, str) or not re.fullmatch('[0-9a-f]{7,40}', commit):
         raise Blocked('Missing review commit.')
     if len(commit) == 40:
         return commit
-    bindings = {} if bindings is None else bindings
-    sha = bindings.get(commit)
-    if sha is None:
-        response = call(f'repos/{repo}/commits/{commit}')
-        sha = response.get('sha') if isinstance(response, dict) else None
+    response = call(f'repos/{repo}/commits/{commit}')
+    sha = response.get('sha') if isinstance(response, dict) else None
     if not isinstance(sha, str) or not re.fullmatch('[0-9a-f]{40}', sha) or not sha.startswith(commit):
         raise Blocked('Resolved commit does not match the authenticated review abbreviation.')
-    bindings[commit] = sha
     return sha
 
 
-def summary_rows(body, repo, call=api, bindings=None):
+def summary_rows(body, repo, call=api, recorded=None):
+    """Parse authenticated summary rows.
+
+    ``recorded`` maps (kind, canonical completion time) of every recorded
+    completion to its full SHA, as built by recorded_completions. Such a row is
+    bound to that SHA without resolution, whatever abbreviation length or
+    equivalent timestamp spelling is rendered, and a commit cell inconsistent
+    with it blocks, so a recorded completion can never be rebound.
+    """
+    recorded = {} if recorded is None else recorded
     allowed_prose = {
         SUMMARY, '## Codex Review Summary',
         'This comment shows the latest Codex review activity on this pull request.',
@@ -91,7 +120,6 @@ def summary_rows(body, repo, call=api, bindings=None):
         commit = re.fullmatch(r'`([0-9a-f]{7,40})`', cells[2])
         if not commit:
             raise Blocked('Missing review commit.')
-        sha = resolve_commit(commit[1], repo, call, bindings)
         completed = re.fullmatch(r'✅ \*\*Completed\*\* <relative-time datetime="([^"]+)">([^<]+)</relative-time>', cells[1])
         if not completed and not re.fullmatch(r'(?:[🔄⏳] )?\*\*(?:Running|Pending|Queued)\*\*', cells[1]):
             raise Blocked('Unclassified summary status/result content.')
@@ -100,10 +128,16 @@ def summary_rows(body, repo, call=api, bindings=None):
         stamp = re.search(r'datetime="([^"]+)"', cells[1])
         if completed and not stamp:
             raise Blocked('Missing review completion time.')
-        if stamp:
-            date(stamp[1])
+        completed_at = canonical_time(stamp[1]) if stamp else None
+        head = recorded.get((kinds[0], completed_at)) if completed else None
+        if head is None:
+            sha = resolve_commit(commit[1], repo, call)
+        elif head.startswith(commit[1]):
+            sha = head
+        else:
+            raise Blocked('Recorded completion rebound to another commit.')
         rows[kinds[0]] = {'head': sha, 'state': 'completed' if completed else 'running',
-                         'completed_at': stamp[1] if completed else None}
+                         'completed_at': completed_at if completed else None}
     if not rows:
         raise Blocked('Empty review summary.')
     return rows
@@ -172,8 +206,8 @@ class History:
                    for d in deliveries):
                 raise Blocked('Scoped activity precedes original opening evidence.')
             state = {'hook': hook, 'anchor': start, 'events': [], 'guids': {}, 'summaries': {},
-                     'commits': {}, 'rounds': {}, 'latest': {}, 'requests': {}, 'writes': {},
-                     'pending': None, 'created_at': pr['created_at']}
+                     'rounds': {}, 'latest': {}, 'requests': {}, 'writes': {}, 'pending': None,
+                     'created_at': pr['created_at']}
         else:
             state = deepcopy(previous)
             start = state['anchor']
@@ -218,16 +252,19 @@ class History:
                 raise Blocked('Missing, deleted or out-of-order summary revision.')
             if not body.startswith(SUMMARY):
                 raise Blocked('Summary marker removed.')
-            rows = summary_rows(body, self.repo, self.call, state.setdefault('commits', {}))
+            recorded = recorded_completions(state)
+            rows = summary_rows(body, self.repo, self.call, recorded)
             for kind, row in rows.items():
                 if row['state'] == 'completed':
-                    key = digest([kind, row['head'], row['completed_at']])
-                    if key not in state['rounds']:
+                    # Duplicate detection uses the canonical identity, never the
+                    # raw-text round key, so legacy records stay recognized.
+                    if (kind, row['completed_at']) not in recorded:
                         pending = state['pending']
                         if not pending or pending['kind'] != kind or pending['head'] != row['head']:
                             raise Blocked('Completion has no unique controlled request reservation.')
                         if pending.get('comment') is None:
                             raise Blocked('Request write not reconciled before completion.')
+                        key = digest([kind, row['head'], row['completed_at']])
                         state['rounds'][key] = dict(row, kind=kind, request=pending['nonce'])
                         state['pending'] = None
                     elif state['latest'].get(kind, {}).get('state') == 'running':

@@ -245,30 +245,125 @@ class HistoryTests(unittest.TestCase):
         with self.assertRaises(budget.Blocked):
             history.summary_rows(summary(commit=SHA[:7]), REPO, failing)
 
-    def test_recorded_abbreviation_binding_survives_summary_edits(self):
-        collision = SHA[:7] + 'c' * 33
+    def _record_abbreviated_completion(self):
         self.api.commits[SHA[:7]] = {'sha': SHA}
         self.state['pending'] = {'kind': 'Code Review', 'head': SHA, 'nonce': 'n', 'comment': 12}
         first = summary(commit=SHA[:7])
         self.api.events.append(event(2, body=first))
-        state = self.history.sync(pr(), self.state)
-        self.assertEqual(state['commits'], {SHA[:7]: SHA})
+        return first, self.history.sync(pr(), self.state)
+
+    def test_recorded_completion_is_not_resolved_again_after_summary_edits(self):
+        first, state = self._record_abbreviated_completion()
         # A same-named ref now points at a crafted prefix collision that holds the next reservation.
+        collision = SHA[:7] + 'c' * 33
         self.api.commits[SHA[:7]] = {'sha': collision}
         state['pending'] = {'kind': 'Code Review', 'head': collision, 'nonce': 'm', 'comment': 13}
-        edited = first + f'\n| Security Review | **Running** | `{SHA[:7]}` | Manual request |'
+        edited = first + f'\n| Security Review | **Running** | `{collision}` | Manual request |'
         self.api.events.append(event(3, action='edited', body=edited, old=first))
         state = self.history.sync(pr(), state)
         self.assertEqual([row['head'] for row in state['rounds'].values()], [SHA])
         self.assertEqual(state['pending']['head'], collision)
-        self.assertEqual(state['latest']['Security Review']['head'], SHA)
         self.assertEqual(self.api.calls.count(f'repos/{REPO}/commits/{SHA[:7]}'), 1)
 
-    def test_corrupt_persisted_binding_blocks_without_resolution(self):
-        for bound in ('c' * 40, SHA[:7], SHA.upper(), 7):
-            with self.subTest(bound=bound), self.assertRaises(budget.Blocked):
-                history.summary_rows(summary(commit=SHA[:7]), REPO, self.api, {SHA[:7]: bound})
-        self.assertFalse([call for call in self.api.calls if '/commits/' in call])
+    def test_recorded_completion_keeps_its_head_under_a_longer_abbreviation(self):
+        first, state = self._record_abbreviated_completion()
+        # The same completion is re-rendered with eight characters while a same-named ref
+        # targets a crafted eight-character collision that holds the next reservation.
+        collision = SHA[:8] + 'c' * 32
+        self.api.commits[SHA[:8]] = {'sha': collision}
+        state['pending'] = {'kind': 'Code Review', 'head': collision, 'nonce': 'm', 'comment': 13}
+        edited = first.replace(f'`{SHA[:7]}`', f'`{SHA[:8]}`')
+        self.api.events.append(event(3, action='edited', body=edited, old=first))
+        state = self.history.sync(pr(), state)
+        self.assertEqual([row['head'] for row in state['rounds'].values()], [SHA])
+        self.assertEqual(state['pending']['head'], collision)
+        self.assertNotIn(f'repos/{REPO}/commits/{SHA[:8]}', self.api.calls)
+        self.assertEqual(self.history.sync(pr(), state), state)
+
+    def test_recorded_completion_rendered_on_another_commit_blocks(self):
+        first, state = self._record_abbreviated_completion()
+        other = 'c' * 40
+        self.api.commits[other[:7]] = {'sha': other}
+        self.api.commits[SHA[:6] + 'c'] = {'sha': SHA[:6] + 'c' * 34}
+        for cell in (other[:7], other, SHA[:6] + 'c'):
+            with self.subTest(cell=cell):
+                edited = first.replace(f'`{SHA[:7]}`', f'`{cell}`')
+                self.api.events.append(event(3, action='edited', body=edited, old=first))
+                with self.assertRaises(budget.Blocked):
+                    self.history.sync(pr(), state)
+                self.api.events.pop()
+        self.assertEqual([call for call in self.api.calls if '/commits/' in call],
+                         [f'repos/{REPO}/commits/{SHA[:7]}'])
+
+    def _fresh_recorded(self):
+        api = DeliveryAPI()
+        api.commits[SHA[:7]] = {'sha': SHA}
+        h = history.History(REPO, 1, REQUESTER, api)
+        state = h.sync(pr(True))
+        state['pending'] = {'kind': 'Code Review', 'head': SHA, 'nonce': 'n', 'comment': 12}
+        first = summary(commit=SHA[:7])
+        api.events.append(event(2, body=first))
+        return api, h, first, h.sync(pr(), state)
+
+    def test_recorded_completion_identity_ignores_timestamp_spelling(self):
+        collision = SHA[:8] + 'c' * 32
+        for stamp in ('2026-10-14T02:00:00+00:00', '2026-10-14T02:00:00.000000Z',
+                      '2026-10-14T04:00:00+02:00', '2026-10-14T01:30:00-00:30'):
+            with self.subTest(stamp=stamp):
+                api, h, first, state = self._fresh_recorded()
+                state = json.loads(json.dumps(state, sort_keys=True))  # journal reload
+                # A same-named ref now targets a crafted collision under either spelling,
+                # a reservation for it is pending, and the authenticated edit re-renders
+                # the recorded completion with a longer abbreviation and another spelling.
+                api.commits[SHA[:7]] = api.commits[SHA[:8]] = {'sha': collision}
+                state['pending'] = {'kind': 'Code Review', 'head': collision, 'nonce': 'm', 'comment': 13}
+                api.events.append(event(3, action='edited', body=summary(stamp=stamp, commit=SHA[:8]), old=first))
+                state = h.sync(pr(), state)
+                self.assertEqual([r['head'] for r in state['rounds'].values()], [SHA])
+                self.assertEqual(state['pending']['head'], collision)
+                self.assertEqual(state['latest']['Code Review']['completed_at'], '2026-10-14T02:00:00Z')
+                self.assertEqual([c for c in api.calls if '/commits/' in c], [f'repos/{REPO}/commits/{SHA[:7]}'])
+
+    def test_legacy_round_spelling_is_recognized_after_reload(self):
+        api, h, first, state = self._fresh_recorded()
+        (key, legacy), = state['rounds'].items()
+        legacy['completed_at'] = '2026-10-14T02:00:00+00:00'  # ledger written before canonicalization
+        state = json.loads(json.dumps(state, sort_keys=True))
+        collision = SHA[:7] + 'c' * 33
+        api.commits[SHA[:7]] = {'sha': collision}
+        state['pending'] = {'kind': 'Code Review', 'head': collision, 'nonce': 'm', 'comment': 13}
+        for stamp in ('2026-10-14T02:00:00Z', '2026-10-14T02:00:00+00:00', '2026-10-14T02:00:00.000Z'):
+            with self.subTest(stamp=stamp):
+                api.events.append(event(3, action='edited', body=summary(stamp=stamp, commit=SHA[:7]), old=first))
+                synced = h.sync(pr(), state)
+                self.assertEqual(list(synced['rounds']), [key])
+                self.assertEqual(synced['rounds'][key], state['rounds'][key])
+                self.assertEqual(synced['pending']['head'], collision)
+                api.events.pop()
+        self.assertEqual([c for c in api.calls if '/commits/' in c], [f'repos/{REPO}/commits/{SHA[:7]}'])
+
+    def test_colliding_legacy_completion_identities_block(self):
+        api, h, first, state = self._fresh_recorded()
+        (key, legacy), = state['rounds'].items()
+        # A pre-canonicalization ledger recorded the same instant twice under different spellings.
+        twin = dict(legacy, completed_at='2026-10-14T02:00:00+00:00', head='c' * 40, request='other')
+        state['rounds'][history.digest(['Code Review', twin['head'], twin['completed_at']])] = twin
+        state = json.loads(json.dumps(state, sort_keys=True))
+        with self.assertRaises(budget.Blocked):
+            history.recorded_completions(state)
+        api.events.append(event(3, action='edited', body=summary(commit=SHA[:8]), old=first))
+        with self.assertRaises(budget.Blocked):
+            h.sync(pr(), state)
+        self.assertEqual([c for c in api.calls if '/commits/' in c], [f'repos/{REPO}/commits/{SHA[:7]}'])
+
+    def test_summary_rows_bind_equivalent_completion_spellings(self):
+        recorded = {('Code Review', '2026-10-14T02:00:00Z'): SHA}
+        for stamp in ('2026-10-14T02:00:00+00:00', '2026-10-14T02:00:00.000000Z', '2026-10-14T04:00:00+02:00'):
+            rows = history.summary_rows(summary(stamp=stamp, commit=SHA[:8]), REPO, self.api, recorded)
+            self.assertEqual(rows['Code Review'], {'head': SHA, 'state': 'completed', 'completed_at': '2026-10-14T02:00:00Z'})
+        with self.assertRaises(budget.Blocked):
+            history.summary_rows(summary(stamp='2026-10-14T02:00:00+00:00', commit='c' * 7), REPO, self.api, recorded)
+        self.assertFalse([c for c in self.api.calls if '/commits/' in c])
 
 
 class MemoryJournal:
