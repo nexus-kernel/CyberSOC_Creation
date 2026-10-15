@@ -410,12 +410,16 @@ async function main() {
     // cut at a sentence end, and the full text goes to the speaker notes. The sentences a pillar keeps (the
     // endpoint coverage and the EW.1-GAPS reconciliation when machines are not reporting) are never cut: the
     // other sentences go first, then the row takes the pillar's short headline, then it gives the measure column
-    // to the story, since the kept coverage sentence carries the measure's figure, and last it sets the story
-    // in 9 pt (Oct 15, 2026).
+    // to the story, since the kept coverage sentence carries the measure's figure, then it sets the story in 9 pt.
+    // When even that cannot hold them (EW.1-GAPS can name 16 reason and product groups), the row keeps its standard
+    // layout with the kept sentences that fit and a pointer, and the next slide carries the full reading, so
+    // nothing kept leaves the deck and no row runs into the next (Oct 15, 2026).
     if (m.pillars.length) {
       s = content('Operations and posture', 'Measured outcomes by pillar', st.takeaways.pillars)
       const prow = (BOTTOM - TOP) / m.pillars.length, nameW = 1.9, storyX = X0 + nameW + 0.2, storyW = 6.3, measX = storyX + storyW + 0.3, measW = CW - nameW - 0.2 - storyW - 0.3
       const sentences = t => clean(t).split(/(?<=\.)\s+(?=[A-Z0-9])/).filter(Boolean)
+      const POINTER = 'The full reading continues on the next slide.'
+      const continued = []
       m.pillars.forEach((p, i) => {
         const y = TOP + i * prow
         if (i) rule(s, X0, y - 0.04, CW, HEX.track, 0.75, `${p.name} outcome rule`)
@@ -436,7 +440,16 @@ async function main() {
         // The first layout that fits, the last one otherwise. Only a row with kept sentences has fallbacks.
         const layouts = [[p.headline, storyW, 10], ...(keep.size ? [[p.headlineShort, storyW, 10], [p.headline, wideW, 10], [p.headlineShort, wideW, 10], [p.headlineShort || p.headline, wideW, 9]] : [])]
           .filter(([head]) => head).map(([head, w, size]) => { const body = fit(head, w, size); return { head, w, size, body, fits: needs(head, w, size, body) <= room } })
-        const { head, w, size, body } = layouts.find(l => l.fits) || layouts[layouts.length - 1]
+        let { head, w, size, body } = layouts.find(l => l.fits) || layouts[layouts.length - 1]
+        if (keep.size && !layouts.some(l => l.fits)) {
+          // The kept sentences in narrative order, up to the first that would not fit beside the pointer. The first
+          // sentence always stays, as in every other row.
+          head = p.headlineShort || p.headline; w = storyW; size = 10
+          const kept = sentences(p.narrative).filter((t, k) => k === 0 || keep.has(t)), shown = kept.slice(0, 1)
+          for (const t of kept.slice(1)) { if (needs(head, w, size, [...shown, t, POINTER].join(' ')) > room) break; shown.push(t) }
+          body = [...shown, POINTER].join(' ')
+          continued.push(p)
+        }
         text(s, [{ text: head, options: { fontSize: 11, bold: true, color: C.text2, breakLine: true } }, { text: body, options: { fontSize: size, color: C.text1, paraSpaceBefore: 3 } }], { x: storyX, y: y + 0.06, w, h: prow - 0.12, objectName: `${p.name} outcome story` })
         if (w > storyW) return
         if (p.measure) {
@@ -447,6 +460,21 @@ async function main() {
         if (p.callout) text(s, [{ text: p.callout.value, options: { fontSize: 14, bold: true, color: C.accent2 } }, { text: `  ${p.callout.label}`, options: { fontSize: 10, color: C.accent6 } }], { x: measX, y: y + (p.measure ? 0.64 : 0.08), w: measW, h: 0.4, valign: 'middle', objectName: `${p.name} callout` })
       })
       s.addNotes(notesOf(['Each pillar leads with the statement its strongest measure earned. The pillars that read lower need change inside the environment, and each of those items is sequenced on the roadmap.', m.pillars.map(p => `${p.name}. ${p.headline}. ${p.narrative} Evidence ${p.source}`)]))
+      // 5c. The continuation: each pillar the slide could not hold in full, with its headline and whole narrative.
+      if (continued.length) {
+        s = content('Operations and posture', 'Measured outcomes by pillar, continued', `${list(continued.map(p => p.name))}: the full reading behind the figure`)
+        let cy = TOP
+        for (const p of continued) {
+          // The story takes the lines its text needs, with the source line under it, all inside the card.
+          const cw = CW - 0.8, storyH = lines(p.name, cw, 15, true) * 0.25 + lines(p.headline, cw, 13, true) * 0.22 + lines(p.narrative, cw, 12) * 0.2 + 0.15
+          const h = Math.min(BOTTOM - cy, storyH + 0.75)
+          card(s, X0, cy, CW, h, `${p.name} continued card`)
+          text(s, [{ text: p.name, options: { fontSize: 15, bold: true, color: C.text2, breakLine: true } }, { text: p.headline, options: { fontSize: 13, bold: true, color: C.text2, breakLine: true, paraSpaceBefore: 4 } }, { text: p.narrative, options: { fontSize: 12, color: C.text1, paraSpaceBefore: 6 } }], { x: X0 + 0.4, y: cy + 0.2, w: cw, h: h - 0.75, objectName: `${p.name} continued story` })
+          text(s, `Evidence ${p.source}`, { x: X0 + 0.4, y: cy + h - 0.45, w: cw, h: 0.25, fontSize: 9, color: C.accent6, objectName: `${p.name} continued source` })
+          cy += h + 0.2
+        }
+        s.addNotes(notesOf(['The previous slide could not hold the full reading for this pillar, so it is set out here in full.', continued.map(p => `${p.name}. ${p.headline}. ${p.narrative}`)]))
+      }
     }
   }
 
