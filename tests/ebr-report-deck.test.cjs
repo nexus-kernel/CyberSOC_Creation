@@ -35,6 +35,22 @@ function deck(depth, threats) {
   execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
   return { data, out }
 }
+// The stock control labels all fit one line of the scope appendix, so a wrapped entry needs a label past the wrap
+// width. The builder is copied beside a model with one label lengthened, the way a future label change would reach
+// this layout, and the copy is run.
+const LONG_LABEL = 'Location-based sign-in access controls enforced through Conditional Access'
+function wrappedDeck(depth) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), copy = path.join(dir, 'report')
+  fs.cpSync(path.join(__dirname, '..', 'report'), copy, { recursive: true })
+  const model = path.join(copy, 'report-model.js'), source = fs.readFileSync(model, 'utf8')
+  assert.equal(source.split(`'${LONG_LABEL}'`).length, 2, 'the lengthened label is in the model once')
+  fs.writeFileSync(model, source.replace(`'${LONG_LABEL}'`, `'${LONG_LABEL} policies'`))
+  const data = pack(depth), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  fs.writeFileSync(dataFile, JSON.stringify(data))
+  const NODE_PATH = [path.join(__dirname, '..', 'node_modules'), process.env.NODE_PATH].filter(Boolean).join(path.delimiter)
+  execFileSync(process.execPath, [path.join(copy, 'build-report-deck.cjs'), dataFile, out], { env: { ...process.env, NODE_PATH } })
+  return { data, out, label: `${LONG_LABEL} policies` }
+}
 async function read(file) {
   const zip = await JSZip.loadAsync(fs.readFileSync(file))
   const texts = async re => Promise.all(Object.keys(zip.files).filter(n => re.test(n)).sort().map(async n => (await zip.file(n).async('string')).match(/<a:t>[^<]*<\/a:t>/g)?.map(t => t.slice(5, -6)).join(' ') || ''))
@@ -59,6 +75,31 @@ const examples = [
 ]
 // Shape positions in the slide XML, in EMU. The content area ends at BOTTOM, 7.0 in.
 const EMU = 914400, BOTTOM_EMU = 7.0 * EMU
+// The scope appendix slides: every not-graded entry box, chip and rule with its position, the continuation marker
+// when the slide has one, and the slide text. The bottom 0.35 in of every column is kept for the marker.
+const BAND_EMU = BOTTOM_EMU - Math.round(0.35 * EMU)
+async function scopeSlides(out) {
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  const xmls = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).filter(x => x.includes('name="Ungathered'))
+  return xmls.map(xml => {
+    const shapes = [...xml.matchAll(/<p:cNvPr id="\d+" name="([^"]*)"(?:(?!<p:cNvPr)[\s\S])*?<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"\/>/g)].map(s => ({ name: s[1], y: Number(s[2]), h: Number(s[3]), bottom: Number(s[2]) + Number(s[3]) }))
+    const entries = shapes.filter(s => /^Ungathered(?: page \d+ (?:left|right))? \d+(?: chip(?: text)?| rule)?$/.test(s.name))
+    return { entries, boxes: entries.filter(s => /\d$/.test(s.name)), marker: shapes.find(s => / continued$/.test(s.name)), text: (xml.match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => t.slice(5, -6)).join(' ').replace(/\u00A0/g, ' ') }
+  })
+}
+// No entry reaches into the band, the marker sits below every entry on a slide that continues, and every ungraded
+// control has one entry box.
+function assertClearOfMarker(slides, count) {
+  for (const { entries, marker } of slides) {
+    assert.ok(entries.length, 'the slide has not-graded entries')
+    for (const s of entries) assert.ok(s.bottom <= BAND_EMU + 1, `"${s.name}" ends at ${(s.bottom / EMU).toFixed(3)} in, inside the bottom band`)
+    if (marker) {
+      assert.ok(marker.bottom <= BOTTOM_EMU + 1, 'the marker ends above BOTTOM')
+      for (const s of entries) assert.ok(s.bottom <= marker.y, `"${s.name}" runs under the continuation marker`)
+    }
+  }
+  assert.equal(slides.reduce((n, s) => n + s.boxes.length, 0), count, 'one entry box per ungraded control')
+}
 async function threatsSlide(out) {
   const zip = await JSZip.loadAsync(fs.readFileSync(out))
   const xmls = await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))
@@ -127,26 +168,22 @@ test('the scope appendix lists every ungraded control, continuing onto further s
   for (const c of ungraded) assert.ok(all.includes(c.label), `${c.label} is listed`)
   assert.ok(/Continued on the next slide, \d+ more controls\./.test(all))
   assert.ok(!scope[scope.length - 1].includes('Continued on the next slide'), 'the last slide does not promise another')
-  // The bottom 0.35 in of every column is kept for the continuation marker: no entry box, chip or rule reaches
-  // into that band, so the marker never overprints a wrapped last entry.
-  const BAND_EMU = BOTTOM_EMU - Math.round(0.35 * EMU)
-  const zip = await JSZip.loadAsync(fs.readFileSync(out))
-  const xmls = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).filter(x => x.includes('name="Ungathered'))
-  assert.equal(xmls.length, scope.length, 'every scope slide carries the not-graded column')
-  let boxes = 0
-  for (const xml of xmls) {
-    const shapes = [...xml.matchAll(/<p:cNvPr id="\d+" name="([^"]*)"(?:(?!<p:cNvPr)[\s\S])*?<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"\/>/g)].map(s => ({ name: s[1], y: Number(s[2]), bottom: Number(s[2]) + Number(s[3]) }))
-    const entries = shapes.filter(s => /^Ungathered(?: page \d+ (?:left|right))? \d+(?: chip(?: text)?| rule)?$/.test(s.name))
-    assert.ok(entries.length, 'the slide has not-graded entries')
-    boxes += entries.filter(s => /\d$/.test(s.name)).length
-    for (const s of entries) assert.ok(s.bottom <= BAND_EMU + 1, `"${s.name}" ends at ${(s.bottom / EMU).toFixed(3)} in, inside the bottom band`)
-    const marker = shapes.find(s => / continued$/.test(s.name))
-    if (marker) {
-      assert.ok(marker.bottom <= BOTTOM_EMU + 1, 'the marker ends above BOTTOM')
-      for (const s of entries) assert.ok(s.bottom <= marker.y, `"${s.name}" runs under the continuation marker`)
-    }
-  }
-  assert.equal(boxes, ungraded.length, 'one entry box per ungraded control')
+  // With one-line entries the columns end at 6.575 in, clear of the marker at 6.70 in either way.
+  const geometry = await scopeSlides(out)
+  assert.equal(geometry.length, scope.length, 'every scope slide carries the not-graded column')
+  assertClearOfMarker(geometry, ungraded.length)
+})
+test('a wrapped last entry moves on to the next column instead of running under the continuation marker', async () => {
+  // One label lengthened past the wrap width makes a two-line entry. Filling to BOTTOM, a column of eight one-line
+  // entries and that entry ended at 6.76 in, under the marker. The band stops the column first and the entry moves on.
+  const { data, out, label } = wrappedDeck('balanced')
+  const ungraded = build(data).controls.filter(c => c.measured === false)
+  const slides = await scopeSlides(out)
+  const home = slides.find(s => s.text.includes(label))
+  assert.ok(home, 'the lengthened label is listed')
+  assert.ok(home.boxes.some(b => b.h >= Math.round(0.6 * EMU)), 'the lengthened label gets a two-line entry box')
+  assert.ok(home.marker, 'the two-line entry lands on a slide that continues, where the old fill ran it under the marker')
+  assertClearOfMarker(slides, ungraded.length)
 })
 test('a register detail that wraps gets a row tall enough for every line', async () => {
   const p = pack('balanced')
