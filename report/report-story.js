@@ -146,9 +146,17 @@
     // on the operations slide, where the chart explains it.
     const kpis = []
     if (m.alerts) kpis.push({ value: fmt(m.alerts.triaged), label: 'Alerts triaged', sub: m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} resolved by automation rules` : m.period.label, area: 'alerts' })
-    // Tactic-qualified: the count is of tactics recorded on the alert (the model names the scope), never a verified outcome.
-    if (m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0) kpis.push({ value: `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, label: `True positives that reached ${m.alerts.flaggedScope}`, sub: m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`, area: 'threat' })
-    else if (m.alerts && m.alerts.truePositives !== null) kpis.push({ value: fmt(m.alerts.truePositives), label: 'Confirmed threats investigated', sub: 'Each closed to a documented disposition', area: 'threat' })
+    // Tactic-qualified: the count is of tactics recorded on the alert (the model names the scope and the phrase),
+    // never a verified outcome, so the label says carried, never reached. A true positive is a classification the
+    // SOC recorded, so the sub-line says classified, never investigated or closed. A confirmed impact from the
+    // reviewed context record (m.impact) withdraws the win and the tactic line, and the takeaways carry the
+    // reviewed determination instead (Oct 15, 2026).
+    const a = m.alerts
+    const tpWord = n => n === 1 ? 'confirmed threat' : 'confirmed threats'
+    const classified = n => n === 1 ? 'Classified as a true positive by the SOC' : `${n === 2 ? 'Both' : 'All'} classified as true positives by the SOC`
+    const impactConfirmed = !!(m.impact && m.impact.confirmed > 0)
+    if (a && a.flaggedKnown && a.truePositives > 0) kpis.push({ value: `${fmt(a.flagged)} of ${fmt(a.truePositives)}`, label: `True positives whose alerts carried ${a.tacticPhrase}`, sub: classified(a.truePositives), area: 'threat' })
+    else if (a && a.truePositives !== null) kpis.push({ value: fmt(a.truePositives), label: 'Confirmed threats', sub: 'Alerts the SOC classified as true positives', area: 'threat' })
     if (s.speed) kpis.push({ value: s.speed.value, label: sentence(s.speed.label), sub: s.speed.kpiSub, area: 'response' })
     if (score) kpis.push({ value: pctText(score.value), label: scoreName, sub: gain ? `Up ${fmt(gain.points)} points since ${gain.since}, from ${pctText(gain.from)}` : `Read ${s.readShort}`, area: 'posture' })
     if (kpis.length < 4 && s.foundational.measured) kpis.push({ value: `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)}`, label: 'Foundational controls enforced', sub: 'Across five pillars', area: 'controls' })
@@ -157,7 +165,7 @@
     // Wins, at most one per area, up to six. A verified configuration reads In force with its own label.
     const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null && (c.boolean || c.total >= MIN_SAMPLE) ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || sub), source: c.source } : null }
     const candidates = [
-      m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? { area: 'threat', eyebrow: 'Threat outcomes', value: `0 of ${fmt(m.alerts.truePositives)}`, label: `${m.alerts.truePositives === 1 ? 'confirmed threat' : 'confirmed threats'} reached ${m.alerts.flaggedScope}`, sub: `${m.alerts.truePositives === 1 ? 'Investigated and closed' : `${m.alerts.truePositives === 2 ? 'Both' : 'All'} investigated and closed`} by the SOC ${s.periodPhrase}.`, source: m.alerts.source } : null,
+      a && a.flaggedKnown && a.truePositives > 0 && a.flagged === 0 && !impactConfirmed ? { area: 'threat', eyebrow: 'Confirmed threats', value: `0 of ${fmt(a.truePositives)}`, label: `${tpWord(a.truePositives)} carried ${a.tacticPhrase}`, sub: `${classified(a.truePositives)} ${s.periodPhrase}.`, source: a.source } : null,
       s.speed ? { area: 'response', eyebrow: 'Response speed', value: s.speed.value, label: s.speed.label, sub: s.speed.sub, source: s.speed.row.source } : null,
       gain ? { area: 'posture', eyebrow: 'Posture', value: `+${fmt(gain.points)} pts`, label: `${scoreName}, ${pctText(gain.from)} in ${gain.since} to ${pctText(score.value)}`, sub: `Calculated by Microsoft, read ${score.read || s.readShort}.`, source: score.source } : null,
       winAt(/^Multifactor authentication required at sign-in/, 'identity', 'users challenged for MFA at sign-in', 'Members who signed in over the last 30 days.', 'multifactor authentication required at sign-in by Conditional Access policy', 'An enabled policy for all users on every application.'),
@@ -276,13 +284,19 @@
     })
 
     // Takeaway subtitles, one sentence built from each slide's lead metric.
-    const threatLine = m.alerts && m.alerts.flaggedKnown && m.alerts.truePositives > 0 && m.alerts.flagged === 0 ? (m.alerts.truePositives === 1 ? `The confirmed threat did not reach ${m.alerts.flaggedScope}` : `${m.alerts.truePositives === 2 ? 'Neither' : 'None of the'} confirmed ${m.alerts.truePositives === 2 ? 'threat' : 'threats'} reached ${m.alerts.flaggedScope}`) : null
-    const parts = [threatLine, gain ? `secure score rose ${fmt(gain.points)} points` : null, !threatLine && s.foundational.measured && s.foundational.enforced === s.foundational.measured ? 'every measured foundational control is enforced' : null].filter(Boolean)
+    // The tactic line names a tactic recorded on the alert, never an outcome. The impact line exists only when the
+    // context file carries a reviewed determination, and it leads the summary when it does.
+    const threatLine = a && a.flaggedKnown && a.truePositives > 0 && a.flagged === 0 && !impactConfirmed ? (a.truePositives === 1 ? `The confirmed threat did not carry ${a.tacticPhrase}` : `${a.truePositives === 2 ? 'Neither confirmed threat' : 'None of the confirmed threats'} carried ${a.tacticPhrase}`) : null
+    const impactLine = m.impact && a && a.truePositives > 0 ? (m.impact.confirmed === 0 ? 'the reviewed investigation records confirm no data exposure or business impact' : `the reviewed investigation records confirm data exposure or business impact from ${a.truePositives === 1 ? 'the confirmed threat' : `${fmt(m.impact.confirmed)} of the ${fmt(a.truePositives)} confirmed threats`}`) : null
+    const lead = impactLine || threatLine
+    const parts = [lead, gain ? `secure score rose ${fmt(gain.points)} points` : null, !lead && s.foundational.measured && s.foundational.enforced === s.foundational.measured ? 'every measured foundational control is enforced' : null].filter(Boolean)
     s.takeaways = {
       summary: parts.length ? `${sentence(parts.join(', and '))}.` : m.alerts ? `${fmt(m.alerts.triaged)} alerts triaged ${s.periodPhrase}.` : 'Readings are completed in the review.',
       wins: `${sentence(word(s.wins.length))} ${s.wins.length === 1 ? 'outcome' : 'outcomes'} ${m.period.valid ? `from ${m.period.label}` : ''}, one from each part of the service, each traced to collected evidence.`.replace(/\s+,/, ','),
       operations: m.alerts ? `${fmt(m.alerts.triaged)} alerts triaged ${s.periodPhrase}.${s.speed ? ` ${s.speed.line}` : ''}` : 'Alert readings are completed in the review.',
-      threats: m.threats ? `${m.alerts && m.alerts.truePositives ? `${sentence(plural(m.alerts.truePositives, 'confirmed threat was', 'confirmed threats were'))} investigated and closed.` : 'Confirmed threats were investigated and closed.'}${threatLine ? ` ${sentence(threatLine)}.` : ''}` : '',
+      // The threats slide is built whenever the pack has true positives, with or without an examples table, so
+      // the takeaway needs no examples either.
+      threats: (a && a.truePositives > 0) || m.threats ? `${a && a.truePositives ? `The SOC classified ${plural(a.truePositives, 'alert', 'alerts')} as ${a.truePositives === 1 ? 'a true positive' : 'true positives'} ${s.periodPhrase}.` : 'Alerts were classified as true positives by the SOC.'}${threatLine ? ` ${sentence(threatLine)}.` : ''}${impactLine ? ` ${sentence(impactLine)}.` : ''}` : '',
       posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced.${belowCount ? ` ${sentence(word(belowCount))} ${belowCount === 1 ? 'reads' : 'read'} below the baseline${s.licensed.length ? `, ${s.driftControls.length ? `${word(s.driftControls.length)} first on the roadmap and ` : ''}${word(s.licensed.length)} waiting on licensing` : ` and ${belowCount === 1 ? 'is' : 'are'} first on the roadmap`}.` : ' None reads below the baseline.'}` : 'Control readings are completed in the review.',
       roadmap: 'Every control below enforced is sequenced into three horizons by risk and by what each needs from your team.',
       methods: pw ? `Microsoft retires text message and voice sign-in on ${RETIREMENT.label}. ${plural(pw.retiring, 'user still relies', 'users still rely')} on it.` : '',

@@ -69,6 +69,8 @@ test('the deck follows the report depth', async () => {
   const detailed = await read(deck('detailed').out)
   assert.ok(detailed.slides.some(s => /Tenant and cloud security posture/.test(s)), 'posture is detailed-only')
 })
+// The impact statement every surface prints until the context file carries a reviewed Impact record.
+const GATE = 'Based on the tactics Sentinel recorded on the alerts, none of the confirmed threats carried an exfiltration or impact tactic. Additional investigation evidence is required to confirm whether any data exposure or business impact occurred.'
 const examples = [
   { Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Severity: 'High', Tactics: 'CommandAndControl', Created: '2026-08-18', ExfilOrImpactTactic: false },
   { Threat: 'Password spray attack against Microsoft Entra ID application', Severity: 'Medium', Tactics: 'CredentialAccess', Created: '2026-07-28', ExfilOrImpactTactic: false }
@@ -233,7 +235,7 @@ test('chart workbooks carry valid table ranges so Keynote and Quick Look draw th
     }
   }
 })
-test('confirmed threats get their own slide at balanced and detailed depth, only when there are examples', async () => {
+test('confirmed threats get their own slide at balanced and detailed depth, with the table only when there are examples', async () => {
   const isThreats = s => s.includes('Confirmed threats') && s.includes('Log4Shell')
   const has = async (depth, rows) => (await read(deck(depth, rows).out)).slides.some(isThreats)
   const { data, out } = deck('balanced', examples)
@@ -243,7 +245,7 @@ test('confirmed threats get their own slide at balanced and detailed depth, only
   assert.equal(await has('detailed', examples), true)
   assert.equal(await has('brief', examples), false)
   const plain = (await read(deck('balanced').out)).slides
-  assert.ok(!plain.some(s => /Attack stage/.test(s)), 'no examples, no slide')
+  assert.ok(!plain.some(s => /Attack stage/.test(s)), 'no examples, no table')
   assert.ok(/Command and control/.test(slide) && /August\u00A02026/.test(slide) && /July\u00A02026/.test(slide), 'stage and month, with the year bound to the month')
   const m = build(data)
   for (const n of [...m.presenter, ...m.review]) assert.ok(!notes.join(' ').includes(n.text), `speaker notes carry "${n.title}"`)
@@ -251,10 +253,11 @@ test('confirmed threats get their own slide at balanced and detailed depth, only
 test('the more line counts the alerts and groups past the five examples', async () => {
   const group = (name, severity, n) => Array.from({ length: n }, (_, i) => ({ Threat: `${name} detected`, Severity: severity, Tactics: 'Execution', Created: `2026-08-1${i}`, ExfilOrImpactTactic: false }))
   const five = ['Alpha', 'Bravo', 'Charlie', 'Delta', 'Echo'].flatMap(n => group(n, 'High', 1))
-  const caption = async rows => (await threatsSlide(deck('balanced', rows).out)).text.find(t => t.endsWith('grouped by alert title.'))
-  assert.equal(await caption([...five, ...group('Foxtrot', 'Low', 2), ...group('Golf', 'Low', 1)]), 'And 3 more confirmed alerts in 2 further groups. Confirmed as true positives by the SOC and closed, grouped by alert title.')
-  assert.equal(await caption([...five, ...group('Foxtrot', 'Low', 1)]), 'And 1 more confirmed alert in 1 further group. Confirmed as true positives by the SOC and closed, grouped by alert title.')
-  assert.equal(await caption(five), 'Confirmed as true positives by the SOC and closed, grouped by alert title.')
+  // Without a reviewed impact record the caption ends with the tactic reading and the request for more evidence.
+  const caption = async rows => (await threatsSlide(deck('balanced', rows).out)).text.find(t => t.includes('grouped by alert title.'))
+  assert.equal(await caption([...five, ...group('Foxtrot', 'Low', 2), ...group('Golf', 'Low', 1)]), `And 3 more confirmed alerts in 2 further groups. Classified as true positives by the SOC, grouped by alert title. ${GATE}`)
+  assert.equal(await caption([...five, ...group('Foxtrot', 'Low', 1)]), `And 1 more confirmed alert in 1 further group. Classified as true positives by the SOC, grouped by alert title. ${GATE}`)
+  assert.equal(await caption(five), `Classified as true positives by the SOC, grouped by alert title. ${GATE}`)
 })
 test('five long threat titles still end above the slide bottom, at 12 pt or cut with three dots', async () => {
   const subjects = ['Credential', 'Mailbox', 'Endpoint', 'Storage', 'Directory']
@@ -319,28 +322,73 @@ test('a short confirmed threats table is followed by the outcome cards and the h
   const { data, out } = deck('balanced', examples)
   const { slides, notes } = await read(out)
   const slide = slides.find(s => s.startsWith('Confirmed threats') && s.includes('Log4Shell'))
-  for (const t of ['Confirmed threats', 'Alerts the SOC classified as true positives from', 'Reached exfiltration or impact', 'None carried an exfiltration or impact tactic.', '1 High severity alert', 'Of the 2 confirmed alerts grouped above, at the severity Sentinel recorded.', 'EVERY CONFIRMED THREAT', '1 Detect', '2 Triage', '3 Investigate', '4 Resolve']) assert.ok(slide.includes(t), t)
+  for (const t of ['Confirmed threats', 'Alerts the SOC classified as true positives from', 'Carried an exfiltration or impact tactic', 'A tactic Sentinel recorded on the alert, not a verified outcome.', '1 High severity alert', 'Of the 2 confirmed alerts grouped above, at the severity Sentinel recorded.', 'EVERY CONFIRMED THREAT', '1 Detect', '2 Triage', '3 Investigate', '4 Resolve', GATE]) assert.ok(slide.includes(t), t)
   assert.ok(!/\bcontain(ed|ment)\b|resulted in|notification process/i.test(slide), 'containment, verified outcomes and notifications are never claimed')
+  // A tactic recorded on the alert is never an outcome, and without a reviewed impact record no surface rules impact out.
+  assert.ok(!/\breached\b|no impact|did not reach/i.test([...slides, ...notes].join(' ')), 'an outcome verb or an unrecorded impact determination reached the deck')
+  assert.ok(!/investigated/i.test(slide + slides.find(s => s.startsWith('Executive summary'))), 'a true positive never reads as investigated')
   // The true positive count and the rows carry no status, so the cards never say the alerts were closed.
   const between = (a, b) => slide.slice(slide.indexOf(a), slide.indexOf(b))
-  assert.ok(!/\bclosed\b/.test(between('Alerts the SOC classified', 'Reached exfiltration or impact')) && !/\bclosed\b/.test(between('High severity alert', 'Median time to close')), 'no true positive card claims closure')
+  assert.ok(!/\bclosed\b/.test(between('Alerts the SOC classified', 'Carried an exfiltration or impact tactic')) && !/\bclosed\b/.test(between('High severity alert', 'Median time to close')), 'no true positive card claims closure')
   // One High and nine Low alerts under one title: the group reads High, the card counts one High alert of ten.
   const mixed = [{ Threat: 'Suspicious sign-in detected', Severity: 'High', Tactics: 'InitialAccess,Exfiltration', Created: '2026-08-01', ExfilOrImpactTactic: true }, ...Array.from({ length: 9 }, (_, i) => ({ Threat: 'Suspicious sign-in detected', Severity: 'Low', Tactics: 'InitialAccess', Created: `2026-08-0${i + 1}`, ExfilOrImpactTactic: false }))]
   const mixedSlide = (await read(deck('balanced', mixed).out)).slides.find(s => s.startsWith('Confirmed threats')).replace(/\u00A0/g, ' ')
   assert.ok(mixedSlide.includes('1 High severity alert') && mixedSlide.includes('Of the 10 confirmed alerts grouped above') && !mixedSlide.includes('10 High severity alerts'), mixedSlide.match(/.{0,20}High severity alert.{0,40}/)?.[0])
-  assert.ok(mixedSlide.includes('1 of 3') && mixedSlide.includes('1 alert carried an exfiltration or impact tactic in Sentinel.'), 'a flagged alert reads as a tactic, not an outcome')
+  assert.ok(mixedSlide.includes('1 of 3') && mixedSlide.includes('1 alert carried an exfiltration or impact tactic in Sentinel, not a verified outcome.'), 'a flagged alert reads as a tactic, not an outcome')
+  assert.ok(mixedSlide.includes('Based on the tactics Sentinel recorded on the alerts, 1 of the 3 confirmed threats carried an exfiltration or impact tactic. Additional investigation evidence'), mixedSlide.match(/Based on.{0,120}/)?.[0])
   // Collection-only true positives: the collector flags them, but no tactic is Exfiltration or Impact, so the card reads none.
   const collection = Array.from({ length: 3 }, (_, i) => ({ Threat: 'Suspicious inbox rule created', Severity: 'High', Tactics: 'Collection', Created: `2026-08-0${i + 1}`, ExfilOrImpactTactic: true }))
   const collectionSlide = (await read(deck('balanced', collection).out)).slides.find(s => s.startsWith('Confirmed threats')).replace(/\u00A0/g, ' ')
-  assert.ok(collectionSlide.includes('0 of 3') && collectionSlide.includes('Reached exfiltration or impact') && collectionSlide.includes('None carried an exfiltration or impact tactic.'), collectionSlide.match(/.{0,10}of 3.{0,80}/)?.[0])
+  assert.ok(collectionSlide.includes('0 of 3') && collectionSlide.includes('Carried an exfiltration or impact tactic') && collectionSlide.includes('A tactic Sentinel recorded on the alert, not a verified outcome.'), collectionSlide.match(/.{0,10}of 3.{0,80}/)?.[0])
   // Rows without tactics (an older builder) keep the flag count and name the wider scope.
   const legacy = collection.map(({ Tactics, ...r }) => r)
   const legacyDeck = await read(deck('balanced', legacy).out)
   const legacySummary = legacyDeck.slides.find(s => s.startsWith('Executive summary')).replace(/\u00A0/g, ' ')
-  assert.ok(legacySummary.includes('3 of 3') && legacySummary.includes('True positives that reached collection, exfiltration or impact') && legacySummary.includes('Collection, exfiltration or impact'), legacySummary.match(/.{0,20}collection.{0,60}/i)?.[0])
+  assert.ok(legacySummary.includes('3 of 3') && legacySummary.includes('True positives whose alerts carried a collection, exfiltration or impact tactic') && legacySummary.includes('Collection, exfiltration or impact tactic'), legacySummary.match(/.{0,20}collection.{0,60}/i)?.[0])
   assert.ok(!legacyDeck.slides.some(s => /Attack stage/.test(s)), 'rows without tactics have no examples table')
   const m = build(data)
   for (const n of [...m.presenter, ...m.review]) assert.ok(!notes.join(' ').includes(n.text), `speaker notes carry "${n.title}"`)
+})
+test('a reviewed impact record in the context file is the only thing that prints an impact determination', async () => {
+  const record = (confirmed, extra = {}) => ({ Confirmed: confirmed, Reviewed: '2026-10-10', Reference: 'CHG-123', WindowStart: '2025-11-01', WindowEnd: '2026-09-30', ...extra })
+  const withContext = async (context, out1 = null, rows = examples) => {
+    const p = pack('balanced', rows)
+    p.context = context
+    if (out1) p.results['OUT.1'] = [out1]
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+    fs.writeFileSync(dataFile, JSON.stringify(p))
+    execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+    const { slides, notes } = await read(out)
+    const plain = s => s.replace(/\u00A0/g, ' ')
+    return { all: plain([...slides, ...notes].join(' ')), summary: plain(slides.find(s => s.startsWith('Executive summary'))), threats: plain(slides.find(s => s.startsWith('Confirmed threats'))) }
+  }
+  const none = await withContext({ ClientName: 'Example', TenantId: 't' })
+  assert.ok(none.threats.includes(GATE) && !/Confirmed impact, reviewed/.test(none.summary), 'without a record the caption asks for more evidence and the summary has no impact row')
+  assert.ok(!/\breached\b|no impact|did not reach|data exposure or business impact confirmed/i.test(none.all), none.all.match(/.{0,40}(reached|no impact|did not reach).{0,40}/i)?.[0])
+  const clear = await withContext({ ClientName: 'Example', TenantId: 't', Impact: record(0) })
+  assert.ok(clear.threats.includes('The reviewed investigation records confirm no data exposure or business impact from the 3 confirmed threats (CHG-123, reviewed Oct 10, 2026).') && !clear.threats.includes(GATE), clear.threats.match(/.{0,40}investigation records.{0,120}/)?.[0])
+  assert.ok(/Confirmed impact, reviewed\s+0/.test(clear.summary) && /The reviewed investigation records confirm no data exposure or business impact\./.test(clear.summary), clear.summary.match(/.{0,60}impact.{0,60}/)?.[0])
+  const hit = await withContext({ ClientName: 'Example', TenantId: 't', Impact: record(1) })
+  assert.ok(hit.threats.includes('confirm data exposure or business impact from 1 of the 3 confirmed threats (CHG-123, reviewed Oct 10, 2026).'), 'a confirmed impact is stated, never softened')
+  assert.ok(!/confirmed threats carried an exfiltration or impact tactic\s+All classified/.test(hit.summary), 'a confirmed impact withdraws the tactic win')
+  const malformed = await withContext({ ClientName: 'Example', TenantId: 't', Impact: { Confirmed: 0 } })
+  assert.ok(malformed.threats.includes(GATE), 'a record without a review date and reference prints nothing')
+  // A context file reused from an earlier period is rejected, so its determination never covers later true positives.
+  const stale = await withContext({ ClientName: 'Example', TenantId: 't', Impact: record(0, { Reviewed: '2026-06-30', Reference: 'Q2-review', WindowStart: '2026-04-01', WindowEnd: '2026-06-30' }) })
+  assert.ok(stale.threats.includes(GATE) && !/investigation records confirm/.test(stale.all), 'a prior-period record prints nothing')
+  // At the 90 percent closure boundary the resolved share earns a tier row, and the reviewed impact still sits in the
+  // three rows the band shows.
+  const boundary = await withContext({ ClientName: 'Example', TenantId: 't', Impact: record(1) }, { Raised: 100, Closed: 90, Open: 10, TruePositive: 3, ClosedUnclassified: 5 })
+  assert.ok(/Confirmed impact, reviewed\s+1/.test(boundary.summary), boundary.summary.match(/TIER 1.{0,160}/)?.[0])
+  // Every title withheld: the pack has true positives but no screened example, so the slide holds the cards and the
+  // statement without the table, and never the withheld placeholder.
+  const withheldRows = [{ Threat: 'Title withheld', Severity: 'High', Tactics: 'Exfiltration', Created: '2026-08-01', ExfilOrImpactTactic: true }, { Threat: 'Title withheld', Severity: 'Low', Tactics: 'InitialAccess', Created: '2026-08-02', ExfilOrImpactTactic: false }]
+  const withheld = await withContext({ ClientName: 'Example', TenantId: 't' }, null, withheldRows)
+  assert.ok(withheld.threats, 'the slide is built without examples')
+  assert.ok(!/Attack stage|Title withheld|High severity alert/.test(withheld.threats), withheld.threats.slice(0, 200))
+  for (const t of ['3 alerts the SOC classified as true positives from Nov 1, 2025 to Sep 30, 2026.', 'Based on the tactics Sentinel recorded on the alerts, 1 of the 3 confirmed threats carried an exfiltration or impact tactic. Additional investigation evidence is required', 'Carried an exfiltration or impact tactic', 'EVERY CONFIRMED THREAT']) assert.ok(withheld.threats.includes(t), t)
+  const withheldClear = await withContext({ ClientName: 'Example', TenantId: 't', Impact: record(0) }, null, withheldRows)
+  assert.ok(withheldClear.threats.includes('The reviewed investigation records confirm no data exposure or business impact from the 3 confirmed threats (CHG-123, reviewed Oct 10, 2026).'), 'the reviewed determination prints without examples too')
 })
 test('the control posture slide highlights the headline measure column and drops the not-gathered note', async () => {
   const zip = await JSZip.loadAsync(fs.readFileSync(deck('balanced').out))

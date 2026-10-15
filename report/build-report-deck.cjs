@@ -5,8 +5,8 @@
    Structure (docs/plans/2026-10-12-ebr-deck-restructure-design.md, grounding slides added Oct 14, 2026):
    cover, executive summary (the outcome KPIs, the four tier "How we report posture" block as the HTML
    executive summary shows it, then wins, watch and the items that need action), wins, security operations,
-   confirmed threats (only when there are examples, with outcome cards and the handling strip when the table
-   leaves room), control posture, measured outcomes by pillar, hardening roadmap, priority workstreams, the
+   confirmed threats (whenever the pack has true positives, with the examples table when titles can be shown,
+   then the outcome cards, the impact statement and the handling strip when the table leaves room), control posture, measured outcomes by pillar, hardening roadmap, priority workstreams, the
    MFA method update, decisions needed, then the appendix: the control register, scope and evidence. Brief
    keeps the cover, summary, wins, roadmap, the MFA method update and decisions. Detailed adds the two
    Microsoft score slides to the appendix.
@@ -91,7 +91,8 @@ async function main() {
   // How we report posture: the four tiers of the HTML executive summary on a navy band, up to three rows each.
   // Long row labels are shortened for the band. The HTML keeps the full label.
   const TIER_SHORT = [
-    [/^True positives that reached collection/, 'Collection, exfiltration or impact'], [/^True positives .*exfiltration or impact$/, 'Exfiltration or impact'], [/^Confirmed threats investigated$/, 'Confirmed threats'],
+    [/^True positives whose alerts carried a collection/, 'Collection, exfiltration or impact tactic'], [/^True positives whose alerts carried an exfiltration/, 'Exfiltration or impact tactic'], [/^Confirmed threats$/, 'Confirmed threats'],
+    [/^Confirmed data exposure or business impact$/, 'Confirmed impact, reviewed'],
     [/^Median time to close, high severity alerts$/, 'Median close, high severity'], [/^Median time to close, all alerts$/, 'Median close, all alerts'],
     [/^90th percentile close/, 'Nine in ten closed within'], [/^Detections correlated into alerts$/, 'Detections correlated'],
     [/^Foundational controls enforced$/, 'Foundational controls'], [/^Defense in depth controls enforced$/, 'Defense in depth controls'],
@@ -245,51 +246,64 @@ async function main() {
       'Response times run from alert creation to recorded close. Medians under 20 minutes are not presented, so the 90th percentile carries the speed story where the median is faster.'
     ]))
 
-    // 4b. Confirmed threats: up to five examples, highest severity first. Omitted when there are none.
-    if (m.threats) {
+    // 4b. Confirmed threats: up to five examples, highest severity first, when the pack has any. A pack with true
+    // positives but no screened example (every title withheld, or rows without titles or tactics) still gets the
+    // slide without the table, so the outcome cards and the impact statement never disappear with the examples.
+    if (m.threats || m.impactStatement) {
       s = content('Operations and posture', 'Confirmed threats', st.takeaways.threats)
-      const HEAD_H = 0.4, GAP = 0.2, CAPTION_H = 0.35, PAD_X = 0.1
-      const colW = [CW * 0.38, CW * 0.09, CW * 0.11, CW * 0.2, CW * 0.22]
-      const head = ['Threat', 'Alerts', 'Severity', 'Attack stage', 'When'].map((t, i) => ({ text: t, options: { fontSize: 12, color: HEX.accent6, align: i === 1 ? 'right' : 'left', border: border(0.75) } }))
-      // Rows hold two lines and grow for a longer title or stage, so the caption stays below the table. When the rows
-      // would push the caption past BOTTOM, the body drops to 12 pt. If that is still too tall, long titles are cut at
-      // a word before 110 characters and end in three dots.
-      const room = BOTTOM - TOP - HEAD_H - GAP - CAPTION_H
-      const lineH = size => size / 14 * 0.235
-      const rowLines = (r, size) => Math.max(2, ...r.map((v, i) => lines(v, colW[i] - 2 * PAD_X, size, i === 0)))
-      const cut = (t, cap) => { if (t.length <= cap) return t
-        const words = t.slice(0, cap + 1).replace(/\s+\S*$/, '').replace(/[\s,.:-]+$/, '')
-        return `${words.length >= cap / 2 && words.length <= cap ? words : t.slice(0, cap).trimEnd()}...` }
-      const layout = (size, cap = Infinity) => {
-        const cells = m.threats.examples.map(t => [cut(t.title, cap), fmt(t.alerts), t.severity, t.stage, glue(t.when)])
-        const rowH = cells.map(r => rowLines(r, size) * lineH(size) + 0.15)
-        return { size, cells, rowH, height: rowH.reduce((n, h) => n + h, 0) }
+      const HEAD_H = 0.4, GAP = 0.2, PAD_X = 0.1
+      const tp = m.alerts ? m.alerts.truePositives : null
+      // The caption carries the impact statement the model built: the reviewed determination when the context file
+      // holds one, otherwise the tactic reading and the request for additional investigation evidence. It takes
+      // the lines it needs, so the table, the cards and the strip stay below it.
+      const caption = m.threats
+        ? `${m.threats.more ? `And ${plural(m.threats.moreAlerts, 'more confirmed alert', 'more confirmed alerts')} in ${plural(m.threats.more, 'further group', 'further groups')}. ` : ''}Classified as true positives by the SOC, grouped by alert title.${m.impactStatement ? ` ${m.impactStatement}` : ''}`
+        : `${fmt(tp)} ${tp === 1 ? 'alert' : 'alerts'} the SOC classified as ${tp === 1 ? 'a true positive' : 'true positives'} ${st.periodPhrase}. ${m.impactStatement}`
+      const CAPTION_H = 0.17 + lines(caption, CW - 0.2, 11) * 0.18
+      // The table, when there are examples. tableH is the room it takes above the caption.
+      let tableH = 0
+      if (m.threats) {
+        const colW = [CW * 0.38, CW * 0.09, CW * 0.11, CW * 0.2, CW * 0.22]
+        const head = ['Threat', 'Alerts', 'Severity', 'Attack stage', 'When'].map((t, i) => ({ text: t, options: { fontSize: 12, color: HEX.accent6, align: i === 1 ? 'right' : 'left', border: border(0.75) } }))
+        // Rows hold two lines and grow for a longer title or stage, so the caption stays below the table. When the
+        // rows would push the caption past BOTTOM, the body drops to 12 pt. If that is still too tall, long titles are
+        // cut at a word before 110 characters and end in three dots.
+        const room = BOTTOM - TOP - HEAD_H - GAP - CAPTION_H
+        const lineH = size => size / 14 * 0.235
+        const rowLines = (r, size) => Math.max(2, ...r.map((v, i) => lines(v, colW[i] - 2 * PAD_X, size, i === 0)))
+        const cut = (t, cap) => { if (t.length <= cap) return t
+          const words = t.slice(0, cap + 1).replace(/\s+\S*$/, '').replace(/[\s,.:-]+$/, '')
+          return `${words.length >= cap / 2 && words.length <= cap ? words : t.slice(0, cap).trimEnd()}...` }
+        const layout = (size, cap = Infinity) => {
+          const cells = m.threats.examples.map(t => [cut(t.title, cap), fmt(t.alerts), t.severity, t.stage, glue(t.when)])
+          const rowH = cells.map(r => rowLines(r, size) * lineH(size) + 0.15)
+          return { size, cells, rowH, height: rowH.reduce((n, h) => n + h, 0) }
+        }
+        // The 80 character tier is a safety net: two-line titles always fit.
+        const fit = [layout(14), layout(12), layout(12, 110)].find(l => l.height <= room) || layout(12, 80)
+        const body = fit.cells.map(r => r.map((v, i) => ({ text: v, options: { fontSize: fit.size, color: i ? HEX.dk1 : HEX.dk2, bold: i === 0, align: i === 1 ? 'right' : 'left', valign: 'middle', border: border(0.5) } })))
+        s.addTable([head, ...body], { x: X0, y: TOP, w: CW, colW, rowH: [HEAD_H, ...fit.rowH], margin: [0.05, PAD_X, 0.05, PAD_X], objectName: 'Confirmed threats table' })
+        tableH = HEAD_H + fit.height + GAP
       }
-      // The 80 character tier is a safety net: two-line titles always fit.
-      const fit = [layout(14), layout(12), layout(12, 110)].find(l => l.height <= room) || layout(12, 80)
-      const body = fit.cells.map(r => r.map((v, i) => ({ text: v, options: { fontSize: fit.size, color: i ? HEX.dk1 : HEX.dk2, bold: i === 0, align: i === 1 ? 'right' : 'left', valign: 'middle', border: border(0.5) } })))
-      s.addTable([head, ...body], { x: X0, y: TOP, w: CW, colW, rowH: [HEAD_H, ...fit.rowH], margin: [0.05, PAD_X, 0.05, PAD_X], objectName: 'Confirmed threats table' })
-      text(s, `${m.threats.more ? `And ${plural(m.threats.moreAlerts, 'more confirmed alert', 'more confirmed alerts')} in ${plural(m.threats.more, 'further group', 'further groups')}. ` : ''}Confirmed as true positives by the SOC and closed, grouped by alert title.`, { x: X0, y: TOP + HEAD_H + fit.height + GAP, w: CW, h: CAPTION_H, fontSize: 11, color: C.accent6, objectName: 'Confirmed threats caption' })
+      text(s, caption, { x: X0, y: TOP + tableH, w: CW, h: CAPTION_H, fontSize: 11, color: C.accent6, objectName: 'Confirmed threats caption' })
       // A short table leaves the slide empty, so the room below it carries what the confirmed threats add up to
       // (the outcome cards) and how every confirmed threat is handled (the strip). Five long titles leave no
       // room, and the slide then holds the table alone (Oct 14, 2026).
       // The outcome cards stay within the evidence: the true positive count (OUT.1) and the rows (OUT.4) are
       // classifications regardless of status, so the cards never claim closure. The tactic count is of tactics
       // recorded on the alert, in the scope the model names (exfiltration or impact, or the wider flag scope for
-      // packs without tactics), never a verified outcome or a notification. The severity count comes from the
-      // model, counted per alert before grouping.
-      const tp = m.alerts ? m.alerts.truePositives : null
-      const high = m.threats.severities.High
-      const scope = m.alerts ? m.alerts.flaggedScope : ''
-      const tactic = `${/^[aeiou]/.test(scope) ? 'an' : 'a'} ${scope} tactic`
+      // packs without tactics), never a verified outcome or a notification, so the card says carried, never
+      // reached. The severity count comes from the model, counted per alert before grouping.
+      const high = m.threats ? m.threats.severities.High : 0
+      const tactic = m.alerts ? m.alerts.tacticPhrase : ''
       const outcomeCards = [
         tp !== null && tp > 0 ? [fmt(tp), tp === 1 ? 'Confirmed threat' : 'Confirmed threats', `${tp === 1 ? 'An alert' : 'Alerts'} the SOC classified as ${tp === 1 ? 'a true positive' : 'true positives'} ${st.periodPhrase}.`] : null,
-        m.alerts && m.alerts.flaggedKnown && tp > 0 ? [`${fmt(m.alerts.flagged)} of ${fmt(tp)}`, sentence(`reached ${scope}`), m.alerts.flagged === 0 ? `None carried ${tactic}.` : `${plural(m.alerts.flagged, 'alert carried', 'alerts carried')} ${tactic} in Sentinel.`] : null,
-        m.threats.alerts > 0 ? [fmt(high), high === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(m.threats.alerts, 'confirmed alert', 'confirmed alerts')} grouped above, at the severity Sentinel recorded.`] : null,
+        m.alerts && m.alerts.flaggedKnown && tp > 0 ? [`${fmt(m.alerts.flagged)} of ${fmt(tp)}`, sentence(`carried ${tactic}`), m.alerts.flagged === 0 ? 'A tactic Sentinel recorded on the alert, not a verified outcome.' : `${plural(m.alerts.flagged, 'alert carried', 'alerts carried')} ${tactic} in Sentinel, not a verified outcome.`] : null,
+        m.threats && m.threats.alerts > 0 ? [fmt(high), high === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(m.threats.alerts, 'confirmed alert', 'confirmed alerts')} grouped above, at the severity Sentinel recorded.`] : null,
         st.speed ? [st.speed.value, sentence(st.speed.label), st.speed.sub] : null
       ].filter(Boolean).slice(0, 4)
-      const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages every alert and confirms its severity'], ['3 Investigate', ' scope, attack stage and impact are established'], ['4 Resolve', ' closed with a documented disposition, and referred to your team where action is needed']]
-      const STRIP_H = 0.85, cardTop = TOP + HEAD_H + fit.height + GAP + CAPTION_H + 0.2
+      const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages every alert and confirms its severity'], ['3 Investigate', ' scope, attack stage and impact are assessed'], ['4 Resolve', ' closed with a documented disposition, and referred to your team where action is needed']]
+      const STRIP_H = 0.85, cardTop = TOP + tableH + CAPTION_H + 0.2
       const roomWithStrip = BOTTOM - STRIP_H - 0.25 - cardTop, roomAlone = BOTTOM - cardTop
       const cardH = outcomeCards.length && roomWithStrip >= 1.1 ? Math.min(1.6, roomWithStrip) : outcomeCards.length && roomAlone >= 1.1 ? Math.min(1.6, roomAlone) : 0
       if (cardH) {
@@ -309,11 +323,12 @@ async function main() {
         handling.forEach(([lead, rest], i) => text(s, [{ text: lead, options: { bold: true, color: C.accent2 } }, { text: rest, options: { color: C.text1 } }], { x: X0 + 2.3 + i * hw, y: BOTTOM - STRIP_H, w: hw - 0.15, h: STRIP_H, fontSize: 11, valign: 'middle', objectName: `Threat handling ${i + 1}` }))
       }
       s.addNotes(notesOf([
-        'These are alerts the SOC confirmed as true positive threats, grouped by alert title, highest severity first.',
+        m.threats ? 'These are alerts the SOC confirmed as true positive threats, grouped by alert title, highest severity first.' : '',
         m.ticketed ? 'Each one opened a ticket with the managed security service and was closed by the SOC.' : '',
         st.takeaways.threats,
+        m.impactStatement,
         cardH ? outcomeCards.map(([value, label, sub]) => `${value} ${label.charAt(0).toLowerCase() + label.slice(1)}. ${sub}`) : '',
-        strip ? 'Every confirmed threat follows the same path: detections are correlated into one alert, the SOC triages it and confirms its severity, the investigation establishes scope, attack stage and impact, and the alert is closed with a documented disposition and referred to your team where action is needed.' : ''
+        strip ? 'Every confirmed threat follows the same path: detections are correlated into one alert, the SOC triages it and confirms its severity, the investigation assesses scope, attack stage and impact, and the alert is closed with a documented disposition and referred to your team where action is needed.' : ''
       ]))
     }
 

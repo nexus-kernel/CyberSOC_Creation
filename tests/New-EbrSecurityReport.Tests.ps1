@@ -198,9 +198,10 @@ Describe 'Offline HTML report generation' {
     }
     It 'accepts the documented context fields and nothing else' {
         $ctx = Join-Path $TestDrive 'context.json'
-        '{"ClientName":"Example Client","TenantId":"example-tenant","ServiceStartDate":"2024-01-15","TenantScore":{"Current":45,"Max":100,"ReadDate":"2026-10-08","Source":"Portal"},"Delivered":[],"Raised":999}' | Set-Content $ctx
+        '{"ClientName":"Example Client","TenantId":"example-tenant","ServiceStartDate":"2024-01-15","TenantScore":{"Current":45,"Max":100,"ReadDate":"2026-10-08","Source":"Portal"},"Delivered":[],"Impact":{"Confirmed":0,"Reviewed":"2026-10-10","Reference":"CHG-123","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"},"Raised":999}' | Set-Content $ctx
         $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack -ContextPath $ctx) -Raw
         $html | Should -Match '"ServiceStartDate":"2024-01-15"'
+        $html | Should -Match '"Impact":\{"Confirmed":0,"Reviewed":"2026-10-10","Reference":"CHG-123","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"\}'
         $html | Should -Not -Match '"Raised":999'
     }
     It 'rejects context from a different client' {
