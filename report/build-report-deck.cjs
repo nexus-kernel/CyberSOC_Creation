@@ -633,13 +633,16 @@ async function main() {
     const notGraded = [...st.ungathered, ...naControls]
     if (!notGraded.length) text(s, 'Every control was gathered and graded in this collection.', { x: ux, y: TOP + 0.45, w: half, h: 0.4, fontSize: 12, color: C.accent6, objectName: 'Ungathered empty' })
     // One column of entries, then as many continuation slides of two columns as the rest need. Nothing is
-    // dropped: a partial collection can leave dozens of controls ungraded.
+    // dropped: a partial collection can leave dozens of controls ungraded. Every column stops above the bottom
+    // band, which is kept clear for the "Continued on the next slide" marker, so a wrapped two-line last entry
+    // never sits under the marker.
+    const BAND = 0.35
     const entryH = c => Math.min(2, lines(c.label, half - 0.5, 11)) * 0.185 + 0.26
     const fillColumn = (sl, x, from, prefix) => {
       let y = TOP + 0.42, i = from
       while (i < notGraded.length) {
         const c = notGraded[i], h = entryH(c)
-        if (y + h > BOTTOM) break
+        if (y + h > BOTTOM - BAND) break
         markChip(sl, c.na ? 'N/A' : '–', x, y + 0.03, 0.36, 0.26, 11, `${prefix} ${i + 1} chip`)
         text(sl, [{ text: c.label, options: { fontSize: 11, color: C.text1, breakLine: true } }, { text: `${whyOf(c)} · ${c.group}`, options: { fontSize: 9.5, color: C.accent6, paraSpaceBefore: 1 } }], { x: x + 0.48, y, w: half - 0.48, h, objectName: `${prefix} ${i + 1}` })
         rule(sl, x, y + h, half, HEX.track, 0.5, `${prefix} ${i + 1} rule`)
