@@ -310,7 +310,10 @@
         return { id, label: clean(label), ...where, good: null, total: null, pct: null, mark: null, value: null, note: clean(note), source: source(id), ...extra }
       }
       if (!ok) return { ...ungathered(id, label, where, reason(id), note), ...extra }
-      const item = { id, label: clean(label), ...where, good, total, pct: pct(good, total), mark: mark(pct(good, total)), value: `${fmt(good)} of ${fmt(total)}`, note: clean(note), source: source(id), ...extra }
+      // A reading at E can still leave resources out. The register counts them as exceptions, so meeting the
+      // threshold and having no exceptions read differently (Oct 15, 2026).
+      const grade = mark(pct(good, total))
+      const item = { id, label: clean(label), ...where, good, total, pct: pct(good, total), mark: grade, value: `${fmt(good)} of ${fmt(total)}`, exceptions: grade === 'E' ? total - good : 0, note: clean(note), source: source(id), ...extra }
       m.controls.push(item)
       return item
     }
@@ -340,6 +343,9 @@
       return item
     }
     const isInForce = c => !!c && c.boolean === true && c.value === 'In force'
+    // Every, all and none are earned only when nothing is left out: a ratio whose good equals its total, or a policy
+    // in force. E at 90 percent or more is a band, not the absence of exceptions (Oct 15, 2026).
+    const complete = c => !!c && c.pct !== null && (c.boolean ? isInForce(c) : c.good === c.total)
     // The condition for a Conditional Access flow: true when an enabled policy covers everyone, 'scoped' when
     // an enabled policy covers selected users, applications or conditions only, otherwise false.
     const flowCondition = f => enforcedState(f) ? true : String(f.PolicyState) === 'Scoped' ? 'scoped' : false
@@ -584,8 +590,9 @@
     }
     const gapCount = gaps.reduce((n, r) => n + Number(r.Devices), 0)
     const gapSensorOnly = gaps.every(r => /^Onboarded,/.test(String(r.Reason)))
+    // An empty gap result reads as every machine reporting only when the onboarding and sensor figures agree.
     const reconciliation = has('EW.1-GAPS') && edrTotal !== null
-      ? gapCount === 0 ? 'Every Azure virtual machine Defender for Endpoint has seen is onboarded with an active sensor.'
+      ? gapCount === 0 ? (edrGood === edrTotal && sum(azureVms, 'SensorActive') === vmOnboarded ? 'Every Azure virtual machine Defender for Endpoint has seen is onboarded with an active sensor.' : '')
         : `${plural(gapCount, 'Azure virtual machine is', 'Azure virtual machines are')} not reporting through an active Defender for Endpoint sensor. ${list(gaps.map(reasonText))}.`
       : ''
     // Azure Arc-enabled servers carry an Azure resource ID, so Defender for Endpoint counts them in the Azure scope
@@ -710,8 +717,8 @@
     if (has('DR.4')) inForce('DR.4', 'Domain controller telemetry collected continuously', F.detection, dc.length > 0 && sum(dc, 'Events') > 0, dc.length ? `${plural(dc.length, 'domain controller', 'domain controllers')} reporting.` : 'No domain controller events recorded.')
     else ungathered('DR.4', 'Domain controller telemetry collected continuously', F.detection, reason('DR.4'), 'Domain controller security events arriving in the workspace.')
     const triage = one('DR.10')
-    if (triage && count(triage.Closed) !== null) control('DR.10', 'Alerts closed with a documented disposition', F.detection, triage.Documented, triage.Closed, 'Alerts closed in the last 30 days that carry a classification and a closing comment.')
-    else if (!has('DR.10')) ungathered('DR.10', 'Alerts closed with a documented disposition', F.detection, reason('DR.10'), 'Alerts closed in the last 30 days that carry a classification and a closing comment.')
+    const dispositions = triage && count(triage.Closed) !== null ? control('DR.10', 'Alerts closed with a documented disposition', F.detection, triage.Documented, triage.Closed, 'Alerts closed in the last 30 days that carry a classification and a closing comment.') : null
+    if (!dispositions && !has('DR.10')) ungathered('DR.10', 'Alerts closed with a documented disposition', F.detection, reason('DR.10'), 'Alerts closed in the last 30 days that carry a classification and a closing comment.')
     const mdiSensors = one('DR.11')
     const mdiLabel = 'Defender for Identity sensors healthy on domain controllers'
     if (mdiSensors && count(mdiSensors.Sensors) !== null) control('DR.11', mdiLabel, F.detection, mdiSensors.Healthy, mdiSensors.Sensors, 'Sensors reporting healthy, of sensors registered. A domain controller with no sensor is found by comparing with the directory.')
@@ -881,10 +888,15 @@
     }
     if (!m.delivered.length) note('Delivered work', 'Add completed change references through the context file to show verified delivery on the roadmap page. Planned work is never labeled as delivered.')
 
-    // Pillar outcome rows. Each row leads with a statement earned by the strongest available measure.
-    const band = (c, strong, partialText, weak) => c && c.pct !== null ? (c.pct >= E_THRESHOLD ? strong : c.pct >= 50 ? partialText : weak) : null
+    // Pillar outcome rows. Each row leads with a statement earned by the strongest available measure. The strong
+    // statement says every or all, so it needs a complete reading. A reading at E that still leaves resources out
+    // takes the near statement instead, which leads with the ratio and the remainder (Oct 15, 2026).
+    const band = (c, strong, near, partialText, weak) => c && c.pct !== null ? (c.pct >= E_THRESHOLD ? (complete(c) ? strong : near) : c.pct >= 50 ? partialText : weak) : null
     const measureText = c => c && c.pct !== null ? `${fmt(c.good)} of ${fmt(c.total)}` : null
-    const pillar = (name, headline, narrative, measure, callout, sourceText) => m.pillars.push({ name, headline: clean(headline), narrative: clean(narrative), measure: measure && measure.pct !== null ? { label: clean(measure.label), good: measure.good, total: measure.total, pct: measure.pct, mark: measure.mark } : null, callout: callout ? { value: clean(callout.value), label: clean(callout.label) } : null, source: clean(sourceText) })
+    const remaining = c => `with ${fmt(c.total - c.good)} remaining`
+    // keep holds the narrative sentences no surface may cut, and headlineShort the headline a crowded deck row may
+    // fall back to before it touches them.
+    const pillar = (name, headline, narrative, measure, callout, sourceText, extra = {}) => m.pillars.push({ name, headline: clean(headline), narrative: clean(narrative), measure: measure && measure.pct !== null ? { label: clean(measure.label), good: measure.good, total: measure.total, pct: measure.pct, mark: measure.mark } : null, callout: callout ? { value: clean(callout.value), label: clean(callout.label) } : null, source: clean(sourceText), ...(extra.keep ? { keep: clean(extra.keep) } : {}), ...(extra.headlineShort && extra.headlineShort !== headline ? { headlineShort: clean(extra.headlineShort) } : {}) })
     {
       const parts = []
       if (mfa.boolean) parts.push(isInForce(mfa) ? `Conditional Access requires multifactor authentication for every user on every application.${mfaRatio ? ` ${pctText(mfaRatio.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied it.` : ''}` : `${mfaPolicy}${mfaRatio ? ` ${pctText(mfaRatio.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied multifactor authentication.` : ''}`)
@@ -894,35 +906,46 @@
       if (legacyBlockedInForce) parts.push('Legacy authentication is blocked.')
       if (advancedPhish) parts.push('An advanced anti-phishing policy protects every mailbox.')
       else if (basicPhish) parts.push('The Microsoft default anti-phishing policy covers every mailbox.')
-      const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')
+      const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', `Multifactor authentication covers ${measureText(mfa)} members at sign-in, ${remaining(mfa)}${legacyBlockedInForce ? ', and legacy protocols are blocked' : ''}`, 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')
       const mfaMeasure = mfa.boolean ? (mfaRatio ? { ...mfa, good: mfaRatio.good, total: mfaRatio.total, pct: mfaRatio.pct, mark: mark(mfaRatio.pct), label: 'Users challenged for MFA at sign-in' } : null) : mfa.pct !== null ? { ...mfa, label: 'Users challenged for MFA at sign-in' } : null
       pillar(G.identity, headline, parts.join(' ') || 'Sign-in telemetry was not available in this collection. Identity coverage is confirmed from the Entra admin center during the review.', mfaMeasure, m.mfaMethods && m.mfaMethods.resistant > 0 ? { value: fmt(m.mfaMethods.resistant), label: 'users already on phishing-resistant sign-in' } : null, mfa.pct !== null ? mfa.source : legacyBlockedInForce ? legacyControl.source : locControl.source)
     }
     {
       const parts = []
       if (edr.pct === null && String(p.DefenderApi || '').toLowerCase() !== 'available') parts.push('Endpoint telemetry was not reachable in this collection, so device coverage is confirmed from the Defender portal during the review.')
-      if (edr.pct !== null) parts.push(`Endpoint detection covers ${fmt(edr.good)} of ${fmt(edr.total)} eligible Azure virtual machines seen in the last 7 days${sensors.pct !== null ? `, with ${pctText(sensors.pct)} of onboarded Azure virtual machine sensors active` : ''}.${reconciliation && gapCount > 0 ? ' ' + reconciliation : ''}`)
+      // When EW.1-GAPS names machines that are not reporting, the coverage sentence and the reconciliation are kept
+      // together on every surface, so the figure is never shown without the machines behind the remainder.
+      const coverage = edr.pct !== null ? `Endpoint detection covers ${fmt(edr.good)} of ${fmt(edr.total)} eligible Azure virtual machines seen in the last 7 days${sensors.pct !== null ? `, with ${pctText(sensors.pct)} of onboarded Azure virtual machine sensors active` : ''}.${reconciliation && gapCount > 0 ? ' ' + reconciliation : ''}` : ''
+      if (coverage) parts.push(coverage)
       if (vaControl.pct !== null) parts.push(`Vulnerability assessment covers ${pctText(vaControl.pct)} of onboarded Azure virtual machines.`)
       if (encryption.pct !== null) parts.push(encryption.pct >= 50 ? `Encryption at host is enabled on ${fmt(encryption.good)} of ${fmt(encryption.total)} virtual machines${encryption.pct < E_THRESHOLD ? ' and the remainder is sequenced on the roadmap' : ''}.` : `Encryption at host for the ${plural(encryption.total, 'virtual machine', 'virtual machines')} is sequenced on the roadmap.`)
-      const headline = band(edr, 'Every eligible Azure virtual machine reports to endpoint detection', 'Most eligible Azure virtual machines report to endpoint detection, with the remainder sequenced', 'Endpoint onboarding is the workload priority on the roadmap') || (encryption.pct !== null ? band(encryption, 'Virtual machines run with encryption at host', 'Encryption at host covers most virtual machines', 'Workload hardening is sequenced on the roadmap') : 'Endpoint readings are confirmed in the review')
-      pillar(G.endpoint, headline, parts.join(' ') || 'Endpoint telemetry was not reachable in this collection. Device coverage is confirmed from the Defender portal during the review.', edr.pct !== null ? { ...edr, label: 'Eligible Azure virtual machines on endpoint detection' } : encryption, vaControl.pct !== null ? { value: pctText(vaControl.pct), label: 'vulnerability assessment coverage' } : encryption.pct !== null ? { value: `${fmt(encryption.good)} of ${fmt(encryption.total)}`, label: 'virtual machines with encryption at host' } : null, edr.pct !== null ? edr.source : encryption.source)
+      const edrLead = `Endpoint detection covers ${measureText(edr)} eligible Azure virtual machines`
+      const edrHeadline = (near, partialText) => band(edr, 'Every eligible Azure virtual machine reports to endpoint detection', near, partialText, 'Endpoint onboarding is the workload priority on the roadmap')
+      const headline = edrHeadline(`${edrLead}, ${remaining(edr)}`, 'Most eligible Azure virtual machines report to endpoint detection, with the remainder sequenced') || (encryption.pct !== null ? band(encryption, 'Virtual machines run with encryption at host', `Encryption at host is enabled on ${measureText(encryption)} virtual machines, ${remaining(encryption)}`, 'Encryption at host covers most virtual machines', 'Workload hardening is sequenced on the roadmap') : 'Endpoint readings are confirmed in the review')
+      const kept = reconciliation && gapCount > 0 ? coverage : ''
+      pillar(G.endpoint, headline, parts.join(' ') || 'Endpoint telemetry was not reachable in this collection. Device coverage is confirmed from the Defender portal during the review.', edr.pct !== null ? { ...edr, label: 'Eligible Azure virtual machines on endpoint detection' } : encryption, vaControl.pct !== null ? { value: pctText(vaControl.pct), label: 'vulnerability assessment coverage' } : encryption.pct !== null ? { value: `${fmt(encryption.good)} of ${fmt(encryption.total)}`, label: 'virtual machines with encryption at host' } : null, edr.pct !== null ? edr.source : encryption.source,
+        { keep: kept, headlineShort: kept ? edrHeadline(edrLead, 'Most eligible Azure virtual machines report to endpoint detection') : '' })
     }
     {
       const parts = []
       if (boundaryCount !== null && windowValid) parts.push(boundaryCount > 0 ? `${plural(boundaryCount, 'boundary and egress detection was', 'boundary and egress detections were')} raised and triaged ${m.period.label}.` : `No boundary or egress detections were raised ${m.period.label}.`)
       if (segmentation.pct !== null) parts.push(`${pctText(segmentation.pct)} of workload subnets have platform, firewall or segmented controls in place${segmentation.pct < E_THRESHOLD ? `, and ${fmt(segmentation.total - segmentation.good)} would benefit from added segmentation` : ''}.`)
-      if (https.pct !== null) parts.push(`${https.pct >= E_THRESHOLD ? 'Every published web app enforces HTTPS' : `${fmt(https.good)} of ${fmt(https.total)} published web apps enforce HTTPS`}.`)
+      if (https.pct !== null) parts.push(`${complete(https) ? 'Every published web app enforces HTTPS' : `${fmt(https.good)} of ${fmt(https.total)} published web apps enforce HTTPS`}.`)
       const lead = https.pct !== null ? https : segmentation
-      const headline = band(https, 'Encryption in transit enforced on every published service', 'Encryption in transit enforced on most published services', 'Transport hardening is sequenced on the roadmap') || band(segmentation, 'Segmentation enforced across workload subnets', 'Segmentation covers most workload subnets', 'Segmentation is the network priority on the roadmap') || 'Boundary detections investigated to a documented disposition'
+      const headline = band(https, 'Encryption in transit enforced on every published service', `Encryption in transit enforced on ${measureText(https)} published web apps, ${remaining(https)}`, 'Encryption in transit enforced on most published services', 'Transport hardening is sequenced on the roadmap') || band(segmentation, 'Segmentation enforced across workload subnets', `Segmentation covers ${measureText(segmentation)} workload subnets, ${remaining(segmentation)}`, 'Segmentation covers most workload subnets', 'Segmentation is the network priority on the roadmap') || 'Boundary detections investigated to a documented disposition'
       pillar(G.network, headline, parts.join(' ') || 'Network readings are completed in the review.', segmentation.pct !== null ? { ...segmentation, label: 'Workload subnets segmented' } : https, boundaryCount !== null ? { value: fmt(boundaryCount), label: 'boundary detections triaged' } : https.pct !== null ? { value: measureText(https), label: 'web apps enforcing HTTPS' } : null, lead.source)
     }
     {
       const parts = []
-      if (transfer.pct !== null) parts.push(`${transfer.pct >= E_THRESHOLD ? 'All' : fmt(transfer.good) + ' of ' + fmt(transfer.total)} storage accounts require secure transfer${publicOff.pct !== null && publicOff.pct >= E_THRESHOLD ? ' and refuse public network access' : ''}.`)
-      if (softDelete.pct !== null) parts.push(`Soft delete ${softDelete.pct >= E_THRESHOLD ? 'protects every Key Vault' : `protects ${fmt(softDelete.good)} of ${fmt(softDelete.total)} Key Vaults`}${purge.pct !== null && purge.pct >= E_THRESHOLD ? ' and purge protection is in force' : ''}.`)
-      if (backup.pct !== null) parts.push(backup.pct >= 50 ? `${backup.pct >= E_THRESHOLD ? 'Every' : `${fmt(backup.good)} of ${fmt(backup.total)}`} virtual machine${backup.pct >= E_THRESHOLD ? ' carries' : 's carry'} a backup policy.` : 'Backup coverage for the virtual machine estate is sequenced on the roadmap.')
+      // Public network access and purge protection share their resource's total, so each joins the sentence as a
+      // ratio unless both readings in it are complete.
+      const atE = c => c.pct !== null && c.pct >= E_THRESHOLD
+      if (transfer.pct !== null) parts.push(complete(transfer) && complete(publicOff) ? 'All storage accounts require secure transfer and refuse public network access.' : `${complete(transfer) ? 'All' : `${fmt(transfer.good)} of ${fmt(transfer.total)}`} storage accounts require secure transfer.${atE(publicOff) ? ` ${fmt(publicOff.good)} of ${fmt(publicOff.total)} refuse public network access.` : ''}`)
+      if (softDelete.pct !== null) parts.push(`Soft delete ${complete(softDelete) ? 'protects every Key Vault' : `protects ${fmt(softDelete.good)} of ${fmt(softDelete.total)} Key Vaults`}${complete(purge) ? ' and purge protection is in force' : atE(purge) ? `, and purge protection covers ${fmt(purge.good)} of ${fmt(purge.total)}` : ''}.`)
+      if (backup.pct !== null) parts.push(backup.pct >= 50 ? (complete(backup) ? 'Every virtual machine carries a backup policy.' : `${fmt(backup.good)} of ${fmt(backup.total)} virtual machines carry a backup policy.`) : 'Backup coverage for the virtual machine estate is sequenced on the roadmap.')
       if (mailRemoved !== null && mailRemoved > 0) parts.push(`Malicious mail is removed after delivery, with ${fmt(mailRemoved)} removals in the last 30 days.`)
-      const headline = band(transfer, 'Data in transit and key material are protected', 'Transport protection covers most storage, with the remainder sequenced', 'Data transport hardening is sequenced on the roadmap') || band(softDelete, 'Key material cannot be silently lost', 'Key Vault recovery covers most vaults', 'Key protection is sequenced on the roadmap') || 'Data protection readings are completed in the review'
+      // Key material is named in the strong statement only when soft delete is complete as well.
+      const headline = band(transfer, complete(softDelete) ? 'Data in transit and key material are protected' : 'Secure transfer is required on every storage account', `Secure transfer is required on ${measureText(transfer)} storage accounts, ${remaining(transfer)}`, 'Transport protection covers most storage, with the remainder sequenced', 'Data transport hardening is sequenced on the roadmap') || band(softDelete, 'Key material cannot be silently lost', `Soft delete protects ${measureText(softDelete)} Key Vaults, ${remaining(softDelete)}`, 'Key Vault recovery covers most vaults', 'Key protection is sequenced on the roadmap') || 'Data protection readings are completed in the review'
       pillar(G.data, headline, parts.join(' ') || 'Data protection readings are completed in the review.', transfer.pct !== null ? { ...transfer, label: 'Storage accounts with secure transfer' } : softDelete, mailRemoved !== null && mailRemoved > 0 ? { value: fmt(mailRemoved), label: 'malicious messages removed after delivery, last 30 days' } : backup.pct !== null && backup.pct >= 90 ? { value: measureText(backup), label: 'virtual machines under Azure Backup' } : softDelete.pct !== null && softDelete.pct >= 90 ? { value: measureText(softDelete), label: 'Key Vaults protected by soft delete' } : transfer.pct !== null ? { value: measureText(transfer), label: 'storage accounts requiring secure transfer' } : null, transfer.pct !== null ? transfer.source : softDelete.source)
     }
     {
@@ -931,7 +954,10 @@
       if (m.response) parts.push(`${m.response.scope === 'High' ? 'High severity alerts' : 'Alerts'} closed at a median of ${m.response.median.value}${m.response.analyst ? ' once automation closures are set aside' : ''}.`)
       if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
       if (ruleControl && ruleControl.pct !== null) parts.push(`${fmt(ruleControl.good)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
-      const headline = m.alerts ? 'Every alert reaches a documented disposition' : band(plan, 'Workload protection covers the resource estate', 'Workload protection covers most of the resource estate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
+      // The disposition statement says every alert, so a DR.10 reading that leaves closures undocumented replaces it
+      // with its own ratio.
+      const undocumented = dispositions && dispositions.pct !== null && !complete(dispositions)
+      const headline = m.alerts ? (undocumented ? `${measureText(dispositions)} alerts closed in the last 30 days carry a documented disposition` : 'Every alert reaches a documented disposition') : band(plan, 'Workload protection covers the resource estate', `Workload protection covers ${measureText(plan)} eligible resources, ${remaining(plan)}`, 'Workload protection covers most of the resource estate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
       pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : ruleControl, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, m.alerts ? m.alerts.source : plan.source)
     }
 

@@ -407,7 +407,11 @@ async function main() {
 
     // 5b. Measured outcomes by pillar: the headline each pillar earned, the narrative behind it, the lead
     // measure and the callout, as the HTML pillar page shows them. A narrative that would not fit its row is
-    // cut at a sentence end, and the full text goes to the speaker notes.
+    // cut at a sentence end, and the full text goes to the speaker notes. The sentences a pillar keeps (the
+    // endpoint coverage and the EW.1-GAPS reconciliation when machines are not reporting) are never cut: the
+    // other sentences go first, then the row takes the pillar's short headline, then it gives the measure column
+    // to the story, since the kept coverage sentence carries the measure's figure, and last it sets the story
+    // in 9 pt (Oct 15, 2026).
     if (m.pillars.length) {
       s = content('Operations and posture', 'Measured outcomes by pillar', st.takeaways.pillars)
       const prow = (BOTTOM - TOP) / m.pillars.length, nameW = 1.9, storyX = X0 + nameW + 0.2, storyW = 6.3, measX = storyX + storyW + 0.3, measW = CW - nameW - 0.2 - storyW - 0.3
@@ -417,10 +421,24 @@ async function main() {
         if (i) rule(s, X0, y - 0.04, CW, HEX.track, 0.75, `${p.name} outcome rule`)
         const reg = st.matrix.find(r => r.group === p.name)
         text(s, [{ text: p.name, options: { fontSize: 14, bold: true, color: C.text2, breakLine: true } }, { text: reg && reg.foundational.measured ? `${reg.foundational.enforced} of ${reg.foundational.measured} foundational enforced` : 'Readings completed in the review', options: { fontSize: 10, color: C.accent6, paraSpaceBefore: 3 } }], { x: X0, y: y + 0.06, w: nameW, h: prow - 0.12, objectName: `${p.name} outcome name` })
-        const room = prow - 0.14, headH = lines(p.headline, storyW, 11, true) * 0.18
-        let parts = sentences(p.narrative), body = parts.join(' ')
-        while (parts.length > 1 && headH + lines(body, storyW, 10) * 0.165 + 0.05 > room) { parts = parts.slice(0, -1); body = parts.join(' ') }
-        text(s, [{ text: p.headline, options: { fontSize: 11, bold: true, color: C.text2, breakLine: true } }, { text: body, options: { fontSize: 10, color: C.text1, paraSpaceBefore: 3 } }], { x: storyX, y: y + 0.06, w: storyW, h: prow - 0.12, objectName: `${p.name} outcome story` })
+        const room = prow - 0.14, keep = new Set(sentences(p.keep)), wideW = CW - nameW - 0.2
+        const needs = (head, w, size, body) => lines(head, w, 11, true) * 0.18 + lines(body, w, size) * size * 0.0165 + 0.05
+        // Drops the last sentence that is neither the first nor kept until the row fits or nothing else can go.
+        const fit = (head, w, size) => {
+          let parts = sentences(p.narrative)
+          while (parts.length > 1 && needs(head, w, size, parts.join(' ')) > room) {
+            const cut = parts.findLastIndex((t, k) => k > 0 && !keep.has(t))
+            if (cut < 0) break
+            parts = parts.filter((_, k) => k !== cut)
+          }
+          return parts.join(' ')
+        }
+        // The first layout that fits, the last one otherwise. Only a row with kept sentences has fallbacks.
+        const layouts = [[p.headline, storyW, 10], ...(keep.size ? [[p.headlineShort, storyW, 10], [p.headline, wideW, 10], [p.headlineShort, wideW, 10], [p.headlineShort || p.headline, wideW, 9]] : [])]
+          .filter(([head]) => head).map(([head, w, size]) => { const body = fit(head, w, size); return { head, w, size, body, fits: needs(head, w, size, body) <= room } })
+        const { head, w, size, body } = layouts.find(l => l.fits) || layouts[layouts.length - 1]
+        text(s, [{ text: head, options: { fontSize: 11, bold: true, color: C.text2, breakLine: true } }, { text: body, options: { fontSize: size, color: C.text1, paraSpaceBefore: 3 } }], { x: storyX, y: y + 0.06, w, h: prow - 0.12, objectName: `${p.name} outcome story` })
+        if (w > storyW) return
         if (p.measure) {
           text(s, p.measure.label, { x: measX, y: y + 0.06, w: measW, h: 0.22, fontSize: 10, color: C.accent6, objectName: `${p.name} measure label` })
           meter(s, measX, y + 0.36, measW - 1.15, p.measure.pct, p.measure.mark === 'E' ? C.accent3 : p.measure.mark === 'N' ? C.accent4 : C.accent2, `${p.name} outcome`)
@@ -555,21 +573,25 @@ async function main() {
     pres.addSection({ title: 'Appendix' })
     const legend = 'E enforced, 90% or more · P partial, 50 to 89%, or a scoped policy whatever its ratio · N not yet enforced · – not gathered'
     const VALUE_W = 1.55
+    // The exception count of a control at E rides on its label line, so it adds a line only when it wraps there.
+    const suffix = c => c.exceptionText ? ` · ${c.exceptionText}` : ''
+    const lineH = size => ({ 12: 0.215, 11: 0.2 })[size] || 0.185
+    const rowLines = (c, labelW, size) => Math.min(suffix(c) ? 3 : 2, lines(c.label + suffix(c), labelW, size)) + (c.detail ? lines(c.detail, labelW, size - 1) : 0)
+    // The largest size at which every column fits, down to 10 pt.
     const registerSize = (regs, w) => {
       const labelW = w - 0.55 - VALUE_W
       const fits = size => regs.every(reg => {
         const tiers = [reg.foundational, reg.defense].filter(r => r.length)
-        const need = tiers.reduce((n, rows) => n + rows.reduce((k, c) => k + (Math.min(2, lines(c.label, labelW, size)) + (c.detail ? lines(c.detail, labelW, size - 1) : 0)) * (size === 12 ? 0.215 : 0.2) + 0.08, 0), 0)
+        const need = tiers.reduce((n, rows) => n + rows.reduce((k, c) => k + rowLines(c, labelW, size) * lineH(size) + 0.08, 0), 0)
         return need <= 7.2 - TOP - 0.45 - tiers.length * 0.52
       })
-      return fits(12) ? 12 : 11
+      return fits(12) ? 12 : fits(11) ? 11 : 10
     }
     const pillarColumn = (sl, reg, x, w, size) => {
       text(sl, reg.group, { x, y: TOP - 0.05, w: w * 0.62, h: 0.4, fontSize: 18, bold: true, color: C.text2, objectName: `${reg.group} register heading` })
       text(sl, reg.summary, { x: x + w * 0.5, y: TOP - 0.05, w: w * 0.5, h: 0.4, fontSize: 11, color: C.accent6, align: 'right', valign: 'middle', objectName: `${reg.group} register summary` })
       const tiers = [['foundational', 'Foundational', reg.foundational], ['defense', 'Defense in depth', reg.defense]].filter(([, , rows]) => rows.length)
       const labelW = w - 0.55 - VALUE_W
-      const lineH = size === 12 ? 0.215 : 0.2
       let y = TOP + 0.45
       tiers.forEach(([key, label, rows]) => {
         const measured = rows.filter(c => c.mark)
@@ -580,9 +602,11 @@ async function main() {
         rows.forEach(c => {
           // A control with a detail line (the ratio behind a Mostly enforced policy, or the resource types a
           // partially covered control is missing) carries it under the label.
-          const h = (Math.min(2, lines(c.label, labelW, size)) + (c.detail ? lines(c.detail, labelW, size - 1) : 0)) * lineH + 0.07
-          markChip(sl, c.chip, x, y + (h - 0.26) / 2, 0.36, 0.26, size, `${c.label} chip`)
-          text(sl, c.detail ? [{ text: c.label, options: { fontSize: size, color: C.text1, breakLine: true } }, { text: c.detail, options: { fontSize: size - 1, color: C.accent6 } }] : c.label, { x: x + 0.48, y, w: labelW, h, fontSize: size, color: C.text1, valign: 'middle', objectName: `${c.label} register label` })
+          const h = rowLines(c, labelW, size) * lineH(size) + 0.07, chipH = size >= 11 ? 0.26 : 0.22
+          markChip(sl, c.chip, x, y + (h - chipH) / 2, 0.36, chipH, size, `${c.label} chip`)
+          const runs = [{ text: c.label, options: { fontSize: size, color: C.text1 } }, ...(suffix(c) ? [{ text: suffix(c), options: { fontSize: size - 1, color: C.accent6 } }] : [])]
+          if (c.detail) { runs[runs.length - 1].options.breakLine = true; runs.push({ text: c.detail, options: { fontSize: size - 1, color: C.accent6 } }) }
+          text(sl, runs.length > 1 ? runs : c.label, { x: x + 0.48, y, w: labelW, h, fontSize: size, color: C.text1, valign: 'middle', objectName: `${c.label} register label` })
           text(sl, c.valueText, { x: x + w - VALUE_W, y, w: VALUE_W, h, fontSize: size, bold: !!c.mark, color: c.mark ? C.text2 : C.accent6, align: 'right', valign: 'middle', objectName: `${c.label} register value` })
           rule(sl, x, y + h + 0.005, w, HEX.track, 0.5, `${c.label} register rule`)
           y += h + 0.01
@@ -590,7 +614,7 @@ async function main() {
         y += 0.1
       })
     }
-    const regNotes = regs => notesOf(['Reference.', regs.map(r => [...r.foundational, ...r.defense].map(c => `${c.label}: ${c.valueText}. ${c.note}`))])
+    const regNotes = regs => notesOf(['Reference.', regs.map(r => [...r.foundational, ...r.defense].map(c => `${c.label}: ${c.valueText}${c.exceptionText ? `, ${c.exceptionText}` : ''}. ${c.note}`))])
     const half = (CW - 0.4) / 2
     ;[[0, 1, 'A1', 'identity and endpoint'], [2, 3, 'A2', 'network and data']].forEach(([a, b, code, name]) => {
       s = content('Appendix', `Control register: ${name}`, `Appendix ${code} · ${legend}`)
@@ -605,7 +629,7 @@ async function main() {
     text(s, 'How we grade posture', { x: gx, y: TOP - 0.05, w: half, h: 0.4, fontSize: 18, bold: true, color: C.text2, objectName: 'Grading heading' })
     rule(s, gx, TOP + 0.4, half, C.text2, 1, 'Grading rule')
     const bench = m.tiers.benchmark.slice(0, 4).map(r => `${r.label} ${r.value}`).join(' · ')
-    const grade = [['Outcomes', 'Did the program hold? Alerts, confirmed threats, impact.'], ['Control effectiveness', 'What is actually enforced, graded E, P or N.'], ['Hardening next', 'Scoped and sequenced on the roadmap.'], ['Vendor benchmark, as context', bench || 'Microsoft scores are read as context, never as the objective.']]
+    const grade = [['Outcomes', 'Did the program hold? Alerts, confirmed threats, impact.'], ['Control effectiveness', 'What is actually enforced, graded E, P or N. An E that leaves resources out lists its exceptions.'], ['Hardening next', 'Scoped and sequenced on the roadmap.'], ['Vendor benchmark, as context', bench || 'Microsoft scores are read as context, never as the objective.']]
     let gy = TOP + 0.55
     grade.forEach(([head, body], i) => {
       const h = 0.3 + lines(body, half - 0.5, 12) * 0.2 + 0.12
