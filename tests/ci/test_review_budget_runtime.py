@@ -342,6 +342,20 @@ class HistoryTests(unittest.TestCase):
                 api.events.pop()
         self.assertEqual([c for c in api.calls if '/commits/' in c], [f'repos/{REPO}/commits/{SHA[:7]}'])
 
+    def test_colliding_legacy_completion_identities_block(self):
+        api, h, first, state = self._fresh_recorded()
+        (key, legacy), = state['rounds'].items()
+        # A pre-canonicalization ledger recorded the same instant twice under different spellings.
+        twin = dict(legacy, completed_at='2026-10-14T02:00:00+00:00', head='c' * 40, request='other')
+        state['rounds'][history.digest(['Code Review', twin['head'], twin['completed_at']])] = twin
+        state = json.loads(json.dumps(state, sort_keys=True))
+        with self.assertRaises(budget.Blocked):
+            history.recorded_completions(state)
+        api.events.append(event(3, action='edited', body=summary(commit=SHA[:8]), old=first))
+        with self.assertRaises(budget.Blocked):
+            h.sync(pr(), state)
+        self.assertEqual([c for c in api.calls if '/commits/' in c], [f'repos/{REPO}/commits/{SHA[:7]}'])
+
     def test_summary_rows_bind_equivalent_completion_spellings(self):
         recorded = {('Code Review', '2026-10-14T02:00:00Z'): SHA}
         for stamp in ('2026-10-14T02:00:00+00:00', '2026-10-14T02:00:00.000000Z', '2026-10-14T04:00:00+02:00'):

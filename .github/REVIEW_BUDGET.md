@@ -93,9 +93,11 @@ or equivalent timezone-offset/fractional-zero timestamp spelling they use, and a
 never resolved again, so a ref later moved to a crafted prefix collision cannot
 rebind the completion to a newly reserved head. Duplicate-round detection uses
 the same canonical identity, never the raw-text round key, so ledger records
-written with an earlier spelling stay recognized without being rewritten. An
-inconsistent cell for a recorded completion blocks. Full SHAs are used without a
-resolution call; API failures and missing or malformed responses block.
+written with an earlier spelling stay recognized without being rewritten. Two
+ledger records that canonicalize to one identity make lifetime history ambiguous
+and block. An inconsistent cell for a recorded completion blocks. Full SHAs are
+used without a resolution call; API failures and missing or malformed responses
+block.
 
 These are GitHub-delivery continuity guarantees, not a claim to control outside
 requests or prove delivery behavior that GitHub never recorded. Hosted delivery
@@ -309,5 +311,7 @@ draft review of that correction found that the identity still used the rendered
 timestamp spelling, so an equivalent timezone-offset or fractional-zero spelling
 escaped it and the raw-text round key. Completion times are now canonicalized for
 binding and duplicate detection, with existing ledger records preserved as
-written. The regression tests fail against the prior implementations and pass
-with the corrections. No activation was performed.
+written. Codex review of that correction found that two legacy records
+canonicalizing to one identity were merged by insertion order; they now block as
+ambiguous history. The regression tests fail against the prior implementations
+and pass with the corrections. No activation was performed.

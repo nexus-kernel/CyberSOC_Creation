@@ -48,9 +48,17 @@ def recorded_completions(state):
     """Map each recorded completion (kind, canonical time) to its full SHA.
 
     Ledger records keep the spelling they were written with; only the lookup key
-    is canonical, so legacy rounds stay recognized without being rewritten.
+    is canonical, so legacy rounds stay recognized without being rewritten. Two
+    records that canonicalize to one identity make lifetime history ambiguous,
+    so they block instead of letting insertion order pick a binding.
     """
-    return {(r['kind'], canonical_time(r['completed_at'])): r['head'] for r in state['rounds'].values()}
+    recorded = {}
+    for record in state['rounds'].values():
+        identity = (record['kind'], canonical_time(record['completed_at']))
+        if identity in recorded:
+            raise Blocked('Ambiguous recorded completion identity in history.')
+        recorded[identity] = record['head']
+    return recorded
 
 
 def resolve_commit(commit, repo, call=api):
