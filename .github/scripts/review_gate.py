@@ -21,6 +21,13 @@ def is_bot(user):
     return user.get("id") == BOT_ID and user.get("login") == BOT and user.get("type") == "Bot"
 
 
+def is_bot_reaction(user):
+    # Reaction API records can label the pinned Codex account as User.
+    # Keep comments, summaries and reviews on the strict Bot predicate.
+    return (user.get("id") == BOT_ID and user.get("login") == BOT
+            and user.get("type") in ("Bot", "User"))
+
+
 SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
 
 # Activation is a reviewed trusted-default code change, never an input/label or
@@ -145,7 +152,7 @@ def evaluate(pr, summary, reactions, reviews, threads, expected_sha=None):
     if not summary:
         raise Blocked("No Codex review summary is available for this PR.")
     completed = completed_review_times(summary, sha, pr["base"]["repo"]["full_name"])
-    bot_reactions = [r for r in reactions if is_bot(r.get("user", {}))]
+    bot_reactions = [r for r in reactions if is_bot_reaction(r.get("user", {}))]
     if any(r["content"] == "eyes" and any(
             kind not in completed or timestamp(r["created_at"]) > completed[kind]
             for kind in r.get("review_types", ["Code Review"])) for r in bot_reactions):
