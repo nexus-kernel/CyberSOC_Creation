@@ -954,10 +954,12 @@
       if (m.response) parts.push(`${m.response.scope === 'High' ? 'High severity alerts' : 'Alerts'} closed at a median of ${m.response.median.value}${m.response.analyst ? ' once automation closures are set aside' : ''}.`)
       if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
       if (ruleControl && ruleControl.pct !== null) parts.push(`${fmt(ruleControl.good)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
-      // The disposition statement says every alert, so a DR.10 reading that leaves closures undocumented replaces it
-      // with its own ratio.
-      const undocumented = dispositions && dispositions.pct !== null && !complete(dispositions)
-      const headline = m.alerts ? (undocumented ? `${measureText(dispositions)} alerts closed in the last 30 days carry a documented disposition` : 'Every alert reaches a documented disposition') : band(plan, 'Workload protection covers the resource estate', `Workload protection covers ${measureText(plan)} eligible resources, ${remaining(plan)}`, 'Workload protection covers most of the resource estate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
+      // The disposition statement says every alert, so only a complete DR.10 reading earns it. A DR.10 reading that
+      // leaves closures undocumented replaces it with its own ratio. Without a DR.10 reading (missing, unavailable,
+      // ungathered or no closures in the last 30 days) the statement leads with the triaged count from OUT.1, which
+      // alone shows nothing about closing comments and can hold open or unclassified alerts (Oct 15, 2026).
+      const disposition = !m.alerts ? null : complete(dispositions) ? 'Every alert reaches a documented disposition' : dispositions && dispositions.pct !== null ? `${measureText(dispositions)} alerts closed in the last 30 days carry a documented disposition` : `${plural(m.alerts.triaged, 'alert', 'alerts')} triaged ${m.period.label}`
+      const headline = disposition || band(plan, 'Workload protection covers the resource estate', `Workload protection covers ${measureText(plan)} eligible resources, ${remaining(plan)}`, 'Workload protection covers most of the resource estate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
       pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : ruleControl, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, m.alerts ? m.alerts.source : plan.source)
     }
 
