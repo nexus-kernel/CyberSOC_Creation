@@ -127,6 +127,26 @@ test('the scope appendix lists every ungraded control, continuing onto further s
   for (const c of ungraded) assert.ok(all.includes(c.label), `${c.label} is listed`)
   assert.ok(/Continued on the next slide, \d+ more controls\./.test(all))
   assert.ok(!scope[scope.length - 1].includes('Continued on the next slide'), 'the last slide does not promise another')
+  // The bottom 0.35 in of every column is kept for the continuation marker: no entry box, chip or rule reaches
+  // into that band, so the marker never overprints a wrapped last entry.
+  const BAND_EMU = BOTTOM_EMU - Math.round(0.35 * EMU)
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  const xmls = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).filter(x => x.includes('name="Ungathered'))
+  assert.equal(xmls.length, scope.length, 'every scope slide carries the not-graded column')
+  let boxes = 0
+  for (const xml of xmls) {
+    const shapes = [...xml.matchAll(/<p:cNvPr id="\d+" name="([^"]*)"(?:(?!<p:cNvPr)[\s\S])*?<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"\/>/g)].map(s => ({ name: s[1], y: Number(s[2]), bottom: Number(s[2]) + Number(s[3]) }))
+    const entries = shapes.filter(s => /^Ungathered(?: page \d+ (?:left|right))? \d+(?: chip(?: text)?| rule)?$/.test(s.name))
+    assert.ok(entries.length, 'the slide has not-graded entries')
+    boxes += entries.filter(s => /\d$/.test(s.name)).length
+    for (const s of entries) assert.ok(s.bottom <= BAND_EMU + 1, `"${s.name}" ends at ${(s.bottom / EMU).toFixed(3)} in, inside the bottom band`)
+    const marker = shapes.find(s => / continued$/.test(s.name))
+    if (marker) {
+      assert.ok(marker.bottom <= BOTTOM_EMU + 1, 'the marker ends above BOTTOM')
+      for (const s of entries) assert.ok(s.bottom <= marker.y, `"${s.name}" runs under the continuation marker`)
+    }
+  }
+  assert.equal(boxes, ungraded.length, 'one entry box per ungraded control')
 })
 test('a register detail that wraps gets a row tall enough for every line', async () => {
   const p = pack('balanced')
