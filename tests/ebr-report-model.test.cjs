@@ -2,6 +2,7 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
+const vm = require('node:vm')
 const { build, clean, span, mark, MEDIAN_FLOOR, NULL_VALUE, NA_VALUE, TIERS } = require('../report/report-model.js')
 
 function pack() {
@@ -542,12 +543,18 @@ test('the identity pillar says legacy authentication is blocked only when the ro
   put(p, 'IA.3', [{ ClientAppUsed: 'Other clients', Attempts: 51, Succeeded: 0, BlockedByCa: 0, Users: 0 }])
   put(p, 'IA.8-CA', [caRow('Legacy authentication', {})])
   let id = build(p).pillars.find(x => x.name === 'Identity and access')
-  assert.equal(id.headline, 'Sign-ins are challenged and legacy protocols are blocked')
+  // 95 of 100 is E, but five members are left, so the headline leads with the ratio rather than reading as everyone.
+  assert.equal(id.headline, 'Multifactor authentication covers 95 of 100 members at sign-in, with 5 remaining, and legacy protocols are blocked')
   assert.match(id.narrative, /Legacy authentication is blocked\./)
+  put(p, 'IA.1', [{ UserType: 'Member', UsersSignedIn: 100, UsersChallenged: 100 }])
+  assert.equal(build(p).pillars.find(x => x.name === 'Identity and access').headline, 'Sign-ins are challenged and legacy protocols are blocked')
   put(p, 'IA.8-CA', [caRow('Legacy authentication', { PolicyState: 'Report-only' })])
   id = build(p).pillars.find(x => x.name === 'Identity and access')
   assert.equal(id.headline, 'Sign-ins are challenged for multifactor authentication')
-  assert.ok(!/legacy/i.test(id.narrative + JSON.stringify(id.callout) + JSON.stringify(id.measure)))
+  put(p, 'IA.1', [{ UserType: 'Member', UsersSignedIn: 100, UsersChallenged: 95 }])
+  id = build(p).pillars.find(x => x.name === 'Identity and access')
+  assert.equal(id.headline, 'Multifactor authentication covers 95 of 100 members at sign-in, with 5 remaining')
+  assert.ok(!/legacy/i.test(id.headline + id.narrative + JSON.stringify(id.callout) + JSON.stringify(id.measure)))
 })
 test('legacy failures without a Conditional Access block are never split when security defaults may have blocked them', () => {
   const p = pack()
@@ -741,6 +748,106 @@ test('the onboarding gaps explain the difference between the sensor figure and t
   const plain = m.controls.find(c => c.label === 'Azure virtual machines reporting to endpoint detection')
   assert.equal(plain.value, '87 of 90')
   assert.ok(!/not reporting through/.test(plain.note))
+})
+test('an empty onboarding gap result reads as every machine reporting only when the onboarding and sensor figures agree', () => {
+  const p = pack()
+  const every = /Every Azure virtual machine Defender for Endpoint has seen is onboarded with an active sensor/
+  const endpointNotes = () => build(p).controls.filter(c => c.id === 'EW.1').map(c => c.note)
+  put(p, 'EW.1', [{ Scope: 'Azure VM', OSPlatform: 'WindowsServer2022', Devices: 90, Onboarded: 90, CanBeOnboarded: 0, SensorActive: 90 }])
+  put(p, 'EW.1-GAPS', [])
+  assert.ok(endpointNotes().every(n => every.test(n)))
+  put(p, 'EW.1', [{ Scope: 'Azure VM', OSPlatform: 'WindowsServer2022', Devices: 90, Onboarded: 89, CanBeOnboarded: 1, SensorActive: 89 }])
+  assert.ok(endpointNotes().every(n => !every.test(n)), 'one machine is not onboarded, so the empty gap result claims nothing')
+  put(p, 'EW.1', [{ Scope: 'Azure VM', OSPlatform: 'WindowsServer2022', Devices: 90, Onboarded: 90, CanBeOnboarded: 0, SensorActive: 85 }])
+  assert.ok(endpointNotes().every(n => !every.test(n)), 'five sensors are not active, so the empty gap result claims nothing')
+})
+// Ratio readings at E that each leave resources out, as the independent review found them (endpoint detection 88 of
+// 89, storage secure transfer 36 of 37, private containers 77 of 78, analytics rules 379 of 386), or with nothing
+// left out when full is set.
+const ABSOLUTE = /\b(every|all|none)\b/i
+function readings(p, full = false) {
+  const left = n => full ? 0 : n
+  put(p, 'IA.1', [{ UserType: 'Member', UsersSignedIn: 194, UsersChallenged: 194 - left(14) }])
+  put(p, 'EW.1', [{ Scope: 'Azure VM', OSPlatform: 'WindowsServer2022', Devices: 89, Onboarded: 89 - left(1), CanBeOnboarded: left(1), SensorActive: 89 - left(8) }])
+  put(p, 'EW.1-GAPS', full ? [] : [
+    { Reason: 'Onboarded, sensor not active', Product: '', Devices: 7, Eligible: true, Covered: false, Onboarded: 7, CanBeOnboarded: 0, NotSeen: 0, Other: 0 },
+    { Reason: 'Not onboarded, no endpoint detection found', Product: '', Devices: 1, Eligible: true, Covered: false, Onboarded: 0, CanBeOnboarded: 1, NotSeen: 0, Other: 0 }
+  ])
+  put(p, 'DR.5', [{ Scope: 'Azure VM', Onboarded: 89 - left(1), Assessed: 89 - left(4) }])
+  put(p, 'DP.4', [{ Resources: 40, WithEncryptionAtHost: 40 - left(2) }])
+  put(p, 'DP.5b', [{ VmsWithoutBackup: left(2) }])
+  put(p, 'EW.10', [{ Machines: 70, WithinCadence: 70 - left(2) }])
+  put(p, 'NB.4', [{ Sites: 48, HttpsOnly: 48 - left(1) }])
+  put(p, 'NB.1', [{ WorkloadSubnets: 30, Segmented: 30 - left(1) }])
+  put(p, 'DP.1', [{ Accounts: 37, SecureTransfer: 37 - left(1), MinTls12: 37 - left(1), AnonymousBlobOff: 37 - left(1), PublicNetworkOff: 37 - left(2) }])
+  put(p, 'DP.1-CONTAINERS', [{ Containers: 78, PrivateContainers: 78 - left(1), ExposedContainers: 0, AccountsExposed: 0, AccountsUnread: 0 }])
+  put(p, 'DP.2', [{ Vaults: 20, SoftDelete: 20 - left(1), PurgeProtection: 20 - left(1), RbacAuth: 20 - left(1) }])
+  put(p, 'DR.2', [{ Plan: 'VirtualMachines', ResourceType: 'microsoft.compute/virtualmachines', Resources: 200, Covered: 200 - left(5) }])
+  put(p, 'DR.9', [{ Scope: 'All workspaces', Metric: 'Total rules', Value: 386 }, { Scope: 'All workspaces', Metric: 'Enabled rules', Value: 386 - left(7) }])
+  put(p, 'DR.10', [{ Closed: 100, Documented: 100 - left(3) }])
+}
+const drop = (p, ...ids) => { for (const id of ids) { p.manifest = p.manifest.filter(r => r.ResultId !== id); delete p.results[id] } }
+test('a reading at E that leaves resources out never reads every, all or none, and counts its exceptions', () => {
+  const p = pack(); alerts(p); readings(p)
+  let m = build(p)
+  const ratios = m.controls.filter(c => !c.boolean && c.pct !== null)
+  assert.ok(ratios.length >= 15 && ratios.every(c => c.mark === 'E' && c.good < c.total), ratios.map(c => `${c.label} ${c.value}`).join(', '))
+  for (const c of ratios) assert.equal(c.exceptions, c.total - c.good, c.label)
+  for (const x of m.pillars) for (const t of [x.headline, x.headlineShort, x.narrative].filter(Boolean)) assert.ok(!ABSOLUTE.test(t), `${x.name}: ${t}`)
+  // The headline leads with the ratio and the remainder, and the disposition statement takes the DR.10 ratio.
+  assert.deepEqual(m.pillars.map(x => x.headline), [
+    'Multifactor authentication covers 180 of 194 members at sign-in, with 14 remaining',
+    'Endpoint detection covers 88 of 89 eligible Azure virtual machines, with 1 remaining',
+    'Encryption in transit enforced on 47 of 48 published web apps, with 1 remaining',
+    'Secure transfer is required on 36 of 37 storage accounts, with 1 remaining',
+    '97 of 100 alerts closed in the last 30 days carry a documented disposition'
+  ])
+  const pillarOf = (model, name) => model.pillars.find(x => x.name === name)
+  assert.match(pillarOf(m, 'Network and boundary').narrative, /47 of 48 published web apps enforce HTTPS\./)
+  assert.match(pillarOf(m, 'Data protection').narrative, /^36 of 37 storage accounts require secure transfer\. 35 of 37 refuse public network access\. Soft delete protects 19 of 20 Key Vaults, and purge protection covers 19 of 20\. 38 of 40 virtual machines carry a backup policy\.$/)
+  // EW.1-GAPS names the machines behind the remainder, so the endpoint row keeps the coverage sentence and the
+  // reconciliation together, and offers a shorter headline a crowded slide can take before it cuts either.
+  const endpoint = pillarOf(m, 'Endpoint and workload')
+  assert.equal(endpoint.headlineShort, 'Endpoint detection covers 88 of 89 eligible Azure virtual machines')
+  assert.match(endpoint.keep, /^Endpoint detection covers 88 of 89 eligible Azure virtual machines seen in the last 7 days, with 92% of onboarded Azure virtual machine sensors active\. 8 Azure virtual machines are not reporting through an active Defender for Endpoint sensor\. 7 are onboarded with a sensor that is not active and 1 is not onboarded and carries no endpoint detection product\.$/)
+  assert.ok(endpoint.narrative.startsWith(endpoint.keep))
+  assert.ok(m.pillars.every(x => x === endpoint || (!x.keep && !x.headlineShort)), 'only the endpoint row keeps sentences')
+  // The fallback statements follow the same rule: encryption at host without EW.1, segmentation without NB.4,
+  // soft delete without DP.1 and workload protection without an alert count.
+  const q = pack(); readings(q); drop(q, 'EW.1', 'EW.1-GAPS', 'NB.4', 'DP.1')
+  assert.deepEqual(build(q).pillars.slice(1).map(x => x.headline), [
+    'Encryption at host is enabled on 38 of 40 virtual machines, with 2 remaining',
+    'Segmentation covers 29 of 30 workload subnets, with 1 remaining',
+    'Soft delete protects 19 of 20 Key Vaults, with 1 remaining',
+    'Workload protection covers 195 of 200 eligible resources, with 5 remaining'
+  ])
+  // With nothing left out the same readings earn every and all, and no control counts an exception.
+  const full = pack(); alerts(full); readings(full, true)
+  m = build(full)
+  assert.ok(m.controls.every(c => !c.exceptions), m.controls.filter(c => c.exceptions).map(c => c.label).join(', '))
+  assert.deepEqual(m.pillars.map(x => x.headline), ['Sign-ins are challenged for multifactor authentication', 'Every eligible Azure virtual machine reports to endpoint detection', 'Encryption in transit enforced on every published service', 'Data in transit and key material are protected', 'Every alert reaches a documented disposition'])
+  assert.match(pillarOf(m, 'Network and boundary').narrative, /Every published web app enforces HTTPS\./)
+  assert.match(pillarOf(m, 'Data protection').narrative, /^All storage accounts require secure transfer and refuse public network access\. Soft delete protects every Key Vault and purge protection is in force\. Every virtual machine carries a backup policy\.$/)
+  assert.ok(!pillarOf(m, 'Endpoint and workload').keep, 'no machine is outside an active sensor')
+  // Key material joins the data statement only when soft delete is complete as well.
+  put(full, 'DP.2', [{ Vaults: 20, SoftDelete: 19, PurgeProtection: 19, RbacAuth: 20 }])
+  assert.equal(pillarOf(build(full), 'Data protection').headline, 'Secure transfer is required on every storage account')
+})
+test('the controls page names the exceptions of a control at E beside its figure', () => {
+  const html = data => {
+    const nodes = {}
+    const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(data) : '', addEventListener() {} }) }
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+    return nodes.report.innerHTML
+  }
+  const p = pack(); readings(p)
+  const near = html(p)
+  assert.ok(near.includes('title="Enforced, 1 exception">E</span><div class="control-text"><h4>Azure virtual machines reporting to endpoint detection</h4>'), 'the mark names the exception')
+  assert.match(near, /<h4>Azure virtual machines reporting to endpoint detection<\/h4>[\s\S]*?<strong>88 of 89<\/strong>[\s\S]*?<span class="exceptions">1 exception<\/span>/)
+  assert.match(near, /<strong>379 of 386<\/strong>[\s\S]*?<span class="exceptions">7 exceptions<\/span>/)
+  assert.ok(near.includes('shows how many as exceptions'), 'the legend explains the count')
+  const full = pack(); readings(full, true)
+  assert.ok(!html(full).includes('class="exceptions"'), 'a complete reading carries no exception line')
 })
 test('MFA at sign-in and admin portal MFA read In force from the Conditional Access policy, with the sign-in ratio in the note', () => {
   const p = pack()

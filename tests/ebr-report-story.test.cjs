@@ -167,6 +167,35 @@ test('every control in the register has a value, never null', () => {
   }
   assert.ok(rows.some(c => c.valueText === 'Not gathered' && c.chip === '–'))
 })
+test('a win, headline or narrative at E that leaves resources out never says every, all or none, and the register counts the exceptions', () => {
+  const p = quarterPack()
+  const set = (id, rows) => { p.manifest = p.manifest.filter(r => r.ResultId !== id); p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-12T10:00:00Z' }); p.results[id] = rows }
+  // MFA at sign-in (180 of 194) and secure transfer (41 of 42) already read E with exceptions in this pack.
+  set('EW.10', [{ Machines: 70, WithinCadence: 68, OverduePatches: 2, AssessedWithin7d: 70 }])
+  set('EW.1', [{ Scope: 'Azure VM', OSPlatform: 'WindowsServer2022', Devices: 89, Onboarded: 88, CanBeOnboarded: 1, SensorActive: 81 }])
+  set('EW.1-GAPS', [{ Reason: 'Onboarded, sensor not active', Product: '', Devices: 7, Eligible: true, Covered: false, Onboarded: 7, CanBeOnboarded: 0, NotSeen: 0, Other: 0 }, { Reason: 'Not onboarded, no endpoint detection found', Product: '', Devices: 1, Eligible: true, Covered: false, Onboarded: 0, CanBeOnboarded: 1, NotSeen: 0, Other: 0 }])
+  set('DP.2', [{ Vaults: 20, SoftDelete: 19, PurgeProtection: 19, RbacAuth: 19 }])
+  set('DR.10', [{ Closed: 100, Documented: 97 }])
+  set('DR.9', [{ Scope: 'All workspaces', Metric: 'Total rules', Value: 386 }, { Scope: 'All workspaces', Metric: 'Enabled rules', Value: 386 }])
+  const { m, s } = story(p)
+  const ABSOLUTE = /\b(every|all|none)\b/i
+  const patch = s.wins.find(w => w.eyebrow === 'Patching')
+  assert.deepEqual([patch.value, patch.sub], ['68 of 70', '2 machines carry a critical or security patch past the cadence at collection.'], 'never "No critical or security patch past the cadence"')
+  const ratioWins = s.wins.filter(w => m.controls.some(c => c.source === w.source && c.exceptions > 0))
+  assert.deepEqual(ratioWins.map(w => w.value), ['180 of 194', '68 of 70'])
+  for (const w of ratioWins) assert.ok(!ABSOLUTE.test(`${w.label} ${w.sub}`), `${w.label} ${w.sub}`)
+  for (const x of m.pillars) for (const t of [x.headline, x.headlineShort, x.narrative].filter(Boolean)) assert.ok(!ABSOLUTE.test(t), `${x.name}: ${t}`)
+  // The register shows meeting the threshold and having no exceptions as different things.
+  const rows = s.register.flatMap(r => [...r.foundational, ...r.defense])
+  const row = re => rows.find(c => re.test(c.label))
+  assert.deepEqual([row(/^Azure virtual machines reporting/).chip, row(/^Azure virtual machines reporting/).exceptionText], ['E', '1 exception'])
+  assert.deepEqual([row(/^Operating system findings/).chip, row(/^Operating system findings/).exceptionText], ['E', '2 exceptions'])
+  assert.deepEqual([row(/^Analytics rules/).chip, row(/^Analytics rules/).exceptionText], ['E', ''], 'a complete reading carries no count')
+  for (const c of rows) assert.equal(!!c.exceptionText, c.chip === 'E' && c.good < c.total, `${c.label}: ${c.exceptionText}`)
+  // Gaps and the roadmap carry only controls below E, so no exception count reaches them.
+  const shown = [...s.drift.map(c => c.detail), ...s.roadmap.flatMap(h => h.items.flatMap(i => [i.evidence, ...i.controls.map(c => c.detail)]))]
+  assert.ok(shown.length && shown.every(t => !/\bexceptions?\b/.test(t)), shown.find(t => /\bexceptions?\b/.test(t)))
+})
 test('the identity win names the evaluated population in a federated tenant', () => {
   const p = quarterPack()
   p.results['IA.1'] = [{ UserType: 'Member', UsersSignedIn: 194, UsersChallenged: 175, NoMfaOnlyUnevaluated: 10, FederatedMfaAtLeastOnce: 175, FederatedWithoutMfa: 0 }]

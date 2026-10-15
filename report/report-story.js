@@ -162,14 +162,15 @@
     if (kpis.length < 4 && s.foundational.measured) kpis.push({ value: `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)}`, label: 'Foundational controls enforced', sub: 'Across five pillars', area: 'controls' })
     s.kpis = kpis.slice(0, 4)
 
-    // Wins, at most one per area, up to six. A verified configuration reads In force with its own label.
-    const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null && (c.boolean || c.total >= MIN_SAMPLE) ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || sub), source: c.source } : null }
+    // Wins, at most one per area, up to six. A verified configuration reads In force with its own label. A sub-line
+    // may depend on the reading, so a win at E that leaves resources out never says none or every (Oct 15, 2026).
+    const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null && (c.boolean || c.total >= MIN_SAMPLE) ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || (typeof sub === 'function' ? sub(c) : sub)), source: c.source } : null }
     const candidates = [
       a && a.flaggedKnown && a.truePositives > 0 && a.flagged === 0 && !impactConfirmed ? { area: 'threat', eyebrow: 'Confirmed threats', value: `0 of ${fmt(a.truePositives)}`, label: `${tpWord(a.truePositives)} carried ${a.tacticPhrase}`, sub: `${classified(a.truePositives)} ${s.periodPhrase}.`, source: a.source } : null,
       s.speed ? { area: 'response', eyebrow: 'Response speed', value: s.speed.value, label: s.speed.label, sub: s.speed.sub, source: s.speed.row.source } : null,
       gain ? { area: 'posture', eyebrow: 'Posture', value: `+${fmt(gain.points)} pts`, label: `${scoreName}, ${pctText(gain.from)} in ${gain.since} to ${pctText(score.value)}`, sub: `Calculated by Microsoft, read ${score.read || s.readShort}.`, source: score.source } : null,
       winAt(/^Multifactor authentication required at sign-in/, 'identity', 'users challenged for MFA at sign-in', 'Members who signed in over the last 30 days.', 'multifactor authentication required at sign-in by Conditional Access policy', 'An enabled policy for all users on every application.'),
-      winAt(/^Operating system findings/, 'endpoint', 'machines patched inside the agreed cadence', 'No critical or security patch past the cadence at collection.') || winAt(/^Azure virtual machines reporting/, 'endpoint', 'Azure virtual machines reporting to endpoint detection', 'Seen in the last 7 days.'),
+      winAt(/^Operating system findings/, 'endpoint', 'machines patched inside the agreed cadence', c => c.good === c.total ? 'No critical or security patch past the cadence at collection.' : `${plural(c.total - c.good, 'machine carries', 'machines carry')} a critical or security patch past the cadence at collection.`) || winAt(/^Azure virtual machines reporting/, 'endpoint', 'Azure virtual machines reporting to endpoint detection', 'Seen in the last 7 days.'),
       m.mailRemoved > 0 && find(/^Malicious mail removed/)?.mark === 'E' ? { area: 'data', eyebrow: 'Email protection', value: fmt(m.mailRemoved), label: 'malicious messages removed after delivery', sub: 'Zero-hour auto purge and automated remediation, last 30 days.', source: find(/^Malicious mail removed/).source } : winAt(/^Managed disks/, 'data', 'managed disks encrypted at rest', 'Platform or customer managed keys, at collection.'),
       winAt(/^Alerts closed with a documented/, 'detection', 'alerts closed with a documented disposition', 'Classification and closing comment, last 30 days.'),
       winAt(/^Encryption in transit/, 'network', 'published web apps enforcing HTTPS only', 'At collection.')
@@ -274,10 +275,11 @@
       return { group: g, foundational: tierCount('foundational'), defense: tierCount('defense'), measure, ungathered: inG.filter(ungathered).length }
     })
 
-    // The register: every control, with a value that is never null.
+    // The register: every control, with a value that is never null. A control at E that leaves resources out
+    // carries its exception count, so E with exceptions never reads as E with none (Oct 15, 2026).
     s.register = GROUPS.map(g => {
       const inG = m.controls.filter(c => c.group === g)
-      const rows = t => inG.filter(c => c.tier === t).map(c => ({ ...safe(c), chip: c.mark || (c.na ? 'N/A' : '–') }))
+      const rows = t => inG.filter(c => c.tier === t).map(c => ({ ...safe(c), chip: c.mark || (c.na ? 'N/A' : '–'), exceptionText: c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : '' }))
       const counts = ['E', 'P', 'N'].map(k => [k, inG.filter(c => c.mark === k).length]).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`)
       const dash = inG.filter(ungathered).length, na = inG.filter(c => c.na).length
       return { group: g, foundational: rows('foundational'), defense: rows('defense'), summary: [...counts, ...(dash ? [`${dash} –`] : []), ...(na ? [`${na} N/A`] : [])].join(' · ') }
