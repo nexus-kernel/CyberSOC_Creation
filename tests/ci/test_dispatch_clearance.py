@@ -53,6 +53,46 @@ class ClearanceTests(unittest.TestCase):
     def test_fresh_clean_review_of_latest_head_passes(self):
         self.assertEqual(gate.evaluate(**self.data, expected_sha=SHA), SHA)
 
+    def test_pinned_bot_and_user_reactions_clear(self):
+        for actor_type in ("Bot", "User"):
+            with self.subTest(actor_type=actor_type):
+                self.data["reactions"][0]["user"] = dict(BOT, type=actor_type)
+                self.assertEqual(gate.evaluate(**self.data, expected_sha=SHA), SHA)
+
+    def test_reaction_identity_requires_pinned_id_login_and_known_type(self):
+        for actor_type in ("Bot", "User"):
+            for identity in ({"id": 1}, {"login": "someone-else"},
+                             {"id": 1, "login": "ordinary-user"}):
+                with self.subTest(actor_type=actor_type, identity=identity):
+                    self.data["reactions"][0]["user"] = dict(BOT, type=actor_type, **identity)
+                    self.blocked("No fresh Codex thumbs-up")
+        for actor_type in (None, "Organization", "user"):
+            with self.subTest(actor_type=actor_type):
+                self.data["reactions"][0]["user"] = dict(BOT, type=actor_type)
+                self.blocked("No fresh Codex thumbs-up")
+
+    def test_pinned_user_summary_is_not_authenticated(self):
+        self.data["summary"]["user"] = dict(BOT, type="User")
+        self.assertFalse(gate.is_bot(self.data["summary"]["user"]))
+        self.blocked("No authenticated Codex review summary")
+
+    def test_reviews_retain_strict_bot_identity(self):
+        for actor_type in ("User", "Bot"):
+            with self.subTest(actor_type=actor_type):
+                user = dict(BOT, type=actor_type)
+                self.assertEqual(gate.is_bot(user), actor_type == "Bot")
+                self.data["reviews"] = [{"id": 1, "user": user, "state": "COMMENTED",
+                                         "submitted_at": "2026-10-14T07:00:05Z"}]
+                if actor_type == "Bot":
+                    self.blocked("newer Codex review")
+                else:
+                    self.assertEqual(gate.evaluate(**self.data), SHA)
+
+    def test_pinned_user_eyes_still_block_signoff(self):
+        self.data["reactions"].append({"user": dict(BOT, type="User"), "content": "eyes",
+                                       "created_at": "2026-10-14T07:00:03Z"})
+        self.blocked("still indicates a review is running")
+
     def test_stale_review_does_not_clear_new_commits(self):
         self.data["pr"]["head"]["sha"] = "b" * 40
         self.blocked("latest PR commit")
@@ -199,8 +239,16 @@ class RequestReactionTests(unittest.TestCase):
                 self.request["body"] = body
                 self.assert_dispatch(False, "No fresh Codex thumbs-up")
 
+    def test_pinned_user_request_reaction_clears_but_user_summary_does_not(self):
+        self.request["body"] = "@codex review"
+        self.request_reactions[0]["user"] = dict(BOT, type="User")
+        self.assert_dispatch(True)
+        self.data["summary"]["user"] = dict(BOT, type="User")
+        self.assert_dispatch(False, "Expected one authenticated Codex review summary")
+
     def test_signoff_must_follow_completion_in_a_later_second(self):
-        for source in ['pr', 'code_request']:
+        for source, actor_type in [('pr', 'Bot'), ('pr', 'User'),
+                                   ('code_request', 'Bot'), ('code_request', 'User')]:
             for completed, reacted, allowed in [
                 ('07:05:00Z', '07:04:59Z', False),
                 ('07:05:00Z', '07:05:00Z', False),
@@ -209,11 +257,12 @@ class RequestReactionTests(unittest.TestCase):
                 ('07:05:00.900Z', '08:05:00.999+01:00', False),
                 ('07:05:00.900Z', '07:05:01Z', True),
             ]:
-                with self.subTest(source=source, completed=completed, reacted=reacted):
+                with self.subTest(source=source, actor_type=actor_type, completed=completed, reacted=reacted):
                     self.data = fixture()
                     self.data['summary']['body'] = self.data['summary']['body'].replace(
                         '07:00:00Z', completed)
-                    reaction = dict(user=BOT, content='+1', created_at='2026-10-14T' + reacted)
+                    reaction = dict(user=dict(BOT, type=actor_type), content='+1',
+                                    created_at='2026-10-14T' + reacted)
                     self.request['body'] = '@codex review'
                     self.data['reactions'] = [reaction] if source == 'pr' else []
                     self.request_reactions = [reaction] if source == 'code_request' else []
@@ -490,11 +539,16 @@ class MigrationSecurityTests(unittest.TestCase):
         for field, value in [('id', 123), ('type', 'User'), ('login', 'other')]:
             for location in ['summary', 'reaction']:
                 data = copy.deepcopy(fixture())
-                user = data['summary']['user'] if location == 'summary' else data['reactions'][0]['user']
-                user[field] = value
+                # Replace the record's actor: deepcopy preserves the shared
+                # summary/reaction user reference in fixture().
+                record = data['summary'] if location == 'summary' else data['reactions'][0]
+                record['user'] = dict(BOT, **{field: value})
                 with self.subTest(field=field, location=location), patch.object(gate, 'gh_api', return_value={'sha': SHA}):
-                    with self.assertRaises(gate.Blocked):
-                        gate.evaluate(**data)
+                    if location == 'reaction' and field == 'type' and value == 'User':
+                        self.assertEqual(gate.evaluate(**data), SHA)
+                    else:
+                        with self.assertRaises(gate.Blocked):
+                            gate.evaluate(**data)
 
     def test_missing_thread_state_and_unknown_mergeability_fail_closed(self):
         for field in ['thread', 'mergeable']:
