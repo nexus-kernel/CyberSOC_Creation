@@ -208,13 +208,19 @@
     // the collector's own OUT.4 note holds that a zero data loss statement needs each flagged closing comment
     // reviewed. Without the record every surface prints the tactic count and asks for additional investigation
     // evidence, and no surface prints reached, no impact or did not reach (Oct 15, 2026).
+    // The record is bound to the alert period it covers: it names the period's WindowStart and WindowEnd, its review
+    // is dated on or after the period's end, and its count never exceeds the true positives. A context file reused
+    // from an earlier period therefore never carries a determination forward to later true positives.
     const impactRecord = context.Impact && typeof context.Impact === 'object' ? context.Impact : null
     if (impactRecord) {
       const confirmed = count(impactRecord.Confirmed)
-      if (confirmed !== null && validDate(impactRecord.Reviewed) && clean(impactRecord.Reference)) {
-        if (m.alerts && m.alerts.truePositives !== null && confirmed > m.alerts.truePositives) note('Impact determination needs review', `The context Impact record confirms impact from ${fmt(confirmed)} alerts against ${fmt(m.alerts.truePositives)} true positives, so it was omitted. Correct the count before presenting.`)
-        else m.impact = { confirmed, reviewed: date(impactRecord.Reviewed), reference: clean(impactRecord.Reference), source: `Reviewed impact determination ${clean(impactRecord.Reference)}, ${date(impactRecord.Reviewed)}, from the reviewed context file.` }
-      } else note('Impact determination needs review', 'The context Impact record was omitted because it lacks a Confirmed count, a Reviewed date or a Reference. Add all three to print the data exposure and business impact determination.')
+      const reviewed = iso(impactRecord.Reviewed), recordStart = iso(impactRecord.WindowStart), recordEnd = iso(impactRecord.WindowEnd)
+      const omitted = reason => note('Impact determination needs review', `The context Impact record was omitted because ${reason} Correct it before presenting, or remove it to keep the request for additional investigation evidence.`)
+      if (confirmed === null || !validDate(reviewed) || !clean(impactRecord.Reference) || !validDate(recordStart) || !validDate(recordEnd)) omitted('it lacks a Confirmed count, a Reviewed date, a Reference, or the WindowStart and WindowEnd of the alert period it covers.')
+      else if (!windowValid || recordStart !== p.WindowStart || recordEnd !== p.WindowEnd) omitted(`it covers ${span(recordStart, recordEnd)} and this pack's alert period is ${m.period.label}.`)
+      else if (reviewed < p.WindowEnd) omitted(`its review is dated ${date(reviewed)}, before the alert period ended on ${date(p.WindowEnd)}, so it cannot cover every true positive in the period.`)
+      else if (m.alerts && m.alerts.truePositives !== null && confirmed > m.alerts.truePositives) omitted(`it confirms impact from ${fmt(confirmed)} alerts against ${fmt(m.alerts.truePositives)} true positives.`)
+      else m.impact = { confirmed, reviewed: date(reviewed), reference: clean(impactRecord.Reference), source: `Reviewed impact determination ${clean(impactRecord.Reference)}, ${date(reviewed)}, covering ${m.period.label}, from the reviewed context file.` }
     }
     const tpKnown = !!m.alerts && m.alerts.truePositives !== null
     m.threatMeasures = {
@@ -227,7 +233,7 @@
       m.impactStatement = clean(m.impact
         ? (m.impact.confirmed === 0 ? `The reviewed investigation records confirm no data exposure or business impact from ${tpText} (${m.impact.reference}, reviewed ${m.impact.reviewed}).` : `The reviewed investigation records confirm data exposure or business impact from ${a.truePositives === 1 ? tpText : `${fmt(m.impact.confirmed)} of ${tpText}`} (${m.impact.reference}, reviewed ${m.impact.reviewed}).`)
         : `${a.flaggedKnown ? `Based on the tactics Sentinel recorded on the alerts, ${a.flagged === 0 ? (a.truePositives === 1 ? 'the confirmed threat did not carry' : 'none of the confirmed threats carried') : `${fmt(a.flagged)} of ${tpText} carried`} ${a.tacticPhrase}. ` : ''}Additional investigation evidence is required to confirm whether any data exposure or business impact occurred.`)
-      if (!m.impact) note('Impact determination', 'The context file carries no reviewed Impact record, so the report prints the tactic count with a request for additional investigation evidence and never a data exposure or business impact statement. Review the closing comment and ticket of each true positive, then add Impact with Confirmed, Reviewed and Reference to the context file to print the determination.')
+      if (!m.impact) note('Impact determination', 'The context file carries no reviewed Impact record, so the report prints the tactic count with a request for additional investigation evidence and never a data exposure or business impact statement. Review the closing comment and ticket of each true positive, then add Impact with Confirmed, Reviewed, Reference, WindowStart and WindowEnd to the context file to print the determination.')
     }
 
     // Response timing candidate ladder.
@@ -949,13 +955,14 @@
 
     const row = (tier, label, value, id) => { if (value !== null && value !== undefined && value !== '' && value !== 'Not available') m.tiers[tier].push({ label: clean(label), value: clean(String(value)), id }) }
     if (m.alerts) {
+      // The deck band shows the first three rows, so the tier leads with what "Did the program hold" names: alerts,
+      // confirmed threats and the reviewed impact determination when the context file holds one. The resolved
+      // share and the tactic reading follow. Tactic-qualified: the count is of tactics recorded on the alert,
+      // never a verified outcome.
       row('outcomes', 'Alerts triaged', fmt(m.alerts.triaged), 'OUT.1')
-      if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts resolved and closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
       if (m.alerts.truePositives !== null) row('outcomes', 'Confirmed threats', fmt(m.alerts.truePositives), 'OUT.1')
-      // The reviewed determination, when the context file holds one, outranks the tactic reading: the deck band
-      // shows the first three rows. Tactic-qualified: the count is of tactics recorded on the alert, never a
-      // verified outcome.
       if (m.impact && m.alerts.truePositives > 0) row('outcomes', 'Confirmed data exposure or business impact', fmt(m.impact.confirmed), 'CONTEXT')
+      if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts resolved and closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
       if (m.alerts.flaggedKnown) row('outcomes', `True positives whose alerts carried ${m.alerts.tacticPhrase}`, `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
     }
     if (m.response) {

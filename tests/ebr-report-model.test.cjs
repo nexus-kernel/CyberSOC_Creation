@@ -1127,10 +1127,12 @@ test('the three threat measures stay apart, and only a reviewed context record p
   // The flag count reads the same way when a tactic is recorded.
   put(p, 'OUT.4', [threat('Data staged for transfer', 'High', 'Exfiltration', '2026-08-18'), threat('Password spray attack', 'Medium', 'CredentialAccess', '2026-08-22')])
   assert.equal(build(p).impactStatement, 'Based on the tactics Sentinel recorded on the alerts, 1 of the 3 confirmed threats carried an exfiltration or impact tactic. Additional investigation evidence is required to confirm whether any data exposure or business impact occurred.')
-  // A reviewed record: the determination prints with its reference and date, and the tier gains a row.
-  p.context = { Impact: { Confirmed: 0, Reviewed: '2026-10-10', Reference: 'CHG-123' } }
+  // A reviewed record bound to this pack's alert period: the determination prints with its reference and date,
+  // and the tier gains a row.
+  const win = { WindowStart: '2025-11-01', WindowEnd: '2026-09-30' }
+  p.context = { Impact: { Confirmed: 0, Reviewed: '2026-10-10', Reference: 'CHG-123', ...win } }
   m = build(p)
-  assert.deepEqual(m.impact, { confirmed: 0, reviewed: 'Oct 10, 2026', reference: 'CHG-123', source: 'Reviewed impact determination CHG-123, Oct 10, 2026, from the reviewed context file.' })
+  assert.deepEqual(m.impact, { confirmed: 0, reviewed: 'Oct 10, 2026', reference: 'CHG-123', source: 'Reviewed impact determination CHG-123, Oct 10, 2026, covering Nov 1, 2025 to Sep 30, 2026, from the reviewed context file.' })
   assert.equal(m.impactStatement, 'The reviewed investigation records confirm no data exposure or business impact from the 3 confirmed threats (CHG-123, reviewed Oct 10, 2026).')
   assert.deepEqual(m.threatMeasures.impact, { value: 0, label: 'Confirmed business impact', detail: 'Reviewed Oct 10, 2026, CHG-123', source: m.impact.source })
   assert.deepEqual(m.tiers.outcomes.find(r => r.id === 'CONTEXT'), { label: 'Confirmed data exposure or business impact', value: '0', id: 'CONTEXT' })
@@ -1140,9 +1142,27 @@ test('the three threat measures stay apart, and only a reviewed context record p
   m = build(p)
   assert.equal(m.impactStatement, 'The reviewed investigation records confirm data exposure or business impact from 2 of the 3 confirmed threats (CHG-123, reviewed Oct 10, 2026).')
   assert.equal(m.headline.find(t => t.label === 'Confirmed threats').sub, '2 with confirmed data exposure or business impact')
+  // The reviewed determination stays within the three rows the deck band shows, even at the 90 percent closure
+  // boundary where the resolved share also earns a row.
+  p.results['OUT.1'] = [{ Raised: 100, Closed: 90, Open: 10, TruePositive: 3, ClosedUnclassified: 5 }]
+  m = build(p)
+  assert.deepEqual(m.tiers.outcomes.map(r => r.label), ['Alerts triaged', 'Confirmed threats', 'Confirmed data exposure or business impact', 'Alerts resolved and closed', 'True positives whose alerts carried an exfiltration or impact tactic'])
+  p.results['OUT.1'] = [{ Raised: 100, Closed: 80, Open: 20, TruePositive: 3, ClosedUnclassified: 5 }]
+  put(p, 'OUT.4', [threat('Log4j vulnerability exploit aka Log4Shell IP IOC', 'High', 'CommandAndControl', '2026-08-18'), threat('Password spray attack', 'Medium', 'CredentialAccess', '2026-08-22')])
+  // A context file reused from an earlier period, or reviewed before the period ended, never carries a determination forward.
+  p.context = { Impact: { Confirmed: 0, Reviewed: '2026-06-30', Reference: 'Q2-review', WindowStart: '2026-04-01', WindowEnd: '2026-06-30' } }
+  m = build(p)
+  assert.equal(m.impact, null)
+  assert.equal(m.impactStatement, gate)
+  assert.match(m.review.find(n => n.title === 'Impact determination needs review').text, /^The context Impact record was omitted because it covers Apr 1 to Jun 30, 2026 and this pack's alert period is Nov 1, 2025 to Sep 30, 2026\./)
+  p.context = { Impact: { Confirmed: 0, Reviewed: '2026-09-15', Reference: 'CHG-123', ...win } }
+  m = build(p)
+  assert.equal(m.impact, null)
+  assert.match(m.review.find(n => n.title === 'Impact determination needs review').text, /because its review is dated Sep 15, 2026, before the alert period ended on Sep 30, 2026/)
+  assert.equal(build({ ...p, context: { Impact: { Confirmed: 0, Reviewed: '2026-09-30', Reference: 'CHG-123', ...win } } }).impact.reviewed, 'Sep 30, 2026', 'a review dated on the last day of the period counts')
   // Malformed or inconsistent records are omitted with a review note, and the gate statement returns.
   put(p, 'OUT.4', [threat('Log4j vulnerability exploit aka Log4Shell IP IOC', 'High', 'CommandAndControl', '2026-08-18'), threat('Password spray attack', 'Medium', 'CredentialAccess', '2026-08-22')])
-  for (const bad of [{ Confirmed: 0 }, { Confirmed: -1, Reviewed: '2026-10-10', Reference: 'CHG-123' }, { Confirmed: 0, Reviewed: '2026-02-31', Reference: 'CHG-123' }, { Confirmed: 4, Reviewed: '2026-10-10', Reference: 'CHG-123' }, 'none']) {
+  for (const bad of [{ Confirmed: 0 }, { Confirmed: 0, Reviewed: '2026-10-10', Reference: 'CHG-123' }, { Confirmed: -1, Reviewed: '2026-10-10', Reference: 'CHG-123', ...win }, { Confirmed: 0, Reviewed: '2026-02-31', Reference: 'CHG-123', ...win }, { Confirmed: 4, Reviewed: '2026-10-10', Reference: 'CHG-123', ...win }, { Confirmed: 0, Reviewed: '2026-10-10', Reference: 'CHG-123', WindowStart: '2025-11-01', WindowEnd: '2026-09-31' }, 'none']) {
     p.context = { Impact: bad }
     m = build(p)
     assert.equal(m.impact, null, JSON.stringify(bad))

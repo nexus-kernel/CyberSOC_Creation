@@ -235,7 +235,7 @@ test('chart workbooks carry valid table ranges so Keynote and Quick Look draw th
     }
   }
 })
-test('confirmed threats get their own slide at balanced and detailed depth, only when there are examples', async () => {
+test('confirmed threats get their own slide at balanced and detailed depth, with the table only when there are examples', async () => {
   const isThreats = s => s.includes('Confirmed threats') && s.includes('Log4Shell')
   const has = async (depth, rows) => (await read(deck(depth, rows).out)).slides.some(isThreats)
   const { data, out } = deck('balanced', examples)
@@ -245,7 +245,7 @@ test('confirmed threats get their own slide at balanced and detailed depth, only
   assert.equal(await has('detailed', examples), true)
   assert.equal(await has('brief', examples), false)
   const plain = (await read(deck('balanced').out)).slides
-  assert.ok(!plain.some(s => /Attack stage/.test(s)), 'no examples, no slide')
+  assert.ok(!plain.some(s => /Attack stage/.test(s)), 'no examples, no table')
   assert.ok(/Command and control/.test(slide) && /August\u00A02026/.test(slide) && /July\u00A02026/.test(slide), 'stage and month, with the year bound to the month')
   const m = build(data)
   for (const n of [...m.presenter, ...m.review]) assert.ok(!notes.join(' ').includes(n.text), `speaker notes carry "${n.title}"`)
@@ -350,9 +350,11 @@ test('a short confirmed threats table is followed by the outcome cards and the h
   for (const n of [...m.presenter, ...m.review]) assert.ok(!notes.join(' ').includes(n.text), `speaker notes carry "${n.title}"`)
 })
 test('a reviewed impact record in the context file is the only thing that prints an impact determination', async () => {
-  const withContext = async context => {
-    const p = pack('balanced', examples)
+  const record = (confirmed, extra = {}) => ({ Confirmed: confirmed, Reviewed: '2026-10-10', Reference: 'CHG-123', WindowStart: '2025-11-01', WindowEnd: '2026-09-30', ...extra })
+  const withContext = async (context, out1 = null, rows = examples) => {
+    const p = pack('balanced', rows)
     p.context = context
+    if (out1) p.results['OUT.1'] = [out1]
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
     fs.writeFileSync(dataFile, JSON.stringify(p))
     execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
@@ -363,14 +365,30 @@ test('a reviewed impact record in the context file is the only thing that prints
   const none = await withContext({ ClientName: 'Example', TenantId: 't' })
   assert.ok(none.threats.includes(GATE) && !/Confirmed impact, reviewed/.test(none.summary), 'without a record the caption asks for more evidence and the summary has no impact row')
   assert.ok(!/\breached\b|no impact|did not reach|data exposure or business impact confirmed/i.test(none.all), none.all.match(/.{0,40}(reached|no impact|did not reach).{0,40}/i)?.[0])
-  const clear = await withContext({ ClientName: 'Example', TenantId: 't', Impact: { Confirmed: 0, Reviewed: '2026-10-10', Reference: 'CHG-123' } })
+  const clear = await withContext({ ClientName: 'Example', TenantId: 't', Impact: record(0) })
   assert.ok(clear.threats.includes('The reviewed investigation records confirm no data exposure or business impact from the 3 confirmed threats (CHG-123, reviewed Oct 10, 2026).') && !clear.threats.includes(GATE), clear.threats.match(/.{0,40}investigation records.{0,120}/)?.[0])
   assert.ok(/Confirmed impact, reviewed\s+0/.test(clear.summary) && /The reviewed investigation records confirm no data exposure or business impact\./.test(clear.summary), clear.summary.match(/.{0,60}impact.{0,60}/)?.[0])
-  const hit = await withContext({ ClientName: 'Example', TenantId: 't', Impact: { Confirmed: 1, Reviewed: '2026-10-10', Reference: 'CHG-123' } })
+  const hit = await withContext({ ClientName: 'Example', TenantId: 't', Impact: record(1) })
   assert.ok(hit.threats.includes('confirm data exposure or business impact from 1 of the 3 confirmed threats (CHG-123, reviewed Oct 10, 2026).'), 'a confirmed impact is stated, never softened')
   assert.ok(!/confirmed threats carried an exfiltration or impact tactic\s+All classified/.test(hit.summary), 'a confirmed impact withdraws the tactic win')
   const malformed = await withContext({ ClientName: 'Example', TenantId: 't', Impact: { Confirmed: 0 } })
   assert.ok(malformed.threats.includes(GATE), 'a record without a review date and reference prints nothing')
+  // A context file reused from an earlier period is rejected, so its determination never covers later true positives.
+  const stale = await withContext({ ClientName: 'Example', TenantId: 't', Impact: record(0, { Reviewed: '2026-06-30', Reference: 'Q2-review', WindowStart: '2026-04-01', WindowEnd: '2026-06-30' }) })
+  assert.ok(stale.threats.includes(GATE) && !/investigation records confirm/.test(stale.all), 'a prior-period record prints nothing')
+  // At the 90 percent closure boundary the resolved share earns a tier row, and the reviewed impact still sits in the
+  // three rows the band shows.
+  const boundary = await withContext({ ClientName: 'Example', TenantId: 't', Impact: record(1) }, { Raised: 100, Closed: 90, Open: 10, TruePositive: 3, ClosedUnclassified: 5 })
+  assert.ok(/Confirmed impact, reviewed\s+1/.test(boundary.summary), boundary.summary.match(/TIER 1.{0,160}/)?.[0])
+  // Every title withheld: the pack has true positives but no screened example, so the slide holds the cards and the
+  // statement without the table, and never the withheld placeholder.
+  const withheldRows = [{ Threat: 'Title withheld', Severity: 'High', Tactics: 'Exfiltration', Created: '2026-08-01', ExfilOrImpactTactic: true }, { Threat: 'Title withheld', Severity: 'Low', Tactics: 'InitialAccess', Created: '2026-08-02', ExfilOrImpactTactic: false }]
+  const withheld = await withContext({ ClientName: 'Example', TenantId: 't' }, null, withheldRows)
+  assert.ok(withheld.threats, 'the slide is built without examples')
+  assert.ok(!/Attack stage|Title withheld|High severity alert/.test(withheld.threats), withheld.threats.slice(0, 200))
+  for (const t of ['3 alerts the SOC classified as true positives from Nov 1, 2025 to Sep 30, 2026.', 'Based on the tactics Sentinel recorded on the alerts, 1 of the 3 confirmed threats carried an exfiltration or impact tactic. Additional investigation evidence is required', 'Carried an exfiltration or impact tactic', 'EVERY CONFIRMED THREAT']) assert.ok(withheld.threats.includes(t), t)
+  const withheldClear = await withContext({ ClientName: 'Example', TenantId: 't', Impact: record(0) }, null, withheldRows)
+  assert.ok(withheldClear.threats.includes('The reviewed investigation records confirm no data exposure or business impact from the 3 confirmed threats (CHG-123, reviewed Oct 10, 2026).'), 'the reviewed determination prints without examples too')
 })
 test('the control posture slide highlights the headline measure column and drops the not-gathered note', async () => {
   const zip = await JSZip.loadAsync(fs.readFileSync(deck('balanced').out))

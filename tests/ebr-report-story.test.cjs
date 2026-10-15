@@ -178,7 +178,7 @@ test('the identity win names the evaluated population in a federated tenant', ()
   assert.equal(win.sub, 'Members whose sign-ins in the last 30 days could be evaluated.')
   assert.equal(story(quarterPack()).s.wins.find(w => w.area === 'identity').sub, 'Members who signed in over the last 30 days.')
 })
-test('the confirmed threats takeaway counts the threats, adds the exfiltration line when known and is empty without examples', () => {
+test('the confirmed threats takeaway counts the threats, adds the tactic line when known and stands without examples', () => {
   const withRows = flaggedOne => {
     const p = quarterPack()
     p.results['OUT.4'] = [
@@ -207,14 +207,14 @@ test('the confirmed threats takeaway counts the threats, adds the exfiltration l
   assert.ok(!/carried an exfiltration or impact tactic/.test(JSON.stringify([wide.s.kpis, wide.s.wins, wide.s.takeaways, wide.m.tiers, wide.m.headline])), 'the narrow wording never appears without tactics')
   const none = story(quarterPack())
   assert.equal(none.m.threats, null, 'rows without a title give no examples')
-  assert.equal(none.s.takeaways.threats, '')
+  assert.equal(none.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter. Neither confirmed threat carried an exfiltration or impact tactic.', 'the slide is built without the examples table, so the takeaway stands')
 })
 test('a reviewed impact record leads the takeaways, and a confirmed impact withdraws the tactic win', () => {
   const withImpact = (confirmed, truePositives = 2) => {
     const p = quarterPack()
     p.results['OUT.1'][0].TruePositive = truePositives
     p.results['OUT.4'] = [{ Severity: 'High', ExfilOrImpactTactic: false, Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Tactics: 'CommandAndControl', Created: '2026-08-18' }, { Severity: 'Medium', ExfilOrImpactTactic: false, Threat: 'Password spray attack', Tactics: 'CredentialAccess', Created: '2026-07-28' }]
-    p.context = { Impact: { Confirmed: confirmed, Reviewed: '2026-10-10', Reference: 'CHG-123' } }
+    p.context = { Impact: { Confirmed: confirmed, Reviewed: '2026-10-10', Reference: 'CHG-123', WindowStart: '2026-07-01', WindowEnd: '2026-09-30' } }
     return story(p)
   }
   const clear = withImpact(0)
