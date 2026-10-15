@@ -295,6 +295,62 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual([call for call in self.api.calls if '/commits/' in call],
                          [f'repos/{REPO}/commits/{SHA[:7]}'])
 
+    def _fresh_recorded(self):
+        api = DeliveryAPI()
+        api.commits[SHA[:7]] = {'sha': SHA}
+        h = history.History(REPO, 1, REQUESTER, api)
+        state = h.sync(pr(True))
+        state['pending'] = {'kind': 'Code Review', 'head': SHA, 'nonce': 'n', 'comment': 12}
+        first = summary(commit=SHA[:7])
+        api.events.append(event(2, body=first))
+        return api, h, first, h.sync(pr(), state)
+
+    def test_recorded_completion_identity_ignores_timestamp_spelling(self):
+        collision = SHA[:8] + 'c' * 32
+        for stamp in ('2026-10-14T02:00:00+00:00', '2026-10-14T02:00:00.000000Z',
+                      '2026-10-14T04:00:00+02:00', '2026-10-14T01:30:00-00:30'):
+            with self.subTest(stamp=stamp):
+                api, h, first, state = self._fresh_recorded()
+                state = json.loads(json.dumps(state, sort_keys=True))  # journal reload
+                # A same-named ref now targets a crafted collision under either spelling,
+                # a reservation for it is pending, and the authenticated edit re-renders
+                # the recorded completion with a longer abbreviation and another spelling.
+                api.commits[SHA[:7]] = api.commits[SHA[:8]] = {'sha': collision}
+                state['pending'] = {'kind': 'Code Review', 'head': collision, 'nonce': 'm', 'comment': 13}
+                api.events.append(event(3, action='edited', body=summary(stamp=stamp, commit=SHA[:8]), old=first))
+                state = h.sync(pr(), state)
+                self.assertEqual([r['head'] for r in state['rounds'].values()], [SHA])
+                self.assertEqual(state['pending']['head'], collision)
+                self.assertEqual(state['latest']['Code Review']['completed_at'], '2026-10-14T02:00:00Z')
+                self.assertEqual([c for c in api.calls if '/commits/' in c], [f'repos/{REPO}/commits/{SHA[:7]}'])
+
+    def test_legacy_round_spelling_is_recognized_after_reload(self):
+        api, h, first, state = self._fresh_recorded()
+        (key, legacy), = state['rounds'].items()
+        legacy['completed_at'] = '2026-10-14T02:00:00+00:00'  # ledger written before canonicalization
+        state = json.loads(json.dumps(state, sort_keys=True))
+        collision = SHA[:7] + 'c' * 33
+        api.commits[SHA[:7]] = {'sha': collision}
+        state['pending'] = {'kind': 'Code Review', 'head': collision, 'nonce': 'm', 'comment': 13}
+        for stamp in ('2026-10-14T02:00:00Z', '2026-10-14T02:00:00+00:00', '2026-10-14T02:00:00.000Z'):
+            with self.subTest(stamp=stamp):
+                api.events.append(event(3, action='edited', body=summary(stamp=stamp, commit=SHA[:7]), old=first))
+                synced = h.sync(pr(), state)
+                self.assertEqual(list(synced['rounds']), [key])
+                self.assertEqual(synced['rounds'][key], state['rounds'][key])
+                self.assertEqual(synced['pending']['head'], collision)
+                api.events.pop()
+        self.assertEqual([c for c in api.calls if '/commits/' in c], [f'repos/{REPO}/commits/{SHA[:7]}'])
+
+    def test_summary_rows_bind_equivalent_completion_spellings(self):
+        recorded = {('Code Review', '2026-10-14T02:00:00Z'): SHA}
+        for stamp in ('2026-10-14T02:00:00+00:00', '2026-10-14T02:00:00.000000Z', '2026-10-14T04:00:00+02:00'):
+            rows = history.summary_rows(summary(stamp=stamp, commit=SHA[:8]), REPO, self.api, recorded)
+            self.assertEqual(rows['Code Review'], {'head': SHA, 'state': 'completed', 'completed_at': '2026-10-14T02:00:00Z'})
+        with self.assertRaises(budget.Blocked):
+            history.summary_rows(summary(stamp='2026-10-14T02:00:00+00:00', commit='c' * 7), REPO, self.api, recorded)
+        self.assertFalse([c for c in self.api.calls if '/commits/' in c])
+
 
 class MemoryJournal:
     def __init__(self, state=None):

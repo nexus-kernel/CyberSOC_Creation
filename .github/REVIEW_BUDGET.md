@@ -75,7 +75,7 @@ in GitHub's retained history. If it expires, disappears, or the hook changes, st
 Do not advance a guessed watermark. Captured summary edits additionally require
 `changes.body.from` to equal the previous authenticated revision. Deleted summaries,
 missing creations, broken edit chains and unauthenticated editors fail closed.
-Each completed row is preserved by kind/full SHA/exact completion timestamp and
+Each completed row is preserved by kind/full SHA/canonical completion instant and
 bound to a unique durable controlled-request reservation. A second completion on
 the same SHA counts again. Repeated ambiguous completion identities block. Initial
 completed Code Review consumes round one; Security Review is not counted as Code
@@ -86,13 +86,16 @@ Summary commit cells may be abbreviated. GitHub's commits endpoint, which resolv
 them, also accepts branch and tag names, so the response must be a full lowercase
 hexadecimal SHA that starts with the authenticated abbreviation before any row is
 recorded, and a new completion is recorded only with a matching reservation. A
-recorded completion, identified by kind and completion time, is bound to its
-recorded full SHA for the life of the PR: later summary revisions must render a
-commit cell consistent with that SHA, whatever abbreviation length they use, and
-are never resolved again, so a ref later moved to a crafted prefix collision
-cannot rebind the completion to a newly reserved head. An inconsistent cell for a
-recorded completion blocks. Full SHAs are used without a resolution call; API
-failures and missing or malformed responses block.
+recorded completion, identified by kind and canonical completion instant, is
+bound to its recorded full SHA for the life of the PR: later summary revisions
+must render a commit cell consistent with that SHA, whatever abbreviation length
+or equivalent timezone-offset/fractional-zero timestamp spelling they use, and are
+never resolved again, so a ref later moved to a crafted prefix collision cannot
+rebind the completion to a newly reserved head. Duplicate-round detection uses
+the same canonical identity, never the raw-text round key, so ledger records
+written with an earlier spelling stay recognized without being rewritten. An
+inconsistent cell for a recorded completion blocks. Full SHAs are used without a
+resolution call; API failures and missing or malformed responses block.
 
 These are GitHub-delivery continuity guarantees, not a claim to control outside
 requests or prove delivery behavior that GitHub never recorded. Hosted delivery
@@ -301,6 +304,10 @@ recorded abbreviation on every summary edit, and then that a changed abbreviatio
 length escaping a spelling-keyed binding, still let a ref moved to a crafted
 prefix collision rebind the old completion to a newly reserved head. Recorded
 completions are now bound by kind and completion time to their recorded full SHA
-and never resolved again; a commit cell inconsistent with that SHA blocks. The
-regression tests fail against the prior implementations and pass with the
-corrections. No activation was performed.
+and never resolved again; a commit cell inconsistent with that SHA blocks. Void's
+draft review of that correction found that the identity still used the rendered
+timestamp spelling, so an equivalent timezone-offset or fractional-zero spelling
+escaped it and the raw-text round key. Completion times are now canonicalized for
+binding and duplicate detection, with existing ledger records preserved as
+written. The regression tests fail against the prior implementations and pass
+with the corrections. No activation was performed.

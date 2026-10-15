@@ -35,6 +35,24 @@ def date(value):
     return parsed.astimezone(timezone.utc)
 
 
+def canonical_time(value):
+    """Return the canonical UTC spelling of an accepted timestamp.
+
+    Equivalent timezone-offset and fractional-zero spellings of one instant share
+    one identity, so a re-rendered completion time cannot escape its binding.
+    """
+    return date(value).isoformat().replace('+00:00', 'Z')
+
+
+def recorded_completions(state):
+    """Map each recorded completion (kind, canonical time) to its full SHA.
+
+    Ledger records keep the spelling they were written with; only the lookup key
+    is canonical, so legacy rounds stay recognized without being rewritten.
+    """
+    return {(r['kind'], canonical_time(r['completed_at'])): r['head'] for r in state['rounds'].values()}
+
+
 def resolve_commit(commit, repo, call=api):
     """Resolve an authenticated summary commit cell to exactly one full SHA.
 
@@ -58,10 +76,11 @@ def resolve_commit(commit, repo, call=api):
 def summary_rows(body, repo, call=api, recorded=None):
     """Parse authenticated summary rows.
 
-    ``recorded`` maps (kind, completion time) of every recorded completion to its
-    full SHA. Such a row is bound to that SHA without resolution, whatever
-    abbreviation length is rendered, and a commit cell inconsistent with it
-    blocks, so a recorded completion can never be rebound to another commit.
+    ``recorded`` maps (kind, canonical completion time) of every recorded
+    completion to its full SHA, as built by recorded_completions. Such a row is
+    bound to that SHA without resolution, whatever abbreviation length or
+    equivalent timestamp spelling is rendered, and a commit cell inconsistent
+    with it blocks, so a recorded completion can never be rebound.
     """
     recorded = {} if recorded is None else recorded
     allowed_prose = {
@@ -101,9 +120,8 @@ def summary_rows(body, repo, call=api, recorded=None):
         stamp = re.search(r'datetime="([^"]+)"', cells[1])
         if completed and not stamp:
             raise Blocked('Missing review completion time.')
-        if stamp:
-            date(stamp[1])
-        head = recorded.get((kinds[0], stamp[1])) if completed else None
+        completed_at = canonical_time(stamp[1]) if stamp else None
+        head = recorded.get((kinds[0], completed_at)) if completed else None
         if head is None:
             sha = resolve_commit(commit[1], repo, call)
         elif head.startswith(commit[1]):
@@ -111,7 +129,7 @@ def summary_rows(body, repo, call=api, recorded=None):
         else:
             raise Blocked('Recorded completion rebound to another commit.')
         rows[kinds[0]] = {'head': sha, 'state': 'completed' if completed else 'running',
-                         'completed_at': stamp[1] if completed else None}
+                         'completed_at': completed_at if completed else None}
     if not rows:
         raise Blocked('Empty review summary.')
     return rows
@@ -226,17 +244,19 @@ class History:
                 raise Blocked('Missing, deleted or out-of-order summary revision.')
             if not body.startswith(SUMMARY):
                 raise Blocked('Summary marker removed.')
-            recorded = {(r['kind'], r['completed_at']): r['head'] for r in state['rounds'].values()}
+            recorded = recorded_completions(state)
             rows = summary_rows(body, self.repo, self.call, recorded)
             for kind, row in rows.items():
                 if row['state'] == 'completed':
-                    key = digest([kind, row['head'], row['completed_at']])
-                    if key not in state['rounds']:
+                    # Duplicate detection uses the canonical identity, never the
+                    # raw-text round key, so legacy records stay recognized.
+                    if (kind, row['completed_at']) not in recorded:
                         pending = state['pending']
                         if not pending or pending['kind'] != kind or pending['head'] != row['head']:
                             raise Blocked('Completion has no unique controlled request reservation.')
                         if pending.get('comment') is None:
                             raise Blocked('Request write not reconciled before completion.')
+                        key = digest([kind, row['head'], row['completed_at']])
                         state['rounds'][key] = dict(row, kind=kind, request=pending['nonce'])
                         state['pending'] = None
                     elif state['latest'].get(kind, {}).get('state') == 'running':
