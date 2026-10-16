@@ -463,14 +463,14 @@ test('the executive summary follows the HTML page: the posture tiers, the items 
   const summary = plain(slides.find(s => s.startsWith('Executive summary')))
   for (const t of ['HOW WE REPORT POSTURE', 'TIER 1 · OUTCOMES', 'Did the program hold', 'TIER 2 · CONTROL EFFECTIVENESS', 'TIER 3 · HARDENING NEXT', 'TIER 4 · VENDOR BENCHMARK', 'Context, not the objective', 'WINS', 'WATCH', 'ITEMS THAT NEED ACTION']) assert.ok(summary.includes(t), t)
   assert.ok(!summary.includes('DECISIONS NEEDED') && !/Grant .*read access/.test(summary), 'the read access ask stays off the summary')
-  assert.ok(/7 users\s+need to update their MFA method before Feb 1, 2027/.test(summary), summary.match(/.{0,30}MFA method.{0,40}/)?.[0])
+  assert.ok(/7 users\s+on text message or voice MFA ahead of Feb 1, 2027 \(Jul 1, 2027 for Global Administrators and external users\)/.test(summary), summary.match(/.{0,30}voice MFA.{0,80}/)?.[0])
   assert.ok(!/detections? correlated/.test(summary), 'the alert KPI no longer carries the detection count')
   assert.ok(/Alerts triaged Nov 1, 2025 to Sep 30, 2026/.test(summary), 'the alert KPI carries the period')
   assert.ok(/Median time to close, high severity alerts/.test(summary) && !/Confirmed threats with exfiltration/.test(summary))
   const m = build(p)
   assert.ok(summary.includes('Members without MFA') && summary.includes(`${m.tiers.hardening.find(r => r.id === 'IA.1').value}`), 'the hardening tier reads the MFA count against its population')
   assert.ok(slides.some(s => s.includes('Decisions needed') && /Grant read access/.test(s)), 'the closing slide still asks for read access')
-  assert.ok(!/passwordless|passkey/i.test(slides.join(' ')), 'no passwordless wording anywhere in the deck')
+  assert.ok(!/passwordless/i.test(slides.join(' ')), 'no passwordless wording anywhere in the deck')
 })
 test('a short confirmed threats table is followed by the outcome cards and the handling strip', async () => {
   const { data, out } = deck('balanced', examples)
@@ -565,8 +565,37 @@ test('the MFA method update slide replaces the passwordless transition', async (
   const { slides, notes } = await read(deck('brief').out)
   const slide = slides.find(s => s.startsWith('MFA method update'))
   assert.ok(slide, 'the slide is there at brief depth')
-  for (const t of ['days to move 7 users', 'USERS BY SIGN-IN METHOD, LAST 30 DAYS', 'Text message or voice', 'Notify the affected users', 'Register a stronger method', 'Remove the retiring methods', 'Confirm readiness early', 'OUTCOME']) assert.ok(slide.replace(/\u00A0/g, ' ').includes(t), t)
-  assert.ok(!slides.some(s => /Passwordless transition|Passkeys/.test(s)) && !/passkey|passwordless/i.test([...slides, ...notes].join(' ')))
+  const plain = slide.replace(/\u00A0/g, ' ')
+  for (const t of ['days to move 7 users', 'when text message and voice sign-in retire for most users, and Jul 1, 2027 for Global Administrators and external users', 'USERS BY SIGN-IN METHOD, LAST 30 DAYS', 'Authenticator app or OTP token', 'Text message or voice', 'Notify the affected users', 'Register a phishing-resistant method', 'or Windows Hello for Business, in guided waves', 'Authenticator push stays supported', 'Remove the retiring methods', 'A telephony provider stays only for a documented regulatory or operational need', 'Confirm readiness early', 'Whether these users hold another registered MFA method is not yet evaluated.', 'OUTCOME']) assert.ok(plain.includes(t), t)
+  assert.ok(!/Authenticator or OTP\b(?! token)|already sign in with Microsoft Authenticator|Register a stronger method/.test(plain), 'the bucket and the caption name what IA.2 counts')
+  const note = notes[slides.indexOf(slide)].replace(/\u00A0/g, ' ')
+  assert.ok(note.includes('Sign-in use alone does not show that a user has no other method.') && note.includes('From September 1, 2026, Microsoft enables passkeys') && note.includes('A user moved to a telephony provider from Microsoft Security Store before that date does not receive it.') && note.includes('a telephony provider from Microsoft Security Store is kept only for a documented regulatory or operational need'.replace(/^a/, 'A')), note)
+  assert.ok(!slides.some(s => /Passwordless transition/.test(s)) && !/passwordless/i.test([...slides, ...notes].join(' ')))
+})
+test('every text box on the MFA method update slide holds its text, with and without the IA.5 registration count', async () => {
+  for (const ia5 of [null, { Members: 1200, MfaRegistered: 1100, PhishingResistant: 25, PhoneRegistered: 900, AuthenticatorRegistered: 150, PhoneOnly: 1234 }]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-'))
+    const data = pack('brief'), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+    data.results['IA.2'] = [{ Bucket: 'Retiring: SMS or voice', DistinctUsers: 1234 }, { Bucket: 'Authenticator or OTP', DistinctUsers: 18500 }, { Bucket: 'Phishing-resistant', DistinctUsers: 3 }]
+    if (ia5) { data.manifest.push({ ResultId: 'IA.5', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-08T10:00:00Z' }); data.results['IA.5'] = [ia5] }
+    fs.writeFileSync(dataFile, JSON.stringify(data))
+    execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+    const zip = await JSZip.loadAsync(fs.readFileSync(out))
+    let xml = ''
+    for (const n of Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))) { const x = await zip.file(n).async('string'); if (x.includes('>MFA method update<')) xml = x }
+    assert.ok(xml, 'the slide is there')
+    if (ia5) assert.ok(xml.includes('The registration read finds 1,234 members whose only registered MFA method is text message or voice.'))
+    const shapes = [...xml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)].map(m => m[0]).filter(sp => /name="(Step \d+|Countdown label|Methods caption|Method \d+ label|Outcome)"/.test(sp))
+    assert.equal(shapes.length, 10, 'four steps, the countdown label, the caption, three method labels and the outcome')
+    for (const sp of shapes) {
+      const name = sp.match(/name="([^"]+)"/)[1]
+      const [, cx, cy] = sp.match(/<a:ext cx="(\d+)" cy="(\d+)"\/>/).map(Number)
+      const paras = [...sp.matchAll(/<a:p>([\s\S]*?)<\/a:p>/g)].map(p => [...p[1].matchAll(/<a:r><a:rPr\b[^>]*\bsz="(\d+)"[^>]*?(\bb="1")?[^>]*>[\s\S]*?<a:t>([^<]*)<\/a:t>/g)].map(r => ({ size: Number(r[1]) / 100, bold: !!r[2] || /\bb="1"/.test(r[0]), text: r[3] }))).filter(p => p.length)
+      // The outcome strip is one paragraph with a label run, measured at its body size.
+      const need = paras.reduce((h, p, k) => h + (k ? 2 / 72 : 0) + lines(p.map(r => r.text).join(''), cx / 914400, Math.max(...p.map(r => r.size)), p.every(r => r.bold)) * Math.max(...p.map(r => r.size)) / 72 * 1.2, 0)
+      assert.ok(need <= cy / 914400 + 0.01, `${name} needs ${need.toFixed(2)} in and holds ${(cy / 914400).toFixed(2)} in: ${paras.map(p => p.map(r => r.text).join('')).join(' | ')}`)
+    }
+  }
 })
 test('the posture appendix draws the Defender for Cloud score by month and states the movement from its starting percentage', async () => {
   const p = pack('detailed')
@@ -623,7 +652,7 @@ test('the deck words planned work as a recommendation: the gaps panel, the roadm
   const all = [...slides, ...notes].join(' ').replace(/ /g, ' ')
   assert.ok(all.includes('Below the baseline at collection. Atmosera recommends closing each gap first.'), 'the gaps panel recommends, never schedules')
   assert.ok(all.includes('Atmosera recommends staging each enforcement in an audit or report-only mode where the control supports one, reviewing it with your team, then turning it on.'))
-  assert.ok(all.includes('Every affected user registered on a replacement method before February 1, 2027, the fallback tested, and no rise in failed sign-ins after enforcement.'), 'the outcome strip carries measurable criteria')
+  assert.ok(all.includes('Every affected user registered on a replacement method before February 1, 2027 (July 1, 2027 for Global Administrators and external users), the fallback tested, and no rise in failed sign-ins after enforcement.'), 'the outcome strip carries measurable criteria')
   assert.ok(all.includes('confirms each affected user holds a replacement method'))
   assert.ok(!/schedules each fix|non-event|No blocked sign-ins|no sign-in is blocked|Every enforcement is staged|Scoped and sequenced/i.test(all), all.match(/.{0,50}(schedules each fix|non-event|blocked sign-ins|sign-in is blocked|Every enforcement is staged|Scoped and sequenced).{0,50}/i)?.[0])
 })

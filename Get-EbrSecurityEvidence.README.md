@@ -167,6 +167,8 @@ Details:
   - If the same XDR incident was synced into more than one workspace, the notes warn that the combined OUT.1 and OUT.3 counts include it more than once.
 - **Missing tables.** A workspace that lacks a table counts as having no data for it, not as an error, and is left out of the combined query.
 - **PARTIAL.** A combined result is PARTIAL when a workspace failed for any other reason. That workspace is left out, and worksheet values built on the result carry a PARTIAL note.
+- October 16, 2026:
+  - `IA.5` adds `PhoneOnly`: MFA-capable members (`isMfaCapable`, so policy allows the method) whose only registered MFA method is a phone (mobile, alternate mobile or office phone, so text message or voice). Email, security questions and app passwords do not count as another method. It is a count across members, not limited to the IA.2 users, and the result holds no user identifiers. The HTML report reads it as the population Microsoft's blocking passkey prompt reaches, and packs without it read "not yet evaluated".
 - **`-SkipWorkspaceBreakdown`** runs only the combined queries, which is faster. P0.1 still runs per workspace, because choosing the tenant-wide workspace and the window depends on it.
 
 ### Graph items

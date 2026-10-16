@@ -3989,6 +3989,15 @@ function Get-EbrGraphIA5 {
     }
     $methods = { param($u) (@(Get-EbrProp $u 'methodsRegistered') -join ',') }
     $flag = { param($u, [string]$name) Test-EbrTrue (Get-EbrProp $u $name) }
+    # PhoneOnly: members whose only registered MFA method is a phone (text message or voice), the population
+    # Microsoft's blocking passkey prompt reaches after its retirement date. Email, security questions and app
+    # passwords do not satisfy MFA, so they do not count as another method. The member must also be MFA capable,
+    # so a phone registered only for password reset while policy disables SMS and voice is not counted as an MFA
+    # method. A count only, never a user list (Oct 16, 2026).
+    $phoneOnly = { param($u) $list = @(Get-EbrProp $u 'methodsRegistered' | Where-Object { $_ } | ForEach-Object { [string]$_ })
+        (& $flag $u 'isMfaCapable') -and
+        @($list | Where-Object { $_ -match '^(mobilePhone|officePhone|alternateMobilePhone)$' }).Count -gt 0 -and
+        @($list | Where-Object { $_ -notmatch '^(mobilePhone|officePhone|alternateMobilePhone|email|securityQuestion|appPassword)$' }).Count -eq 0 }
     $admins = @($users | Where-Object { & $flag $_ 'isAdmin' })
     $row = [pscustomobject]@{
         Members                 = @($users).Count
@@ -3999,10 +4008,11 @@ function Get-EbrGraphIA5 {
         PhishingResistant       = @($users | Where-Object { (& $methods $_) -match 'fido2|passKey|windowsHelloForBusiness|certificate' }).Count
         PhoneRegistered         = @($users | Where-Object { (& $methods $_) -match 'mobilePhone|officePhone|alternateMobilePhone' }).Count
         AuthenticatorRegistered = @($users | Where-Object { (& $methods $_) -match 'microsoftAuthenticator' }).Count
+        PhoneOnly               = @($users | Where-Object { & $phoneOnly $_ }).Count
         Admins                  = $admins.Count
         AdminsMfaRegistered     = @($admins | Where-Object { & $flag $_ 'isMfaRegistered' }).Count
     }
-    New-EbrGraphResult -Rows @($row) -Columns @('Members', 'MfaRegistered', 'MfaCapable', 'SsprRegistered', 'PasswordlessCapable', 'PhishingResistant', 'PhoneRegistered', 'AuthenticatorRegistered', 'Admins', 'AdminsMfaRegistered') -Detail 'Members only. Methods registered, not methods used (IA.2 has those). Phone registration does not separate SMS from voice.'
+    New-EbrGraphResult -Rows @($row) -Columns @('Members', 'MfaRegistered', 'MfaCapable', 'SsprRegistered', 'PasswordlessCapable', 'PhishingResistant', 'PhoneRegistered', 'AuthenticatorRegistered', 'PhoneOnly', 'Admins', 'AdminsMfaRegistered') -Detail 'Members only. Methods registered, not methods used (IA.2 has those). Phone registration does not separate SMS from voice. PhoneOnly counts MFA-capable members whose only registered MFA method is a phone.'
 }
 
 function Get-EbrGraphIA6 {

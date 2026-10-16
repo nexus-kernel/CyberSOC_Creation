@@ -91,8 +91,10 @@ test('the story carries the wins, asks and takeaways the review asked for, worde
   assert.deepEqual(s.asks.map(a => a.title), ['Move users off text message and voice MFA', 'Grant read access for one ungraded control', 'Approve the user-risk policy', 'Agree a segmentation design and change windows'])
   assert.equal(s.asks[1].body, 'Sharing settings.', 'only the permission gap is an access ask, not the service error')
   // The executive summary names the items that need action from the client. Read access is Atmosera's to arrange.
-  assert.deepEqual(s.summaryAsks, [{ value: '40 users', label: 'need to update their MFA method before Feb 1, 2027' }, { value: '1 control', label: 'Approve the user-risk policy' }, { value: '2 controls', label: 'Agree a segmentation design and change windows' }])
-  assert.ok(!/passwordless|passkey/i.test(JSON.stringify(s)), 'the story never frames the MFA method update as passwordless')
+  assert.deepEqual(s.summaryAsks, [{ value: '40 users', label: 'on text message or voice MFA ahead of Feb 1, 2027 (Jul 1, 2027 for Global Administrators and external users)' }, { value: '1 control', label: 'Approve the user-risk policy' }, { value: '2 controls', label: 'Agree a segmentation design and change windows' }])
+  assert.ok(!/passwordless/i.test(JSON.stringify(s)), 'the story never frames the MFA method update as passwordless')
+  assert.ok(!/need to update their MFA method|still rel(y|ies)/.test(JSON.stringify(s)), 'use alone is never read as sole reliance')
+  assert.equal(s.roadmap.flatMap(h => h.items).find(i => i.key === 'methods').evidence, '40 users on text message or voice, ahead of Feb 1, 2027 (Jul 1, 2027 for Global Administrators and external users)')
   assert.equal(s.deadlineDays, 112)
   const all = JSON.stringify(s)
   assert.ok(!/;|→|←|\bcontain(ed|ment)\b|\(null\)|\bincidents?\b/i.test(all.replace(/\\u[0-9a-f]{4}/gi, '')), all.match(/.{0,40}(;|contain|\(null\)|incident).{0,40}/i)?.[0])
@@ -157,8 +159,8 @@ test('counts read as natural English', () => {
   const { s } = story(p)
   assert.equal(s.takeaways.summary.startsWith('The confirmed threat did not carry an exfiltration or impact tactic'), true)
   assert.equal(s.kpis[1].sub, 'Classified as a true positive by the SOC')
-  assert.equal(s.asks[0].body, '1 user needs to update their MFA method before February 1, 2027, when Microsoft retires text message and voice sign-in.')
-  assert.equal(s.takeaways.methods, 'Microsoft retires text message and voice sign-in on February 1, 2027. 1 user still relies on it.')
+  assert.equal(s.asks[0].body, '1 user on text message or voice, which retire Feb 1, 2027 (Jul 1, 2027 for Global Administrators and external users).')
+  assert.equal(s.takeaways.methods, 'Microsoft retires text message and voice sign-in on February 1, 2027 (July 1, 2027 for Global Administrators and external users). 1 user signed in with it in the last 30 days.')
   assert.ok(s.watch.every(w => !/^1$/.test(w.value) || !/^(members|users|devices|resources) /.test(w.label)), JSON.stringify(s.watch))
 })
 test('every control in the register has a value, never null', () => {

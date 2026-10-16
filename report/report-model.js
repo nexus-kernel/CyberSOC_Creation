@@ -47,7 +47,15 @@
   const mark = value => value === null ? null : value >= E_THRESHOLD ? 'E' : value >= 50 ? 'P' : 'N'
   const bool = value => value === true || String(value ?? '').toLowerCase() === 'true'
   const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`
-  const RETIREMENT = { date: '2027-02-01', label: 'February 1, 2027' }
+  // Microsoft retires its own text message and voice delivery in two populations: most users on Feb 1, 2027, and
+  // Global Administrators and external users on Jul 1, 2027 (internal guests stay in the first). The countdown runs
+  // to the first date. Read from learn.microsoft.com concept-sms-voice-retirement, dated Sep 23, 2026 (Oct 16, 2026).
+  const RETIREMENT = {
+    date: '2027-02-01', label: 'February 1, 2027', short: 'Feb 1, 2027',
+    later: { date: '2027-07-01', label: 'July 1, 2027', short: 'Jul 1, 2027', who: 'Global Administrators and external users' },
+    text: 'February 1, 2027 (July 1, 2027 for Global Administrators and external users)',
+    shortText: 'Feb 1, 2027 (Jul 1, 2027 for Global Administrators and external users)'
+  }
   // The reviewed status of a roadmap item or an ask, from the Actions records in the context file. Each record names
   // the item by its key, the same key the story gives the roadmap item and the ask (report/report-story.js, kept in
   // step by tests/ebr-report-story.test.cjs), so later surfaces can read owner, target date and status by key. No
@@ -55,7 +63,7 @@
   // same reference as well (Oct 16, 2026).
   // The MFA method update is measured by what the next collection and the change record can show, never promised
   // as a non-event (Oct 16, 2026).
-  const MFA_OUTCOME = `Every affected user registered on a replacement method before ${RETIREMENT.label}, the fallback tested, and no rise in failed sign-ins after enforcement.`
+  const MFA_OUTCOME = `Every affected user registered on a replacement method before ${RETIREMENT.text}, the fallback tested, and no rise in failed sign-ins after enforcement.`
   const ACTION_KEYS = ['drift', 'critical', 'methods', 'access', 'idp', 'phish', 'consent', 'workload', 'logging', 'kvrbac', 'diskenc', 'containers', 'detect', 'segment', 'windows', 'backup', 'vmplatform', 'pim', 'allowlist', 'sharing', 'mdi']
   const ACTION_STATUS = { Proposed: 'Proposed', PendingValidation: 'Pending validation', AwaitingApproval: 'Awaiting approval', Approved: 'Approved', Scheduled: 'Scheduled', InProgress: 'In progress', Verified: 'Verified' }
   // A median under the floor and a 90th percentile over one hour are presented with a note, never hidden.
@@ -849,7 +857,14 @@
       if (unevaluated !== null) priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} members whose sign-ins could be evaluated showed no multifactor authentication in the last 30 days. Members whose only sign-ins reused a device session that no policy checked are not part of this figure.`, 'Deploy a report-only Conditional Access policy requiring multifactor authentication for all members to measure session coverage, confirm the identity provider sign-on rules, then move to enforcement in waves.', 'Every member sign-in evaluated by policy and covered by multifactor authentication, with documented exceptions.', 'IA.1')
       else priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} active members signed in without a recorded multifactor requirement in the last 30 days.`, 'Confirm exclusions and service accounts, pilot the Conditional Access change in report-only mode, then move to enforcement in waves.', 'Every intended user covered by validated policy, with documented exceptions.', 'IA.1')
     }
-    if (count(retiring?.DistinctUsers) > 0) priority(3, 'MFA method update', `${plural(retiring.DistinctUsers, 'user', 'users')} signed in with text message or voice in the last 30 days. Microsoft retires these methods on ${RETIREMENT.label}.`, 'Notify the affected users, register each one on Microsoft Authenticator or a phishing-resistant method in guided waves, then remove text message and voice from the allowed methods under change control.', MFA_OUTCOME, 'IA.2')
+    // IA.2 counts methods used, not registered, so use alone never reads as sole reliance. PhoneOnly (IA.5,
+    // added Oct 16, 2026) counts members whose only registered MFA method is a phone, as an aggregate across members.
+    // A pack without it, or a partial read, leaves reliance not yet evaluated (Oct 16, 2026).
+    const phoneOnly = state('IA.5') === 'OK' ? count(one('IA.5')?.PhoneOnly) : null
+    const reliance = phoneOnly === null ? 'Whether these users hold another registered MFA method is not yet evaluated.'
+      : phoneOnly === 0 ? 'The registration read finds no member whose only registered MFA method is text message or voice.'
+      : `The registration read finds ${plural(phoneOnly, 'member', 'members')} whose only registered MFA method is text message or voice.`
+    if (count(retiring?.DistinctUsers) > 0) priority(3, 'MFA method update', `${plural(retiring.DistinctUsers, 'user', 'users')} signed in with text message or voice in the last 30 days. Microsoft retires these methods on ${RETIREMENT.text}. ${reliance}`, 'Notify the affected users, register each one on a passkey (in Microsoft Authenticator, a Microsoft Entra passkey on Windows or a FIDO2 security key) or on Windows Hello for Business in guided waves, then remove text message and voice from the allowed methods under change control. Microsoft Authenticator push is outside this retirement and stays supported. A telephony provider from Microsoft Security Store is kept only for a documented regulatory or operational need.', MFA_OUTCOME, 'IA.2')
     if (edr.pct !== null && edr.pct < E_THRESHOLD) priority(4, 'Endpoint coverage', `${fmt(edr.total - edr.good)} of ${fmt(edr.total)} eligible Azure virtual machines are not yet reporting to endpoint detection.${reconciliation ? ' ' + reconciliation : ''}`, 'Confirm ownership and operating state, complete onboarding and verify sensor health.', 'Every eligible Azure virtual machine reports through an active sensor.', 'EW.1')
     if (antimalware && antimalware.pct !== null && antimalware.pct < E_THRESHOLD) priority(5, 'Anti-malware configuration', `${fmt(antimalware.total - antimalware.good)} of ${fmt(antimalware.total)} Azure virtual machines do not meet the real-time protection configuration checks.`, 'Apply the endpoint security baseline to the affected platforms and verify through the configuration assessment.', 'Real-time protection enforced on every onboarded Azure virtual machine.', 'EW.3')
     if (plan.pct !== null && plan.pct < E_THRESHOLD || (aiRow && count(aiRow.Resources) - count(aiRow.Covered) > 0)) priority(6, 'Workload protection scope', `${plan.total !== null && plan.total - plan.good > 0 ? `${plural(plan.total - plan.good, 'eligible resource is', 'eligible resources are')} outside Standard plan coverage.` : ''}${aiRow && count(aiRow.Resources) - count(aiRow.Covered) > 0 ? ` ${plural(count(aiRow.Resources) - count(aiRow.Covered), 'AI service resource is', 'AI service resources are')} not yet covered.` : ''}`, 'Validate resource-level coverage in Defender for Cloud and agree the intended protection scope, including AI services.', 'Every agreed resource has workload protection or a documented exception.', 'DR.2')
@@ -865,9 +880,23 @@
 
     // MFA methods: the users still signing in with text message or voice, which Microsoft retires, and the
     // stronger methods already in use. The report frames this as updating each user's MFA method, never as a
-    // passwordless programme (Oct 14, 2026).
+    // passwordless programme (Oct 14, 2026). Passkeys are the recommended target, Authenticator push stays
+    // supported, and a telephony provider is kept only for a documented need. The HTML block and the deck share
+    // the Microsoft timeline and the steps from here (Oct 16, 2026).
     if (count(retiring?.DistinctUsers) > 0 || count(resistant?.DistinctUsers) > 0) {
-      m.mfaMethods = { outcome: MFA_OUTCOME, retiring: count(retiring?.DistinctUsers) ?? 0, resistant: count(resistant?.DistinctUsers) ?? 0, authenticator: count(authenticator?.DistinctUsers) ?? 0, deadline: RETIREMENT.label, source: source('IA.2', 'Methods used in successful sign-ins, last 30 days.') }
+      const n = count(retiring?.DistinctUsers) ?? 0
+      m.mfaMethods = {
+        outcome: MFA_OUTCOME, retiring: n, resistant: count(resistant?.DistinctUsers) ?? 0, authenticator: count(authenticator?.DistinctUsers) ?? 0, phoneOnly, reliance,
+        deadline: RETIREMENT.text, deadlineShort: RETIREMENT.shortText,
+        timeline: `From September 1, 2026, Microsoft enables passkeys for users enabled for text message or voice and prompts them to register one when they complete MFA. Microsoft retires its text message and voice delivery on ${RETIREMENT.label} for most users and on ${RETIREMENT.later.label} for ${RETIREMENT.later.who}. After the applicable date, a user whose only available MFA method is Microsoft-provided text message or voice must register a passkey before signing in again, and this blocking prompt has no opt-out. A user moved to a telephony provider from Microsoft Security Store before that date does not receive it.`,
+        steps: [
+          ['Notify the affected users', `Each of the ${plural(n, 'user', 'users')} on text message or voice hears what changes, when, and to expect the passkey prompt.`],
+          ['Register a phishing-resistant method', 'A passkey in Microsoft Authenticator, on Windows or on a FIDO2 key, or Windows Hello for Business, in guided waves. Authenticator push stays supported.'],
+          ['Remove the retiring methods', 'Text message and voice leave the allowed methods under change control. A telephony provider stays only for a documented regulatory or operational need.'],
+          ['Confirm readiness early', `A final sweep before ${RETIREMENT.shortText} confirms each affected user holds a replacement method.`]
+        ],
+        source: `${source('IA.2', 'Methods used in successful sign-ins, last 30 days.')}${phoneOnly !== null ? ` ${source('IA.5', 'Registered methods, members only.')}` : ''}`
+      }
     }
 
     // Scores and posture.
@@ -1132,7 +1161,7 @@
     if (m.posture.highHealthy) row('benchmark', 'High severity assessments healthy', pctText(m.posture.highHealthy.pct), 'POS.4')
     if (m.posture.assessed !== null) row('benchmark', 'Resources assessed by Defender for Cloud', fmt(m.posture.assessed), 'POS.2')
     for (const c of (m.tenantScore?.categories || [])) { if (m.tiers.benchmark.length < 6) row('benchmark', `${c.label} category score`, pctText(c.pct), 'POS.6') }
-    m.whatNext = `The foundational and defense in depth controls we hold this environment to across five pillars, the status of each, ${m.period.months ? `${plural(m.period.months, 'month', 'months')} of measured outcomes` : 'the measured outcomes'}, the proposed hardening roadmap${m.mfaMethods && m.mfaMethods.retiring > 0 ? ` and the recommended MFA method update ahead of ${RETIREMENT.label}` : ''}.`
+    m.whatNext = `The foundational and defense in depth controls we hold this environment to across five pillars, the status of each, ${m.period.months ? `${plural(m.period.months, 'month', 'months')} of measured outcomes` : 'the measured outcomes'}, the proposed hardening roadmap${m.mfaMethods && m.mfaMethods.retiring > 0 ? ` and the recommended MFA method update ahead of ${RETIREMENT.text}` : ''}.`
 
     // Presenter notes and boundaries.
     const manual = m.manifest.filter(r => r.status === 'MANUAL').map(r => r.id)
