@@ -303,9 +303,11 @@ test('the control register counts the exceptions of a control at E on its label 
   const xmls = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).filter(x => x.includes('register rule'))
   assert.equal(xmls.length, 3, 'the three register slides')
   const text = xmls.map(x => (x.match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => t.slice(5, -6)).join(' ')).join(' ').replace(/\u00A0/g, ' ')
-  for (const [label, count] of [['Azure virtual machines reporting to endpoint detection', '1 exception'], ['Analytics rules enabled in Sentinel', '7 exceptions'], ['Key Vault soft delete', '1 exception'], ['Multifactor authentication required at sign-in', '14 exceptions']]) {
+  for (const [label, count] of [['Azure virtual machines reporting to endpoint detection', '1 exception'], ['Endpoint sensors active on onboarded Azure virtual machines', '7 exceptions'], ['Key Vault soft delete', '1 exception'], ['Multifactor authentication required at sign-in', '14 exceptions']]) {
     assert.match(text, new RegExp(`${label}\\s+· ${count}\\b`), `${label} carries ${count}`)
   }
+  // Analytics rules are a presence check: 379 of 386 enabled reads In force, and disabled rules are no exceptions.
+  assert.match(text, /Analytics rules enabled in every Sentinel workspace In force/)
   // Every row ends inside the column the register sizes for.
   for (const xml of xmls) for (const r of xml.matchAll(/name="([^"]*) register rule"[\s\S]*?<a:off x="\d+" y="(\d+)"\/>/g)) assert.ok(Number(r[2]) <= 7.2 * EMU, `"${r[1]}" ends at ${(Number(r[2]) / EMU).toFixed(2)} in`)
   const { notes } = await read(out)

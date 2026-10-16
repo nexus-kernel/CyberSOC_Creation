@@ -520,7 +520,7 @@ test('every control is placed in a pillar and a tier that follows the controls b
   // Oct 16, 2026: analytics rules and threat intelligence ingestion are switched on at build, so they are
   // foundational. Domain controller telemetry and Defender for Identity sensors need licensing and a sensor on each
   // domain controller from the client, so they are defense in depth.
-  assert.equal(tierOf('Analytics rules enabled in Sentinel'), 'foundational')
+  assert.equal(tierOf('Analytics rules enabled in every Sentinel workspace'), 'foundational')
   assert.equal(tierOf('Threat intelligence indicators ingested tenant-wide'), 'foundational')
   assert.equal(tierOf('Domain controller telemetry collected continuously'), 'defense')
   assert.equal(tierOf('Defender for Identity sensors healthy on domain controllers'), 'defense')
@@ -537,6 +537,34 @@ test('the Detection and response pillar swaps two controls each way, so its tier
   assert.deepEqual(ids('foundational'), ['DR.10', 'DR.2', 'DR.6-INITIATIVE', 'DR.7', 'DR.9', 'EW.1'])
   assert.deepEqual(ids('defense'), ['DR.11', 'DR.13', 'DR.4'])
   assert.deepEqual([m.tierSummary.foundational.total, m.tierSummary.defense.total], [31, 22])
+})
+test('analytics rules read In force only when every Sentinel workspace has an enabled rule, from a complete read', () => {
+  const rules = (...ws) => [{ Scope: 'All workspaces', Metric: 'Total rules', Value: ws.reduce((n, [, t]) => n + t, 0) }, { Scope: 'All workspaces', Metric: 'Enabled rules', Value: ws.reduce((n, [, , e]) => n + e, 0) }, ...ws.flatMap(([w, t, e]) => [{ Scope: w, Metric: 'Total rules', Value: t }, { Scope: w, Metric: 'Enabled rules', Value: e }])]
+  const read = (rows, status = 'OK') => { const p = pack(); put(p, 'DR.9', rows, status); const m = build(p); return { m, c: m.controls.find(x => x.id === 'DR.9') } }
+  // Many disabled rules, one enabled in each workspace: In force, foundational, with the count as context only.
+  let { c } = read(rules(['w1', 200, 1], ['w2', 186, 2]))
+  assert.deepEqual([c.label, c.tier, c.value, c.mark, c.boolean, c.exceptions], ['Analytics rules enabled in every Sentinel workspace', 'foundational', 'In force', 'E', true, undefined])
+  assert.match(c.note, /3 of 386 analytics rules enabled across 2 workspaces, as context: disabled rules do not move the grade\./)
+  assert.match(c.note, /does not identify which rules are Atmosera's standard set/)
+  // A workspace read with no enabled rule, or with no rules at all (no scope of its own), is Not in force.
+  ;({ c } = read(rules(['w1', 200, 150], ['w2', 30, 0])))
+  assert.deepEqual([c.value, c.mark, c.gap], ['Not in force', 'N', '1 of 2 workspaces without an enabled rule'])
+  ;({ c } = read(rules(['w1', 200, 150])))
+  assert.deepEqual([c.value, c.gap], ['Not in force', '1 of 2 workspaces without an enabled rule'], 'w2 holds no rules')
+  // A partial read never reads In force: the workspace without a scope may be the one that failed.
+  let m
+  ;({ m, c } = read(rules(['w1', 200, 150]), 'PARTIAL'))
+  assert.deepEqual([c.value, c.mark, c.measured], ['(null)', null, false])
+  assert.ok(m.unmeasured.some(u => u.id === 'DR.9' && /could not be read/.test(u.reason)))
+  // A workspace that was read and shows no enabled rule is Not in force even in a partial read.
+  ;({ c } = read(rules(['w1', 30, 0]), 'PARTIAL'))
+  assert.equal(c.value, 'Not in force')
+  // Several workspaces with no per-workspace scope cannot say which holds the rules.
+  ;({ c } = read(rules().concat([]).map(r => ({ ...r, Value: 50 }))))
+  assert.equal(c.value, '(null)')
+  // Missing or failed reads stay ungathered.
+  assert.equal(build(pack()).controls.find(x => x.id === 'DR.9').value, '(null)')
+  assert.equal(read([], 'FAILED').c.value, '(null)')
 })
 test('the default anti-phishing policy decides the foundational row and the advanced flags decide the defense row', () => {
   const p = pack()
@@ -924,7 +952,7 @@ function readings(p, full = false) {
   put(p, 'DP.1-CONTAINERS', [{ Containers: 78, PrivateContainers: 78 - left(1), ExposedContainers: 0, AccountsExposed: 0, AccountsUnread: 0 }])
   put(p, 'DP.2', [{ Vaults: 20, SoftDelete: 20 - left(1), PurgeProtection: 20 - left(1), RbacAuth: 20 - left(1) }])
   put(p, 'DR.2', [{ Plan: 'VirtualMachines', ResourceType: 'microsoft.compute/virtualmachines', Resources: 200, Covered: 200 - left(5) }])
-  put(p, 'DR.9', [{ Scope: 'All workspaces', Metric: 'Total rules', Value: 386 }, { Scope: 'All workspaces', Metric: 'Enabled rules', Value: 386 - left(7) }])
+  put(p, 'DR.9', [{ Scope: 'All workspaces', Metric: 'Total rules', Value: 386 }, { Scope: 'All workspaces', Metric: 'Enabled rules', Value: 386 - left(7) }, { Scope: 'w1', Metric: 'Total rules', Value: 200 }, { Scope: 'w1', Metric: 'Enabled rules', Value: 200 - left(7) }, { Scope: 'w2', Metric: 'Total rules', Value: 186 }, { Scope: 'w2', Metric: 'Enabled rules', Value: 186 }])
   put(p, 'DR.10', [{ Closed: 100, Documented: 100 - left(3) }])
 }
 const drop = (p, ...ids) => { for (const id of ids) { p.manifest = p.manifest.filter(r => r.ResultId !== id); delete p.results[id] } }
@@ -1085,7 +1113,9 @@ test('the controls page names the exceptions of a control at E beside its figure
   const near = html(p)
   assert.ok(near.includes('title="Enforced, 1 exception">E</span><div class="control-text"><h4>Azure virtual machines reporting to endpoint detection</h4>'), 'the mark names the exception')
   assert.match(near, /<h4>Azure virtual machines reporting to endpoint detection<\/h4>[\s\S]*?<strong>88 of 89<\/strong>[\s\S]*?<span class="exceptions">1 exception<\/span>/)
-  assert.match(near, /<strong>379 of 386<\/strong>[\s\S]*?<span class="exceptions">7 exceptions<\/span>/)
+  // Analytics rules are a presence check, so 379 of 386 enabled reads In force and the disabled rules are no exceptions.
+  const rulesRow = near.slice(near.indexOf('<h4>Analytics rules enabled in every Sentinel workspace</h4>'), near.indexOf('<h4>Threat intelligence'))
+  assert.ok(/<strong>In force<\/strong>/.test(rulesRow) && !rulesRow.includes('class="exceptions"') && rulesRow.includes('379 of 386 analytics rules enabled across 2 workspaces, as context'), rulesRow)
   assert.ok(near.includes('shows how many as exceptions'), 'the legend explains the count')
   const full = pack(); readings(full, true)
   assert.ok(!html(full).includes('class="exceptions"'), 'a complete reading carries no exception line')

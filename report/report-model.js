@@ -782,9 +782,34 @@
     // are switched on at build, so they are foundational. Domain controller telemetry (DR.4) and Defender for Identity
     // sensors (DR.11) need Defender for Identity licensing and a sensor on each domain controller from the client, and
     // do not apply to cloud-only tenants, so they are defense in depth.
-    const rules = rows('DR.9').filter(r => /All workspaces/i.test(String(r.Scope)))
-    const ruleTotal = count(rules.find(r => /^Total rules$/i.test(r.Metric))?.Value), ruleEnabled = count(rules.find(r => /^Enabled rules$/i.test(r.Metric))?.Value)
-    const ruleControl = ruleTotal !== null ? control('DR.9', 'Analytics rules enabled in Sentinel', F.detection, ruleEnabled, ruleTotal, 'Enabled analytics rules across all workspaces.') : ungathered('DR.9', 'Analytics rules enabled in Sentinel', F.detection, reason('DR.9'), 'Enabled analytics rules across all workspaces.')
+    // DR.9 is a presence check (Oct 16, 2026): In force when every Sentinel workspace in scope has at least one enabled
+    // analytics rule. The evidence cannot tell Atmosera's standard rules from others, since they carry no naming
+    // convention, so the grade never claims the standard set. The enabled of total count is context only: disabled
+    // noisy rules are tuning, never a foundational gap. The collector writes one summary scope per workspace that
+    // holds rules, so a workspace with none has no scope. That reads as zero only when every workspace was read.
+    const ruleMetric = (scope, metric) => count(rows('DR.9').find(r => String(r.Scope).toLowerCase() === scope.toLowerCase() && String(r.Metric).toLowerCase() === metric.toLowerCase())?.Value)
+    const ruleTotal = ruleMetric('All workspaces', 'Total rules'), ruleEnabled = ruleMetric('All workspaces', 'Enabled rules')
+    const ruleLabel = 'Analytics rules enabled in every Sentinel workspace'
+    const ruleNote = 'Sentinel workspaces with at least one enabled analytics rule, of the workspaces in scope. It does not identify which rules are Atmosera\'s standard set.'
+    const ruleScopes = [...new Set(rows('DR.9').map(r => clean(r.Scope)).filter(x => x && !/^All workspaces$/i.test(x)))]
+    const ruleWorkspaces = m.workspaces.map(w => clean(w.Name)).filter(Boolean)
+    // A pack with one workspace and only the All workspaces scope reads that scope as the workspace.
+    const inScope = ruleWorkspaces.length ? ruleWorkspaces : ruleScopes.length ? ruleScopes : ruleTotal !== null ? ['All workspaces'] : []
+    const singleScope = inScope.length === 1 && !ruleScopes.length
+    // Several workspaces with only the All workspaces scope (no per-workspace breakdown) cannot say which one holds the rules.
+    const noBreakdown = inScope.length > 1 && !ruleScopes.length
+    const wsEnabled = w => { if (noBreakdown) return ruleTotal === 0 && state('DR.9') === 'OK' ? 0 : undefined; const v = ruleMetric(singleScope ? 'All workspaces' : w, 'Enabled rules'); return v !== null ? v : ruleScopes.some(x => x.toLowerCase() === w.toLowerCase()) ? null : state('DR.9') === 'OK' ? 0 : undefined }
+    const ruleReadings = inScope.map(wsEnabled)
+    const ruleContext = ruleTotal !== null && ruleEnabled !== null ? ` ${fmt(ruleEnabled)} of ${plural(ruleTotal, 'analytics rule', 'analytics rules')} enabled across ${plural(inScope.length, 'workspace', 'workspaces')}, as context: disabled rules do not move the grade.` : ''
+    const emptyWorkspaces = ruleReadings.filter(v => v === 0).length
+    let ruleControl
+    if (!has('DR.9') || ruleTotal === null || !inScope.length) ruleControl = ungathered('DR.9', ruleLabel, F.detection, has('DR.9') ? 'the result does not contain a valid reading' : reason('DR.9'), ruleNote)
+    else if (emptyWorkspaces > 0) {
+      ruleControl = inForce('DR.9', ruleLabel, F.detection, false, `${plural(emptyWorkspaces, 'Sentinel workspace has', 'Sentinel workspaces have')} no enabled analytics rule. ${ruleNote}${ruleContext}`)
+      ruleControl.gap = inScope.length === 1 ? 'no enabled rule in the workspace' : `${fmt(emptyWorkspaces)} of ${fmt(inScope.length)} workspaces without an enabled rule`
+    }
+    else if (partial('DR.9') || ruleReadings.some(v => v === undefined || v === null)) ruleControl = ungathered('DR.9', ruleLabel, F.detection, 'a Sentinel workspace could not be read, so an enabled rule in every workspace cannot be confirmed', ruleNote)
+    else ruleControl = inForce('DR.9', ruleLabel, F.detection, true, `${ruleNote}${ruleContext}`)
     const ti = one('DR.7')
     inForce('DR.7', 'Threat intelligence indicators ingested tenant-wide', F.detection, has('DR.7') ? count(ti?.Indicators) > 0 : null, ti ? `${fmt(ti.Indicators)} indicators available for matching.` : has('DR.7') ? 'No threat intelligence table recorded.' : 'Threat intelligence indicators available for matching in the workspace.')
     const dc = rows('DR.4')
@@ -1084,7 +1109,7 @@
       }
       if (m.response) parts.push(`High severity alerts closed at a median of ${m.response.median.value}.${m.response.median.belowFloor ? ` ${m.response.notes[0]}` : ''}`)
       if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
-      if (ruleControl && ruleControl.pct !== null) parts.push(`${fmt(ruleControl.good)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
+      if (ruleControl.mark && ruleEnabled > 0) parts.push(`${fmt(ruleEnabled)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
       // The disposition statement says every alert, so it needs a complete DR.10 reading of every workspace and an
       // OUT.1 reading with no open alert and no unclassified closure. Open alerts at collection lead the
       // statement with the closed and open counts from OUT.1. Otherwise a DR.10 reading of every workspace that
@@ -1105,7 +1130,7 @@
       // When DR.10 earns the statement the source line cites it beside OUT.1, so the statement traces to its evidence.
       // A reviewed open alert split in the narrative cites its record as well.
       const detectionSource = !m.alerts ? plan.source : [m.alerts.source, dispositionLed ? dispositions.source : '', m.alerts.openSplit ? m.alerts.openSplit.source : ''].filter(Boolean).join(' ')
-      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : ruleControl, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, detectionSource)
+      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : null, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, detectionSource)
     }
 
     // Executive summary tiles and tiers.

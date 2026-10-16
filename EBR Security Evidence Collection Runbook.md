@@ -1647,7 +1647,7 @@ Get-MgAdminSharepointSetting |
 | DR-F2 | Every alert triaged to a documented disposition | F | Closed alerts with a classification and a closing comment, alerts linked to an incident | DR.10, OUT.1, DR.1 |
 | DR-F3 | Cloud workload protection enabled across the resource estate | F | Plan-covered resources over plan-eligible resources | DR.2 |
 | DR-F4 | Security telemetry centrally collected and retained | F | Retention days and active data types | P0.2, DR.3 |
-| DR-F5 | Analytics rules enabled in Sentinel | F | Enabled rules over all analytics rules in the workspaces | DR.9 |
+| DR-F5 | Analytics rules enabled in every Sentinel workspace | F | In force when every workspace in scope has at least one enabled analytics rule. Enabled over total rules is context, not the grade, and it does not identify Atmosera's rules | DR.9, DR.9-RULES |
 | DR-F6 | Vulnerability assessment running estate-wide (DRB) | F | Onboarded devices with a software inventory | DR.5, DFC.1 |
 | DR-F7 | Threat intelligence indicators ingested tenant-wide | F | Indicators available for matching. TI match alerts (DR.8) are context, not graded | DR.7, DR.8 |
 | DR-D1 | Diagnostic logging enabled on all platform resources | D | Resources with every logging assessment healthy, and initiative compliance once assigned | DR.13, DR.6-INITIATIVE, DR.6 |

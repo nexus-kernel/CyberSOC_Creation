@@ -180,7 +180,8 @@ test('analytics rules and threat intelligence gaps are foundational gaps in Now,
   // Foundational since Oct 16, 2026: the standard rule set and threat intelligence ingestion are switched on at build.
   const p = quarterPack()
   const put = (id, rows) => { p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-12T10:00:00Z' }); p.results[id] = rows }
-  put('DR.9', [{ Scope: 'All workspaces', Metric: 'Total rules', Value: 386 }, { Scope: 'All workspaces', Metric: 'Enabled rules', Value: 120 }])
+  // A workspace with no enabled analytics rule is the gap. The rule count is context and never the grade.
+  put('DR.9', [{ Scope: 'All workspaces', Metric: 'Total rules', Value: 40 }, { Scope: 'All workspaces', Metric: 'Enabled rules', Value: 0 }, { Scope: 'w1', Metric: 'Total rules', Value: 40 }, { Scope: 'w1', Metric: 'Enabled rules', Value: 0 }])
   put('DR.7', [{ Indicators: 0 }])
   put('DR.5', [{ Scope: 'Azure VM', Onboarded: 88, Assessed: 40 }])
   const { m, s } = story(p)
@@ -189,9 +190,16 @@ test('analytics rules and threat intelligence gaps are foundational gaps in Now,
   assert.deepEqual(['DR.9', 'DR.7'].map(id => s.drift.some(c => c.id === id)), [true, true], 'both on the gaps panel')
   const now = s.roadmap.find(h => h.key === 'now').items.find(i => i.key === 'drift')
   assert.ok(now.controls.some(c => c.id === 'DR.9') && now.controls.some(c => c.id === 'DR.7'), 'both in Now as Atmosera\'s fix')
-  assert.match(now.evidence, /analytics rules and threat intelligence$/)
+  assert.match(now.evidence, /analytics rules \(no enabled rule in the workspace\) and threat intelligence$/)
   const next = s.roadmap.find(h => h.key === 'next').items
   assert.ok(!next.some(i => i.controls.some(c => ['DR.9', 'DR.7'].includes(c.id))), 'neither sits in Next')
+  assert.deepEqual([m.controls.find(c => c.id === 'DR.9').value, s.drift.find(c => c.id === 'DR.9').detail], ['Not in force', 'no enabled rule in the workspace'])
+  // Many disabled rules with one enabled in every workspace is tuning, never a foundational gap.
+  const q = JSON.parse(JSON.stringify(p))
+  q.results['DR.9'] = [{ Scope: 'All workspaces', Metric: 'Total rules', Value: 386 }, { Scope: 'All workspaces', Metric: 'Enabled rules', Value: 3 }, { Scope: 'w1', Metric: 'Total rules', Value: 386 }, { Scope: 'w1', Metric: 'Enabled rules', Value: 3 }]
+  const tuned = story(q)
+  assert.equal(tuned.m.controls.find(c => c.id === 'DR.9').value, 'In force')
+  assert.ok(!tuned.s.drift.some(c => c.id === 'DR.9') && !tuned.s.roadmap.some(h => h.items.some(i => i.controls.some(c => c.id === 'DR.9'))), 'no gap and no roadmap item')
   const va = next.find(i => i.key === 'vulnassess')
   assert.deepEqual([va.title, va.controls.map(c => c.id)], ['Vulnerability assessment coverage', ['DR.5']])
   assert.ok(!s.roadmap.some(h => h.items.some(i => i.key === 'detect')), 'the detect item is retired')
