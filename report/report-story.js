@@ -11,7 +11,7 @@
 (function (root) {
   'use strict'
   const R = typeof module !== 'undefined' && module.exports ? require('./report-model.js') : root.EbrReport
-  const { fmt, clean, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, RETIREMENT } = R
+  const { fmt, clean, pctText, plural, E_THRESHOLD, RETIREMENT } = R
   const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
   const word = n => n >= 0 && n < WORDS.length ? WORDS[n] : fmt(n)
   const GROUPS = ['Identity and access', 'Endpoint and workload', 'Network and boundary', 'Data protection', 'Detection and response']
@@ -101,18 +101,16 @@
     s.periodPhrase = s.quarter ? 'this quarter' : m.period.valid ? `from ${m.period.label}` : 'in the period'
     s.readShort = shortDate(p.PostureReadDate) || m.readDate
 
-    // Response speed. A median shows only at the floor or above. Otherwise the 90th percentile carries
-    // the story when it is within one hour. The 90th percentile is creation to recorded close, so it reads
-    // as nine in ten alerts triaged and closed, as the HTML tile words it, never as investigated or
-    // resolved (Oct 14, 2026).
-    const timing = m.timing || []
-    const speedRow = timing.find(r => r.scope === 'High') && timing.find(r => r.scope === 'High').n >= 5 ? timing.find(r => r.scope === 'High') : timing.find(r => r.scope === 'All')
+    // Response speed from the model's fixed cohort, every high severity alert created in the period and closed by
+    // collection, so the KPI never
+    // switches cohort or measure with the result. A median under 20 minutes or a 90th percentile over one hour keeps
+    // its note. The 90th percentile is creation to recorded close, so it reads as nine in ten alerts triaged and
+    // closed, as the HTML tile words it, never as investigated or resolved (Oct 16, 2026).
+    const r = m.response
     s.speed = null
-    if (speedRow) {
-      const who = speedRow.scope === 'High' ? 'high-severity alerts' : 'alerts'
-      const nineInTen = speedRow.p90 && speedRow.p90.minutes <= 60 ? `Nine in ten triaged and closed within ${speedRow.p90.value}` : ''
-      if (speedRow.median) s.speed = { value: speedRow.median.value, label: `median time to close, ${speedRow.scope === 'High' ? 'high severity alerts' : 'all alerts'}`, sub: `${plural(speedRow.n, 'alert', 'alerts')} closed.${nineInTen ? ` ${nineInTen}.` : ''}`, kpiSub: nineInTen || `${plural(speedRow.n, 'alert', 'alerts')} closed`, line: `${sentence(who)} closed in a median of ${speedRow.median.value}.`, row: speedRow }
-      else if (speedRow.p90 && speedRow.p90.minutes <= 60) s.speed = { value: speedRow.p90.value, label: `time for 90% of ${who} to close`, sub: `${plural(speedRow.n, 'alert', 'alerts')} closed ${s.periodPhrase}.`, kpiSub: `${plural(speedRow.n, 'alert', 'alerts')} closed ${s.periodPhrase}`, line: `90% of ${who} closed within ${speedRow.p90.value}.`, row: speedRow }
+    if (r) {
+      const nineInTen = r.p90 ? `Nine in ten triaged and closed within ${r.p90.value}` : ''
+      s.speed = { value: r.median.value, label: 'median time to close, high severity alerts', sub: [`${plural(r.n, 'alert', 'alerts')} closed.`, nineInTen ? `${nineInTen}.` : '', ...r.notes].filter(Boolean).join(' '), kpiSub: [nineInTen || `${plural(r.n, 'alert', 'alerts')} closed`, ...r.notes.map(t => t.replace(/\.$/, ''))].join('. '), line: [`High-severity alerts closed in a median of ${r.median.value}.`, ...r.notes].join(' '), row: { source: r.median.source } }
     }
 
     // Score movement. Only a gain is a headline. The posture chart shows the monthly trend in either direction.

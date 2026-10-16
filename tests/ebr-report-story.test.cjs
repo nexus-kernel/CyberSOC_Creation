@@ -50,15 +50,19 @@ test('every control below E lands on the roadmap, and every foundational one is 
   assert.equal(now.items[0].controls.length, m.controls.filter(c => c.tier === 'foundational').length)
   assert.ok(CATALOG.every(e => e.horizon === 'next' || e.horizon === 'later'))
 })
-test('response speed never shows a median under the floor and uses the 90th percentile instead', () => {
+test('response speed keeps the fixed high severity cohort and shows a median under the floor with its note', () => {
   const { m, s } = story(quarterPack())
-  assert.equal(m.timing.find(r => r.scope === 'High').median, null, 'the 7 minute median is below the floor')
+  assert.deepEqual([m.timing.find(r => r.scope === 'High').median.value, m.timing.find(r => r.scope === 'All').median.value], ['7 min', '8 min'], 'every median is shown')
   assert.equal(m.timing.find(r => r.scope === 'Medium').median.value, '3 hr')
-  assert.equal(s.speed.value, '36 min')
-  assert.match(s.takeaways.operations, /^615 alerts triaged this quarter\. 90% of high-severity alerts closed within 36 min\.$/)
-  const text = JSON.stringify(s)
-  assert.ok(!/\b7 min\b|\b8 min\b/.test(text), 'a sub-floor median leaked into the story')
+  assert.deepEqual([s.speed.value, s.speed.label], ['7 min', 'median time to close, high severity alerts'])
+  assert.equal(s.speed.sub, '208 alerts closed. Nine in ten triaged and closed within 36 min. Median under 20 minutes, covered in the review.')
+  assert.equal(s.kpis[2].sub, 'Nine in ten triaged and closed within 36 min. Median under 20 minutes, covered in the review')
+  assert.equal(s.takeaways.operations, '615 alerts triaged this quarter. High-severity alerts closed in a median of 7 min. Median under 20 minutes, covered in the review.')
   assert.ok(MEDIAN_FLOOR === 20)
+  // A 90th percentile over one hour stays on the KPI with its note, never swapped for another measure.
+  const p = quarterPack(); p.results['OUT.2'][0].MedianCloseMin = 30; p.results['OUT.2'][0].P90CloseMin = 300
+  const slow = story(p).s
+  assert.deepEqual([slow.speed.value, slow.kpis[2].sub], ['30 min', 'Nine in ten triaged and closed within 5 hr. 90th percentile over one hour, covered in the review'])
 })
 test('open alerts and the severity spike stay out of the story', () => {
   const { s } = story(quarterPack())
@@ -69,8 +73,8 @@ test('open alerts and the severity spike stay out of the story', () => {
 test('the story carries the wins, asks and takeaways the review asked for, worded within the copy rules', () => {
   const { s } = story(quarterPack())
   assert.equal(s.quarter, 'Q3 2026')
-  assert.deepEqual(s.kpis.map(k => k.value), ['615', '0 of 2', '36 min', '59.7%'])
-  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'True positives whose alerts carried an exfiltration or impact tactic', 'Time for 90% of high-severity alerts to close', 'Defender for Cloud secure score'])
+  assert.deepEqual(s.kpis.map(k => k.value), ['615', '0 of 2', '7 min', '59.7%'])
+  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'True positives whose alerts carried an exfiltration or impact tactic', 'Median time to close, high severity alerts', 'Defender for Cloud secure score'])
   assert.equal(s.kpis[1].sub, 'Both classified as true positives by the SOC', 'a true positive is a classification, never an investigation or a closure')
   assert.equal(s.kpis[0].sub, 'Jul 1 to Sep 30, 2026', 'the alert KPI carries the period, not the detection count')
   assert.equal(s.kpis[3].sub, 'Up 6.1 points since Jul 2026, from 53.6%')

@@ -584,3 +584,37 @@ test('the posture appendix draws the Defender for Cloud score by month and state
   assert.ok(!/of 40 points|points across/.test(posture), 'the points available are never stated')
   assert.ok(posture.includes('DEFENDER FOR CLOUD · AZURE RESOURCE ESTATE'))
 })
+test('the time to close table shows every figure of the fixed cohort, with acknowledge beside close, and its caption fits above the next quadrant', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-'))
+  const data = pack('balanced'), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  data.results['OUT.2'] = [{ Scope: 'All', Incidents: 80, AutoClosed: 30, MedianTriageMin: 3, MedianCloseMin: 12, P90CloseMin: 300 }, { Scope: 'High', Incidents: 30, AutoClosed: 12, MedianTriageMin: 2, MedianCloseMin: 7, P90CloseMin: 95 }, { Scope: 'Medium', Incidents: 25, AutoClosed: 9, MedianTriageMin: 4, MedianCloseMin: 40, P90CloseMin: 400 }, { Scope: 'Low', Incidents: 25, AutoClosed: 9, MedianTriageMin: 5, MedianCloseMin: 60, P90CloseMin: 900 }]
+  data.manifest.push({ ResultId: 'OUT.2-ANALYST', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-08T10:00:00Z' })
+  data.results['OUT.2-ANALYST'] = [{ Scope: 'High', Incidents: 18, AutoClosed: 0, MedianTriageMin: 9, MedianCloseMin: 45, P90CloseMin: 240 }]
+  data.context = { ResponseTargetMinutes: 60 }
+  fs.writeFileSync(dataFile, JSON.stringify(data))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  const names = Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+  const xmls = await Promise.all(names.map(n => zip.file(n).async('string')))
+  const index = xmls.findIndex(x => x.includes('name="Time to close table"')), xml = xmls[index]
+  assert.ok(xml, 'the operations slide has the table')
+  const frame = xml.slice(xml.indexOf('name="Time to close table"'), xml.indexOf('</p:graphicFrame>', xml.indexOf('name="Time to close table"')))
+  const [, tableY] = frame.match(/<a:off x="\d+" y="(\d+)"\/>/).map(Number)
+  const rows = [...frame.matchAll(/<a:tr h="(\d+)"[^>]*>([\s\S]*?)<\/a:tr>/g)]
+  const cells = rows.map(r => (r[2].match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => t.slice(5, -6)).join(' | '))
+  assert.equal(cells[0], 'Severity | Closed | Median to acknowledge | Median to close | 90% closed within')
+  assert.equal(cells[1], 'High | 30 | 2 min | 7 min | 1.6 hr', 'a median under 20 minutes and a 90th percentile over one hour are both shown')
+  assert.equal(cells[4], 'All closed | 80 | 3 min | 12 min | 5 hr', 'the all row includes automation closures')
+  const caption = xml.match(/name="Time to close caption"[\s\S]*?<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"\/>[\s\S]*?<\/p:sp>/)
+  const captionText = (caption[0].match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => t.slice(5, -6)).join('')
+  assert.equal(captionText, 'Acknowledge is the first status change from New. A median under 20 minutes or a 90th percentile over one hour is covered in the review.')
+  const tableBottom = tableY + rows.reduce((n, r) => n + Number(r[1]), 0)
+  assert.ok(tableBottom <= Number(caption[1]), 'the caption sits below the table')
+  assert.ok(Number(caption[1]) + Number(caption[2]) <= 4.55 * EMU, `the caption ends at ${((Number(caption[1]) + Number(caption[2])) / EMU).toFixed(2)} in, past the next quadrant`)
+  const notes = await zip.file(`ppt/notesSlides/notesSlide${names[index].match(/(\d+)\.xml$/)[1]}.xml`)?.async('string')
+  const noteText = (notes.match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => t.slice(5, -6)).join(' ')
+  assert.ok(noteText.includes('Of the high severity alerts, 12 were closed by automation rules. Analyst-handled: median 45 min, 90th percentile 4 hr.'), noteText)
+  assert.ok(noteText.includes('Against the agreed 1 hr response target, the median time to close of 7 min is under it and the 90th percentile of 1.6 hr is over it.'), noteText)
+  assert.ok(noteText.includes('for every high severity alert created in the period and closed by collection') && !/closed in the period/.test(noteText), noteText)
+  assert.ok(!/Medians under 20 minutes are not presented/.test(noteText))
+})

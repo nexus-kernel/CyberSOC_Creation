@@ -194,17 +194,22 @@ async function main() {
         valGridLine: { color: HEX.track, size: 0.5 }, catGridLine: { style: 'none' }, showLegend: true, legendPos: 'r', legendFontSize: 11, legendFontFace: '+mn-lt', legendColor: HEX.dk1, objectName: 'Monthly alerts chart'
       })
     } else text(s, 'Monthly volume is confirmed in the review.', { x: q.x, y: q.y, w: qw, h: 0.4, fontSize: 13, color: C.accent6, objectName: 'Monthly alerts empty' })
-    // Time to close by severity. Medians under the floor are never shown.
+    // Time to acknowledge and close by severity, every figure shown. A median under 20 minutes or a 90th percentile
+    // over one hour carries the uniform caption note. The analyst-handled and automation-closed high severity rows,
+    // and the agreed target comparison, go to the speaker notes, as the HTML operations page shows them.
     q = quad(1, 'Time to close, by severity')
     if (m.timing && m.timing.length) {
-      const head = ['Severity', 'Closed', 'Median', '90% within'].map((t, i) => ({ text: t, options: { fontSize: 11, color: HEX.accent6, align: i ? 'right' : 'left', border: border(0.75) } }))
+      const head = ['Severity', 'Closed', 'Median to acknowledge', 'Median to close', '90% closed within'].map((t, i) => ({ text: t, options: { fontSize: 11, color: HEX.accent6, align: i ? 'right' : 'left', valign: 'bottom', border: border(0.75) } }))
       const body = m.timing.map(r => {
         const all = r.scope === 'All', fill = all ? { color: HEX.lt2 } : undefined
         const cell = (t, o = {}) => ({ text: t, options: { fontSize: 13, color: HEX.dk1, align: 'right', fill, border: border(0.5), ...o } })
-        return [cell(all ? 'All closed' : r.scope, { bold: true, color: HEX.dk2, align: 'left' }), cell(fmt(r.n)), cell(r.median ? r.median.value : '–', { bold: true, color: r.median ? HEX.accent2 : HEX.accent6 }), cell(r.p90 ? r.p90.value : '–')]
+        return [cell(all ? 'All closed' : r.scope, { bold: true, color: HEX.dk2, align: 'left' }), cell(fmt(r.n)), cell(r.acknowledge ? r.acknowledge.value : '–'), cell(r.median ? r.median.value : '–', { bold: true, color: r.median ? HEX.accent2 : HEX.accent6 }), cell(r.p90 ? r.p90.value : '–')]
       })
-      s.addTable([head, ...body], { x: q.x, y: q.y - 0.05, w: qw, colW: [qw * 0.34, qw * 0.2, qw * 0.21, qw * 0.25], rowH: 0.34, margin: [0.03, 0.08, 0.03, 0.08], objectName: 'Time to close table' })
-      text(s, 'Medians under 20 minutes are not presented. 90% within is the 90th percentile.', { x: q.x, y: q.y + 0.34 * (body.length + 1) + 0.05, w: qw, h: 0.3, fontSize: 10, color: C.accent6, objectName: 'Time to close caption' })
+      const HEAD_H = 0.42, ROW_H = 0.28, tableH = HEAD_H + ROW_H * body.length
+      s.addTable([head, ...body], { x: q.x, y: q.y - 0.05, w: qw, colW: [qw * 0.2, qw * 0.14, qw * 0.24, qw * 0.2, qw * 0.22], rowH: [HEAD_H, ...body.map(() => ROW_H)], margin: [0.03, 0.08, 0.03, 0.08], objectName: 'Time to close table' })
+      const captionText = 'Acknowledge is the first status change from New. A median under 20 minutes or a 90th percentile over one hour is covered in the review.'
+      const captionY = q.y - 0.05 + tableH + 0.05
+      text(s, captionText, { x: q.x, y: captionY, w: qw, h: lines(captionText, qw - 0.1, 10) * 0.17 + 0.05, fontSize: 10, color: C.accent6, objectName: 'Time to close caption' })
     } else text(s, 'Response timing is confirmed in the review.', { x: q.x, y: q.y, w: qw, h: 0.4, fontSize: 13, color: C.accent6, objectName: 'Time to close empty' })
     // How closed alerts were classified. Open alerts appear only as the referral sentence, split by owner only from
     // the reviewed OpenAlertNote record.
@@ -244,7 +249,9 @@ async function main() {
       m.ticketed ? 'An alert is a Sentinel record that opened a ticket with the managed security service. Informational severity is excluded, and detections are the records correlated into those alerts.' : 'Detections from Sentinel, Defender for Cloud and the Defender services are correlated into alerts.',
       m.alerts ? `Closed alerts: ${fmt(m.alerts.benign)} benign positive, ${fmt(m.alerts.falsePositives)} false positive, ${fmt(m.alerts.truePositives)} true positive, ${fmt(m.alerts.unclassified)} unclassified.` : '',
       m.alerts && m.alerts.open > 0 ? (m.alerts.openSplit ? `Of the alerts open at collection, ${m.alerts.openSplit.phrase}. Evidence ${m.alerts.openSplit.source}` : 'The remaining alerts are referred to your team for action or confirmation under the agreed notification process, or are still under investigation.') : '',
-      'Response times run from alert creation to recorded close. Medians under 20 minutes are not presented, so the 90th percentile carries the speed story where the median is faster.'
+      'Response times run from alert creation to recorded close, for every high severity alert created in the period and closed by collection. Every median and 90th percentile is shown, and one under 20 minutes or over one hour is covered in the review.',
+      m.response && m.response.split ? `Of the high severity alerts, ${fmt(m.response.split.automation.n)} were closed by automation rules.${m.response.split.analyst && m.response.split.analyst.median ? ` Analyst-handled: median ${m.response.split.analyst.median.value}${m.response.split.analyst.p90 ? `, 90th percentile ${m.response.split.analyst.p90.value}` : ''}.` : ''}` : '',
+      m.response && m.response.target ? m.response.target.sentence : ''
     ]))
 
     // 4b. Confirmed threats: up to five examples, highest severity first, when the pack has any. A pack with true

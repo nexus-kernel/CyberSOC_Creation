@@ -43,8 +43,8 @@ $fields = [ordered]@{
     'P0.1-XDRDUP' = @('XdrIncidents','InMultipleWorkspaces')
     'P0.5' = @('Resources')
     'OUT.1' = @('Raised','Closed','Open','TruePositive','BenignPositive','FalsePositive','ClosedUnclassified')
-    'OUT.2' = @('Scope','Incidents','AutoClosed','MedianCloseMin','P90CloseMin')
-    'OUT.2-ANALYST' = @('Scope','Incidents','AutoClosed','MedianCloseMin','P90CloseMin')
+    'OUT.2' = @('Scope','Incidents','AutoClosed','MedianTriageMin','MedianCloseMin','P90CloseMin')
+    'OUT.2-ANALYST' = @('Scope','Incidents','AutoClosed','MedianTriageMin','MedianCloseMin','P90CloseMin')
     'OUT.2-RECENT' = @('Scope','Incidents','AutoClosed','MedianCloseMin','P90CloseMin')
     'OUT.2-RECENT-ANALYST' = @('Scope','Incidents','AutoClosed','MedianCloseMin','P90CloseMin')
     'OUT.3' = @('Month','Total','High','Medium','Low','Informational','TruePositive','FalsePositive')
@@ -282,7 +282,7 @@ if ($ContextPath) {
         throw 'The context client and tenant must match the evidence pack.'
     }
     # Allow only the documented editorial inputs.
-    $context = $context | Select-Object ClientName, TenantId, ServiceStartDate, TenantScore, Delivered, OpenAlertNote, Impact
+    $context = $context | Select-Object ClientName, TenantId, ServiceStartDate, TenantScore, Delivered, OpenAlertNote, Impact, ResponseTargetMinutes
 }
 $data = [ordered]@{
     version = '2.0.0'

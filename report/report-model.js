@@ -48,7 +48,9 @@
   const bool = value => value === true || String(value ?? '').toLowerCase() === 'true'
   const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`
   const RETIREMENT = { date: '2027-02-01', label: 'February 1, 2027' }
+  // A median under the floor and a 90th percentile over one hour are presented with a note, never hidden.
   const MEDIAN_FLOOR = 20
+  const TIMING_SAMPLE = 5
   const TIERS = { foundational: 'Foundational', defense: 'Defense in depth' }
   // Network devices and firewall operating systems, which cannot run an endpoint sensor.
   const NETWORK_DEVICE = /palo ?alto|pan-?os|meraki|fortinet|forti(gate|os)|sonicwall|sonicos|watchguard|check ?point|gaia|barracuda/i
@@ -258,52 +260,80 @@
       if (!m.impact) note('Impact determination', 'The context file carries no reviewed Impact record, so the report prints the tactic count with a request for additional investigation evidence and never a data exposure or business impact statement. Review the closing comment and ticket of each true positive, then add Impact with Confirmed, Reviewed, Reference, WindowStart and WindowEnd to the context file to print the determination.')
     }
 
-    // Response timing candidate ladder.
-    const recentAvailable = validDate(p.RecentStart) && windowValid && p.RecentStart > p.WindowStart
-    const timingRow = (id, scope) => alertsAllowed ? rows(id).find(r => r.Scope === scope) : null
-    const pick = (baseId, analystId, scope) => {
-      const base = timingRow(baseId, scope), analyst = timingRow(analystId, scope)
-      if (scope === 'All') return { row: analyst, analyst: true, id: analystId }
-      const heavy = base && count(base.Incidents) > 0 && count(base.AutoClosed) !== null && base.AutoClosed / base.Incidents >= 0.5
-      return heavy && analyst ? { row: analyst, analyst: true, id: analystId } : { row: base, analyst: false, id: baseId }
-    }
-    const candidates = [
-      { key: 'high-full', scope: 'High', period: 'full', ...pick('OUT.2', 'OUT.2-ANALYST', 'High') },
-      ...(recentAvailable ? [{ key: 'high-recent', scope: 'High', period: 'recent', ...pick('OUT.2-RECENT', 'OUT.2-RECENT-ANALYST', 'High') }] : []),
-      { key: 'all-full', scope: 'All', period: 'full', ...pick('OUT.2', 'OUT.2-ANALYST', 'All') },
-      ...(recentAvailable ? [{ key: 'all-recent', scope: 'All', period: 'recent', ...pick('OUT.2-RECENT', 'OUT.2-RECENT-ANALYST', 'All') }] : [])
-    ].map(c => {
-      const r = c.row
-      const n = count(r?.Incidents), median = num(r?.MedianCloseMin), p90 = num(r?.P90CloseMin)
-      const periodLabel = c.period === 'recent' ? span(p.RecentStart, p.WindowEnd) : m.period.label
-      const cohort = `${c.scope === 'High' ? 'High severity alerts' : 'All severities'}${c.analyst ? ', excluding automation closures' : ''}, ${periodLabel}`
-      const reason = !r ? 'no result available' : n === null || n < 5 ? `${fmt(n ?? 0)} closed alerts, below the minimum sample of 5` : median === null ? 'no median recorded' : median < MEDIAN_FLOOR ? `median of ${duration(median)} is below the ${MEDIAN_FLOOR} minute floor and is not presented` : p90 === null ? 'no 90th percentile recorded' : p90 > 60 ? `90th percentile of ${duration(p90)} exceeds one hour` : ''
-      return { ...c, n, median, p90, cohort, periodLabel, qualifies: reason === '', medianOnly: !!r && n !== null && n >= 5 && median !== null && median >= MEDIAN_FLOOR, reason }
-    })
-    const chosen = candidates.find(c => c.qualifies) || null
-    const fallback = chosen ? null : candidates.filter(c => c.medianOnly).sort((a, b) => b.n - a.n)[0] || null
-    const selected = chosen || fallback
-    if (selected) {
-      const sample = selected.n < 20 ? ` Based on ${fmt(selected.n)} closed alerts.` : ` Based on ${fmt(selected.n)} closed alerts.`
+    // Response timing from one fixed cohort: every eligible high severity alert created in the alert period and closed
+    // by collection (OUT.2, row High, which filters on CreatedTime and reads each alert's latest closed state),
+    // automation closures included. The cohort never changes with the result, so two reviews compare
+    // like for like. A median under 20 minutes and a 90th percentile over one hour are presented with a visible note
+    // and a presenter note, never replaced by another cohort or period. The minimum sample of 5 closed alerts is the
+    // only rule that withholds the figures, and it does not depend on them. When automation rules closed any of the
+    // cohort, the analyst-handled figures (OUT.2-ANALYST) and the automation-closed count sit beside it as two
+    // labelled rows. The collector records no timing for automation closures alone, so that row carries the count
+    // only (Oct 16, 2026).
+    const timingRow = (id, scope) => alertsAllowed ? rows(id).find(r => r.Scope === scope) || null : null
+    const timingOf = r => ({ n: count(r?.Incidents), median: num(r?.MedianCloseMin), p90: num(r?.P90CloseMin), triage: num(r?.MedianTriageMin) })
+    const FLOOR_NOTE = `Under ${MEDIAN_FLOOR} minutes, covered in the review.`, CEILING_NOTE = 'Over one hour, covered in the review.'
+    const highRow = timingRow('OUT.2', 'High'), fixed = timingOf(highRow)
+    const cohortLabel = `High severity alerts created ${m.period.label}, closed by collection`
+    const timingReason = !alertsAllowed ? '' : !highRow ? `no high severity row in OUT.2 (${state('OUT.2')})` : fixed.n === null || fixed.n < TIMING_SAMPLE ? `${plural(fixed.n ?? 0, 'high severity alert', 'high severity alerts')} closed, below the minimum sample of ${TIMING_SAMPLE}` : fixed.median === null ? 'no median recorded for high severity alerts' : ''
+    if (alertsAllowed && !timingReason) {
+      const sample = ` Based on ${plural(fixed.n, 'closed alert', 'closed alerts')}.`
+      const belowFloor = fixed.median < MEDIAN_FLOOR, overHour = fixed.p90 !== null && fixed.p90 > 60
       m.response = {
-        cohort: selected.cohort, scope: selected.scope, analyst: selected.analyst, n: selected.n, key: selected.key,
-        median: { value: duration(selected.median), minutes: selected.median, label: selected.scope === 'High' ? 'Median time to close, high severity alerts' : 'Median time to close, all alerts', note: `Creation to recorded close.${sample}`, source: source(selected.id) },
-        p90: chosen ? { value: duration(selected.p90), minutes: selected.p90, label: selected.scope === 'High' ? '90th percentile close, high severity alerts' : '90th percentile close, all alerts', note: `Nine in ten alerts triaged and closed within this time.${sample}`, source: source(selected.id) } : null,
-        small: selected.n < 20
+        cohort: cohortLabel, scope: 'High', n: fixed.n, key: 'high-full', small: fixed.n < 20,
+        median: { value: duration(fixed.median), minutes: fixed.median, belowFloor, label: 'Median time to close, high severity alerts', note: `Creation to recorded close.${sample}${belowFloor ? ` ${FLOOR_NOTE}` : ''}`, source: source('OUT.2') },
+        p90: fixed.p90 === null ? null : { value: duration(fixed.p90), minutes: fixed.p90, overHour, label: '90th percentile close, high severity alerts', note: `Nine in ten alerts triaged and closed within this time.${sample}${overHour ? ` ${CEILING_NOTE}` : ''}`, source: source('OUT.2') },
+        // MedianTriageMin runs from creation to the first status change away from New, by an analyst or an automation
+        // rule, and an alert closed straight from New counts that close.
+        acknowledge: fixed.triage === null ? null : { value: duration(fixed.triage), minutes: fixed.triage, label: 'Median time to acknowledge, high severity alerts', note: 'Creation to the first status change from New, by an analyst or an automation rule.', source: source('OUT.2') },
+        notes: [belowFloor ? `Median ${FLOOR_NOTE.charAt(0).toLowerCase()}${FLOOR_NOTE.slice(1)}` : '', overHour ? `90th percentile ${CEILING_NOTE.charAt(0).toLowerCase()}${CEILING_NOTE.slice(1)}` : ''].filter(Boolean),
+        split: null, target: null
+      }
+      if (belowFloor) presenter('Median under 20 minutes', `The high severity median time to close is ${duration(fixed.median)}, under the ${MEDIAN_FLOOR} minute presentation floor. It is presented with a note, since the cohort is fixed. A short median often reflects quick benign closures and automation rules, so have the closing breakdown from the tickets ready.`)
+      if (overHour) presenter('90th percentile over one hour', `One in ten high severity alerts took longer than ${duration(fixed.p90)} to close. It is presented with a note, since the cohort is fixed. Have the longest running alerts and the reason each stayed open ready.`)
+      const auto = count(highRow.AutoClosed)
+      if (auto !== null && auto > 0) {
+        const analystRow = timingRow('OUT.2-ANALYST', 'High'), a = timingOf(analystRow)
+        const analyst = analystRow && a.n !== null ? { label: 'Analyst-handled', n: a.n, median: a.n >= TIMING_SAMPLE && a.median !== null ? { value: duration(a.median), minutes: a.median } : null, p90: a.n >= TIMING_SAMPLE && a.p90 !== null ? { value: duration(a.p90), minutes: a.p90 } : null, acknowledge: a.n >= TIMING_SAMPLE && a.triage !== null ? { value: duration(a.triage), minutes: a.triage } : null, source: source('OUT.2-ANALYST') } : null
+        m.response.split = { analyst, automation: { label: 'Closed by automation rules', n: auto, source: source('OUT.2') } }
+        presenter('Automation closures in the timing', `Automation rules closed ${fmt(auto)} of the ${plural(fixed.n, 'high severity alert', 'high severity alerts')} in the timing cohort, and the figures include them. ${analyst ? `Analyst-handled alone: ${plural(analyst.n, 'alert', 'alerts')}${analyst.median ? `, median ${analyst.median.value}` : ''}${analyst.p90 ? `, 90th percentile ${analyst.p90.value}` : ''}.` : 'The pack has no analyst-handled high severity result (OUT.2-ANALYST).'} The collector records no time to close for automation closures alone, so that row carries the count only.`)
+      }
+    } else if (alertsAllowed) unmeasured('OUT.2', 'Response timing', timingReason)
+    // The agreed response target (ResponseTargetMinutes in the reviewed context file) is time from creation to
+    // recorded close. OUT.2 counts whole minute boundaries per alert and estimates its percentiles, so no share of
+    // alerts meeting the target can be read from it. The line compares the reported median and 90th percentile with
+    // the target instead, says "about" within a minute of it, and names both limits. Without the field the report
+    // prints no target line (Oct 16, 2026).
+    const target = context.ResponseTargetMinutes
+    if (target !== undefined && target !== null) {
+      const minutes = count(target)
+      if (minutes === null || minutes < 1) note('Response target needs review', 'The context ResponseTargetMinutes is not a whole number of minutes above zero, so the response target line is omitted. Correct it before presenting, or remove it.')
+      else if (m.response) {
+        const r = m.response
+        const against = v => Math.abs(v.minutes - minutes) <= 1 ? 'about the same as the target' : v.minutes < minutes ? 'under it' : 'over it'
+        const parts = [`the median time to close of ${r.median.value} is ${against(r.median)}`, r.p90 ? `the 90th percentile of ${r.p90.value} is ${against(r.p90)}` : ''].filter(Boolean)
+        r.target = { minutes, value: duration(minutes), median: against(r.median), p90: r.p90 ? against(r.p90) : null,
+          sentence: `Against the agreed ${duration(minutes)} response target, ${parts.join(' and ')}. Close times are recorded in whole minutes and the percentiles are estimates, so this compares the figures with the target and does not count the alerts that met it.`,
+          source: 'Response target from the reviewed context file.' }
+        presenter('Response target', `The agreed ${duration(minutes)} target is compared with the reported median and 90th percentile only. OUT.2 holds no per-alert close times, so the report gives no share of alerts that met the target and no SLA attainment figure. Have the ticket report ready if the share is asked for.`)
       }
     }
-    m.timingRationale = candidates.map(c => ({ key: c.key, cohort: c.cohort, n: c.n, median: c.median === null ? null : duration(c.median), p90: c.p90 === null ? null : duration(c.p90), status: c === chosen ? 'Selected' : c === fallback ? 'Selected for the median only' : c.reason ? `Not used: ${c.reason}` : 'Not used: an earlier candidate qualified' }))
-    if (!selected && alertsAllowed) unmeasured('OUT.2', 'Response timing', `no candidate cohort produced a median at or above ${MEDIAN_FLOOR} minutes`)
-    // Time to close by severity over the full period, for the deck. The same floor applies: a median under
-    // 20 minutes is never presented, and a severity with fewer than 5 closed alerts carries no timing.
+    // The audit trail of the fixed cohort, for the presenter notes only.
+    m.timingRationale = alertsAllowed ? [
+      { key: 'high-full', cohort: cohortLabel, n: fixed.n, median: fixed.median === null ? null : duration(fixed.median), p90: fixed.p90 === null ? null : duration(fixed.p90), acknowledge: fixed.triage === null ? null : duration(fixed.triage), status: m.response ? ['Presented.', ...m.response.notes].join(' ') : `Not presented: ${timingReason}` },
+      ...(m.response?.split ? [
+        { key: 'high-analyst', cohort: `${cohortLabel}, analyst-handled`, n: m.response.split.analyst?.n ?? null, median: m.response.split.analyst?.median?.value ?? null, p90: m.response.split.analyst?.p90?.value ?? null, acknowledge: m.response.split.analyst?.acknowledge?.value ?? null, status: m.response.split.analyst ? 'Presented as a labelled row beside the cohort.' : 'Not available: no OUT.2-ANALYST high severity result.' },
+        { key: 'high-automation', cohort: `${cohortLabel}, closed by automation rules`, n: m.response.split.automation.n, median: null, p90: null, acknowledge: null, status: 'Presented as a labelled row with the count only. The collector records no timing for automation closures alone.' }
+      ] : [])
+    ] : []
+    // Time to close by severity over the full period, for the deck, from the same OUT.2 rows with automation
+    // closures included. Every figure is shown. A severity with fewer than 5 closed alerts carries no timing.
     m.timing = alertsAllowed ? ['High', 'Medium', 'Low', 'All'].map(scope => {
-      const c = pick('OUT.2', 'OUT.2-ANALYST', scope), r = c.row
-      const n = count(r?.Incidents), median = num(r?.MedianCloseMin), p90 = num(r?.P90CloseMin), enough = n !== null && n >= 5
-      return { scope, n, analyst: c.analyst, source: source(c.id),
-        median: enough && median !== null && median >= MEDIAN_FLOOR ? { value: duration(median), minutes: median } : null,
-        p90: enough && p90 !== null ? { value: duration(p90), minutes: p90 } : null }
+      const t = timingOf(timingRow('OUT.2', scope)), enough = t.n !== null && t.n >= TIMING_SAMPLE
+      return { scope, n: t.n, source: source('OUT.2'),
+        median: enough && t.median !== null ? { value: duration(t.median), minutes: t.median, belowFloor: t.median < MEDIAN_FLOOR } : null,
+        p90: enough && t.p90 !== null ? { value: duration(t.p90), minutes: t.p90, overHour: t.p90 > 60 } : null,
+        acknowledge: enough && t.triage !== null ? { value: duration(t.triage), minutes: t.triage } : null }
     }).filter(r => r.n !== null) : []
-    if (!recentAvailable && windowValid && m.period.months > 3) presenter('Trailing three month timing', 'This pack has no OUT.2-RECENT result. Rerun the collector (version 1.5 or later) to add the trailing three month timing candidates.')
 
     // Monthly alert trend.
     const trend = alertsAllowed ? rows('OUT.3').filter(r => validDate(iso(r.Month)) && iso(r.Month) >= p.WindowStart && iso(r.Month) <= p.WindowEnd && ['Total','High','Medium','Low','Informational'].every(k => count(r[k]) !== null)).sort((a, b) => iso(a.Month).localeCompare(iso(b.Month))) : []
@@ -982,7 +1012,7 @@
         if (a.analystMode) parts.push(`Automation rules closed ${fmt(a.automation)} more.`)
         if (a.unclassified > 0) parts.push(`${plural(a.unclassified, 'closed alert carries', 'closed alerts carry')} no recorded classification.`)
       }
-      if (m.response) parts.push(`${m.response.scope === 'High' ? 'High severity alerts' : 'Alerts'} closed at a median of ${m.response.median.value}${m.response.analyst ? ' once automation closures are set aside' : ''}.`)
+      if (m.response) parts.push(`High severity alerts closed at a median of ${m.response.median.value}.${m.response.median.belowFloor ? ` ${m.response.notes[0]}` : ''}`)
       if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
       if (ruleControl && ruleControl.pct !== null) parts.push(`${fmt(ruleControl.good)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
       // The disposition statement says every alert, so it needs a complete DR.10 reading of every workspace and an
@@ -1017,7 +1047,8 @@
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
     // The 90th percentile is creation to recorded close, so the line claims triage and closure, never investigation
     // completion or resolution quality, which the evidence does not hold.
-    if (m.response) tile(m.response.median.label, m.response.median.value, m.response.p90 ? `Nine in ten triaged and closed within ${m.response.p90.value}` : m.response.analyst ? 'Analyst-handled alerts' : m.response.cohort.split(',')[0], m.response.median.source)
+    // A median under 20 minutes or a 90th percentile over one hour carries its note on the tile as well.
+    if (m.response) tile(m.response.median.label, m.response.median.value, [m.response.p90 ? `Nine in ten triaged and closed within ${m.response.p90.value}` : 'High severity alerts', ...m.response.notes.map(t => t.replace(/\.$/, ''))].join('. '), m.response.median.source)
     // The tile never claims an outcome: the sub-line is the reviewed impact determination when the context file
     // carries one, otherwise the tactic reading or the classification itself. When the determination drives the
     // sub-line the source line cites the reviewed record beside OUT.1, so the impact claim traces to its evidence.
