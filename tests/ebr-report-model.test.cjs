@@ -1128,6 +1128,26 @@ test('the controls page names the exceptions of a control at E beside its figure
   const full = pack(); readings(full, true)
   assert.ok(!html(full).includes('class="exceptions"'), 'a complete reading carries no exception line')
 })
+test('every Conditional Access flow names both kinds of scoping when policies select users and applications side by side', () => {
+  const p = pack()
+  put(p, 'IA.1', [{ UserType: 'Member', UsersSignedIn: 200, UsersChallenged: 150 }])
+  const flow = (Flow, Control) => ({ Flow, Control, PolicyRead: true, PolicySource: 'Raw', PolicyState: 'Scoped', ScopeReason: 'UsersOrApplications', EnforcedPolicies: 0, ExcludedIdentities: 0, DetailRead: false })
+  p.results['IA.8-CA'] = [flow('MFA at sign-in', 'IA.1'), flow('Admin portals', 'IA.1-ADMINPORTAL'), flow('Legacy authentication', 'IA.3'), flow('Device code', 'IA.3-DEVICECODE'), flow('Location', 'IA.4-LOCATION')]
+  const m = build(p)
+  const note = id => m.controls.find(x => x.id === id).note
+  assert.match(note('IA.1'), /^Some of the enabled Conditional Access policies that require multifactor authentication apply to all users on selected applications only, and others to selected users only\./)
+  assert.match(note('IA.1-ADMINPORTAL'), /^Some of the enabled Conditional Access policies that require multifactor authentication apply to all users on selected applications only, and others to selected users only\./)
+  assert.match(note('IA.3'), /^Some of the enabled Conditional Access policies that block legacy authentication apply to all users on selected applications only, and others to selected users only\./)
+  assert.match(note('IA.3-DEVICECODE'), /^Some of the enabled Conditional Access policies that block device code flow apply to all users on selected applications only, and others to selected users only\./)
+  assert.match(note('IA.4-LOCATION'), /^Some of the enabled Conditional Access policies that restrict sign-ins by location apply to all users on selected applications only, and others to selected users only\./)
+  // Never read as the existing case where every policy selects both its users and its applications, nor as every application.
+  for (const id of ['IA.1', 'IA.1-ADMINPORTAL', 'IA.3', 'IA.3-DEVICECODE', 'IA.4-LOCATION']) {
+    assert.ok(!/selected users and selected applications|every application|Microsoft admin portals apply/.test(note(id)), id)
+    assert.ok(!/[;<>]/.test(note(id)), id)
+  }
+  // The MFA presenter note carries the same scoping.
+  assert.ok(m.presenter.some(n => n.title === 'MFA at sign-in' && /because some enabled policies are limited to selected applications and others to selected users, and the sign-in ratio stands at or above 50 percent/.test(n.text)))
+})
 test('MFA at sign-in and admin portal MFA read In force from the Conditional Access policy, with the sign-in ratio in the note', () => {
   const p = pack()
   put(p, 'IA.1', [{ UserType: 'Member', UsersSignedIn: 200, UsersChallenged: 150 }])
@@ -1191,6 +1211,18 @@ test('MFA at sign-in and admin portal MFA read In force from the Conditional Acc
   assert.ok(build(p).presenter.some(n => n.title === 'MFA at sign-in' && /because the enabled policy applies to selected applications only/.test(n.text)))
   p.results['IA.8-CA'] = flows('Scoped').map(f => ({ ...f, ScopeReason: 'UsersAndApplications' }))
   assert.match(build(p).controls.find(x => x.id === 'IA.1').note, /that requires multifactor authentication applies to selected users and selected applications only\./)
+  // The mixed case: a policy for all users on selected applications beside one for selected users on every application.
+  p.results['IA.8-CA'] = flows('Scoped').map(f => ({ ...f, ScopeReason: 'UsersOrApplications' }))
+  m = build(p)
+  c = m.controls.find(x => x.id === 'IA.1')
+  assert.deepEqual([c.value, c.mark], ['Mostly enforced', 'P'])
+  assert.match(c.note, /^Some of the enabled Conditional Access policies that require multifactor authentication apply to all users on selected applications only, and others to selected users only\. 150 of 200/)
+  assert.ok(m.presenter.some(n => n.title === 'MFA at sign-in' && /because some enabled policies are limited to selected applications and others to selected users, and the sign-in ratio/.test(n.text)))
+  // A reason this model does not know, from another evaluator, keeps the general sentence.
+  p.results['IA.8-CA'] = flows('Scoped').map(f => ({ ...f, ScopeReason: 'SomethingNewer' }))
+  m = build(p)
+  assert.match(m.controls.find(x => x.id === 'IA.1').note, /^The enabled Conditional Access policy that requires multifactor authentication on every application applies to selected users, applications or conditions only\./)
+  assert.ok(m.presenter.some(n => n.title === 'MFA at sign-in' && /because the enabled policy applies to selected users, applications or conditions only and the sign-in ratio/.test(n.text)))
   // Without a policy inventory the sign-in ratio grades the control as before.
   delete p.results['IA.8-CA']
   m = build(p)
