@@ -805,18 +805,23 @@ async function main() {
     scoreCard(X0, 'DEFENDER FOR CLOUD · AZURE RESOURCE ESTATE', cs ? cs.value : null, cs ? [
       { text: pctText(cs.value), options: { fontSize: 24, bold: true, color: C.text2, breakLine: true } },
       movement(cs, C.accent6),
-      { text: `${cs.note}${m.posture.assessed !== null ? ` Measured across ${fmt(m.posture.assessed)} assessed resources.` : ''}`, options: { fontSize: 11, color: C.accent6, paraSpaceBefore: 4 } }
+      // The assessed resource count is the inventory card below, so the card text carries the model, scope and read.
+      { text: cs.basis, options: { fontSize: 11, color: C.accent6, paraSpaceBefore: 4 } }
     ] : 'Reading completed in the review.', 'Defender for Cloud', cloudTrend)
     const tsc = m.tenantScore
     const tenantBox = scoreCard(X0 + cw2 + 0.3, 'MICROSOFT SECURE SCORE · MICROSOFT 365 TENANT', tsc ? tsc.value : null, tsc ? [
       { text: pctText(tsc.value), options: { fontSize: 24, bold: true, color: C.text2, breakLine: true } },
       movement(tsc, C.accent6),
-      { text: `Read ${tsc.read}.`, options: { fontSize: 11, color: C.accent6, paraSpaceBefore: 4 } }
+      { text: tsc.basis, options: { fontSize: 11, color: C.accent6, paraSpaceBefore: 4 } }
     ] : [{ text: 'Added from the portal reading', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: 'The tenant score is read in the Defender portal and added through the review context so both estates are presented together.', options: { paraSpaceBefore: 6 } }], 'Secure Score')
     if (tsc && tsc.categories.length) {
-      // Category scores under the reading, as the HTML card shows them.
-      let cy = TOP + 1.85
-      const rowH = Math.min(0.24, (ch2 - 1.95) / tsc.categories.length)
+      // Category scores under the reading, as the HTML card shows them, starting below the measured text: the
+      // percentage, the movement line and the model line at their sizes, with 4 pt between paragraphs. The model
+      // line is given one extra line, since renderers wrap with different font metrics.
+      const movementText = movement(tsc, C.accent6).text
+      const need = 24 / 72 * 1.2 + (lines(movementText, tenantBox.tw, 12, !!tsc.delta) * 12 + (lines(tsc.basis, tenantBox.tw, 11) + 1) * 11) / 72 * 1.2 + 8 / 72
+      let cy = Math.max(TOP + 1.85, TOP + 0.6 + need + 0.05)
+      const rowH = Math.min(0.24, (TOP + ch2 - 0.05 - cy) / tsc.categories.length)
       tsc.categories.forEach((c, i) => {
         text(s, c.label, { x: tenantBox.tx, y: cy, w: 0.85, h: rowH, fontSize: 9.5, color: C.text1, valign: 'middle', objectName: `Category ${i + 1} label` })
         meter(s, tenantBox.tx + 0.9, cy + (rowH - 0.14) / 2, tenantBox.tw - 1.55, c.pct, C.accent2, `Category ${i + 1}`)
@@ -831,7 +836,7 @@ async function main() {
 
     s = content('Appendix', 'Where the next points are', 'Appendix A6 · Microsoft score controls ranked by the points still available')
     const sc = m.posture.scoreControls.slice(0, 8), leftW = 7.3
-    if (sc.length) s.addChart(pres.charts.BAR, [{ name: 'Score control', labels: sc.map(c => `${c.label} (${fmt(c.remaining)} ${c.remaining === 1 ? 'pt' : 'pts'})`), values: sc.map(c => c.pct) }], {
+    if (sc.length) s.addChart(pres.charts.BAR, [{ name: 'Score control', labels: sc.map(c => `${c.label} (${fmt(c.remaining)} ${c.remaining === 1 ? 'pt' : 'pts'}${c.resources ? `, ${fmt(c.healthy)} of ${fmt(c.resources)} healthy` : ''})`), values: sc.map(c => c.pct) }], {
       x: X0, y: TOP, w: leftW, h: BOTTOM - TOP, barDir: 'bar', chartColors: [HEX.accent2], barGapWidthPct: 40, valAxisMinVal: 0, valAxisMaxVal: 100, valAxisHidden: true,
       showValue: true, dataLabelPosition: 'outEnd', dataLabelColor: HEX.dk1, dataLabelFontSize: 11, dataLabelFontFace: '+mn-lt', dataLabelFormatCode: '0.0"%"',
       catAxisOrientation: 'maxMin', catAxisLabelColor: HEX.dk1, catAxisLabelFontSize: 11, catAxisLabelFontFace: '+mn-lt',
@@ -849,7 +854,7 @@ async function main() {
     })
     card(s, rx, my, rw, BOTTOM - my, 'Explainer card', C.text2)
     text(s, [{ text: 'MICROSOFT CHANGED HOW SECURE SCORE IS CALCULATED', options: { fontSize: 10, bold: true, color: C.accent1, charSpacing: 1, breakLine: true } }, { text: 'A score movement can reflect a change in the measurement model, the scope or the weighting rather than a change in your controls. We track the controls behind the score, not the percentage alone.', options: { fontSize: 13, color: C.background1, paraSpaceBefore: 6 } }], { x: rx + 0.25, y: my + 0.2, w: rw - 0.5, h: BOTTOM - my - 0.35, objectName: 'Explainer' })
-    s.addNotes(notesOf(['Microsoft score controls pay out all or nothing, so remediation can land with no visible movement until a control completes.', st.headroom]))
+    s.addNotes(notesOf([m.posture.scoreControlBasis, st.headroom]))
   }
 
   console.log(await writeDeck(pres, path.resolve(outFile)))

@@ -721,3 +721,40 @@ test('a reviewed drift status with a URL-length reference stays above the first 
   const { notes } = await read(out)
   assert.ok(notes.join(' ').includes(`Foundational fixes: scheduled, from the reviewed action record ${url}, reviewed Oct 16, 2026.`))
 })
+test('the posture appendix prints the model of each score, the score controls carry their healthy resources and the notes drop the all-or-nothing claim', async () => {
+  const p = pack('detailed')
+  const put = (id, rows) => { p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-08T10:00:00Z' }); p.results[id] = rows }
+  put('POS.6', [{ ReadDate: '2026-10-10', Current: 412.5, Max: 1000, Percent: 41.25, IdentityPct: 50, DevicePct: 61, AppsPct: 59, DataPct: 71 }])
+  put('POS.2', [{ AssessedResources: 12345 }])
+  put('POS.7', [{ Month: '2026-07-01', Current: 18, Max: 40, Percent: 45 }, { Month: '2026-10-01', Current: 20, Max: 40, Percent: 50 }])
+  p.results['POS.1'][0].Subscriptions = 12
+  // A two-line movement and a two-line model line are the tallest tenant text.
+  put('POS.6-TREND', [{ Date: '2026-07-15', Current: 300.5, Max: 1000, Percent: 30.05 }, { Date: '2026-10-10', Current: 412.5, Max: 1000, Percent: 41.25 }])
+  put('POS.3', [{ Control: 'Remediate vulnerabilities', Current: 0.31, Max: 6, Healthy: 4, Unhealthy: 74 }, { Control: 'Apply system updates', Current: 2, Max: 6 }])
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  fs.writeFileSync(dataFile, JSON.stringify(p))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  const { slides, notes } = await read(out)
+  const posture = slides.find(s => s.startsWith('Tenant and cloud security posture')).replace(/ /g, ' ')
+  assert.ok(posture.includes('Classic Defender for Cloud secure score across 12 subscriptions. Read Oct 8, 2026 from Azure Resource Graph.') && posture.includes('12,345 Resources assessed by Defender for Cloud'), posture)
+  assert.ok(posture.includes('MICROSOFT SECURE SCORE · MICROSOFT 365 TENANT') && posture.includes('Microsoft Secure Score. Read Oct 10, 2026 from Microsoft Graph.') && posture.includes('Up 11.2 points since Jul 2026, from 30.1%.'), posture)
+  // Both score texts hold in their boxes, and the tenant text ends above the first category bar.
+  const zipped = await JSZip.loadAsync(fs.readFileSync(out))
+  let xml = ''
+  for (const n of Object.keys(zipped.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))) { const x = await zipped.file(n).async('string'); if (x.includes('name="Secure Score text"')) xml = x }
+  const firstCategory = Number(xml.match(/name="Category 1 label"[\s\S]*?<a:off x="\d+" y="(\d+)"\/>/)[1]) / EMU
+  for (const [name, room] of [['Defender for Cloud text', null], ['Secure Score text', firstCategory - 1.75 - 0.6]]) {
+    const sp = xml.match(new RegExp(`<p:sp>(?:(?!</p:sp>)[\\s\\S])*name="${name}"[\\s\\S]*?</p:sp>`))[0]
+    const [, cx, cy] = sp.match(/<a:ext cx="(\d+)" cy="(\d+)"\/>/).map(Number)
+    const paras = [...sp.matchAll(/<a:p>([\s\S]*?)<\/a:p>/g)].map(q => [...q[1].matchAll(/<a:r><a:rPr\b[^>]*\bsz="(\d+)"[^>]*?(\bb="1")?[^>]*>[\s\S]*?<a:t>([^<]*)<\/a:t>/g)].map(r => ({ size: Number(r[1]) / 100, bold: !!r[2] || /\bb="1"/.test(r[0]), text: r[3] }))).filter(q => q.length)
+    const need = paras.reduce((h, q, k) => h + (k ? 4 / 72 : 0) + lines(q.map(r => r.text).join(''), cx / EMU, Math.max(...q.map(r => r.size)), q.every(r => r.bold)) * Math.max(...q.map(r => r.size)) / 72 * 1.2, 0)
+    assert.ok(need <= (room ?? cy / EMU) + 0.01, `${name} needs ${need.toFixed(2)} in and holds ${(room ?? cy / EMU).toFixed(2)} in`)
+  }
+  assert.ok(!notes.some(n => /all or nothing|no visible movement until a control completes/.test(n)), 'the all-or-nothing claim is gone from the notes')
+  assert.ok(notes.some(n => n.includes('Each control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources, so points can be gained before a control completes.')))
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  const charts = await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/charts\/chart\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))
+  const bar = charts.find(c => c.includes('Remediate vulnerabilities'))
+  assert.ok(bar.includes('Remediate vulnerabilities (5.7 pts, 4 of 78 healthy)'), bar.match(/Remediate[^<]*/)?.[0])
+  assert.ok(bar.includes('Apply system updates (4 pts)'), 'a control without resource counts carries none')
+})
