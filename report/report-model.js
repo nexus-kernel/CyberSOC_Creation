@@ -955,13 +955,17 @@
       if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
       if (ruleControl && ruleControl.pct !== null) parts.push(`${fmt(ruleControl.good)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
       // The disposition statement says every alert, so only a complete DR.10 reading of every workspace earns it. A
-      // DR.10 reading that leaves closures undocumented, or that a failed or excluded workspace left partial, replaces
-      // it with its own ratio. Without a DR.10 reading (missing, unavailable, ungathered or no closures in the last
-      // 30 days) the statement leads with the triaged count from OUT.1, which alone shows nothing about closing
+      // DR.10 reading of every workspace that leaves closures undocumented replaces it with its own ratio. Otherwise
+      // (DR.10 missing, unavailable, ungathered, without closures in the last 30 days, or partial because a workspace
+      // failed or was excluded) the statement leads with the triaged count from OUT.1, the figure the pillar's source
+      // line cites, so a partial DR.10 ratio never reads as the whole tenant. OUT.1 alone shows nothing about closing
       // comments and can hold open or unclassified alerts (Oct 16, 2026).
-      const disposition = !m.alerts ? null : complete(dispositions) && !partial('DR.10') ? 'Every alert reaches a documented disposition' : dispositions && dispositions.pct !== null ? `${measureText(dispositions)} alerts closed in the last 30 days carry a documented disposition` : `${plural(m.alerts.triaged, 'alert', 'alerts')} triaged ${m.period.label}`
+      const wholeDispositions = dispositions && dispositions.pct !== null && !partial('DR.10')
+      const disposition = !m.alerts ? null : wholeDispositions && complete(dispositions) ? 'Every alert reaches a documented disposition' : wholeDispositions ? `${measureText(dispositions)} alerts closed in the last 30 days carry a documented disposition` : `${plural(m.alerts.triaged, 'alert', 'alerts')} triaged ${m.period.label}`
       const headline = disposition || band(plan, 'Workload protection covers the resource estate', `Workload protection covers ${measureText(plan)} eligible resources, ${remaining(plan)}`, 'Workload protection covers most of the resource estate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
-      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : ruleControl, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, m.alerts ? m.alerts.source : plan.source)
+      // When DR.10 earns the statement the source line cites it beside OUT.1, so the statement traces to its evidence.
+      const detectionSource = !m.alerts ? plan.source : wholeDispositions ? `${m.alerts.source} ${dispositions.source}` : m.alerts.source
+      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : ruleControl, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, detectionSource)
     }
 
     // Executive summary tiles and tiers.

@@ -833,28 +833,30 @@ test('a reading at E that leaves resources out never reads every, all or none, a
   put(full, 'DP.2', [{ Vaults: 20, SoftDelete: 19, PurgeProtection: 19, RbacAuth: 20 }])
   assert.equal(pillarOf(build(full), 'Data protection').headline, 'Secure transfer is required on every storage account')
 })
-// OUT.1 alone shows nothing about closing comments, so without a DR.10 reading the disposition statement leads with
-// the triaged count, whether OUT.1 holds open alerts, unclassified closures or neither. A partial DR.10 reading covers
-// only the workspaces that answered, so it keeps its ratio even when nothing it read is undocumented (Oct 16, 2026).
+// OUT.1 alone shows nothing about closing comments, so without a DR.10 reading of every workspace the disposition
+// statement leads with the triaged count, whether OUT.1 holds open alerts, unclassified closures or neither. A partial
+// DR.10 reading covers only the workspaces that answered, and the pillar cites OUT.1, so its ratio never leads the
+// pillar, even when nothing it read is undocumented (Oct 16, 2026).
 test('the detection statement says every alert only from a complete DR.10 reading', () => {
   const detection = p => build(p).pillars.find(x => x.name === 'Detection and response')
   const TRIAGED = '100 alerts triaged Nov 1, 2025 to Sep 30, 2026'
   const p = pack(); alerts(p); readings(p, true)
-  assert.equal(detection(p).headline, 'Every alert reaches a documented disposition')
-  for (const [Documented, headline] of [[100, '100 of 100 alerts closed in the last 30 days carry a documented disposition'], [97, '97 of 100 alerts closed in the last 30 days carry a documented disposition']]) {
-    const q = pack(); alerts(q); readings(q, true)
-    put(q, 'DR.10', [{ Closed: 100, Documented }], 'PARTIAL')
-    assert.equal(detection(q).headline, headline, `partial DR.10, ${Documented} documented`)
-  }
-  const outcomes = [{ Open: 20, ClosedUnclassified: 5 }, { Open: 20, ClosedUnclassified: 0 }, { Open: 0, ClosedUnclassified: 5 }, { Open: 0, ClosedUnclassified: 0 }]
+  // When DR.10 earns the statement, every alert or its own ratio, the source line cites it beside OUT.1.
+  assert.deepEqual([detection(p).headline, detection(p).source], ['Every alert reaches a documented disposition', 'OUT.1. Read Oct 8, 2026. DR.10. Read Oct 8, 2026.'])
+  const undocumented = pack(); alerts(undocumented); readings(undocumented, true)
+  put(undocumented, 'DR.10', [{ Closed: 100, Documented: 97 }])
+  assert.deepEqual([detection(undocumented).headline, detection(undocumented).source], ['97 of 100 alerts closed in the last 30 days carry a documented disposition', 'OUT.1. Read Oct 8, 2026. DR.10. Read Oct 8, 2026.'])
+  const outcomes =[{ Open: 20, ClosedUnclassified: 5 }, { Open: 20, ClosedUnclassified: 0 }, { Open: 0, ClosedUnclassified: 5 }, { Open: 0, ClosedUnclassified: 0 }]
   const unmeasured = [['missing', q => drop(q, 'DR.10')], ['unavailable', q => put(q, 'DR.10', [], 'UNAVAILABLE')], ['not readable', q => put(q, 'DR.10', [{ Closed: null, Documented: null }])],
-    ['ungathered', q => put(q, 'DR.10', [{ Closed: 100, Documented: 101 }])], ['without closures', q => put(q, 'DR.10', [{ Closed: 0, Documented: 0 }])]]
+    ['ungathered', q => put(q, 'DR.10', [{ Closed: 100, Documented: 101 }])], ['without closures', q => put(q, 'DR.10', [{ Closed: 0, Documented: 0 }])],
+    ['partial with every closure documented', q => put(q, 'DR.10', [{ Closed: 100, Documented: 100 }], 'PARTIAL')], ['partial with closures undocumented', q => put(q, 'DR.10', [{ Closed: 100, Documented: 97 }], 'PARTIAL')]]
   for (const { Open, ClosedUnclassified } of outcomes) for (const [how, unset] of unmeasured) {
     const q = pack(); alerts(q); readings(q, true)
     put(q, 'OUT.1', [{ Raised: 100, Closed: 100 - Open, Open, TruePositive: 3, ClosedUnclassified }])
     unset(q)
     const row = detection(q), label = `DR.10 ${how}, ${Open} open, ${ClosedUnclassified} unclassified`
     assert.equal(row.headline, TRIAGED, label)
+    assert.equal(row.source, 'OUT.1. Read Oct 8, 2026.', `${label}: the headline's figure is the one the source line cites`)
     for (const t of [row.headline, row.narrative]) assert.ok(!ABSOLUTE.test(t) && !/;|\bincidents?\b|contain|impact/i.test(t), `${label}: ${t}`)
   }
   // The page carries the same statement the model earned.
