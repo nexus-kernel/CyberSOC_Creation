@@ -6,12 +6,37 @@
   "RecentStart": "2026-07-01",
   "PostureReadDate": "2026-10-08",
   "Subscriptions": [
-    "synthetic-subscription"
+    "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+    "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d"
   ],
   "Workspaces": [
     {
+      "Name": "DefaultWorkspace-5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11-EUS",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-synthetic-sentinel/providers/Microsoft.OperationalInsights/workspaces/DefaultWorkspace-5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11-EUS",
+      "CustomerId": "7d3e9b2a-1c4f-4a8e-b6d2-3f5a7c9e1b20",
+      "SubscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "RetentionDays": 90,
+      "AccessTenant": "9e8d7c6b-5a49-4382-a716-f5e4d3c2b1a0"
+    },
+    {
       "Name": "synthetic-workspace",
-      "CustomerId": "synthetic-workspace"
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-synthetic-private/providers/Microsoft.OperationalInsights/workspaces/synthetic-workspace",
+      "CustomerId": "c4a7e1d9-8b2f-4c6a-9e3d-5b7f1a2c4e68",
+      "SubscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "RetentionDays": 365,
+      "AccessTenant": "9e8d7c6b-5a49-4382-a716-f5e4d3c2b1a0"
     }
+  ],
+  "AccessTenant": "9e8d7c6b-5a49-4382-a716-f5e4d3c2b1a0",
+  "TenantWideTables": {
+    "SigninLogs": "DefaultWorkspace-5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11-EUS",
+    "AuditLogs": "DefaultWorkspace-5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11-EUS"
+  },
+  "TicketPattern": "(?i)\\bZD\\s*#?\\s*\\d{4,}",
+  "ManagedRgPattern": "^(MC_|databricks-rg-)",
+  "DefenderApi": "Advanced Hunting returned 403 for tenant 9e8d7c6b-5a49-4382-a716-f5e4d3c2b1a0",
+  "GraphApi": "available",
+  "Warnings": [
+    "Subscription a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d could not list workspaces in rg-synthetic-private"
   ]
 }

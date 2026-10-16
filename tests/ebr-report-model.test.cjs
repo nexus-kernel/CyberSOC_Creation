@@ -159,7 +159,7 @@ test('the operations page shows the fixed cohort with acknowledge, the labelled 
   p.context = { ResponseTargetMinutes: 60 }
   const nodes = {}
   const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(p) : '', addEventListener() {} }) }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+  for (const script of ['report-render.js', 'report-review.js']) vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report', script), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
   const html = nodes.report.innerHTML, review = nodes.review.innerHTML
   const rowsOf = h => [...h.match(/<div class="timing">[\s\S]*?<\/table>/)[0].matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map(r => r[1].replace(/<[^>]+>/g, '|').replace(/\|+/g, '|').replace(/^\||\|$/g, ''))
   assert.deepEqual(rowsOf(html), ['Alerts|Closed|Median to acknowledge|Median to close|90th percentile close', 'All high severity alerts|30|2 min|7 min|1.6 hr', 'Analyst-handled|10|12 min|45 min|6.7 hr', 'Closed by automation rules|20|Not collected|Not collected|Not collected'])
@@ -477,6 +477,15 @@ test('real packs agree with their client-level source results and expose no priv
     assert.equal(m.workspaces.length, data.parameters.Workspaces.length)
     for (const field of ['ClassificationComment', 'AccountUpn', 'VmName', 'DeviceName', 'SubnetName', '"Title"', 'AccountDisplayName']) assert.ok(!html.includes(field), `${dir} embeds ${field}`)
     assert.ok(!/\bincidents?\b/i.test(visible(m)), dir)
+    // The client edition beside it holds no GUID and reads the same subscription and workspace counts.
+    const clientFile = path.join(root, dir, '03-security-report.client.html')
+    if (fs.existsSync(clientFile)) {
+      const client = fs.readFileSync(clientFile, 'utf8')
+      assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(client), `${dir} client edition embeds a GUID`)
+      assert.ok(!client.includes('Presenter notes'), `${dir} client edition carries the presenter notes`)
+      const mc = build(JSON.parse(client.match(/<script id="report-data" type="application\/json">([\s\S]*?)<\/script>/)[1]))
+      assert.deepEqual([mc.subscriptions, mc.workspaces.length, mc.alerts?.raised], [m.subscriptions, m.workspaces.length, m.alerts?.raised], dir)
+    }
   }
 })
 

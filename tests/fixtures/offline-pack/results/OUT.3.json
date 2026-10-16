@@ -1,0 +1,26 @@
+[
+  {
+    "Month": "2026-07-01",
+    "Total": 30,
+    "High": 8,
+    "Medium": 10,
+    "Low": 12,
+    "Informational": 0
+  },
+  {
+    "Month": "2026-08-01",
+    "Total": 32,
+    "High": 10,
+    "Medium": 10,
+    "Low": 12,
+    "Informational": 0
+  },
+  {
+    "Month": "2026-09-01",
+    "Total": 38,
+    "High": 12,
+    "Medium": 12,
+    "Low": 14,
+    "Informational": 0
+  }
+]
