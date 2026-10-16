@@ -595,14 +595,29 @@ async function main() {
       const wide = i === st.asks.length - 1 && st.asks.length % 2 === 1 && st.asks.length > 1
       const x = 0.7 + (wide ? 0 : (i % 2) * (aw + 0.25)), y = 2.45 + Math.floor(i / 2) * (ah + 0.25), cw = wide ? 9.7 : aw, ch = wide ? Math.min(ah, 1.4) : ah
       s.addShape(pres.shapes.RECTANGLE, { x, y, w: cw, h: ch, fill: { color: HEX.dk2, transparency: 12 }, line: { color: HEX.accent5, width: 0.75 }, objectName: `Ask ${i + 1} card` })
-      text(s, [{ text: String(i + 1).padStart(2, '0'), options: { fontSize: 14, bold: true, color: C.accent1, breakLine: true } }, { text: a.title, options: { fontSize: 18, bold: true, color: C.background1, breakLine: true, paraSpaceBefore: 4 } }, { text: a.body, options: { fontSize: 13, color: C.background2, paraSpaceBefore: 4 } }], { x: x + 0.3, y: y + 0.2, w: cw - 0.6, h: ch - 0.3, objectName: `Ask ${i + 1}` })
+      // A reviewed status line sits under the body. The body steps down from 13 pt to 10 pt until the card holds it.
+      // If it still does not fit, the owner is cut first, then the reference, each with three dots, so the status, the
+      // target date and the review date stay. The speaker notes keep the full attribution.
+      const tw = cw - 0.6, th = ch - 0.3, x0 = a.action
+      const tall = (size, status) => (14 + 4) / 72 * 1.2 + lines(glue(a.title), tw, 18, true) * 18 / 72 * 1.2 + 4 / 72 + lines(glue(a.bodyText), tw, size) * size / 72 * 1.2 + (status ? 4 / 72 + lines(glue(status), tw, size - 1) * (size - 1) / 72 * 1.2 : 0)
+      const dots = (t, n) => n >= t.length ? t : `${t.slice(0, n).replace(/[\s,.]+$/, '')}...`
+      const statusOf = (owner, ref) => x0 ? `${x0.label}${owner ? `, owner ${owner}` : ''}${x0.targetDate ? `, target ${x0.targetDate}` : ''} (${ref}, reviewed ${x0.reviewed}).` : ''
+      let status = x0 ? statusOf(x0.owner, x0.reference) : ''
+      const size = [13, 12, 11, 10].find(n => tall(n, status) <= th) || 10
+      if (x0 && tall(size, status) > th) {
+        let o = x0.owner.length, r = x0.reference.length
+        while (o > 0 && tall(size, statusOf(dots(x0.owner, o), x0.reference)) > th) o--
+        while (r > 8 && tall(size, statusOf(o ? dots(x0.owner, o) : '', dots(x0.reference, r))) > th) r--
+        status = statusOf(o ? dots(x0.owner, o) : '', dots(x0.reference, r))
+      }
+      text(s, [{ text: String(i + 1).padStart(2, '0'), options: { fontSize: 14, bold: true, color: C.accent1, breakLine: true } }, { text: a.title, options: { fontSize: 18, bold: true, color: C.background1, breakLine: true, paraSpaceBefore: 4 } }, { text: a.bodyText, options: { fontSize: size, color: C.background2, paraSpaceBefore: 4, breakLine: !!status } }, ...(status ? [{ text: status, options: { fontSize: size - 1, color: C.background2, paraSpaceBefore: 4 } }] : [])], { x: x + 0.3, y: y + 0.2, w: tw, h: th, objectName: `Ask ${i + 1}` })
     })
   } else {
     s.addShape(pres.shapes.RECTANGLE, { x: 0.7, y: 2.55, w: 9.7, h: 1.3, fill: { color: HEX.dk2, transparency: 12 }, line: { color: HEX.accent5, width: 0.75 }, objectName: 'No asks card' })
     text(s, 'Nothing needs approval or access from your team before the next review. The roadmap proceeds as sequenced.', { x: 1.0, y: 2.55, w: 9.1, h: 1.3, fontSize: 16, color: C.background1, valign: 'middle', objectName: 'No asks' })
   }
   text(s, 'At the next review we recollect the evidence and verify each outcome.', { x: 0.7, y: 6.82, w: 9.7, h: 0.35, fontSize: 13, color: C.background2, objectName: 'Next review' })
-  s.addNotes(notesOf(['Close on the decisions. Each one unblocks a roadmap item, or lets us grade a control we cannot see today.', st.asks.map(a => `${a.title}. ${a.body}`)]))
+  s.addNotes(notesOf(['Close on the decisions. Each one unblocks a roadmap item, or lets us grade a control we cannot see today.', st.asks.map(a => `${a.title}. ${a.body}`), st.settledAsks.length ? `No longer asked, from reviewed action records: ${st.settledAsks.map(a => `${a.title}, ${a.status}`).join('. ')}.` : '']))
 
   // Appendix: the control register, two pillars per slide, and on A3 how we grade.
   if (balanced) {

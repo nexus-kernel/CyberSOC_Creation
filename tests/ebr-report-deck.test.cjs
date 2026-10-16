@@ -627,3 +627,43 @@ test('the deck words planned work as a recommendation: the gaps panel, the roadm
   assert.ok(all.includes('confirms each affected user holds a replacement method'))
   assert.ok(!/schedules each fix|non-event|No blocked sign-ins|no sign-in is blocked|Every enforcement is staged|Scoped and sequenced/i.test(all), all.match(/.{0,50}(schedules each fix|non-event|blocked sign-ins|sign-in is blocked|Every enforcement is staged|Scoped and sequenced).{0,50}/i)?.[0])
 })
+test('a reviewed status with a URL-length reference fits inside its decision card, and the notes keep the full attribution', async () => {
+  const url = 'https://example.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef'
+  const build = actions => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-'))
+    const data = pack('balanced'), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+    // Two more asks beside the MFA method update, so the cards sit two by two at their smallest.
+    data.manifest.push({ ResultId: 'IA.11', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-08T10:00:00Z' }, { ResultId: 'NB.1', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-08T10:00:00Z' }, { ResultId: 'IA.13', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-08T10:00:00Z' })
+    Object.assign(data.results, { 'IA.11': [{ SignInRiskPolicies: 0, SignInRiskAllUsers: false, UserRiskPolicies: 0, UserRiskAllUsers: false, InForce: false }], 'NB.1': [{ WorkloadSubnets: 36, Segmented: 4 }], 'IA.13': [{ UserConsent: 'Allowed', AdminConsentWorkflow: false, Governed: false }] })
+    data.context = { Actions: actions }
+    fs.writeFileSync(dataFile, JSON.stringify(data))
+    execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+    return out
+  }
+  const window = { Reviewed: '2026-10-16', WindowStart: '2025-11-01', WindowEnd: '2026-09-30' }
+  const owner = 'Client identity and access management owner with the Atmosera service delivery manager'
+  for (const actions of [[{ Key: 'methods', Status: 'AwaitingApproval', TargetDate: '2026-11-30', Reference: url, ...window }],
+    [{ Key: 'methods', Status: 'PendingValidation', Owner: owner, TargetDate: '2026-11-30', Reference: url, ...window }, { Key: 'idp', Status: 'AwaitingApproval', Owner: owner, TargetDate: '2026-12-15', Reference: `${url}${url}`, ...window }]]) {
+    const out = build(actions)
+    const zip = await JSZip.loadAsync(fs.readFileSync(out))
+    const names = Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))
+    let xml = ''
+    for (const n of names) { const x = await zip.file(n).async('string'); if (x.includes('>Decisions needed<')) xml = x }
+    assert.ok(xml, 'the decisions slide is there')
+    const shapes = [...xml.matchAll(/<p:sp>[\s\S]*?<\/p:sp>/g)].map(m => m[0])
+    const asks = shapes.filter(sp => /name="Ask \d+"/.test(sp))
+    assert.ok(asks.length >= 3, `${asks.length} asks`)
+    for (const sp of asks) {
+      const [, cx, cy] = sp.match(/<a:ext cx="(\d+)" cy="(\d+)"\/>/).map(Number)
+      // Paragraphs and their runs at the size each was written in, measured the way the builder measures them.
+      const paras = [...sp.matchAll(/<a:p>([\s\S]*?)<\/a:p>/g)].map(p => [...p[1].matchAll(/<a:r><a:rPr\b[^>]*\bsz="(\d+)"[^>]*?(\bb="1")?[^>]*>[\s\S]*?<a:t>([^<]*)<\/a:t>/g)].map(r => ({ size: Number(r[1]) / 100, bold: !!r[2] || /\bb="1"/.test(r[0]), text: r[3] }))).filter(p => p.length)
+      const need = paras.reduce((h, p, k) => h + (k ? 4 / 72 : 0) + lines(p.map(r => r.text).join(''), cx / 914400, p[0].size, p[0].bold) * p[0].size / 72 * 1.2, 0)
+      assert.ok(need <= cy / 914400 + 0.01, `${sp.match(/name="(Ask \d+)"/)[1]} needs ${need.toFixed(2)} in and holds ${(cy / 914400).toFixed(2)} in: ${paras.map(p => p.map(r => r.text).join('')).join(' | ')}`)
+    }
+    const status = asks.map(sp => [...sp.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map(t => t[1]).join(' ')).join(' ')
+    assert.ok(/(Awaiting approval|Pending validation)/.test(status), 'the status shows on the card')
+    assert.ok(!status.includes('…'), 'cut with three dots, never the ellipsis glyph')
+    const { notes } = await read(out)
+    assert.ok(notes.join(' ').includes(`${url},`), 'the speaker notes keep the full reference')
+  }
+})

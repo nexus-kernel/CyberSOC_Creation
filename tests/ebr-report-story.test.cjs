@@ -326,7 +326,7 @@ test('no roadmap evidence, ask or takeaway says scheduled, approved, completed, 
   const keys = [...new Set(strings(everything(null)).map(x => x.key).filter(k => !k.startsWith('takeaway:') && k !== 'other'))]
   assert.ok(keys.length >= 15, keys.join(', '))
   const record = (Key, Status) => ({ Key, Status, Owner: 'Client identity owner', TargetDate: '2026-12-15', Reference: `CHG-${Key}`, Reviewed: '2026-10-14', WindowStart: '2026-07-01', WindowEnd: '2026-09-30' })
-  for (const [Status, word] of [['Approved', 'approved'], ['Scheduled', 'scheduled'], ['Verified', 'verified']]) {
+  for (const [Status, word] of [['Approved', 'approved'], ['Scheduled', 'scheduled'], ['InProgress', 'in progress'], ['Verified', 'verified'], ['AwaitingApproval', 'awaiting approval'], ['PendingValidation', 'pending validation']]) {
     const delivered = Status === 'Verified' ? keys.map(k => ({ Title: k, Outcome: 'Done.', Reference: `CHG-${k}`, CompletedDate: '2026-09-15' })) : []
     const s = everything({ Actions: keys.map(k => record(k, Status)), Delivered: delivered })
     for (const x of strings(s)) {
@@ -345,9 +345,34 @@ test('no roadmap evidence, ask or takeaway says scheduled, approved, completed, 
   assert.equal(one.driftNote, 'Below the baseline at collection. Atmosera recommends closing each gap first.')
   const drift = collected({ Actions: [record('drift', 'InProgress')] })
   assert.equal(drift.driftNote, 'Below the baseline at collection. Fixes in progress (CHG-drift).')
-  const ask = collected({ Actions: [record('idp', 'Approved')] }).asks.find(a => a.key === 'idp')
-  assert.equal(ask.body, 'Sign-in and user risk policies for all users, with leaked credential response. Approved, owner Client identity owner, target Dec 15, 2026 (CHG-idp, reviewed Oct 14, 2026).')
-  assert.equal(ask.title, 'Approve the user-risk policy', 'the ask keeps its title, so the decisions slide still names it')
+  const ask = collected({ Actions: [record('idp', 'AwaitingApproval')] }).asks.find(a => a.key === 'idp')
+  assert.equal(ask.body, 'Sign-in and user risk policies for all users, with leaked credential response. Awaiting approval, owner Client identity owner, target Dec 15, 2026 (CHG-idp, reviewed Oct 14, 2026).')
+  assert.equal(ask.title, 'Approve the user-risk policy', 'an ask still awaiting approval keeps its title')
+  assert.equal(ask.bodyText, 'Sign-in and user risk policies for all users, with leaked credential response.')
+})
+test('an ask whose reviewed record settles the decision leaves the asks before the limit and the count, and its roadmap item keeps the status', () => {
+  const record = (Key, Status) => ({ Key, Status, TargetDate: '2026-12-15', Reference: `CHG-${Key}`, Reviewed: '2026-10-12', WindowStart: '2026-07-01', WindowEnd: '2026-09-30' })
+  // The quarter pack asks for methods, access, idp and segment. An open consent setting adds a Next horizon ask ahead
+  // of segment, so segment is the fifth candidate and falls outside the four.
+  const withConsent = actions => { const p = quarterPack(); p.manifest.push({ ResultId: 'IA.13', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' }); p.results['IA.13'] = [{ UserConsent: 'Allowed', AdminConsentWorkflow: false, Governed: false }]; p.context = actions ? { Actions: actions } : null; return buildStory(build(p), p) }
+  assert.deepEqual(withConsent(null).asks.map(a => a.key), ['methods', 'access', 'idp', 'consent'])
+  for (const Status of ['Approved', 'Scheduled', 'InProgress']) {
+    const s = withConsent([record('idp', Status)])
+    assert.deepEqual(s.asks.map(a => a.key), ['methods', 'access', 'consent', 'segment'], `${Status} frees its slot for the pending segment ask`)
+    assert.ok(!s.asks.some(a => a.title === 'Approve the user-risk policy'))
+    assert.ok(!s.summaryAsks.some(a => /user-risk/.test(a.label)), 'the executive summary never asks for it either')
+    assert.equal(s.takeaways.decisions, 'Four items need approval or access from your team to move the roadmap forward.')
+    assert.deepEqual(s.settledAsks.map(a => a.key), ['idp'])
+    assert.match(s.roadmap.flatMap(h => h.items).find(i => i.key === 'idp').evidence, new RegExp(`\\(CHG-idp, reviewed Oct 12, 2026\\)`), 'the roadmap item carries the status instead')
+  }
+  // Verified needs its Delivered record, and settles the ask the same way.
+  const p = quarterPack(); p.context = { Actions: [record('methods', 'Verified'), record('segment', 'Verified')], Delivered: [{ Title: 'Method move', Outcome: 'Done.', Reference: 'CHG-methods', CompletedDate: '2026-09-20' }, { Title: 'Segmentation', Outcome: 'Done.', Reference: 'CHG-segment', CompletedDate: '2026-09-20' }] }
+  const verified = buildStory(build(p), p)
+  assert.deepEqual(verified.asks.map(a => a.key), ['access', 'idp'])
+  assert.deepEqual(verified.summaryAsks.map(a => a.label), ['Approve the user-risk policy'])
+  assert.equal(verified.takeaways.decisions, 'Two items need approval or access from your team to move the roadmap forward.')
+  // A pending status keeps the ask, with its status.
+  assert.deepEqual(withConsent([record('idp', 'PendingValidation')]).asks.map(a => a.key), ['methods', 'access', 'idp', 'consent'])
 })
 test('every roadmap item and ask key the story builds is a key the Actions record accepts', () => {
   const { ACTION_KEYS } = require('../report/report-model.js')

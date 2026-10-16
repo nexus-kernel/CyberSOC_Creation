@@ -183,7 +183,8 @@
     // Actions record in the context file with its key (the model validates the record, Oct 16, 2026). Without one the
     // copy reads as a recommendation, and the drift panel and the vulnerability item say what Atmosera recommends.
     const actionOf = key => (m.actions || []).find(x => x.key === key) || null
-    const statusText = x => `${x.label}${x.owner ? `, owner ${x.owner}` : ''}${x.targetDate ? `, target ${x.targetDate}` : ''} (${x.reference}, reviewed ${x.reviewed})`
+    const statusLead = x => `${x.label}${x.owner ? `, owner ${x.owner}` : ''}${x.targetDate ? `, target ${x.targetDate}` : ''}`
+    const statusText = x => `${statusLead(x)} (${x.reference}, reviewed ${x.reviewed})`
     const withStatus = (text, x) => !x ? text : !clean(text) ? statusText(x) : `${clean(text).replace(/\.$/, '')}. ${statusText(x)}${/\.$/.test(clean(text)) ? '.' : ''}`
     const driftAction = actionOf('drift')
     s.driftNote = `Below the baseline at collection. ${driftAction ? `Fixes ${driftAction.label.toLowerCase()} (${driftAction.reference}).` : 'Atmosera recommends closing each gap first.'}`
@@ -227,21 +228,29 @@
 
     // Decisions needed: the MFA method update, read access, then approvals for items whose controls read N.
     // Each ask carries a kind, so the executive summary can leave the read access ask to the closing slide.
+    // An ask whose reviewed record reads approved, scheduled, in progress or verified is no longer a decision, so it
+    // leaves the list before the four-ask limit and the count, and its roadmap item carries the status instead. The
+    // speaker notes name it (Oct 16, 2026).
+    const SETTLED = ['Approved', 'Scheduled', 'InProgress', 'Verified']
+    const settled = []
     const asks = []
-    if (pw) asks.push({ kind: 'methods', key: 'methods', lead: plural(pw.retiring, 'user', 'users'), title: 'Move users off text message and voice MFA', body: `${plural(pw.retiring, 'user needs', 'users need')} to update their MFA method before ${RETIREMENT.label}, when Microsoft retires text message and voice sign-in.`, short: `need to update their MFA method before ${shortDate(RETIREMENT.date)}` })
+    const open = (key, title) => { const x = actionOf(key); if (x && SETTLED.includes(x.status)) { if (!settled.some(t => t.key === key)) settled.push({ key, title, status: statusText(x) }); return false } return true }
+    if (pw && open('methods', 'Move users off text message and voice MFA')) asks.push({ kind: 'methods', key: 'methods', lead: plural(pw.retiring, 'user', 'users'), title: 'Move users off text message and voice MFA', body: `${plural(pw.retiring, 'user needs', 'users need')} to update their MFA method before ${RETIREMENT.label}, when Microsoft retires text message and voice sign-in.`, short: `need to update their MFA method before ${shortDate(RETIREMENT.date)}` })
     // Read access is asked for only where the collector was not permitted to read the evidence. Service
     // errors and packs that only need recollection are Atmosera's to resolve.
     const gap = id => (data.manifest || []).some(r => r.ResultId === id && (r.AccessGap === true || String(r.AccessGap).toLowerCase() === 'true'))
     const unread = s.ungathered.filter(c => gap(c.id))
-    if (unread.length) asks.push({ kind: 'access', key: 'access', lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
+    if (unread.length && open('access', 'Grant read access')) asks.push({ kind: 'access', key: 'access', lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
     // An item that holds a foundational control (one that needs a license, routed through the catalog) is asked
     // for ahead of the defense in depth items, whatever its horizon.
     const askItems = HORIZONS.flatMap(h => items[h.key]).map((item, i) => ({ item, i })).sort((a, b) => (a.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) - (b.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) || a.i - b.i).map(x => x.item)
     for (const item of askItems) {
       const entry = CATALOG.find(e => e.key === item.key)
-      if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N')) asks.push({ kind: 'approval', key: entry.key, lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
+      if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N') && open(entry.key, entry.ask.title)) asks.push({ kind: 'approval', key: entry.key, lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
     }
-    s.asks = asks.slice(0, 4).map(x => { const action = actionOf(x.key); return { ...x, action, body: clean(withStatus(x.body, action)) } })
+    // The deck sizes the card text from bodyText and the action, and keeps the full body with its attribution in the notes.
+    s.asks = asks.slice(0, 4).map(x => { const action = actionOf(x.key); return { ...x, action, bodyText: x.body, body: clean(withStatus(x.body, action)) } })
+    s.settledAsks = settled
 
     // Executive summary columns. Wins and watch items avoid numbers already in the KPI strip.
     const kpiAreas = new Set(s.kpis.map(k => k.area))
