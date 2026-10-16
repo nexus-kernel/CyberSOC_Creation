@@ -198,12 +198,24 @@ Describe 'Offline HTML report generation' {
     }
     It 'accepts the documented context fields and nothing else' {
         $ctx = Join-Path $TestDrive 'context.json'
-        '{"ClientName":"Example Client","TenantId":"example-tenant","ServiceStartDate":"2024-01-15","TenantScore":{"Current":45,"Max":100,"ReadDate":"2026-10-08","Source":"Portal"},"Delivered":[],"Impact":{"Confirmed":0,"Reviewed":"2026-10-10","Reference":"CHG-123","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"},"OpenAlertNote":{"AwaitingClient":2,"InProgress":1,"Reviewed":"2026-10-10","Reference":"ZD 9900200","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"},"Raised":999}' | Set-Content $ctx
+        '{"ClientName":"Example Client","TenantId":"example-tenant","ServiceStartDate":"2024-01-15","TenantScore":{"Current":45,"Max":100,"ReadDate":"2026-10-08","Source":"Portal"},"Delivered":[],"Impact":{"Confirmed":0,"Reviewed":"2026-10-10","Reference":"CHG-123","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"},"OpenAlertNote":{"AwaitingClient":2,"InProgress":1,"Reviewed":"2026-10-10","Reference":"ZD 9900200","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"},"ResponseTargetMinutes":60,"Raised":999}' | Set-Content $ctx
         $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack -ContextPath $ctx) -Raw
         $html | Should -Match '"ServiceStartDate":"2024-01-15"'
         $html | Should -Match '"Impact":\{"Confirmed":0,"Reviewed":"2026-10-10","Reference":"CHG-123","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"\}'
         $html | Should -Match '"OpenAlertNote":\{"AwaitingClient":2,"InProgress":1,"Reviewed":"2026-10-10","Reference":"ZD 9900200","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"\}'
+        $html | Should -Match '"ResponseTargetMinutes":60'
         $html | Should -Not -Match '"Raised":999'
+    }
+    It 'embeds the median time to triage from OUT.2 and OUT.2-ANALYST beside the close times' {
+        $m = @(Import-Csv (Join-Path $pack '00-manifest.csv'))
+        $m += [pscustomobject]@{ ResultId = 'OUT.2'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m += [pscustomobject]@{ ResultId = 'OUT.2-ANALYST'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
+        '[{"Scope":"High","Incidents":30,"AutoClosed":4,"MedianTriageMin":6,"MedianCloseMin":7,"P90CloseMin":95}]' | Set-Content (Join-Path $pack 'results/OUT.2.json')
+        '[{"Scope":"High","Incidents":26,"AutoClosed":0,"MedianTriageMin":9,"MedianCloseMin":40,"P90CloseMin":120}]' | Set-Content (Join-Path $pack 'results/OUT.2-ANALYST.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"OUT.2":\[\{"Scope":"High","Incidents":30,"AutoClosed":4,"MedianTriageMin":6,"MedianCloseMin":7,"P90CloseMin":95\}\]'
+        $html | Should -Match '"OUT.2-ANALYST":\[\{"Scope":"High","Incidents":26,"AutoClosed":0,"MedianTriageMin":9,"MedianCloseMin":40,"P90CloseMin":120\}\]'
     }
     It 'rejects context from a different client' {
         $ctx = Join-Path $TestDrive 'wrong-client.json'

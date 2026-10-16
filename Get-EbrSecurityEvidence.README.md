@@ -193,7 +193,7 @@ in the pack (`results/<ID>.csv`).
 - Control measures added on Oct 11, 2026: `IA.1-ADMINPORTAL`, `IA.3-DEVICECODE`, `IA.14`, `EW.10` (patch cadence), `EW.12`, `EW.14`, `EW.15`, `EW.16`, `NB.8`, `NB.10`, `NB.11` (per-device secure configuration checks), `DP.7-ZAP`, `DR.10`, `DR.12`, `DR.13` and `DR.6-INITIATIVE`. The runbook has one block per query.
 - `OUT.2-ANALYST`: OUT.2 without incidents closed by automation rules.
 - Every OUT query carries the ticket scope clause (`{{TICKET}}`) and the informational exclusion. `00-parameters.json` records `TicketPattern` and `AlertScope`.
-- `OUT.2-RECENT` and `OUT.2-RECENT-ANALYST`: the same two queries over the trailing three full months of the window (`RecentStart` in `00-parameters.json`). The HTML report uses them as fallback response-timing cohorts.
+- `OUT.2-RECENT` and `OUT.2-RECENT-ANALYST`: the same two queries over the trailing three full months of the window (`RecentStart` in `00-parameters.json`). They are context for the analyst. The HTML report presents one fixed cohort from `OUT.2` and never falls back to them.
 - `IA.2-METHOD`: IA.2 split by method.
 - `DFC.1-DETAIL`, `EW.7-DETAIL`, `DP.4-DETAIL`: the itemized lists the runbook asks for.
 - `DR.9-RULES`: every analytics rule.
