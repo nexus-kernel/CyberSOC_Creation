@@ -1702,18 +1702,26 @@ test('the posture page states how a score control earns points, the healthy reso
   put(p, 'POS.3', [
     { Control: 'Remediate vulnerabilities', Current: 0.31, Max: 6, Healthy: 4, Unhealthy: 74 },
     { Control: 'Enable MFA', Current: 9, Max: 10, Healthy: 1, Unhealthy: 0 },
-    { Control: 'Restrict unauthorized network access', Current: 0, Max: 4, Healthy: 0, Unhealthy: 0 }
+    { Control: 'Restrict unauthorized network access', Current: 0, Max: 4, Healthy: 0, Unhealthy: 0 },
+    // Two subscriptions summed by POS.3: 1 healthy of 1 earns the whole max of 6 in one, 0 of 99 earns nothing in the
+    // other, so the row reads 50% of its points with 1 of 100 resources healthy.
+    { Control: 'Apply system updates', Current: 6, Max: 12, Healthy: 1, Unhealthy: 99 }
   ])
   const nodes = {}
   const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(p) : '', addEventListener() {} }) }
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
   const html = nodes.report.innerHTML
   assert.ok(!/all or nothing|no visible movement until a control completes/.test(html), 'the all-or-nothing claim is gone')
-  assert.ok(html.includes('Microsoft score controls ranked by the points still available. Defender for Cloud secure score provides a standardized view of assessed cloud security controls. Each control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources, so points can be gained before a control completes.'))
+  assert.ok(html.includes('Microsoft score controls ranked by the points still available. Defender for Cloud secure score provides a standardized view of assessed cloud security controls. Within each subscription, a control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources in that subscription, so points can be gained before a control completes. The points and resource counts shown for each control are added across subscriptions, so the share of resources healthy can differ from the share of points earned.'))
+  assert.ok(html.includes('<h4>Apply system updates</h4><p class="small">1 of 100 resources healthy</p></div>') && html.includes('aria-label="Apply system updates: 50%"'), 'the summed row keeps its points share beside its resource count')
   assert.ok(html.includes('<h4>Remediate vulnerabilities</h4><p class="small">4 of 78 resources healthy</p>'))
   assert.ok(html.includes('<h4>Enable MFA</h4><p class="small">1 of 1 resource healthy</p>'))
   assert.ok(html.includes('<h4>Restrict unauthorized network access</h4></div>'), 'a control with no assessed resources prints no count')
   assert.ok(!/0 of 0/.test(html))
+  // With one subscription the formula holds for the row itself, so the summed-rows sentence is left out.
+  p.results['POS.1'][0].Subscriptions = 1
+  const single = build(p).posture.scoreControlBasis
+  assert.ok(single.includes('Within each subscription, a control earns points') && !/added across subscriptions/.test(single), single)
   assert.ok(html.includes('Classic Defender for Cloud secure score across 2 subscriptions, calculated by Microsoft. Read Oct 8, 2026 from Azure Resource Graph.'))
   assert.ok(html.includes('Microsoft Secure Score for the Microsoft 365 tenant, calculated by Microsoft. Read Oct 10, 2026 from Microsoft Graph.'))
   assert.ok(!/;/.test(html.replace(/&[a-z#0-9]+;/gi, '').replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>|style="[^"]*"/g, '')), 'no semicolon in the visible copy')

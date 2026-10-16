@@ -751,7 +751,7 @@ test('the posture appendix prints the model of each score, the score controls ca
     assert.ok(need <= (room ?? cy / EMU) + 0.01, `${name} needs ${need.toFixed(2)} in and holds ${(room ?? cy / EMU).toFixed(2)} in`)
   }
   assert.ok(!notes.some(n => /all or nothing|no visible movement until a control completes/.test(n)), 'the all-or-nothing claim is gone from the notes')
-  assert.ok(notes.some(n => n.includes('Each control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources, so points can be gained before a control completes.')))
+  assert.ok(notes.some(n => n.includes('Within each subscription, a control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources in that subscription, so points can be gained before a control completes. The points and resource counts shown for each control are added across subscriptions')))
   const zip = await JSZip.loadAsync(fs.readFileSync(out))
   const charts = await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/charts\/chart\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))
   const bar = charts.find(c => c.includes('Remediate vulnerabilities'))

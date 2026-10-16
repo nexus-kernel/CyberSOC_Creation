@@ -1026,10 +1026,12 @@
         const resources = healthy !== null && unhealthy !== null && healthy >= 0 && unhealthy >= 0 && healthy + unhealthy > 0 ? healthy + unhealthy : null
         return { label: clean(r.Control), pct: pct(r.Current, r.Max), remaining: Number((r.Max - r.Current).toFixed(2)), healthy, unhealthy, resources }
       }).sort((a, b) => b.remaining - a.remaining),
-      // How a classic score control earns points, from Microsoft's secure score page (dated Jun 30, 2026): the
-      // current score is the score per resource (the maximum over the healthy and unhealthy resources) times the
-      // healthy resources, so a control gains points before it completes.
-      scoreControlBasis: 'Defender for Cloud secure score provides a standardized view of assessed cloud security controls. Each control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources, so points can be gained before a control completes. Changes in the score may reflect remediation activity, changes to the evaluated resource population, or differences in the underlying scoring model. Atmosera evaluates the individual findings, the affected resources and the controls in force alongside the Microsoft-calculated score.',
+      // How a classic score control earns points, from Microsoft's secure score page (dated Jun 30, 2026): within a
+      // subscription or connector, the current score is the score per resource (the maximum over the healthy and
+      // unhealthy resources) times the healthy resources, so a control gains points before it completes. POS.3 adds
+      // the points and the resource counts of each control across subscriptions, so with more than one subscription
+      // (or an unknown count) the page says the healthy share can differ from the share of points earned.
+      scoreControlBasis: `Defender for Cloud secure score provides a standardized view of assessed cloud security controls. Within each subscription, a control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources in that subscription, so points can be gained before a control completes.${(count(cloud?.Subscriptions) ?? m.subscriptions) === 1 ? '' : ' The points and resource counts shown for each control are added across subscriptions, so the share of resources healthy can differ from the share of points earned.'} Changes in the score may reflect remediation activity, changes to the evaluated resource population, or differences in the underlying scoring model. Atmosera evaluates the individual findings, the affected resources and the controls in force alongside the Microsoft-calculated score.`,
       scoreControlSource: source('POS.3'), telemetryTables: telemetry, rules: ruleTotal !== null ? { total: ruleTotal, enabled: ruleEnabled } : null
     }
 
