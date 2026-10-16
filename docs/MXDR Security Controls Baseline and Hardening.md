@@ -28,7 +28,7 @@ Three working rules apply during build:
 
 ## Foundational controls
 
-Twenty-six foundational controls follow the pillar slides, five per pillar except network and boundary, which holds six since Oct 12, 2026, when encryption in transit on published web apps moved here from defense in depth. Each exits build at E, enforced on 90 percent or more of in-scope resources, with every remaining resource recorded as a documented exception. A foundational control that later reads P or N is reported as drift with a fix date. Since Oct 12, 2026 drift is shown on the posture slide and goes first in the roadmap's Now column as Atmosera's fix, ahead of the client-sequenced defense in depth work.
+Twenty-seven foundational controls follow the pillar slides, five per pillar except network and boundary, which holds six since Oct 12, 2026, when encryption in transit on published web apps moved here from defense in depth, and detection and response, which holds six since Oct 16, 2026, when analytics rules and threat intelligence ingestion moved here and Defender for Identity moved to defense in depth. Each exits build at E, enforced on 90 percent or more of in-scope resources, with every remaining resource recorded as a documented exception. A foundational control that later reads P or N is reported as drift with a fix date. Since Oct 12, 2026 drift is shown on the posture slide and goes first in the roadmap's Now column as Atmosera's fix, ahead of the client-sequenced defense in depth work.
 
 ### Identity and access, SOC 2 CC6.1, CC6.2, CC6.3
 
@@ -79,7 +79,10 @@ Twenty-six foundational controls follow the pillar slides, five per pillar excep
 | Cloud workload protection enabled across the resource estate | Every Defender for Cloud plan that has matching resources in the client environment, enabled on every subscription | DR.2 |
 | Endpoint detection sensor reporting on Azure virtual machines | Sensor health review in the final build week on every onboarded Azure virtual machine, with inactive sensors fixed or explained. Workstations and network devices such as Palo Alto, Meraki, Fortinet and SonicWall firewalls are not part of this measure | EW.1 |
 | Every alert triaged to a documented disposition | SOC triage that closes every incident with a classification and a closing note | DR.10 |
-| Domain controller telemetry collected continuously | Defender for Identity sensors on every domain controller, where Active Directory exists | DR.11 |
+| Analytics rules enabled in Sentinel | The Atmosera standard analytics rule set, deployed and enabled at build | DR.9 |
+| Threat intelligence indicators ingested tenant-wide | Threat intelligence ingestion switched on at build, so indicators are available for matching in the workspace | DR.7 |
+
+Analytics rules and threat intelligence ingestion moved here from defense in depth on Oct 16, 2026. Their rows grade what the build delivers. Tuning the rules against the environment's own operating history, and blocking on matched indicators, are not delivered at build, so they are not graded by DR.9 or DR.7 and stay out of scope of the grade.
 
 ## Conditional Access foundation
 
@@ -155,7 +158,7 @@ Entra ID sign-in and audit logs, Defender XDR and Microsoft 365 are tenant servi
 
 ## Defense in depth controls
 
-Twenty-eight defense in depth controls (seven under identity since Oct 12, 2026, when privileged role eligibility and the advanced anti-phishing policy moved out of the foundational tier, and six under network since the same day, when workload subnet segmentation moved here and App Service minimum TLS 1.2 took its foundational slot, and later that day encryption in transit on published web apps moved to foundational and container-level anonymous blob access joined) carry the E, P and N grading and form the What comes next roadmap. Each one waits on something only the client can approve, schedule or license.
+Twenty-eight defense in depth controls (seven under identity since Oct 12, 2026, when privileged role eligibility and the advanced anti-phishing policy moved out of the foundational tier, and six under network since the same day, when workload subnet segmentation moved here and App Service minimum TLS 1.2 took its foundational slot, and later that day encryption in transit on published web apps moved to foundational and container-level anonymous blob access joined, and five under detection and response since Oct 16, 2026, when Defender for Identity sensors and domain controller telemetry took the slots of analytics rules and threat intelligence) carry the E, P and N grading and form the What comes next roadmap. Each one waits on something only the client can approve, schedule or license.
 
 | Pillar | Defense in depth control | Why it waits | Measures |
 | --- | --- | --- | --- |
@@ -183,8 +186,8 @@ Twenty-eight defense in depth controls (seven under identity since Oct 12, 2026,
 | Data protection | Encryption at host on virtual machines and scale sets | Needs feature registration and a deallocation inside a maintenance window | DP.4 |
 | Data protection | Azure Backup enabled on all persistent virtual machines | Adds recurring cost and needs agreement on which machines persist | DP.5b |
 | Detection and response | Automated attack disruption active on identity threats | Needs Defender XDR prerequisites and agreement on automatic containment actions | DR.12 |
-| Detection and response | Detection content engineered and tuned to this environment | Needs operating history to tune against. The Atmosera standard rule set deploys at build | DR.9 |
-| Detection and response | Threat intelligence indicators ingested, matched and blocked tenant-wide | Ingestion is on at build. Blocking on matched indicators is agreed with the client | DR.7 |
+| Detection and response | Defender for Identity sensors healthy on domain controllers | Needs Defender for Identity licensing and a sensor on each domain controller from the client. Not in scope for cloud-only tenants | DR.11 |
+| Detection and response | Domain controller telemetry collected continuously | Needs the same Defender for Identity licensing and sensors, which supply the domain controller events. Not in scope for cloud-only tenants | DR.4 |
 | Detection and response | Vulnerability assessment running estate-wide | Endpoint assessment comes with onboarding. Server and container coverage follows the Defender for Cloud plans enabled at build | DR.5 |
 | Detection and response | Diagnostic logging enabled on all platform resources | Extends logging past the approved audit set and adds ingestion cost | DR.13 |
 
@@ -224,6 +227,7 @@ Foundational rows are expected at E at every review, and anything less is report
 | Container-level anonymous access (Oct 12, 2026) | The account-level setting was the only anonymous access reading, and a container left public becomes readable again if the account setting is relaxed | DP.1-CONTAINERS (collector 1.11.0) reads each container's own access level in every storage account through the Storage resource provider and grades the new defense in depth row. Containers readable today stay in the presenter notes and the SecOps worklist |
 | Endpoint sensor scope (Oct 12, 2026) | The sensor row counted workstations and any device Defender discovered, including network devices | The row reads Azure virtual machines only. Collector 1.11.0 also drops network devices and firewalls (Palo Alto, Meraki, Fortinet, SonicWall and similar) from EW.1 and EW.1-DEVICES |
 | Network virtual appliances (Oct 12, 2026) | Marketplace firewall images were graded on Trusted Launch, encryption at host, Azure Backup and agent-based recommendations they cannot take | Machines whose plan or image publisher is a firewall, router or SD-WAN vendor are listed in P0.6-APPLIANCES and left out of EW.7, EW.8, DP.4, DP.5b and those DFC.1 rows |
+| Detection and response tiers (Oct 16, 2026) | Defender for Identity sensors and domain controller telemetry sat in foundational, though they need licensing and a sensor on each domain controller from the client and do not apply to cloud-only tenants. Analytics rules and threat intelligence sat in defense in depth, though the standard rule set and ingestion are switched on at build | DR.11 and DR.4 moved to defense in depth and go to Later on the roadmap with the licensing ask. DR.9 and DR.7 moved to foundational, renamed to what the build delivers, and a gap goes first in Now as Atmosera's fix. Tuning against operating history and blocking on matched indicators are not graded. DR.12 still reads E only when DR.11 is at E, now within one tier |
 | Legacy authentication (Oct 14, 2026) | Every failed legacy sign-in counted as blocked, so a password spray against a tenant with no block policy read as a perfect score | IA.3 is graded from the block policy like IA.3-DEVICECODE and renamed Legacy authentication blocked. Only error 53003 counts as a Conditional Access block. Without a policy inventory, no block and no success reads N/A, for device code too. Security defaults log their block as error 530035, which the collector does not yet count |
 
 ### Slide grading
@@ -257,7 +261,6 @@ Each of the 24 controls that had no measure now has a draft ID, a count and a da
 | NB.8 | Egress and DNS monitored for tunneling and command traffic | Onboarded Windows devices with network protection in block mode, of onboarded Windows devices seen in the last 30 days. Reads E only when the Atmosera DNS tunneling and beaconing rules are enabled in Sentinel | Defender Vulnerability Management secure configuration assessment for network protection, and the Sentinel analytics rules API |
 | DP.8 | Data loss prevention enforced across mail and endpoint | Licensed locations covered by at least one enabled policy in enforce mode, of licensed locations among Exchange, SharePoint, OneDrive, Teams and devices. Locations declined in the SOW are not in scope | Get-DlpCompliancePolicy in Security and Compliance PowerShell, reading Mode and the location properties |
 | DR.10 | Every alert triaged to a documented disposition | Incidents closed in the last 30 days with a classification and a closing comment, of all incidents closed in the last 30 days | Sentinel SecurityIncident table, Classification and ClassificationComment columns |
-| DR.11 | Domain controller telemetry collected continuously | Domain controllers with a healthy, up-to-date Defender for Identity sensor, of domain controllers in the directory. Not in scope for cloud-only tenants | Microsoft Graph security/identities/sensors, reading sensorType, healthStatus and deploymentStatus, compared with the domain controller list |
 
 ### Defense in depth measures
 
@@ -278,6 +281,7 @@ Each of the 24 controls that had no measure now has a draft ID, a count and a da
 | DP.9 | Collaboration sharing boundaries defined and governed | In force when the tenant sharing level, default link type and anonymous link expiration match the boundaries agreed with the client | Get-SPOTenant, reading SharingCapability, DefaultSharingLinkType and RequireAnonymousLinksExpireInDays |
 | DP.10 | Endpoint disk encryption enforced on managed devices | Managed Windows and macOS devices reported as encrypted, of managed Windows and macOS devices | Intune managed device isEncrypted property in Microsoft Graph |
 | DR.12 | Automated attack disruption active on identity threats | Onboarded devices in device groups set to Full or Semi automation, of onboarded devices. Reads E only when DR.11 is at E and the attack disruption exclusion list is documented | Device group remediation levels at System > Settings > Endpoints > Device groups in the Defender portal, with group membership from the MachineGroup column of DeviceInfo |
+| DR.11 | Defender for Identity sensors healthy on domain controllers | Domain controllers with a healthy, up-to-date Defender for Identity sensor, of domain controllers in the directory. Not in scope for cloud-only tenants | Microsoft Graph security/identities/sensors, reading sensorType, healthStatus and deploymentStatus, compared with the domain controller list |
 | DR.13 | Diagnostic logging enabled on all platform resources | Resources with every Defender for Cloud diagnostic and audit logging assessment healthy, of resources with at least one such assessment | Defender for Cloud assessments in Azure Resource Graph securityresources, counted per resource |
 
 ## Sources

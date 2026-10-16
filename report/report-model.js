@@ -64,7 +64,7 @@
   // The MFA method update is measured by what the next collection and the change record can show, never promised
   // as a non-event (Oct 16, 2026).
   const MFA_OUTCOME = `Every affected user registered on a replacement method before ${RETIREMENT.text}, the fallback tested, and no rise in failed sign-ins after enforcement.`
-  const ACTION_KEYS = ['drift', 'critical', 'methods', 'access', 'idp', 'phish', 'consent', 'workload', 'logging', 'kvrbac', 'diskenc', 'containers', 'detect', 'segment', 'windows', 'backup', 'vmplatform', 'pim', 'allowlist', 'sharing', 'mdi']
+  const ACTION_KEYS = ['drift', 'critical', 'methods', 'access', 'idp', 'phish', 'consent', 'workload', 'logging', 'kvrbac', 'diskenc', 'containers', 'vulnassess', 'segment', 'windows', 'backup', 'vmplatform', 'pim', 'allowlist', 'sharing', 'mdi']
   const ACTION_STATUS = { Proposed: 'Proposed', PendingValidation: 'Pending validation', AwaitingApproval: 'Awaiting approval', Approved: 'Approved', Scheduled: 'Scheduled', InProgress: 'In progress', Verified: 'Verified' }
   // A median under the floor and a 90th percentile over one hour are presented with a note, never hidden.
   const MEDIAN_FLOOR = 20
@@ -778,20 +778,24 @@
     // DR.6 counts assessment entries and duplicated DR.13, so it no longer has a control row (Oct 12, 2026).
     // Diagnostic logging is graded per resource by DR.13 in defense in depth. DR.6 remains a fallback for the backlog.
     const logging = rows('DR.6').filter(r => count(r.Healthy) !== null && count(r.Unhealthy) !== null)
+    // Tiers (Oct 16, 2026): the Atmosera standard analytics rule set (DR.9) and threat intelligence ingestion (DR.7)
+    // are switched on at build, so they are foundational. Domain controller telemetry (DR.4) and Defender for Identity
+    // sensors (DR.11) need Defender for Identity licensing and a sensor on each domain controller from the client, and
+    // do not apply to cloud-only tenants, so they are defense in depth.
     const rules = rows('DR.9').filter(r => /All workspaces/i.test(String(r.Scope)))
     const ruleTotal = count(rules.find(r => /^Total rules$/i.test(r.Metric))?.Value), ruleEnabled = count(rules.find(r => /^Enabled rules$/i.test(r.Metric))?.Value)
-    const ruleControl = ruleTotal !== null ? control('DR.9', 'Analytics rules enabled in Sentinel', D.detection, ruleEnabled, ruleTotal, 'Enabled analytics rules across all workspaces.') : ungathered('DR.9', 'Analytics rules enabled in Sentinel', D.detection, reason('DR.9'), 'Enabled analytics rules across all workspaces.')
+    const ruleControl = ruleTotal !== null ? control('DR.9', 'Analytics rules enabled in Sentinel', F.detection, ruleEnabled, ruleTotal, 'Enabled analytics rules across all workspaces.') : ungathered('DR.9', 'Analytics rules enabled in Sentinel', F.detection, reason('DR.9'), 'Enabled analytics rules across all workspaces.')
     const ti = one('DR.7')
-    inForce('DR.7', 'Threat intelligence indicators ingested tenant-wide', D.detection, has('DR.7') ? count(ti?.Indicators) > 0 : null, ti ? `${fmt(ti.Indicators)} indicators available for matching.` : has('DR.7') ? 'No threat intelligence table recorded.' : 'Threat intelligence indicators available for matching in the workspace.')
+    inForce('DR.7', 'Threat intelligence indicators ingested tenant-wide', F.detection, has('DR.7') ? count(ti?.Indicators) > 0 : null, ti ? `${fmt(ti.Indicators)} indicators available for matching.` : has('DR.7') ? 'No threat intelligence table recorded.' : 'Threat intelligence indicators available for matching in the workspace.')
     const dc = rows('DR.4')
-    if (has('DR.4')) inForce('DR.4', 'Domain controller telemetry collected continuously', F.detection, dc.length > 0 && sum(dc, 'Events') > 0, dc.length ? `${plural(dc.length, 'domain controller', 'domain controllers')} reporting.` : 'No domain controller events recorded.')
-    else ungathered('DR.4', 'Domain controller telemetry collected continuously', F.detection, reason('DR.4'), 'Domain controller security events arriving in the workspace.')
+    if (has('DR.4')) inForce('DR.4', 'Domain controller telemetry collected continuously', D.detection, dc.length > 0 && sum(dc, 'Events') > 0, dc.length ? `${plural(dc.length, 'domain controller', 'domain controllers')} reporting.` : 'No domain controller events recorded.')
+    else ungathered('DR.4', 'Domain controller telemetry collected continuously', D.detection, reason('DR.4'), 'Domain controller security events arriving in the workspace.')
     const triage = one('DR.10')
     const dispositions = triage && count(triage.Closed) !== null ? control('DR.10', 'Alerts closed with a documented disposition', F.detection, triage.Documented, triage.Closed, 'Alerts closed in the last 30 days that carry a classification and a closing comment.') : null
     if (!dispositions && !has('DR.10')) ungathered('DR.10', 'Alerts closed with a documented disposition', F.detection, reason('DR.10'), 'Alerts closed in the last 30 days that carry a classification and a closing comment.')
     const mdiSensors = one('DR.11')
     const mdiLabel = 'Defender for Identity sensors healthy on domain controllers'
-    if (mdiSensors && count(mdiSensors.Sensors) !== null) control('DR.11', mdiLabel, F.detection, mdiSensors.Healthy, mdiSensors.Sensors, 'Sensors reporting healthy, of sensors registered. A domain controller with no sensor is found by comparing with the directory.')
+    if (mdiSensors && count(mdiSensors.Sensors) !== null) control('DR.11', mdiLabel, D.detection, mdiSensors.Healthy, mdiSensors.Sensors, 'Sensors reporting healthy, of sensors registered. A domain controller with no sensor is found by comparing with the directory.')
     // The service answered that the tenant is not onboarded to Defender for Identity (manifest NotOnboarded). That
     // is evidence the control is not in place, not a read the token was refused, so it reads Not in force and
     // needs a license and sensors rather than read access (Oct 14, 2026). Only where the collection shows a
@@ -802,10 +806,10 @@
       // Defender for Identity itself supplies, so neither can prove that a tenant has none. Without that evidence
       // the control stays ungathered rather than reading as a gap or as not applicable.
       const directoryEstate = rows('NB.10').some(r => count(r.Devices) > 0) || rows('DR.4').some(r => count(r.Events) > 0)
-      if (directoryEstate) inForce('DR.11', mdiLabel, F.detection, false, 'The tenant is not onboarded to Microsoft Defender for Identity, so no sensor reports from a domain controller.').needsLicense = true
-      else ungathered('DR.11', mdiLabel, F.detection, 'the tenant is not onboarded to Defender for Identity and the collection holds no evidence of domain controllers (NB.10 reads Azure virtual machines only, DR.4 needs Defender for Identity telemetry)', 'Sensors reporting healthy, of sensors registered. Whether the tenant has domain controllers could not be established in this collection.')
+      if (directoryEstate) inForce('DR.11', mdiLabel, D.detection, false, 'The tenant is not onboarded to Microsoft Defender for Identity, so no sensor reports from a domain controller.')
+      else ungathered('DR.11', mdiLabel, D.detection, 'the tenant is not onboarded to Defender for Identity and the collection holds no evidence of domain controllers (NB.10 reads Azure virtual machines only, DR.4 needs Defender for Identity telemetry)', 'Sensors reporting healthy, of sensors registered. Whether the tenant has domain controllers could not be established in this collection.')
     }
-    else if (!has('DR.11')) ungathered('DR.11', mdiLabel, F.detection, reason('DR.11'), 'Sensors reporting healthy, of sensors registered.')
+    else if (!has('DR.11')) ungathered('DR.11', mdiLabel, D.detection, reason('DR.11'), 'Sensors reporting healthy, of sensors registered.')
     const logPerResource = one('DR.13')
     if (logPerResource && count(logPerResource.Resources) !== null) control('DR.13', 'Diagnostic logging enabled on all platform resources', D.detection, logPerResource.AllHealthy, logPerResource.Resources, 'Resources with every diagnostic and audit logging assessment healthy, of resources with at least one such assessment.')
     else if (!has('DR.13')) ungathered('DR.13', 'Diagnostic logging enabled on all platform resources', D.detection, reason('DR.13'), 'Resources with every diagnostic and audit logging assessment healthy.')
@@ -989,7 +993,9 @@
       const key = clean(record.Key), status = String(record.Status ?? '')
       const reviewed = iso(record.Reviewed), recordStart = iso(record.WindowStart), recordEnd = iso(record.WindowEnd), target = record.TargetDate === undefined || record.TargetDate === null || record.TargetDate === '' ? null : iso(record.TargetDate)
       const omitted = reason => note('Action status needs review', `The context Actions record${key ? ` for ${key}` : ''} was omitted because ${reason} Correct it before presenting, or remove it to keep the item worded as a recommendation.`)
-      if (!ACTION_KEYS.includes(key)) omitted(`its Key is not one of ${ACTION_KEYS.join(', ')}.`)
+      // The detect item was split on Oct 16, 2026, when analytics rules and threat intelligence became foundational.
+      if (key === 'detect') omitted('the detect item was retired on Oct 16, 2026. Use vulnassess for vulnerability assessment, and drift for analytics rules and threat intelligence, which are now foundational gaps.')
+      else if (!ACTION_KEYS.includes(key)) omitted(`its Key is not one of ${ACTION_KEYS.join(', ')}.`)
       else if (seenActions.has(key)) omitted('another record already carries the same Key.')
       else if (!Object.prototype.hasOwnProperty.call(ACTION_STATUS, status)) omitted(`its Status is not one of ${Object.keys(ACTION_STATUS).join(', ')}.`)
       else if (!clean(record.Reference) || !validDate(reviewed) || !validDate(recordStart) || !validDate(recordEnd)) omitted('it lacks a Reference, a Reviewed date, or the WindowStart and WindowEnd of the alert period it covers.')

@@ -359,7 +359,8 @@ test('a register detail that wraps gets a row tall enough for every line', async
   assert.ok(gap.y + gap.h <= rule.y + 1, 'the box ends at its own rule')
   assert.ok(gap.h > 2 * 0.2 * 914400, 'the row holds the label and at least two detail lines')
 })
-test('a licensed control as the only foundational gap never reads as every foundational control enforced', async () => {
+test('Defender for Identity as the only gap is defense in depth, so the posture slide reads no foundational gaps', async () => {
+  // Defense in depth since Oct 16, 2026: it needs licensing and sensors from the client, so it sits in Later.
   const p = pack('balanced')
   p.results['DP.2'][0].PurgeProtection = 6 // no other foundational gap
   p.manifest.push({ ResultId: 'DR.11', Status: 'UNAVAILABLE', Rows: 0, ReadTimeUtc: '2026-10-08T10:00:00Z', AccessGap: false, NotOnboarded: true })
@@ -371,9 +372,9 @@ test('a licensed control as the only foundational gap never reads as every found
   const { slides } = await read(out)
   const posture = slides.find(s => s.startsWith('Control posture'))
   assert.ok(posture, 'the posture slide')
-  assert.ok(!/No foundational gaps|Every measured foundational control reads E/.test(posture), posture.match(/.{0,60}foundational control reads E.{0,20}/)?.[0])
-  assert.ok(/needs licensing and sits in Later/.test(posture))
-  assert.ok(/waiting on licensing/.test(posture))
+  assert.ok(/No foundational gaps\. Every measured foundational control reads E\./.test(posture), posture)
+  assert.ok(!/licensing/.test(posture), 'no foundational control waits on licensing')
+  assert.ok(slides.some(s => /Defender for Identity deployment/.test(s)), 'the Later item stays on the roadmap')
 })
 test('chart workbooks carry valid table ranges so Keynote and Quick Look draw the charts', async () => {
   // pptxgenjs 4.0.1 writes ref="A1:D4'" into each chart's embedded table. Apple's importer then

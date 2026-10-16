@@ -517,13 +517,26 @@ test('every control is placed in a pillar and a tier that follows the controls b
   assert.equal(tierOf('Cloud workload protection across the resource estate'), 'foundational')
   assert.equal(tierOf('Diagnostic logging enabled on platform resources'), undefined, 'DR.6 duplicated DR.13 and has no row')
   assert.equal(tierOf('Diagnostic logging enabled on all platform resources'), 'defense')
-  assert.equal(tierOf('Analytics rules enabled in Sentinel'), 'defense')
-  assert.equal(tierOf('Threat intelligence indicators ingested tenant-wide'), 'defense')
+  // Oct 16, 2026: analytics rules and threat intelligence ingestion are switched on at build, so they are
+  // foundational. Domain controller telemetry and Defender for Identity sensors need licensing and a sensor on each
+  // domain controller from the client, so they are defense in depth.
+  assert.equal(tierOf('Analytics rules enabled in Sentinel'), 'foundational')
+  assert.equal(tierOf('Threat intelligence indicators ingested tenant-wide'), 'foundational')
+  assert.equal(tierOf('Domain controller telemetry collected continuously'), 'defense')
+  assert.equal(tierOf('Defender for Identity sensors healthy on domain controllers'), 'defense')
   const sensors = m.controls.find(c => c.label === 'Endpoint sensors active on onboarded Azure virtual machines')
   assert.equal(sensors.tier, 'foundational'); assert.equal(sensors.group, 'Detection and response')
   assert.deepEqual(m.tierSummary.foundational, { label: 'Foundational', enforced: 0, measured: 0, total: m.controls.filter(c => c.tier === 'foundational').length })
   assert.deepEqual(m.tierSummary.defense, { label: 'Defense in depth', enforced: 0, measured: 0, total: m.controls.filter(c => c.tier === 'defense').length })
   assert.deepEqual(m.tiers.controls, [], 'no tier totals when nothing was measured')
+})
+test('the Detection and response pillar swaps two controls each way, so its tier counts and the totals hold', () => {
+  // The standards build places every control, measured or not, so it carries the full list.
+  const m = build({ version: '2.0.0', standard: true, parameters: { ClientName: 'Standard' }, manifest: [], results: {} })
+  const ids = tier => m.controls.filter(c => c.group === 'Detection and response' && c.tier === tier).map(c => c.id).sort()
+  assert.deepEqual(ids('foundational'), ['DR.10', 'DR.2', 'DR.6-INITIATIVE', 'DR.7', 'DR.9', 'EW.1'])
+  assert.deepEqual(ids('defense'), ['DR.11', 'DR.13', 'DR.4'])
+  assert.deepEqual([m.tierSummary.foundational.total, m.tierSummary.defense.total], [31, 22])
 })
 test('the default anti-phishing policy decides the foundational row and the advanced flags decide the defense row', () => {
   const p = pack()
@@ -1203,7 +1216,7 @@ test('the benchmark meter reads the Microsoft cloud security benchmark alone whe
   put(p, 'POS.5', [{ Standard: 'Microsoft-cloud-security-benchmark-v9', Passed: 1, Failed: 9 }, { Standard: 'Microsoft-cloud-security-benchmark-v10', Passed: 8, Failed: 2 }])
   assert.deepEqual([build(p).posture.benchmark.passed, build(p).posture.benchmark.total], [8, 10], 'editions compare by version number, not as text')
 })
-test('a tenant that is not onboarded to Defender for Identity reads Not in force and needs a license, never read access', () => {
+test('a tenant that is not onboarded to Defender for Identity reads Not in force in defense in depth, never read access', () => {
   const p = pack()
   p.manifest.push({ ResultId: 'DR.11', Status: 'UNAVAILABLE', Rows: 0, ReadTimeUtc: '2026-10-08T10:00:00Z', AccessGap: false, NotOnboarded: true })
   // Without positive evidence of domain controllers the control stays ungathered: NB.10 reads Azure virtual
@@ -1220,7 +1233,7 @@ test('a tenant that is not onboarded to Defender for Identity reads Not in force
   put(p, 'NB.10', [{ Scope: 'Azure VM', Devices: 3, Compliant: 0 }])
   m = build(p)
   c = m.controls.find(x => x.id === 'DR.11')
-  assert.deepEqual([c.value, c.mark, c.tier, c.needsLicense], ['Not in force', 'N', 'foundational', true])
+  assert.deepEqual([c.value, c.mark, c.tier, c.needsLicense], ['Not in force', 'N', 'defense', undefined])
   assert.match(c.note, /not onboarded to Microsoft Defender for Identity/)
   assert.ok(!m.unmeasured.some(u => u.id === 'DR.11'))
   p.manifest.find(r => r.ResultId === 'DR.11').NotOnboarded = false
@@ -1557,6 +1570,9 @@ test('an Actions record carries a reviewed status only when it names a known key
     assert.ok(built.review.some(r => r.title === 'Action status needs review' && reason.test(r.text)), reason.source)
   }
   omitted([record({ Key: 'everything' })], /its Key is not one of drift, critical/)
+  // The detect item was split on Oct 16, 2026, so its record is omitted with the keys that replace it.
+  omitted([record({ Key: 'detect' })], /the detect item was retired on Oct 16, 2026\. Use vulnassess for vulnerability assessment, and drift for analytics rules and threat intelligence/)
+  assert.deepEqual(withActions([record({ Key: 'vulnassess' })]).actions.map(a => a.key), ['vulnassess'])
   omitted([record({ Status: 'Done' })], /its Status is not one of Proposed, PendingValidation, AwaitingApproval, Approved, Scheduled, InProgress, Verified/)
   omitted([record({ Reference: '' })], /lacks a Reference, a Reviewed date/)
   omitted([record({ WindowStart: '2026-07-01' })], /covers Jul 1 to Sep 30, 2026 and this pack's alert period is Nov 1, 2025 to Sep 30, 2026/)

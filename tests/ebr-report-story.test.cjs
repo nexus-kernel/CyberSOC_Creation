@@ -128,27 +128,65 @@ test('a tiny population never stands as a win or leads a pillar, and a policy-on
   q.results['IA.2'] = [{ Bucket: 'Retiring: SMS or voice', DistinctUsers: 40 }, { Bucket: 'Phishing-resistant', DistinctUsers: 3 }]
   assert.equal(story(q).s.matrix.find(x => x.group === 'Identity and access').measure, '3 users already on phishing-resistant sign-in', 'a tiny sign-in population drops out and the callout stands alone')
 })
-test('a foundational control that needs a license goes to Later with its ask, not into the foundational gaps', () => {
+test('Defender for Identity and domain controller telemetry gaps sit in Later with the licensing ask, never in the foundational gaps', () => {
+  // Defense in depth since Oct 16, 2026: both need Defender for Identity licensing and a sensor on each domain controller.
   const p = quarterPack()
   p.manifest.push({ ResultId: 'DR.11', Status: 'UNAVAILABLE', Rows: 0, ReadTimeUtc: '2026-10-12T10:00:00Z', AccessGap: false, NotOnboarded: true })
   p.manifest.push({ ResultId: 'NB.10', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' })
   p.results['NB.10'] = [{ Scope: 'Azure VM', Devices: 3, Compliant: 0 }] // domain controllers in Azure, so the control applies
-  const { s } = story(p)
-  assert.ok(!s.drift.some(c => c.id === 'DR.11'))
-  assert.deepEqual(s.licensed.map(c => c.id), ['DR.11'])
+  const { m, s } = story(p)
+  assert.deepEqual([m.controls.find(c => c.id === 'DR.11').value, m.controls.find(c => c.id === 'DR.11').tier], ['Not in force', 'defense'])
+  assert.ok(!s.drift.some(c => c.id === 'DR.11'), 'not a foundational gap')
+  assert.equal(s.licensed, undefined, 'no foundational control waits on licensing')
   const later = s.roadmap.find(h => h.key === 'later').items.find(i => i.key === 'mdi')
   assert.ok(later && later.controls[0].id === 'DR.11', 'Defender for Identity sits in Later')
-  assert.ok(s.asks.some(a => a.title === 'Approve Defender for Identity licensing'))
+  assert.equal(later.ask.title, 'Approve Defender for Identity licensing')
+  // As a defense in depth item its ask takes its turn in horizon order, after Now and Next and after segmentation,
+  // which sits earlier in Later. With segmentation and storage network access enforced it makes the four.
+  assert.deepEqual(s.asks.map(a => a.key), ['methods', 'access', 'idp', 'segment'])
+  const q = JSON.parse(JSON.stringify(p)); q.results['NB.1'] = [{ WorkloadSubnets: 36, Segmented: 36 }]; q.results['DP.1'][0].PublicNetworkOff = 42
+  assert.deepEqual(buildStory(build(q), q).asks.map(a => [a.key, a.title]).slice(-1), [['mdi', 'Approve Defender for Identity licensing']])
   assert.ok(!s.asks.some(a => /read access/.test(a.title) && /Defender for Identity/.test(a.body)), 'never a read access ask')
-  assert.match(s.takeaways.posture, /read below the baseline, (two|three|four) first on the roadmap and one waiting on licensing\./)
-  assert.equal(s.watch.find(w => /foundational controls read below enforced/.test(w.label)).value, String(s.drift.length + 1))
-  // With the licensed control as the only foundational gap, nothing claims that every foundational control reads E.
+  assert.ok(!/licensing/.test(s.takeaways.posture), s.takeaways.posture)
+  assert.equal(s.watch.find(w => /foundational controls? reads? below enforced/.test(w.label)).value, String(s.drift.length))
+  // Domain controller telemetry reads Not in force with no events, and joins the same item and ask.
+  p.manifest.push({ ResultId: 'DR.4', Status: 'EMPTY', Rows: 0, ReadTimeUtc: '2026-10-12T10:00:00Z' }); p.results['DR.4'] = []
+  const both = story(p)
+  assert.deepEqual([both.m.controls.find(c => c.id === 'DR.4').value, both.m.controls.find(c => c.id === 'DR.4').tier], ['Not in force', 'defense'])
+  assert.ok(!both.s.drift.some(c => c.id === 'DR.4'))
+  const mdi = both.s.roadmap.find(h => h.key === 'later').items.find(i => i.key === 'mdi')
+  assert.deepEqual(mdi.controls.map(c => c.id).sort(), ['DR.11', 'DR.4'])
+  q.manifest.push({ ResultId: 'DR.4', Status: 'EMPTY', Rows: 0, ReadTimeUtc: '2026-10-12T10:00:00Z' }); q.results['DR.4'] = []
+  const asks = buildStory(build(q), q).asks.filter(a => a.key === 'mdi')
+  assert.deepEqual(asks.map(a => a.lead), ['2 controls'], 'one licensing ask covers both')
+  // With Defender for Identity as the only gap, the foundational controls all read E and nothing says otherwise.
   const m2 = build(p)
-  for (const c of m2.controls) if (c.tier === 'foundational' && c.mark && c.id !== 'DR.11') Object.assign(c, { mark: 'E', pct: 100 })
+  for (const c of m2.controls) if (c.tier === 'foundational' && c.mark) Object.assign(c, { mark: 'E', pct: 100 })
   const only = buildStory(m2, p)
-  assert.deepEqual([only.drift.length, only.licensed.length], [0, 1])
-  assert.match(only.takeaways.posture, /^\d+ of \d+ foundational controls are enforced\. One reads below the baseline, one waiting on licensing\.$/)
-  assert.equal(only.watch.find(w => /foundational control reads below enforced/.test(w.label)).value, '1')
+  assert.equal(only.drift.length, 0)
+  assert.match(only.takeaways.posture, /^\d+ of \d+ foundational controls are enforced\. None reads below the baseline\.$/)
+  assert.ok(!only.watch.some(w => /foundational controls? reads? below enforced/.test(w.label)))
+  assert.ok(only.roadmap.find(h => h.key === 'later').items.some(i => i.key === 'mdi'))
+})
+test('analytics rules and threat intelligence gaps are foundational gaps in Now, and vulnerability assessment stays in Next', () => {
+  // Foundational since Oct 16, 2026: the standard rule set and threat intelligence ingestion are switched on at build.
+  const p = quarterPack()
+  const put = (id, rows) => { p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-12T10:00:00Z' }); p.results[id] = rows }
+  put('DR.9', [{ Scope: 'All workspaces', Metric: 'Total rules', Value: 386 }, { Scope: 'All workspaces', Metric: 'Enabled rules', Value: 120 }])
+  put('DR.7', [{ Indicators: 0 }])
+  put('DR.5', [{ Scope: 'Azure VM', Onboarded: 88, Assessed: 40 }])
+  const { m, s } = story(p)
+  const tier = id => m.controls.find(c => c.id === id).tier
+  assert.deepEqual([tier('DR.9'), tier('DR.7'), tier('DR.5')], ['foundational', 'foundational', 'defense'])
+  assert.deepEqual(['DR.9', 'DR.7'].map(id => s.drift.some(c => c.id === id)), [true, true], 'both on the gaps panel')
+  const now = s.roadmap.find(h => h.key === 'now').items.find(i => i.key === 'drift')
+  assert.ok(now.controls.some(c => c.id === 'DR.9') && now.controls.some(c => c.id === 'DR.7'), 'both in Now as Atmosera\'s fix')
+  assert.match(now.evidence, /analytics rules and threat intelligence$/)
+  const next = s.roadmap.find(h => h.key === 'next').items
+  assert.ok(!next.some(i => i.controls.some(c => ['DR.9', 'DR.7'].includes(c.id))), 'neither sits in Next')
+  const va = next.find(i => i.key === 'vulnassess')
+  assert.deepEqual([va.title, va.controls.map(c => c.id)], ['Vulnerability assessment coverage', ['DR.5']])
+  assert.ok(!s.roadmap.some(h => h.items.some(i => i.key === 'detect')), 'the detect item is retired')
 })
 test('counts read as natural English', () => {
   const p = quarterPack()
