@@ -48,6 +48,16 @@
   const bool = value => value === true || String(value ?? '').toLowerCase() === 'true'
   const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`
   const RETIREMENT = { date: '2027-02-01', label: 'February 1, 2027' }
+  // The reviewed status of a roadmap item or an ask, from the Actions records in the context file. Each record names
+  // the item by its key, the same key the story gives the roadmap item and the ask (report/report-story.js, kept in
+  // step by tests/ebr-report-story.test.cjs), so later surfaces can read owner, target date and status by key. No
+  // surface says scheduled, approved or in progress without a record, and verified needs a Delivered record with the
+  // same reference as well (Oct 16, 2026).
+  // The MFA method update is measured by what the next collection and the change record can show, never promised
+  // as a non-event (Oct 16, 2026).
+  const MFA_OUTCOME = `Every affected user registered on a replacement method before ${RETIREMENT.label}, the fallback tested, and no rise in failed sign-ins after enforcement.`
+  const ACTION_KEYS = ['drift', 'critical', 'methods', 'access', 'idp', 'phish', 'consent', 'workload', 'logging', 'kvrbac', 'diskenc', 'containers', 'detect', 'segment', 'windows', 'backup', 'vmplatform', 'pim', 'allowlist', 'sharing', 'mdi']
+  const ACTION_STATUS = { Proposed: 'Proposed', PendingValidation: 'Pending validation', AwaitingApproval: 'Awaiting approval', Approved: 'Approved', Scheduled: 'Scheduled', InProgress: 'In progress', Verified: 'Verified' }
   // A median under the floor and a 90th percentile over one hour are presented with a note, never hidden.
   const MEDIAN_FLOOR = 20
   const TIMING_SAMPLE = 5
@@ -84,7 +94,7 @@
       workspaces: [...new Map(array(p.Workspaces).map(w => [String(w.CustomerId || w.ResourceId || w.Name).toLowerCase(), w])).values()],
       depth: ['brief', 'balanced', 'detailed'].includes(data.depth) ? data.depth : 'balanced',
       service: null, headline: [], tiers: { outcomes: [], controls: [], hardening: [], benchmark: [] }, tierSummary: null, whatNext: '',
-      response: null, alerts: null, threats: null, impact: null, threatMeasures: null, impactStatement: '', detections: null, trend: [], pillars: [], controls: [], priorities: [], delivered: [], mfaMethods: null,
+      response: null, alerts: null, threats: null, impact: null, threatMeasures: null, impactStatement: '', detections: null, trend: [], pillars: [], controls: [], priorities: [], delivered: [], actions: [], mfaMethods: null,
       cloudScore: null, tenantScore: null, posture: {}, review: [], presenter: [], unmeasured: [], notApplicable: [], issues: array(data.issues).map(clean),
       manifest: manifest.map(r => ({ id: clean(r.ResultId), status: clean(r.Status), rows: count(r.Rows), date: date(r.ReadTimeUtc) })),
       tenantWorkspace: clean(p.TenantWideTables?.SigninLogs || 'Not recorded'),
@@ -839,7 +849,7 @@
       if (unevaluated !== null) priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} members whose sign-ins could be evaluated showed no multifactor authentication in the last 30 days. Members whose only sign-ins reused a device session that no policy checked are not part of this figure.`, 'Deploy a report-only Conditional Access policy requiring multifactor authentication for all members to measure session coverage, confirm the identity provider sign-on rules, then move to enforcement in waves.', 'Every member sign-in evaluated by policy and covered by multifactor authentication, with documented exceptions.', 'IA.1')
       else priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} active members signed in without a recorded multifactor requirement in the last 30 days.`, 'Confirm exclusions and service accounts, pilot the Conditional Access change in report-only mode, then move to enforcement in waves.', 'Every intended user covered by validated policy, with documented exceptions.', 'IA.1')
     }
-    if (count(retiring?.DistinctUsers) > 0) priority(3, 'MFA method update', `${plural(retiring.DistinctUsers, 'user', 'users')} signed in with text message or voice in the last 30 days. Microsoft retires these methods on ${RETIREMENT.label}.`, 'Notify the affected users, register each one on Microsoft Authenticator or a phishing-resistant method in guided waves, then remove text message and voice from the allowed methods under change control.', `${RETIREMENT.label} arrives as a non-event. Every user signs in with a stronger method and no sign-in is blocked.`, 'IA.2')
+    if (count(retiring?.DistinctUsers) > 0) priority(3, 'MFA method update', `${plural(retiring.DistinctUsers, 'user', 'users')} signed in with text message or voice in the last 30 days. Microsoft retires these methods on ${RETIREMENT.label}.`, 'Notify the affected users, register each one on Microsoft Authenticator or a phishing-resistant method in guided waves, then remove text message and voice from the allowed methods under change control.', MFA_OUTCOME, 'IA.2')
     if (edr.pct !== null && edr.pct < E_THRESHOLD) priority(4, 'Endpoint coverage', `${fmt(edr.total - edr.good)} of ${fmt(edr.total)} eligible Azure virtual machines are not yet reporting to endpoint detection.${reconciliation ? ' ' + reconciliation : ''}`, 'Confirm ownership and operating state, complete onboarding and verify sensor health.', 'Every eligible Azure virtual machine reports through an active sensor.', 'EW.1')
     if (antimalware && antimalware.pct !== null && antimalware.pct < E_THRESHOLD) priority(5, 'Anti-malware configuration', `${fmt(antimalware.total - antimalware.good)} of ${fmt(antimalware.total)} Azure virtual machines do not meet the real-time protection configuration checks.`, 'Apply the endpoint security baseline to the affected platforms and verify through the configuration assessment.', 'Real-time protection enforced on every onboarded Azure virtual machine.', 'EW.3')
     if (plan.pct !== null && plan.pct < E_THRESHOLD || (aiRow && count(aiRow.Resources) - count(aiRow.Covered) > 0)) priority(6, 'Workload protection scope', `${plan.total !== null && plan.total - plan.good > 0 ? `${plural(plan.total - plan.good, 'eligible resource is', 'eligible resources are')} outside Standard plan coverage.` : ''}${aiRow && count(aiRow.Resources) - count(aiRow.Covered) > 0 ? ` ${plural(count(aiRow.Resources) - count(aiRow.Covered), 'AI service resource is', 'AI service resources are')} not yet covered.` : ''}`, 'Validate resource-level coverage in Defender for Cloud and agree the intended protection scope, including AI services.', 'Every agreed resource has workload protection or a documented exception.', 'DR.2')
@@ -857,7 +867,7 @@
     // stronger methods already in use. The report frames this as updating each user's MFA method, never as a
     // passwordless programme (Oct 14, 2026).
     if (count(retiring?.DistinctUsers) > 0 || count(resistant?.DistinctUsers) > 0) {
-      m.mfaMethods = { retiring: count(retiring?.DistinctUsers) ?? 0, resistant: count(resistant?.DistinctUsers) ?? 0, authenticator: count(authenticator?.DistinctUsers) ?? 0, deadline: RETIREMENT.label, source: source('IA.2', 'Methods used in successful sign-ins, last 30 days.') }
+      m.mfaMethods = { outcome: MFA_OUTCOME, retiring: count(retiring?.DistinctUsers) ?? 0, resistant: count(resistant?.DistinctUsers) ?? 0, authenticator: count(authenticator?.DistinctUsers) ?? 0, deadline: RETIREMENT.label, source: source('IA.2', 'Methods used in successful sign-ins, last 30 days.') }
     }
 
     // Scores and posture.
@@ -939,6 +949,31 @@
       } else note('Delivery record needs review', 'A delivery entry was omitted because it lacks a title, outcome, reference or a completion date inside the alert period.')
     }
     if (!m.delivered.length) note('Delivered work', 'Add completed change references through the context file to show verified delivery on the roadmap page. Planned work is never labeled as delivered.')
+
+    // Action status from the reviewed context file. Like Impact and OpenAlertNote, a record is bound to the alert
+    // period it covers and reviewed on or after the posture read date, so a record from an earlier review never
+    // carries a status forward to this collection's findings. Scheduled needs a target date, and Verified needs a
+    // Delivered record in this period with the same reference. A record that fails a check is omitted with a note.
+    const seenActions = new Set()
+    for (const raw of array(context.Actions)) {
+      const record = raw && typeof raw === 'object' ? raw : {}
+      const key = clean(record.Key), status = String(record.Status ?? '')
+      const reviewed = iso(record.Reviewed), recordStart = iso(record.WindowStart), recordEnd = iso(record.WindowEnd), target = record.TargetDate === undefined || record.TargetDate === null || record.TargetDate === '' ? null : iso(record.TargetDate)
+      const omitted = reason => note('Action status needs review', `The context Actions record${key ? ` for ${key}` : ''} was omitted because ${reason} Correct it before presenting, or remove it to keep the item worded as a recommendation.`)
+      if (!ACTION_KEYS.includes(key)) omitted(`its Key is not one of ${ACTION_KEYS.join(', ')}.`)
+      else if (seenActions.has(key)) omitted('another record already carries the same Key.')
+      else if (!Object.prototype.hasOwnProperty.call(ACTION_STATUS, status)) omitted(`its Status is not one of ${Object.keys(ACTION_STATUS).join(', ')}.`)
+      else if (!clean(record.Reference) || !validDate(reviewed) || !validDate(recordStart) || !validDate(recordEnd)) omitted('it lacks a Reference, a Reviewed date, or the WindowStart and WindowEnd of the alert period it covers.')
+      else if (!windowValid || recordStart !== p.WindowStart || recordEnd !== p.WindowEnd) omitted(`it covers ${span(recordStart, recordEnd)} and this pack's alert period is ${m.period.label}.`)
+      else if (!validDate(iso(p.PostureReadDate)) || reviewed < iso(p.PostureReadDate)) omitted(`its review is dated ${date(reviewed)}, before the evidence was collected on ${readDate}.`)
+      else if (target !== null && !validDate(target)) omitted('its TargetDate is not a date.')
+      else if (status === 'Scheduled' && target === null) omitted('a Scheduled item needs a TargetDate.')
+      else if (status === 'Verified' && !m.delivered.some(d => d.reference === clean(record.Reference))) omitted('a Verified item needs a Delivered record in this alert period with the same Reference.')
+      else {
+        seenActions.add(key)
+        m.actions.push({ key, status, label: ACTION_STATUS[status], owner: clean(record.Owner || ''), targetDate: target ? date(target) : '', verification: clean(record.Verification || ''), reference: clean(record.Reference), reviewed: date(reviewed), source: `Reviewed action status ${clean(record.Reference)}, ${date(reviewed)}, from the reviewed context file.` })
+      }
+    }
 
     // Pillar outcome rows. Each row leads with a statement earned by the strongest available measure. The strong
     // statement says every or all, so it needs a complete reading. A reading at E that still leaves resources out
@@ -1097,7 +1132,7 @@
     if (m.posture.highHealthy) row('benchmark', 'High severity assessments healthy', pctText(m.posture.highHealthy.pct), 'POS.4')
     if (m.posture.assessed !== null) row('benchmark', 'Resources assessed by Defender for Cloud', fmt(m.posture.assessed), 'POS.2')
     for (const c of (m.tenantScore?.categories || [])) { if (m.tiers.benchmark.length < 6) row('benchmark', `${c.label} category score`, pctText(c.pct), 'POS.6') }
-    m.whatNext = `The foundational and defense in depth controls we hold this environment to across five pillars, the status of each, ${m.period.months ? `${plural(m.period.months, 'month', 'months')} of measured outcomes` : 'the measured outcomes'}, the sequenced hardening roadmap${m.mfaMethods && m.mfaMethods.retiring > 0 ? ` and the MFA method update already scoped ahead of ${RETIREMENT.label}` : ''}.`
+    m.whatNext = `The foundational and defense in depth controls we hold this environment to across five pillars, the status of each, ${m.period.months ? `${plural(m.period.months, 'month', 'months')} of measured outcomes` : 'the measured outcomes'}, the proposed hardening roadmap${m.mfaMethods && m.mfaMethods.retiring > 0 ? ` and the recommended MFA method update ahead of ${RETIREMENT.label}` : ''}.`
 
     // Presenter notes and boundaries.
     const manual = m.manifest.filter(r => r.status === 'MANUAL').map(r => r.id)
@@ -1116,7 +1151,7 @@
     }
     return m
   }
-  const api = { build, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced' }
+  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced' }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.EbrReport = api
 })(typeof globalThis !== 'undefined' ? globalThis : this)

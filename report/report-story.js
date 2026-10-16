@@ -179,12 +179,21 @@
     const EYEBROW = { identity: 'Identity', endpoint: 'Endpoint', data: 'Data protection', detection: 'Detection', network: 'Network' }
     s.wins = candidates.slice(0, 6).map(w => ({ ...w, eyebrow: w.eyebrow || (w.label.startsWith('machines patched') ? 'Patching' : EYEBROW[w.area]) }))
 
+    // Reviewed action status. A roadmap item or an ask reads scheduled, approved, in progress or verified only from an
+    // Actions record in the context file with its key (the model validates the record, Oct 16, 2026). Without one the
+    // copy reads as a recommendation, and the drift panel and the vulnerability item say what Atmosera recommends.
+    const actionOf = key => (m.actions || []).find(x => x.key === key) || null
+    const statusText = x => `${x.label}${x.owner ? `, owner ${x.owner}` : ''}${x.targetDate ? `, target ${x.targetDate}` : ''} (${x.reference}, reviewed ${x.reviewed})`
+    const withStatus = (text, x) => !x ? text : !clean(text) ? statusText(x) : `${clean(text).replace(/\.$/, '')}. ${statusText(x)}${/\.$/.test(clean(text)) ? '.' : ''}`
+    const driftAction = actionOf('drift')
+    s.driftNote = `Below the baseline at collection. ${driftAction ? `Fixes ${driftAction.label.toLowerCase()} (${driftAction.reference}).` : 'Atmosera recommends closing each gap first.'}`
+
     // The roadmap: every below-E control mapped to a catalog item, drift first in Now.
     const items = { now: [], next: [], later: [] }
     const prio = id => m.priorities.find(x => x.id === id)
     if (s.drift.length) items.now.push({ key: 'drift', title: 'Close foundational gaps', evidence: `${plural(s.driftControls.length, 'control', 'controls')} below the baseline: ${list(s.drift.map(c => c.detail ? `${c.short} (${c.detail})` : c.short))}`, controls: s.driftControls, owner: 'Atmosera' })
     const crit = prio('BKL.1')
-    if (m.criticalCves > 0) items.now.push({ key: 'critical', title: 'Critical vulnerability remediation', evidence: `${plural(m.criticalCves, 'critical exploitable finding', 'critical exploitable findings')}, scheduled with owners inside the patch cadence`, controls: [], priority: crit })
+    if (m.criticalCves > 0) items.now.push({ key: 'critical', title: 'Critical vulnerability remediation', evidence: `${plural(m.criticalCves, 'critical exploitable finding', 'critical exploitable findings')}.${actionOf('critical') ? '' : ' Atmosera recommends validating the affected workloads and agreeing remediation or compensating controls with the owners inside the patch cadence.'}`, controls: [], priority: crit })
     // The MFA method update: users still on text message or voice move to a stronger method before Microsoft
     // retires those methods. Never framed as a passwordless programme (Oct 14, 2026).
     const pw = m.mfaMethods && m.mfaMethods.retiring > 0 ? m.mfaMethods : null
@@ -210,7 +219,7 @@
     const evidenceOf = item => item.evidence || (item.controls.length === 1 && item.priority ? item.priority.evidence
       : item.controls.length === 1 && item.controls[0].boolean && item.controls[0].note ? item.controls[0].note
       : item.controls.length ? item.controls.map(c => `${sentence(c.short)} ${c.valueText}${c.detail ? `, ${c.detail}` : ''}`).join(' · ') : item.priority ? item.priority.evidence : '')
-    s.roadmap = HORIZONS.map(h => ({ ...h, items: items[h.key].map(i => ({ ...i, evidence: clean(evidenceOf(i)) })) }))
+    s.roadmap = HORIZONS.map(h => ({ ...h, items: items[h.key].map(i => { const action = i.key === 'other' ? null : actionOf(i.key); return { ...i, action, evidence: clean(withStatus(evidenceOf(i), action)) } }) }))
     s.unmapped = other.map(c => c.label)
     const headroom = m.posture && m.posture.scoreControls ? m.posture.scoreControls.filter(c => /vulnerabilit|security configuration/i.test(c.label)) : []
     const available = m.cloudScore ? Number((m.cloudScore.max - m.cloudScore.current).toFixed(2)) : null
@@ -219,20 +228,20 @@
     // Decisions needed: the MFA method update, read access, then approvals for items whose controls read N.
     // Each ask carries a kind, so the executive summary can leave the read access ask to the closing slide.
     const asks = []
-    if (pw) asks.push({ kind: 'methods', lead: plural(pw.retiring, 'user', 'users'), title: 'Move users off text message and voice MFA', body: `${plural(pw.retiring, 'user needs', 'users need')} to update their MFA method before ${RETIREMENT.label}, when Microsoft retires text message and voice sign-in.`, short: `need to update their MFA method before ${shortDate(RETIREMENT.date)}` })
+    if (pw) asks.push({ kind: 'methods', key: 'methods', lead: plural(pw.retiring, 'user', 'users'), title: 'Move users off text message and voice MFA', body: `${plural(pw.retiring, 'user needs', 'users need')} to update their MFA method before ${RETIREMENT.label}, when Microsoft retires text message and voice sign-in.`, short: `need to update their MFA method before ${shortDate(RETIREMENT.date)}` })
     // Read access is asked for only where the collector was not permitted to read the evidence. Service
     // errors and packs that only need recollection are Atmosera's to resolve.
     const gap = id => (data.manifest || []).some(r => r.ResultId === id && (r.AccessGap === true || String(r.AccessGap).toLowerCase() === 'true'))
     const unread = s.ungathered.filter(c => gap(c.id))
-    if (unread.length) asks.push({ kind: 'access', lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
+    if (unread.length) asks.push({ kind: 'access', key: 'access', lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
     // An item that holds a foundational control (one that needs a license, routed through the catalog) is asked
     // for ahead of the defense in depth items, whatever its horizon.
     const askItems = HORIZONS.flatMap(h => items[h.key]).map((item, i) => ({ item, i })).sort((a, b) => (a.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) - (b.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) || a.i - b.i).map(x => x.item)
     for (const item of askItems) {
       const entry = CATALOG.find(e => e.key === item.key)
-      if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N')) asks.push({ kind: 'approval', lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
+      if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N')) asks.push({ kind: 'approval', key: entry.key, lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
     }
-    s.asks = asks.slice(0, 4)
+    s.asks = asks.slice(0, 4).map(x => { const action = actionOf(x.key); return { ...x, action, body: clean(withStatus(x.body, action)) } })
 
     // Executive summary columns. Wins and watch items avoid numbers already in the KPI strip.
     const kpiAreas = new Set(s.kpis.map(k => k.area))
@@ -301,9 +310,9 @@
       // the takeaway needs no examples either.
       threats: (a && a.truePositives > 0) || m.threats ? `${a && a.truePositives ? `The SOC classified ${plural(a.truePositives, 'alert', 'alerts')} as ${a.truePositives === 1 ? 'a true positive' : 'true positives'} ${s.periodPhrase}.` : 'Alerts were classified as true positives by the SOC.'}${threatLine ? ` ${sentence(threatLine)}.` : ''}${impactLine ? ` ${sentence(impactLine)}.` : ''}` : '',
       posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced.${belowCount ? ` ${sentence(word(belowCount))} ${belowCount === 1 ? 'reads' : 'read'} below the baseline${s.licensed.length ? `, ${s.driftControls.length ? `${word(s.driftControls.length)} first on the roadmap and ` : ''}${word(s.licensed.length)} waiting on licensing` : ` and ${belowCount === 1 ? 'is' : 'are'} first on the roadmap`}.` : ' None reads below the baseline.'}` : 'Control readings are completed in the review.',
-      roadmap: 'Every control below enforced is sequenced into three horizons by risk and by what each needs from your team.',
+      roadmap: 'Every control below enforced is proposed in one of three horizons, by risk and by what each needs from your team.',
       methods: pw ? `Microsoft retires text message and voice sign-in on ${RETIREMENT.label}. ${plural(pw.retiring, 'user still relies', 'users still rely')} on it.` : '',
-      decisions: s.asks.length ? `${sentence(word(s.asks.length))} ${s.asks.length === 1 ? 'item needs' : 'items need'} approval or access from your team to keep the roadmap on schedule.` : 'No approvals or access are needed before the next review.',
+      decisions: s.asks.length ? `${sentence(word(s.asks.length))} ${s.asks.length === 1 ? 'item needs' : 'items need'} approval or access from your team to move the roadmap forward.` : 'No approvals or access are needed before the next review.',
       // The grounding slides added Oct 14, 2026: measured outcomes by pillar and the priority workstreams.
       pillars: (() => { const n = s.matrix.filter(r => r.foundational.measured && r.foundational.enforced === r.foundational.measured).length; return n ? `${sentence(word(n))} of five pillars ${n === 1 ? 'has' : 'have'} every measured foundational control enforced. Each statement is earned by the evidence collected ${s.readShort}.` : `Each statement is earned by the evidence collected ${s.readShort}. The pillars that read lower are sequenced on the roadmap.` })(),
       priorities: m.priorities.length ? `${sentence(word(m.priorities.length))} ${m.priorities.length === 1 ? 'workstream' : 'workstreams'} sequenced from the collected evidence, ${m.priorities.length > 3 ? 'the first three' : 'each'} with the action and the outcome we verify at the next review.` : ''

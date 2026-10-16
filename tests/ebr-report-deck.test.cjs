@@ -618,3 +618,12 @@ test('the time to close table shows every figure of the fixed cohort, with ackno
   assert.ok(noteText.includes('for every high severity alert created in the period and closed by collection') && !/closed in the period/.test(noteText), noteText)
   assert.ok(!/Medians under 20 minutes are not presented/.test(noteText))
 })
+test('the deck words planned work as a recommendation: the gaps panel, the roadmap notes and the MFA outcome strip', async () => {
+  const { slides, notes } = await read(deck('balanced').out)
+  const all = [...slides, ...notes].join(' ').replace(/ /g, ' ')
+  assert.ok(all.includes('Below the baseline at collection. Atmosera recommends closing each gap first.'), 'the gaps panel recommends, never schedules')
+  assert.ok(all.includes('Atmosera recommends staging each enforcement in an audit or report-only mode where the control supports one, reviewing it with your team, then turning it on.'))
+  assert.ok(all.includes('Every affected user registered on a replacement method before February 1, 2027, the fallback tested, and no rise in failed sign-ins after enforcement.'), 'the outcome strip carries measurable criteria')
+  assert.ok(all.includes('confirms each affected user holds a replacement method'))
+  assert.ok(!/schedules each fix|non-event|No blocked sign-ins|no sign-in is blocked|Every enforcement is staged|Scoped and sequenced/i.test(all), all.match(/.{0,50}(schedules each fix|non-event|blocked sign-ins|sign-in is blocked|Every enforcement is staged|Scoped and sequenced).{0,50}/i)?.[0])
+})

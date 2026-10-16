@@ -300,3 +300,57 @@ test('MFA at sign-in and MFA at the admin portals below E together read as one g
   p.results['IA.8-CA'][0].PolicyState = 'Enforced'
   assert.deepEqual(story(p).s.drift.filter(c => /^Multifactor authentication/.test(c.label)).map(c => c.id), ['IA.1-ADMINPORTAL'])
 })
+test('no roadmap evidence, ask or takeaway says scheduled, approved, completed, implemented or verified unless the matching Actions record is present', () => {
+  const STATUS = /\b(scheduled|approved|completed|implemented|verified)\b/i
+  // Every control below E, so every catalog item and ask is on the roadmap, beside the pack as collected.
+  const everything = context => { const p = quarterPack(); p.context = context; const m = build(p); for (const c of m.controls) Object.assign(c, { mark: 'N', pct: 10, good: 1, total: 10, measured: true, na: false, value: '1 of 10', boolean: false }); return buildStory(m, p) }
+  const collected = context => { const p = quarterPack(); p.context = context; return buildStory(build(p), p) }
+  const strings = s => [
+    // carries: the string that names the reviewed status when the item has a record. Ask titles and short labels never do.
+    ...s.roadmap.flatMap(h => h.items.map(i => ({ key: i.key, action: i.action, carries: true, text: i.evidence }))),
+    ...s.asks.flatMap(a => [[a.title, false], [a.body, true], [a.short, false]].map(([text, carries]) => ({ key: a.key, action: a.action, carries, text }))),
+    ...Object.entries(s.takeaways).map(([key, text]) => ({ key: `takeaway:${key}`, action: null, carries: false, text })),
+    { key: 'drift', action: s.roadmap[0].items.find(i => i.key === 'drift')?.action || null, carries: true, text: s.driftNote }
+  ]
+  // Without a context record nothing says an item is scheduled, approved or complete, and the rewritten lines read as recommendations.
+  for (const s of [collected(null), everything(null)]) {
+    for (const x of strings(s)) assert.ok(!STATUS.test(x.text), `${x.key}: ${x.text}`)
+    assert.ok(!/schedules each fix|scoped and sequenced|on schedule|non-event/i.test(JSON.stringify(s)))
+  }
+  const plain = collected(null)
+  assert.equal(plain.roadmap[0].items.find(i => i.key === 'critical').evidence, '7 critical exploitable findings. Atmosera recommends validating the affected workloads and agreeing remediation or compensating controls with the owners inside the patch cadence.')
+  assert.equal(plain.driftNote, 'Below the baseline at collection. Atmosera recommends closing each gap first.')
+  assert.equal(plain.takeaways.roadmap, 'Every control below enforced is proposed in one of three horizons, by risk and by what each needs from your team.')
+  assert.match(plain.takeaways.decisions, /approval or access from your team to move the roadmap forward\.$/)
+  // With a record for every item on the roadmap and every ask, each one carries its own status and nothing else does.
+  const keys = [...new Set(strings(everything(null)).map(x => x.key).filter(k => !k.startsWith('takeaway:') && k !== 'other'))]
+  assert.ok(keys.length >= 15, keys.join(', '))
+  const record = (Key, Status) => ({ Key, Status, Owner: 'Client identity owner', TargetDate: '2026-12-15', Reference: `CHG-${Key}`, Reviewed: '2026-10-14', WindowStart: '2026-07-01', WindowEnd: '2026-09-30' })
+  for (const [Status, word] of [['Approved', 'approved'], ['Scheduled', 'scheduled'], ['Verified', 'verified']]) {
+    const delivered = Status === 'Verified' ? keys.map(k => ({ Title: k, Outcome: 'Done.', Reference: `CHG-${k}`, CompletedDate: '2026-09-15' })) : []
+    const s = everything({ Actions: keys.map(k => record(k, Status)), Delivered: delivered })
+    for (const x of strings(s)) {
+      if (x.action && x.carries) {
+        assert.ok(new RegExp(`\\b${word}\\b`, 'i').test(x.text), `${x.key} should carry ${word}: ${x.text}`)
+        assert.ok(!STATUS.test(x.text.replace(new RegExp(`\\b${word}\\b`, 'gi'), '')), `${x.key} carries another status: ${x.text}`)
+      } else assert.ok(!STATUS.test(x.text), `${x.key} carries a status it has no record for: ${x.text}`)
+    }
+  }
+  // One record changes its own item only.
+  const one = collected({ Actions: [record('critical', 'Scheduled')] })
+  const critical = one.roadmap[0].items.find(i => i.key === 'critical')
+  assert.equal(critical.evidence, '7 critical exploitable findings. Scheduled, owner Client identity owner, target Dec 15, 2026 (CHG-critical, reviewed Oct 14, 2026).')
+  assert.equal(critical.action.key, 'critical')
+  for (const x of strings(one).filter(x => x.key !== 'critical')) assert.ok(!STATUS.test(x.text), `${x.key}: ${x.text}`)
+  assert.equal(one.driftNote, 'Below the baseline at collection. Atmosera recommends closing each gap first.')
+  const drift = collected({ Actions: [record('drift', 'InProgress')] })
+  assert.equal(drift.driftNote, 'Below the baseline at collection. Fixes in progress (CHG-drift).')
+  const ask = collected({ Actions: [record('idp', 'Approved')] }).asks.find(a => a.key === 'idp')
+  assert.equal(ask.body, 'Sign-in and user risk policies for all users, with leaked credential response. Approved, owner Client identity owner, target Dec 15, 2026 (CHG-idp, reviewed Oct 14, 2026).')
+  assert.equal(ask.title, 'Approve the user-risk policy', 'the ask keeps its title, so the decisions slide still names it')
+})
+test('every roadmap item and ask key the story builds is a key the Actions record accepts', () => {
+  const { ACTION_KEYS } = require('../report/report-model.js')
+  const keys = new Set(['drift', 'critical', 'methods', 'access', ...CATALOG.map(e => e.key)])
+  assert.deepEqual([...keys].sort(), [...ACTION_KEYS].sort())
+})
