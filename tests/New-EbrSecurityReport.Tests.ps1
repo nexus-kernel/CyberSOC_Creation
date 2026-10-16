@@ -338,14 +338,16 @@ Describe 'Client and internal editions of the HTML' -Skip:(-not (Get-Command nod
     }
 }
 Describe 'Client edition without Node.js' {
-    It 'writes the internal edition only and warns that the client edition was not written' {
+    It 'writes the internal edition only, removes an earlier client edition and warns that it was not written' {
         $pack = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures/offline-pack') -Destination $pack -Recurse
+        $stale = Join-Path $pack '03-security-report.client.html'
+        'An earlier client edition' | Set-Content $stale
         Mock Get-Command { $null } -ParameterFilter { $Name -eq 'node' }
         $files = @(& $generator -SkipDeck -EvidencePath $pack -WarningVariable warned -WarningAction SilentlyContinue)
         $files.Count | Should -Be 1
         $files[0] | Should -Match '03-security-report\.html$'
-        Test-Path -LiteralPath ([IO.Path]::ChangeExtension($files[0], '.client.html')) | Should -BeFalse
+        Test-Path -LiteralPath $stale | Should -BeFalse -Because 'a client edition from an earlier run is not left behind'
         "$warned" | Should -Match 'client edition of the report was not written'
     }
 }

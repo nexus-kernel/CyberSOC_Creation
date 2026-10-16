@@ -344,6 +344,8 @@ Write-Output $destination
 # written, with a warning.
 $guidPattern = '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 $clientDestination = [IO.Path]::ChangeExtension($destination, '.client.html')
+# A client edition from an earlier run is removed first, so a run that cannot write one never leaves a stale file.
+if (Test-Path -LiteralPath $clientDestination) { Remove-Item -LiteralPath $clientDestination -Force }
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Warning 'Node.js was not found, so the client edition of the report was not written. Do not send the internal edition to the client.' }
 else {
     $dataFile = Join-Path ([IO.Path]::GetTempPath()) ('ebr-client-{0}.json' -f [guid]::NewGuid())
