@@ -201,7 +201,7 @@
     const pw = m.mfaMethods && m.mfaMethods.retiring > 0 ? m.mfaMethods : null
     s.deadlineDays = days(p.PostureReadDate, RETIREMENT.date)
     s.deadlineShort = shortDate(RETIREMENT.date)
-    if (pw) items[s.deadlineDays !== null && s.deadlineDays <= 180 ? 'now' : 'next'].push({ key: 'methods', title: 'MFA method update', evidence: `${plural(pw.retiring, 'user', 'users')} on text message or voice, ahead of ${shortDate(RETIREMENT.date)}`, controls: [], priority: prio('IA.2') })
+    if (pw) items[s.deadlineDays !== null && s.deadlineDays <= 180 ? 'now' : 'next'].push({ key: 'methods', title: 'MFA method update', evidence: `${plural(pw.retiring, 'user', 'users')} on text message or voice, ahead of ${RETIREMENT.shortText}`, controls: [], priority: prio('IA.2') })
     const mapped = new Set(s.driftControls.map(c => c.label))
     const other = []
     for (const c of m.controls.filter(c => below(c) && !mapped.has(c.label))) {
@@ -238,7 +238,7 @@
     const settled = []
     const asks = []
     const open = (key, title) => { const x = actionOf(key); if (x && SETTLED.includes(x.status)) { if (!settled.some(t => t.key === key)) settled.push({ key, title, status: statusText(x) }); return false } return true }
-    if (pw && open('methods', 'Move users off text message and voice MFA')) asks.push({ kind: 'methods', key: 'methods', lead: plural(pw.retiring, 'user', 'users'), title: 'Move users off text message and voice MFA', body: `${plural(pw.retiring, 'user needs', 'users need')} to update their MFA method before ${RETIREMENT.label}, when Microsoft retires text message and voice sign-in.`, short: `need to update their MFA method before ${shortDate(RETIREMENT.date)}` })
+    if (pw && open('methods', 'Move users off text message and voice MFA')) asks.push({ kind: 'methods', key: 'methods', lead: plural(pw.retiring, 'user', 'users'), title: 'Move users off text message and voice MFA', body: `${plural(pw.retiring, 'user', 'users')} on text message or voice, which retire ${RETIREMENT.shortText}.`, short: `on text message or voice MFA ahead of ${RETIREMENT.shortText}` })
     // Read access is asked for only where the collector was not permitted to read the evidence. Service
     // errors and packs that only need recollection are Atmosera's to resolve.
     const gap = id => (data.manifest || []).some(r => r.ResultId === id && (r.AccessGap === true || String(r.AccessGap).toLowerCase() === 'true'))
@@ -323,7 +323,7 @@
       threats: (a && a.truePositives > 0) || m.threats ? `${a && a.truePositives ? `The SOC classified ${plural(a.truePositives, 'alert', 'alerts')} as ${a.truePositives === 1 ? 'a true positive' : 'true positives'} ${s.periodPhrase}.` : 'Alerts were classified as true positives by the SOC.'}${threatLine ? ` ${sentence(threatLine)}.` : ''}${impactLine ? ` ${sentence(impactLine)}.` : ''}` : '',
       posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced.${belowCount ? ` ${sentence(word(belowCount))} ${belowCount === 1 ? 'reads' : 'read'} below the baseline${s.licensed.length ? `, ${s.driftControls.length ? `${word(s.driftControls.length)} first on the roadmap and ` : ''}${word(s.licensed.length)} waiting on licensing` : ` and ${belowCount === 1 ? 'is' : 'are'} first on the roadmap`}.` : ' None reads below the baseline.'}` : 'Control readings are completed in the review.',
       roadmap: 'Every control below enforced is proposed in one of three horizons, by risk and by what each needs from your team.',
-      methods: pw ? `Microsoft retires text message and voice sign-in on ${RETIREMENT.label}. ${plural(pw.retiring, 'user still relies', 'users still rely')} on it.` : '',
+      methods: pw ? `Microsoft retires text message and voice sign-in on ${RETIREMENT.text}. ${plural(pw.retiring, 'user', 'users')} signed in with it in the last 30 days.` : '',
       decisions: s.asks.length ? `${sentence(word(s.asks.length))} ${s.asks.length === 1 ? 'item needs' : 'items need'} approval or access from your team to move the roadmap forward.` : 'No approvals or access are needed before the next review.',
       // The grounding slides added Oct 14, 2026: measured outcomes by pillar and the priority workstreams.
       pillars: (() => { const n = s.matrix.filter(r => r.foundational.measured && r.foundational.enforced === r.foundational.measured).length; return n ? `${sentence(word(n))} of five pillars ${n === 1 ? 'has' : 'have'} every measured foundational control enforced. Each statement is earned by the evidence collected ${s.readShort}.` : `Each statement is earned by the evidence collected ${s.readShort}. The pillars that read lower are sequenced on the roadmap.` })(),

@@ -84,7 +84,7 @@ $fields = [ordered]@{
     'BKL.1' = @('Scope','Software','VulnerabilitySeverityLevel','ExploitableCves','Devices')
     'BKL.2' = @('AlertId')
     # Graph and the controls added on Oct 11, 2026. Counts and flags only; names, domains and policy titles stay in the pack.
-    'IA.5' = @('Members','MfaRegistered','MfaCapable','SsprRegistered','PasswordlessCapable','PhishingResistant','PhoneRegistered','AuthenticatorRegistered','Admins','AdminsMfaRegistered')
+    'IA.5' = @('Members','MfaRegistered','MfaCapable','SsprRegistered','PasswordlessCapable','PhishingResistant','PhoneRegistered','AuthenticatorRegistered','PhoneOnly','Admins','AdminsMfaRegistered')
     'IA.1-ADMINPORTAL' = @('UserType','Users','UsersChallenged','UsersAlwaysMfa','SignIns','MfaSignIns','FederatedMfaAtLeastOnce','FederatedWithoutMfa','NoMfaOnlyUnevaluated','NotEvaluatedSignIns')
     'IA.3-DEVICECODE' = @('Attempts','Succeeded','BlockedByCa','Users','Apps','InForce')
     'IA.11' = @('SignInRiskPolicies','SignInRiskAllUsers','UserRiskPolicies','UserRiskAllUsers','InForce','PasswordHashSync')

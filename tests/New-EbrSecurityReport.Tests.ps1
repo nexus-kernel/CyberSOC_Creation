@@ -51,6 +51,16 @@ Describe 'Offline HTML report generation' {
         $html | Should -Match '"NoMfaOnlyUnevaluated":550,"MfaSessionLinkedOnly":31'
         $html | Should -Not -Match 'secret-domain|exk123|wsfed'
     }
+    It 'embeds the IA.5 phone-only count with the registration counts and never a user identifier' {
+        $m = @(Import-Csv (Join-Path $pack '00-manifest.csv'))
+        $m += [pscustomobject]@{ ResultId = 'IA.5'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
+        '[{"Members":200,"MfaRegistered":180,"MfaCapable":178,"SsprRegistered":150,"PasswordlessCapable":30,"PhishingResistant":25,"PhoneRegistered":90,"AuthenticatorRegistered":150,"PhoneOnly":12,"Admins":5,"AdminsMfaRegistered":5,"UserPrincipalName":"private@example.test","Id":"0f0e0d0c-aaaa-bbbb-cccc-000000000001"}]' |
+            Set-Content (Join-Path $pack 'results/IA.5.json')
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html | Should -Match '"AuthenticatorRegistered":150,"PhoneOnly":12,"Admins":5'
+        $html | Should -Not -Match 'private@example.test|0f0e0d0c-aaaa'
+    }
     It 'reduces resource-level results to counts and keeps names, titles and comments out of the report' {
         $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
         $html | Should -Match '"WorkloadSubnets":2'

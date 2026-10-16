@@ -939,9 +939,30 @@ Describe 'Graph collectors' {
         $row.PhishingResistant | Should -Be 1
         $row.PhoneRegistered | Should -Be 1
         $row.AuthenticatorRegistered | Should -Be 1
+        $row.PhoneOnly | Should -Be 1
         $row.Admins | Should -Be 1
         $row.AdminsMfaRegistered | Should -Be 1
         Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like '*userRegistrationDetails?$filter=userType eq ''member''*' -and $Tenant -eq 'client' }
+    }
+
+    It 'IA.5 counts members whose only registered MFA method is a phone, as a count with no user identifiers' {
+        Mock Invoke-EbrGraphGet { , @(
+                [pscustomobject]@{ userType = 'member'; userPrincipalName = 'a@contoso.com'; id = 'u1'; methodsRegistered = @('mobilePhone') },
+                [pscustomobject]@{ userType = 'member'; userPrincipalName = 'b@contoso.com'; id = 'u2'; methodsRegistered = @('officePhone', 'email', 'securityQuestion') },
+                [pscustomobject]@{ userType = 'member'; userPrincipalName = 'c@contoso.com'; id = 'u3'; methodsRegistered = @('alternateMobilePhone', 'mobilePhone', 'appPassword') },
+                [pscustomobject]@{ userType = 'member'; userPrincipalName = 'd@contoso.com'; id = 'u4'; methodsRegistered = @('mobilePhone', 'microsoftAuthenticatorPush') },
+                [pscustomobject]@{ userType = 'member'; userPrincipalName = 'e@contoso.com'; id = 'u5'; methodsRegistered = @('mobilePhone', 'softwareOneTimePasscode') },
+                [pscustomobject]@{ userType = 'member'; userPrincipalName = 'f@contoso.com'; id = 'u6'; methodsRegistered = @('mobilePhone', 'passKeyDeviceBound') },
+                [pscustomobject]@{ userType = 'member'; userPrincipalName = 'g@contoso.com'; id = 'u7'; methodsRegistered = @('email') },
+                [pscustomobject]@{ userType = 'member'; userPrincipalName = 'h@contoso.com'; id = 'u8'; methodsRegistered = $null }) }
+        $r = Invoke-EbrGraphCollector -Ctx (New-GraphCtx) -Item (New-GraphItem 'IA.5')
+        $r.Status | Should -Be 'OK'
+        @($r.Rows).Count | Should -Be 1
+        $r.Rows[0].Members | Should -Be 8
+        $r.Rows[0].PhoneRegistered | Should -Be 6
+        $r.Rows[0].PhoneOnly | Should -Be 3
+        $r.Columns | Should -Contain 'PhoneOnly'
+        ($r.Rows | ConvertTo-Json -Depth 5) | Should -Not -Match 'contoso|"u\d"'
     }
 
     It 'IA.6 separates standing, activated and eligible privileged assignments and ignores other roles' {

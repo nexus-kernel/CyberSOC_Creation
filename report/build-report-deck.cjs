@@ -26,7 +26,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { createDeck, writeDeck, lines, HEX, X0, CW } = require('./deck-common.cjs')
-const { build, fmt, clean, pctText, plural } = require('./report-model.js')
+const { build, fmt, clean, pctText, plural, RETIREMENT } = require('./report-model.js')
 const { buildStory, shortName } = require('./report-story.js')
 
 const [dataFile, outFile] = process.argv.slice(2)
@@ -569,29 +569,29 @@ async function main() {
     const lw = 6.1
     if (st.deadlineDays !== null && st.deadlineDays > 0) {
       text(s, fmt(st.deadlineDays), { x: X0 - 0.05, y: TOP - 0.15, w: 2.6, h: 1.25, fontSize: 80, bold: true, color: C.accent2, valign: 'middle', objectName: 'Countdown' })
-      text(s, [{ text: `days to move ${plural(methods.retiring, 'user', 'users')}`, options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: `From ${st.readShort} to ${st.deadlineShort}, when text message and voice sign-in retire`, options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 2 } }], { x: X0 + 2.6, y: TOP + 0.3, w: lw - 2.6, h: 0.9, objectName: 'Countdown label' })
+      text(s, [{ text: `days to move ${plural(methods.retiring, 'user', 'users')}`, options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: `From ${st.readShort} to ${st.deadlineShort}, when text message and voice sign-in retire for most users, and ${RETIREMENT.later.short} for ${RETIREMENT.later.who}`, options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 2 } }], { x: X0 + 2.6, y: TOP + 0.1, w: lw - 2.6, h: 1.2, objectName: 'Countdown label' })
     } else text(s, [{ text: fmt(methods.retiring), options: { fontSize: 60, bold: true, color: C.accent2, breakLine: true } }, { text: 'users still sign in with text message or voice', options: { fontSize: 16, bold: true, color: C.text2 } }], { x: X0, y: TOP, w: lw, h: 1.3, objectName: 'Retiring users' })
     rule(s, X0, TOP + 1.4, lw, C.text2, 1, 'Methods rule')
     eyebrow(s, 'Users by sign-in method, last 30 days', X0, TOP + 1.55, lw, C.text2, 'Methods')
-    const bars = [['Authenticator or OTP', methods.authenticator, C.accent2], ['Text message or voice', methods.retiring, C.accent4], ['Phishing-resistant', methods.resistant, C.accent3]]
+    const bars = [['Authenticator app or OTP token', methods.authenticator, C.accent2], ['Text message or voice', methods.retiring, C.accent4], ['Phishing-resistant', methods.resistant, C.accent3]]
     const maxM = Math.max(1, ...bars.map(([, v]) => v))
     bars.forEach(([l, v, c], i) => {
       const y = TOP + 2.05 + i * 0.5
-      text(s, l, { x: X0, y, w: 2.3, h: 0.35, fontSize: 13, bold: i === 1, color: C.text1, valign: 'middle', objectName: `Method ${i + 1} label` })
-      if (v > 0) s.addShape(pres.shapes.RECTANGLE, { x: X0 + 2.35, y: y + 0.07, w: Math.max(0.05, 3.0 * v / maxM), h: 0.22, fill: { color: c }, line: { color: c, width: 0 }, objectName: `Method ${i + 1} bar` })
+      text(s, l, { x: X0, y, w: 2.9, h: 0.35, fontSize: 13, bold: i === 1, color: C.text1, valign: 'middle', objectName: `Method ${i + 1} label` })
+      if (v > 0) s.addShape(pres.shapes.RECTANGLE, { x: X0 + 2.95, y: y + 0.07, w: Math.max(0.05, 2.35 * v / maxM), h: 0.22, fill: { color: c }, line: { color: c, width: 0 }, objectName: `Method ${i + 1} bar` })
       text(s, fmt(v), { x: X0 + lw - 0.75, y, w: 0.75, h: 0.35, fontSize: 14, bold: true, color: C.text2, align: 'right', valign: 'middle', objectName: `Method ${i + 1} value` })
     })
-    text(s, methods.authenticator > 0 ? `${plural(methods.authenticator, 'user already signs', 'users already sign')} in with Microsoft Authenticator, the method the ${plural(methods.retiring, 'affected user moves', 'affected users move')} to.` : `The ${plural(methods.retiring, 'affected user moves', 'affected users move')} to Microsoft Authenticator or a phishing-resistant method.`, { x: X0, y: TOP + 3.65, w: lw, h: 0.5, fontSize: 12, color: C.accent6, objectName: 'Methods caption' })
-    const steps = [['Notify the affected users', `Each of the ${plural(methods.retiring, 'user', 'users')} on text message or voice is told what to change and by when.`], ['Register a stronger method', 'Microsoft Authenticator, or a phishing-resistant method where the device allows it, in guided waves.'], ['Remove the retiring methods', 'Text message and voice leave the allowed methods under change control, group by group.'], ['Confirm readiness early', `A final sweep before ${methods.deadline} confirms each affected user holds a replacement method.`]]
+    text(s, methods.reliance, { x: X0, y: TOP + 3.65, w: lw, h: 0.5, fontSize: 12, color: C.accent6, objectName: 'Methods caption' })
+    const steps = methods.steps
     const sx = X0 + lw + 0.5, sw = CW - lw - 0.5
     steps.forEach(([head, body], i) => {
       const y = TOP + i * 1.08
       chip(s, String(i + 1), sx, y + 0.05, 0.5, 0.5, C.text2, 16, `Step ${i + 1} number`)
-      text(s, [{ text: head, options: { fontSize: 17, bold: true, color: C.text2, breakLine: true } }, { text: body, options: { fontSize: 13, color: C.text1, paraSpaceBefore: 2 } }], { x: sx + 0.7, y, w: sw - 0.7, h: 0.95, objectName: `Step ${i + 1}` })
+      text(s, [{ text: head, options: { fontSize: 17, bold: true, color: C.text2, breakLine: true } }, { text: body, options: { fontSize: 13, color: C.text1, paraSpaceBefore: 2 } }], { x: sx + 0.7, y, w: sw - 0.7, h: 1.0, objectName: `Step ${i + 1}` })
     })
     card(s, X0, BOTTOM - 0.7, CW, 0.7, 'Outcome strip')
     text(s, [{ text: 'OUTCOME   ', options: { bold: true, color: C.text2, charSpacing: 1.5, fontSize: 11 } }, { text: methods.outcome, options: { color: C.text1, fontSize: 13 } }], { x: X0 + 0.25, y: BOTTOM - 0.7, w: CW - 0.5, h: 0.7, valign: 'middle', objectName: 'Outcome' })
-    s.addNotes(notesOf([`${plural(methods.retiring, 'user', 'users')} signed in with text message or voice over the last 30 days. Microsoft retires these methods on ${methods.deadline}, so each of these users updates their MFA method before then.`, methods.authenticator ? `${plural(methods.authenticator, 'user already uses', 'users already use')} Microsoft Authenticator, the method the affected users move to.` : '', 'The plan notifies the affected users, registers each one on Microsoft Authenticator or a phishing-resistant method in guided waves, removes text message and voice from the allowed methods under change control, and confirms readiness with a final sweep before the deadline.']))
+    s.addNotes(notesOf([`${plural(methods.retiring, 'user', 'users')} signed in with text message or voice over the last 30 days. Sign-in use alone does not show that a user has no other method. ${methods.reliance}`, methods.timeline, methods.authenticator ? `${plural(methods.authenticator, 'user', 'users')} signed in with the Microsoft Authenticator app or an OTP token.` : '', `The plan notifies the affected users, registers each one on a passkey in Microsoft Authenticator, Windows Hello for Business or a FIDO2 security key in guided waves, removes text message and voice from the allowed methods under change control, and confirms readiness with a final sweep before ${methods.deadline}. Microsoft Authenticator push is outside this retirement and stays supported. A telephony provider from Microsoft Security Store is kept only for a documented regulatory or operational need.`]))
   }
 
   // 8. Decisions needed
