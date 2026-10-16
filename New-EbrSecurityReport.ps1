@@ -322,6 +322,8 @@ $template = $template.Replace('__CSS__', $css).Replace('__CONTROLS__', $controls
 if (-not $OutputPath) { $OutputPath = Join-Path $pack '03-security-report.html' }
 $destination = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
 if ([IO.Path]::GetExtension($destination) -ine '.html') { throw 'OutputPath must end in .html.' }
+# OutputPath names the internal edition, so a client-looking name never holds the presenter notes and identifiers.
+if ($destination -match '(?i)\.client\.html$') { throw 'OutputPath names the internal edition and cannot end in .client.html. The client edition is written beside it with that ending.' }
 $parent = Split-Path -Parent $destination
 if (-not (Test-Path -LiteralPath $parent -PathType Container)) { [void](New-Item -ItemType Directory -Path $parent -Force) }
 

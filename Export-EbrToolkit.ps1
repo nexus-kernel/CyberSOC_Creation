@@ -68,7 +68,8 @@ Add-PackageItem 'EBR Security Evidence Collection Runbook.md' $false
 # .bin holds symlinks to package CLIs, which the decks never call.
 if (-not $SkipNodeModules) { Add-PackageItem 'node_modules' $true { $args[0] -notmatch '^node_modules/\.bin/' } }
 # The Python tests cover scripts that live outside this folder.
-if ($IncludeTests) { Add-PackageItem 'tests' $true { $args[0] -match '\.(Tests\.ps1|test\.cjs)$' } }
+# The edition tests generate both report editions from the synthetic offline fixture and its context file.
+if ($IncludeTests) { Add-PackageItem 'tests' $true { $args[0] -match '\.(Tests\.ps1|test\.cjs)$|^tests/fixtures/(offline-pack/|offline-context\.json$)' } }
 if ($IncludeDocs) { Add-PackageItem 'docs' }
 
 $collector = Get-Content -LiteralPath (Join-Path $root 'Get-EbrSecurityEvidence.ps1') -Raw

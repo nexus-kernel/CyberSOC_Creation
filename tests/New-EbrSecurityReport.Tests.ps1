@@ -329,6 +329,12 @@ Describe 'Client and internal editions of the HTML' -Skip:(-not (Get-Command nod
         Get-Content $files[0] -Raw | Should -Match 'OUT.5 could not be read'
         Get-Content $files[1] -Raw | Should -Not -Match 'OUT.5 could not be read'
     }
+    It 'refuses an -OutputPath that ends in .client.html, so the internal edition never takes the client name' {
+        $out = Join-Path $TestDrive 'out/Client-Security-Review.client.html'
+        { & $generator -SkipDeck -EvidencePath $pack -OutputPath $out } | Should -Throw '*cannot end in .client.html*'
+        { & $generator -SkipDeck -EvidencePath $pack -OutputPath ($out -replace 'client', 'CLIENT') } | Should -Throw '*cannot end in .client.html*'
+        Test-Path -LiteralPath $out | Should -BeFalse
+    }
     It 'names the client edition after -OutputPath' {
         $out = Join-Path $TestDrive 'out/Client-Security-Review.html'
         $files = @(& $generator -SkipDeck -EvidencePath $pack -OutputPath $out)
