@@ -260,8 +260,9 @@
       if (!m.impact) note('Impact determination', 'The context file carries no reviewed Impact record, so the report prints the tactic count with a request for additional investigation evidence and never a data exposure or business impact statement. Review the closing comment and ticket of each true positive, then add Impact with Confirmed, Reviewed, Reference, WindowStart and WindowEnd to the context file to print the determination.')
     }
 
-    // Response timing from one fixed cohort: every eligible high severity alert closed in the alert period (OUT.2,
-    // row High), automation closures included. The cohort never changes with the result, so two reviews compare
+    // Response timing from one fixed cohort: every eligible high severity alert created in the alert period and closed
+    // by collection (OUT.2, row High, which filters on CreatedTime and reads each alert's latest closed state),
+    // automation closures included. The cohort never changes with the result, so two reviews compare
     // like for like. A median under 20 minutes and a 90th percentile over one hour are presented with a visible note
     // and a presenter note, never replaced by another cohort or period. The minimum sample of 5 closed alerts is the
     // only rule that withholds the figures, and it does not depend on them. When automation rules closed any of the
@@ -272,7 +273,7 @@
     const timingOf = r => ({ n: count(r?.Incidents), median: num(r?.MedianCloseMin), p90: num(r?.P90CloseMin), triage: num(r?.MedianTriageMin) })
     const FLOOR_NOTE = `Under ${MEDIAN_FLOOR} minutes, covered in the review.`, CEILING_NOTE = 'Over one hour, covered in the review.'
     const highRow = timingRow('OUT.2', 'High'), fixed = timingOf(highRow)
-    const cohortLabel = `High severity alerts closed, ${m.period.label}`
+    const cohortLabel = `High severity alerts created ${m.period.label}, closed by collection`
     const timingReason = !alertsAllowed ? '' : !highRow ? `no high severity row in OUT.2 (${state('OUT.2')})` : fixed.n === null || fixed.n < TIMING_SAMPLE ? `${plural(fixed.n ?? 0, 'high severity alert', 'high severity alerts')} closed, below the minimum sample of ${TIMING_SAMPLE}` : fixed.median === null ? 'no median recorded for high severity alerts' : ''
     if (alertsAllowed && !timingReason) {
       const sample = ` Based on ${plural(fixed.n, 'closed alert', 'closed alerts')}.`
@@ -298,17 +299,22 @@
       }
     } else if (alertsAllowed) unmeasured('OUT.2', 'Response timing', timingReason)
     // The agreed response target (ResponseTargetMinutes in the reviewed context file) is time from creation to
-    // recorded close. OUT.2 holds percentiles, not per-alert times, so the share is the band the median and the 90th
-    // percentile bound: at least nine in ten, between half and nine in ten, or half or fewer. Without the field the
-    // report prints no target line.
+    // recorded close. OUT.2 counts whole minute boundaries per alert and estimates its percentiles, so no share of
+    // alerts meeting the target can be read from it. The line compares the reported median and 90th percentile with
+    // the target instead, says "about" within a minute of it, and names both limits. Without the field the report
+    // prints no target line (Oct 16, 2026).
     const target = context.ResponseTargetMinutes
     if (target !== undefined && target !== null) {
       const minutes = count(target)
-      if (minutes === null || minutes < 1) note('Response target needs review', 'The context ResponseTargetMinutes is not a whole number of minutes above zero, so the share of alerts meeting the agreed response target is omitted. Correct it before presenting, or remove it.')
+      if (minutes === null || minutes < 1) note('Response target needs review', 'The context ResponseTargetMinutes is not a whole number of minutes above zero, so the response target line is omitted. Correct it before presenting, or remove it.')
       else if (m.response) {
-        const r = m.response, within = r.p90 && r.p90.minutes <= minutes ? 'at least nine in ten' : r.median.minutes <= minutes ? (r.p90 ? 'between half and nine in ten' : 'at least half') : 'half or fewer'
-        r.target = { minutes, value: duration(minutes), band: within, sentence: `${within.charAt(0).toUpperCase()}${within.slice(1)} high severity alerts closed within the agreed ${duration(minutes)} response target.`, source: 'Response target from the reviewed context file.' }
-        presenter('Response target', `The share meeting the agreed ${duration(minutes)} target is read from the median (${r.median.value}) and the 90th percentile (${r.p90 ? r.p90.value : 'not recorded'}), so it is a band, not an exact share. It is not an SLA attainment figure.`)
+        const r = m.response
+        const against = v => Math.abs(v.minutes - minutes) <= 1 ? 'about the same as the target' : v.minutes < minutes ? 'under it' : 'over it'
+        const parts = [`the median time to close of ${r.median.value} is ${against(r.median)}`, r.p90 ? `the 90th percentile of ${r.p90.value} is ${against(r.p90)}` : ''].filter(Boolean)
+        r.target = { minutes, value: duration(minutes), median: against(r.median), p90: r.p90 ? against(r.p90) : null,
+          sentence: `Against the agreed ${duration(minutes)} response target, ${parts.join(' and ')}. Close times are recorded in whole minutes and the percentiles are estimates, so this compares the figures with the target and does not count the alerts that met it.`,
+          source: 'Response target from the reviewed context file.' }
+        presenter('Response target', `The agreed ${duration(minutes)} target is compared with the reported median and 90th percentile only. OUT.2 holds no per-alert close times, so the report gives no share of alerts that met the target and no SLA attainment figure. Have the ticket report ready if the share is asked for.`)
       }
     }
     // The audit trail of the fixed cohort, for the presenter notes only.

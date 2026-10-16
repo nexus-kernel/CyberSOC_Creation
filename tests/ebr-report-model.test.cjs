@@ -37,11 +37,12 @@ test('client-facing copy says alerts and detections, never incidents, and writes
   assert.ok(text.includes('Nov 1, 2025 to Sep 30, 2026'))
   assert.equal(span('2026-07-01', '2026-09-30'), 'Jul 1 to Sep 30, 2026')
 })
-test('response timing comes from one fixed cohort, every high severity alert closed in the period', () => {
+test('response timing comes from one fixed cohort, every high severity alert created in the period and closed by collection', () => {
   const p = pack(); alerts(p)
   const m = build(p)
   assert.equal(m.response.key, 'high-full')
-  assert.equal(m.response.cohort, 'High severity alerts closed, Nov 1, 2025 to Sep 30, 2026')
+  assert.equal(m.response.cohort, 'High severity alerts created Nov 1, 2025 to Sep 30, 2026, closed by collection')
+  assert.ok(!/closed in the (alert )?period/.test(JSON.stringify([visible(m), m.timingRationale, m.presenter])), 'OUT.2 filters on creation, so no surface says closed in the period')
   assert.deepEqual([m.response.median.value, m.response.median.note], ['20 min', 'Creation to recorded close. Based on 30 closed alerts.'])
   assert.deepEqual([m.response.p90.value, m.response.p90.note], ['45 min', 'Nine in ten alerts triaged and closed within this time. Based on 30 closed alerts.'])
   assert.deepEqual([m.response.notes, m.response.split, m.response.target, m.response.acknowledge], [[], null, null, null])
@@ -126,22 +127,32 @@ test('median time to acknowledge comes from MedianTriageMin beside time to close
   assert.deepEqual(m.timing.map(r => [r.scope, r.acknowledge.value]), [['High', '6 min'], ['All', '9 min']])
   assert.equal(m.timingRationale[0].acknowledge, '6 min')
 })
-test('the agreed response target prints the band its percentiles bound only from a valid context value', () => {
+test('the agreed response target compares the reported figures with it, never a share of alerts, and only from a valid context value', () => {
   const p = pack(); alerts(p)
-  const band = minutes => { p.context = { ResponseTargetMinutes: minutes }; return build(p) }
+  const withTarget = minutes => { p.context = { ResponseTargetMinutes: minutes }; return build(p) }
+  const LIMITS = 'Close times are recorded in whole minutes and the percentiles are estimates, so this compares the figures with the target and does not count the alerts that met it.'
   assert.equal(build(p).response.target, null, 'no target line without the field')
-  assert.deepEqual([band(60).response.target.band, band(60).response.target.sentence], ['at least nine in ten', 'At least nine in ten high severity alerts closed within the agreed 1 hr response target.'])
-  assert.equal(band(30).response.target.band, 'between half and nine in ten')
-  assert.equal(band(15).response.target.band, 'half or fewer')
-  assert.ok(band(30).presenter.some(n => n.title === 'Response target' && /not an exact share\. It is not an SLA attainment figure\./.test(n.text)))
+  assert.equal(withTarget(30).response.target.sentence, `Against the agreed 30 min response target, the median time to close of 20 min is under it and the 90th percentile of 45 min is over it. ${LIMITS}`)
+  assert.deepEqual([withTarget(120).response.target.median, withTarget(120).response.target.p90], ['under it', 'under it'])
+  assert.deepEqual([withTarget(10).response.target.median, withTarget(10).response.target.p90], ['over it', 'over it'])
+  // Minute boundaries: an alert closed 60 minutes and 30 seconds after creation records 60, so a figure within a
+  // minute of the target is never read as meeting it.
+  p.results['OUT.2'][1].MedianCloseMin = 60; p.results['OUT.2'][1].P90CloseMin = 60
+  let m = withTarget(60)
+  assert.deepEqual([m.response.target.median, m.response.target.p90], ['about the same as the target', 'about the same as the target'])
+  assert.deepEqual([withTarget(59).response.target.median, withTarget(61).response.target.p90], ['about the same as the target', 'about the same as the target'])
+  assert.deepEqual([withTarget(62).response.target.median, withTarget(58).response.target.p90], ['under it', 'over it'])
+  m = withTarget(60)
+  assert.ok(!/nine in ten|at least|half|share|within the agreed/i.test(m.response.target.sentence), 'no attainment share is claimed')
+  assert.ok(m.presenter.some(n => n.title === 'Response target' && /no share of alerts that met the target and no SLA attainment figure/.test(n.text)))
   for (const bad of [0, -5, 12.5, 'soon', {}]) {
-    const m = band(bad)
-    assert.equal(m.response.target, null, String(bad))
-    assert.ok(m.review.some(n => n.title === 'Response target needs review'), String(bad))
+    const bm = withTarget(bad)
+    assert.equal(bm.response.target, null, String(bad))
+    assert.ok(bm.review.some(n => n.title === 'Response target needs review'), String(bad))
   }
-  assert.ok(!band(null).review.some(n => n.title === 'Response target needs review'), 'a null field from the example file is silent')
+  assert.ok(!withTarget(null).review.some(n => n.title === 'Response target needs review'), 'a null field from the example file is silent')
 })
-test('the operations page shows the fixed cohort with acknowledge, the labelled automation rows, the target band, and the presenter cohort table', () => {
+test('the operations page shows the fixed cohort with acknowledge, the labelled automation rows, the target comparison, and the presenter cohort table', () => {
   const p = pack(); alerts(p)
   p.results['OUT.2'][1] = { Scope: 'High', Incidents: 30, AutoClosed: 20, MedianTriageMin: 2, MedianCloseMin: 7, P90CloseMin: 95 }
   p.results['OUT.2-ANALYST'][1] = { Scope: 'High', Incidents: 10, AutoClosed: 0, MedianTriageMin: 12, MedianCloseMin: 45, P90CloseMin: 400 }
@@ -153,7 +164,8 @@ test('the operations page shows the fixed cohort with acknowledge, the labelled 
   const rowsOf = h => [...h.match(/<div class="timing">[\s\S]*?<\/table>/)[0].matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map(r => r[1].replace(/<[^>]+>/g, '|').replace(/\|+/g, '|').replace(/^\||\|$/g, ''))
   assert.deepEqual(rowsOf(html), ['Alerts|Closed|Median to acknowledge|Median to close|90th percentile close', 'All high severity alerts|30|2 min|7 min|1.6 hr', 'Analyst-handled|10|12 min|45 min|6.7 hr', 'Closed by automation rules|20|Not collected|Not collected|Not collected'])
   assert.ok(html.includes('Median under 20 minutes, covered in the review. 90th percentile over one hour, covered in the review.'))
-  assert.ok(html.includes('Between half and nine in ten high severity alerts closed within the agreed 1 hr response target.'))
+  assert.ok(html.includes('Against the agreed 1 hr response target, the median time to close of 7 min is under it and the 90th percentile of 1.6 hr is over it.'))
+  assert.ok(html.includes('<caption>High severity alerts created Nov 1, 2025 to Sep 30, 2026, closed by collection</caption>'))
   assert.ok(html.includes('<span class="tile-value">7 min</span><h3>Median time to close, high severity alerts</h3>'), 'the tile presents the sub-floor median')
   assert.ok(review.includes('<h3>Response timing cohort</h3>') && !/Candidates are tried in order/.test(review))
   assert.ok(!/Response timing cohort|presentation floor/.test(html), 'the cohort audit stays in the presenter notes')

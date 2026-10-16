@@ -614,6 +614,7 @@ test('the time to close table shows every figure of the fixed cohort, with ackno
   const notes = await zip.file(`ppt/notesSlides/notesSlide${names[index].match(/(\d+)\.xml$/)[1]}.xml`)?.async('string')
   const noteText = (notes.match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => t.slice(5, -6)).join(' ')
   assert.ok(noteText.includes('Of the high severity alerts, 12 were closed by automation rules. Analyst-handled: median 45 min, 90th percentile 4 hr.'), noteText)
-  assert.ok(noteText.includes('Between half and nine in ten high severity alerts closed within the agreed 1 hr response target.'), noteText)
+  assert.ok(noteText.includes('Against the agreed 1 hr response target, the median time to close of 7 min is under it and the 90th percentile of 1.6 hr is over it.'), noteText)
+  assert.ok(noteText.includes('for every high severity alert created in the period and closed by collection') && !/closed in the period/.test(noteText), noteText)
   assert.ok(!/Medians under 20 minutes are not presented/.test(noteText))
 })

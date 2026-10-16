@@ -196,7 +196,7 @@ async function main() {
     } else text(s, 'Monthly volume is confirmed in the review.', { x: q.x, y: q.y, w: qw, h: 0.4, fontSize: 13, color: C.accent6, objectName: 'Monthly alerts empty' })
     // Time to acknowledge and close by severity, every figure shown. A median under 20 minutes or a 90th percentile
     // over one hour carries the uniform caption note. The analyst-handled and automation-closed high severity rows,
-    // and the agreed target band, go to the speaker notes, as the HTML operations page shows them.
+    // and the agreed target comparison, go to the speaker notes, as the HTML operations page shows them.
     q = quad(1, 'Time to close, by severity')
     if (m.timing && m.timing.length) {
       const head = ['Severity', 'Closed', 'Median to acknowledge', 'Median to close', '90% closed within'].map((t, i) => ({ text: t, options: { fontSize: 11, color: HEX.accent6, align: i ? 'right' : 'left', valign: 'bottom', border: border(0.75) } }))
@@ -249,7 +249,7 @@ async function main() {
       m.ticketed ? 'An alert is a Sentinel record that opened a ticket with the managed security service. Informational severity is excluded, and detections are the records correlated into those alerts.' : 'Detections from Sentinel, Defender for Cloud and the Defender services are correlated into alerts.',
       m.alerts ? `Closed alerts: ${fmt(m.alerts.benign)} benign positive, ${fmt(m.alerts.falsePositives)} false positive, ${fmt(m.alerts.truePositives)} true positive, ${fmt(m.alerts.unclassified)} unclassified.` : '',
       m.alerts && m.alerts.open > 0 ? (m.alerts.openSplit ? `Of the alerts open at collection, ${m.alerts.openSplit.phrase}. Evidence ${m.alerts.openSplit.source}` : 'The remaining alerts are referred to your team for action or confirmation under the agreed notification process, or are still under investigation.') : '',
-      'Response times run from alert creation to recorded close, for every high severity alert closed in the period. Every median and 90th percentile is shown, and one under 20 minutes or over one hour is covered in the review.',
+      'Response times run from alert creation to recorded close, for every high severity alert created in the period and closed by collection. Every median and 90th percentile is shown, and one under 20 minutes or over one hour is covered in the review.',
       m.response && m.response.split ? `Of the high severity alerts, ${fmt(m.response.split.automation.n)} were closed by automation rules.${m.response.split.analyst && m.response.split.analyst.median ? ` Analyst-handled: median ${m.response.split.analyst.median.value}${m.response.split.analyst.p90 ? `, 90th percentile ${m.response.split.analyst.p90.value}` : ''}.` : ''}` : '',
       m.response && m.response.target ? m.response.target.sentence : ''
     ]))

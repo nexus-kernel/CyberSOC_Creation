@@ -101,7 +101,8 @@
     s.periodPhrase = s.quarter ? 'this quarter' : m.period.valid ? `from ${m.period.label}` : 'in the period'
     s.readShort = shortDate(p.PostureReadDate) || m.readDate
 
-    // Response speed from the model's fixed cohort, every high severity alert closed in the period, so the KPI never
+    // Response speed from the model's fixed cohort, every high severity alert created in the period and closed by
+    // collection, so the KPI never
     // switches cohort or measure with the result. A median under 20 minutes or a 90th percentile over one hour keeps
     // its note. The 90th percentile is creation to recorded close, so it reads as nine in ten alerts triaged and
     // closed, as the HTML tile words it, never as investigated or resolved (Oct 16, 2026).
