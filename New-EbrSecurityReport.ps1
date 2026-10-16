@@ -307,11 +307,63 @@ $data = [ordered]@{
 }
 # The client edition, for sending to the client, embeds only what its pages read. It leaves out what only the
 # presenter notes read: the evidence file notes, the manifest row counts behind the collection register, the context
-# TenantId, and the parameters the model does not read (the access tenant, warnings and API diagnostics). Subscription
-# IDs become their count. Each workspace keeps its name and retention, and its CustomerId or ResourceId becomes a
-# placeholder that P0.1-BY-WORKSPACE carries too, so the per-workspace checks pair the same rows. Every GUID left in
-# the data, such as one inside a default workspace name or a context Reference, becomes the same [id N] placeholder
-# wherever it appears, so names still match across results. Evidence IDs and read dates stay in the source lines.
+# TenantId, context records the model is certain to omit, the parameters the model does not read (the access tenant,
+# warnings and API diagnostics), the results and fields listed below, and every result field whose name the report
+# code never reads. Subscription IDs become their count. Each workspace keeps its name and retention, and its
+# CustomerId or ResourceId becomes a placeholder. Every GUID left in the data, such as one inside a default workspace
+# name or a context Reference, becomes the same [id N] placeholder wherever it appears, so names still match across
+# results. Evidence IDs and read dates stay in the source lines.
+# Results no client page reads: P0.1 and the trailing three month timings are not read, and P0.1-BY-WORKSPACE, EW.1-EDR,
+# DR.12 and IA.14 feed presenter notes only. Fields listed beside a result feed presenter notes only: the XDR count, the
+# anonymously readable containers and unread accounts, members covered only by session inference, the federation
+# provider and its MFA behaviour, and the identities a location policy excludes.
+$clientOmit = @{
+    'P0.1' = '*'; 'P0.1-BY-WORKSPACE' = '*'; 'OUT.2-RECENT' = '*'; 'OUT.2-RECENT-ANALYST' = '*'; 'DP.5' = '*'; 'BKL.2' = '*'
+    'POS.6-CATEGORIES' = '*'; 'OUT.7' = '*'; 'NB.2' = '*'; 'IA.8' = '*'; 'EW.1-EDR' = '*'; 'DR.12' = '*'; 'IA.14' = '*'
+    'P0.1-XDRDUP' = @('XdrIncidents')
+    'DP.1-CONTAINERS' = @('Accounts', 'AccountsUnread', 'ExposedContainers', 'AccountsExposed')
+    'IA.1' = @('MfaSessionLinkedOnly')
+    'IA.1-FEDERATION' = @('Provider', 'MfaBehavior')
+    'IA.8-CA' = @('ExcludedIdentities', 'Control')
+    'OUT.3' = @('TruePositive', 'FalsePositive')
+    'OUT.6' = @('ProductName')
+}
+# A context record the model is certain to omit, by the checks report-model.js applies that do not depend on the
+# evidence, is left out of the client edition. A record the model may still use is kept.
+# Values are read as the embedded JSON writes them, since ConvertFrom-Json turns a timestamp into a DateTime.
+function Get-EbrJsonText($Value) { if ($null -eq $Value) { '' } elseif ($Value -is [string]) { $Value } else { (ConvertTo-Json -InputObject $Value -Compress).Trim('"') } }
+function Test-EbrDay($Value) { $s = Get-EbrJsonText $Value; $d = [datetime]::MinValue; $s -match '^\d{4}-\d{2}-\d{2}$' -and [datetime]::TryParseExact($s, 'yyyy-MM-dd', [cultureinfo]::InvariantCulture, 'None', [ref]$d) }
+function Get-EbrIsoDay($Value) { $s = Get-EbrJsonText $Value; if ($s.Length -gt 10) { $s.Substring(0, 10) } else { $s } }
+function Select-EbrClientContext($Context, $Parameters) {
+    if ($null -eq $Context) { return $null }
+    $c = $Context | Select-Object -Property * -ExcludeProperty TenantId
+    $start = Get-EbrJsonText $Parameters.WindowStart; $end = Get-EbrJsonText $Parameters.WindowEnd; $read = Get-EbrIsoDay $Parameters.PostureReadDate
+    $window = (Test-EbrDay $start) -and (Test-EbrDay $end) -and [string]::CompareOrdinal($start, $end) -le 0
+    $blank = { param($v) [string]::IsNullOrWhiteSpace([string]$v) }
+    # A record bound to another alert period, or missing its reference or dates, is omitted.
+    $outOfPeriod = { param($r) (& $blank $r.Reference) -or -not (Test-EbrDay (Get-EbrIsoDay $r.Reviewed)) -or -not (Test-EbrDay (Get-EbrIsoDay $r.WindowStart)) -or -not (Test-EbrDay (Get-EbrIsoDay $r.WindowEnd)) -or -not $window -or (Get-EbrIsoDay $r.WindowStart) -cne $start -or (Get-EbrIsoDay $r.WindowEnd) -cne $end }
+    if ($null -ne $c.ServiceStartDate -and -not ((Test-EbrDay $c.ServiceStartDate) -and (Test-EbrDay $Parameters.PostureReadDate) -and [string]::CompareOrdinal((Get-EbrJsonText $c.ServiceStartDate), (Get-EbrJsonText $Parameters.PostureReadDate)) -le 0)) { $c.ServiceStartDate = $null }
+    if ($null -ne $c.Delivered) {
+        $c.Delivered = @(@($c.Delivered) | Where-Object {
+                $_ -and -not (& $blank $_.Title) -and -not (& $blank $_.Outcome) -and -not (& $blank $_.Reference) -and (Test-EbrDay $_.CompletedDate) -and $window -and
+                [string]::CompareOrdinal((Get-EbrJsonText $_.CompletedDate), $start) -ge 0 -and [string]::CompareOrdinal((Get-EbrJsonText $_.CompletedDate), $end) -le 0 })
+    }
+    if ($null -ne $c.Actions) {
+        $keys = @('drift', 'critical', 'methods', 'access', 'idp', 'phish', 'consent', 'workload', 'logging', 'kvrbac', 'diskenc', 'containers', 'vulnassess', 'segment', 'windows', 'backup', 'vmplatform', 'pim', 'allowlist', 'sharing', 'mdi')
+        $statuses = @('Proposed', 'PendingValidation', 'AwaitingApproval', 'Approved', 'Scheduled', 'InProgress', 'Verified')
+        $c.Actions = @(@($c.Actions) | Where-Object {
+                $target = if ($null -eq $_.TargetDate -or [string]$_.TargetDate -eq '') { $null } else { Get-EbrIsoDay $_.TargetDate }
+                # The model reads the key after its copy normalization, which can only remove characters that are not letters.
+                $_ -and (([string]$_.Key) -creplace '[^A-Za-z]', '') -cin $keys -and [string]$_.Status -cin $statuses -and -not (& $outOfPeriod $_) -and
+                (Test-EbrDay $read) -and [string]::CompareOrdinal((Get-EbrIsoDay $_.Reviewed), $read) -ge 0 -and
+                ($null -eq $target -or (Test-EbrDay $target)) -and -not ([string]$_.Status -ceq 'Scheduled' -and $null -eq $target) })
+    }
+    foreach ($name in 'Impact', 'OpenAlertNote') {
+        $r = $c.$name
+        if ($null -ne $r -and ($r -isnot [pscustomobject] -or (& $outOfPeriod $r) -or [string]::CompareOrdinal((Get-EbrIsoDay $r.Reviewed), $end) -lt 0)) { $c.$name = $null }
+    }
+    $c
+}
 function ConvertTo-EbrClientData($Data) {
     $p = $Data.parameters
     $keys = @{}
@@ -325,13 +377,15 @@ function ConvertTo-EbrClientData($Data) {
     $subscriptions = @(@($p.Subscriptions) | Where-Object { $null -ne $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() } | Sort-Object -Unique).Count
     $defender = [string]$p.DefenderApi
     $results = [ordered]@{}
-    foreach ($id in $Data.results.Keys) { $results[$id] = $Data.results[$id] }
-    $results['P0.1-BY-WORKSPACE'] = @(foreach ($r in $Data.results['P0.1-BY-WORKSPACE']) {
-            $o = [ordered]@{}
-            foreach ($prop in $r.PSObject.Properties) { $o[$prop.Name] = $prop.Value }
-            if ($o['WorkspaceId']) { $o['WorkspaceId'] = & $placeholder $o['WorkspaceId'] 'workspace' }
-            [pscustomobject]$o
-        })
+    foreach ($id in $Data.results.Keys) {
+        $omit = $clientOmit[$id]
+        if ($omit -eq '*') { continue }
+        $results[$id] = @(foreach ($r in @($Data.results[$id])) {
+                $o = [ordered]@{}
+                foreach ($prop in $r.PSObject.Properties) { if ($prop.Name -cnotin $omit -and $codeTokens.Contains($prop.Name)) { $o[$prop.Name] = $prop.Value } }
+                [pscustomobject]$o
+            })
+    }
     [ordered]@{
         version = $Data.version
         depth = $Data.depth
@@ -347,10 +401,11 @@ function ConvertTo-EbrClientData($Data) {
         manifest = @($Data.manifest | Select-Object ResultId, Status, ReadTimeUtc, NotOnboarded, AccessGap)
         results = $results
         issues = @()
-        context = $(if ($null -ne $Data.context) { $Data.context | Select-Object -Property * -ExcludeProperty TenantId } else { $null })
+        context = Select-EbrClientContext $Data.context $p
     }
 }
-$guidPattern = '(?i)(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])'
+# Any GUID-shaped run, even inside a longer run of hexadecimal characters, so a name such as a<GUID>f is masked too.
+$guidPattern = '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 function ConvertTo-EbrEmbeddedJson($InputObject, [switch]$MaskGuids) {
     $text = ConvertTo-Json -InputObject $InputObject -Depth 15 -Compress
     if ($MaskGuids) {
@@ -361,6 +416,11 @@ function ConvertTo-EbrEmbeddedJson($InputObject, [switch]$MaskGuids) {
     # Escape HTML-sensitive characters even inside application/json script elements.
     $text = $text.Replace('&', '\u0026').Replace('<', '\u003c').Replace('>', '\u003e')
     $text.Replace([string][char]0x2028, '\u2028').Replace([string][char]0x2029, '\u2029')
+}
+# Result fields are read by name only, so a field whose name the report code never mentions is read by no page.
+$codeTokens = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+foreach ($file in 'report-model.js', 'report-story.js', 'report-render.js') {
+    foreach ($t in [regex]::Matches((Get-Content -LiteralPath (Join-Path $assets $file) -Raw), '[A-Za-z_][A-Za-z0-9_]*')) { [void]$codeTokens.Add($t.Value) }
 }
 $json = ConvertTo-EbrEmbeddedJson $data
 $clientJson = ConvertTo-EbrEmbeddedJson (ConvertTo-EbrClientData $data) -MaskGuids

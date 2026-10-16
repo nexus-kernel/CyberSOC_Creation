@@ -1,0 +1,17 @@
+[
+  {
+    "Account": "synthetic-private-store1",
+    "Containers": 10,
+    "PublicContainers": 2,
+    "ExposedContainers": 2,
+    "PublicContainerNames": "synthetic-private-container (Blob)",
+    "ReadStatus": "OK"
+  },
+  {
+    "Account": "synthetic-private-store2",
+    "Containers": 0,
+    "PublicContainers": 0,
+    "ExposedContainers": 0,
+    "ReadStatus": "HTTP 403"
+  }
+]

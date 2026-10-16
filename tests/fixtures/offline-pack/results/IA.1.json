@@ -1,0 +1,17 @@
+[
+  {
+    "UserType": "Member",
+    "UsersSignedIn": 200,
+    "UsersChallenged": 190,
+    "UsersAlwaysMfa": 150,
+    "UsersExternalMfa": 0,
+    "UsersEntraMfa": 190,
+    "MfaAtLeastOnce": 190,
+    "MfaEveryAppSignIn": 150,
+    "CoveredEveryAppSignIn": 160,
+    "FederatedMfaAtLeastOnce": 0,
+    "FederatedWithoutMfa": 0,
+    "NoMfaOnlyUnevaluated": 0,
+    "MfaSessionLinkedOnly": 7
+  }
+]

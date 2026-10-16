@@ -289,7 +289,7 @@ Describe 'Onboarding gaps and patch exclusions (collector 1.14.0)' {
 }
 Describe 'Client and internal editions of the HTML' {
     BeforeAll {
-        $guid = '(?i)(?<![0-9a-f])[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-f])'
+        $guid = '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
         function Get-EmbeddedData([string]$Html) { [regex]::Match($Html, '<script id="report-data" type="application/json">([\s\S]*?)</script>').Groups[1].Value | ConvertFrom-Json }
     }
     BeforeEach {
@@ -320,13 +320,31 @@ Describe 'Client and internal editions of the HTML' {
         $data = Get-EmbeddedData $client
         $data.parameters.SubscriptionCount | Should -Be 2
         $data.parameters.PSObject.Properties.Name | Should -Not -Contain 'Subscriptions'
-        @($data.parameters.Workspaces | ForEach-Object { '{0}|{1}|{2}' -f $_.Name, $_.CustomerId, $_.RetentionDays }) | Should -Be @('DefaultWorkspace-[id 1]-EUS|[workspace 1]|90', 'synthetic-workspace|[workspace 2]|365')
-        @($data.results.'P0.1-BY-WORKSPACE' | ForEach-Object { $_.WorkspaceId }) | Should -Be @('[workspace 1]', '[workspace 2]') -Because 'the reach rows keep their pairing with the workspaces'
-        @($data.results.'DR.9' | ForEach-Object { $_.Scope } | Select-Object -Unique) | Should -Be @('All workspaces', 'DefaultWorkspace-[id 1]-EUS', 'synthetic-workspace') -Because 'a GUID reads as the same placeholder in every case and every field'
-        $data.context.Impact.Reference | Should -Be 'Review [id 2]'
+        @($data.parameters.Workspaces | ForEach-Object { '{0}|{1}|{2}' -f $_.Name, $_.CustomerId, $_.RetentionDays }) | Should -Be @('DefaultWorkspace-[id 1]-EUS|[workspace 1]|90', 'law-a[id 2]f|[workspace 2]|365') -Because 'a GUID between hexadecimal characters is masked too'
+        $internal | Should -Match 'law-ae2d4c6b8-a0f1-4e3d-9c5b-7a9f1e3d5c7bf'
+        $client | Should -Not -Match 'e2d4c6b8'
+        @($data.results.'DR.9' | ForEach-Object { $_.Scope } | Select-Object -Unique) | Should -Be @('All workspaces', 'DefaultWorkspace-[id 1]-EUS', 'LAW-A[id 2]F') -Because 'a GUID reads as the same placeholder in every case and every field'
+        $data.context.Impact.Reference | Should -Be 'Review [id 3]'
         $data.parameters.DefenderApi | Should -Be 'Not available'
         $data.parameters.TenantWideTables.SigninLogs | Should -Be 'DefaultWorkspace-[id 1]-EUS'
         @($data.manifest | Where-Object ResultId -eq 'IA.11').AccessGap | Should -BeTrue -Because 'the read access ask still finds its gap'
+    }
+    It 'leaves out the results and fields only the presenter notes read, and the context records the model omits' {
+        $files = @(& $generator -SkipDeck -EvidencePath $pack -ContextPath $context)
+        $internal = Get-EmbeddedData (Get-Content $files[0] -Raw)
+        $client = Get-Content $files[1] -Raw
+        $data = Get-EmbeddedData $client
+        foreach ($id in 'P0.1', 'P0.1-BY-WORKSPACE', 'EW.1-EDR', 'DR.12', 'IA.14', 'OUT.7') {
+            $internal.results.PSObject.Properties.Name | Should -Contain $id
+            $data.results.PSObject.Properties.Name | Should -Not -Contain $id
+        }
+        @($data.results.'DP.1-CONTAINERS')[0].PSObject.Properties.Name | Should -Be @('Containers', 'PrivateContainers')
+        @($data.results.'P0.1-XDRDUP')[0].PSObject.Properties.Name | Should -Be @('InMultipleWorkspaces')
+        @($internal.results.'DP.1-CONTAINERS')[0].ExposedContainers | Should -Be 2
+        $client | Should -Not -Match '"(ExposedContainers|AccountsExposed|AccountsUnread|XdrIncidents|MfaSessionLinkedOnly|UsersAlwaysMfa)"'
+        $client | Should -Not -Match 'CHG-401|CHG-OLD-77|CHG-OLD-78|Synthetic private owner|synthetic-private'
+        @($data.context.Actions).Count | Should -Be 1
+        @($data.context.Delivered).Count | Should -Be 1
     }
     It 'keeps the evidence file notes in the internal edition only' {
         '{invalid' | Set-Content (Join-Path $pack 'results/OUT.5.json')

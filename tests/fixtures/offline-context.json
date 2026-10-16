@@ -9,6 +9,12 @@
       "Reference": "CHG-12345",
       "CompletedDate": "2026-09-18",
       "Pillar": "Data protection"
+    },
+    {
+      "Title": "Earlier synthetic private change",
+      "Outcome": "Completed before the period.",
+      "Reference": "CHG-OLD-77",
+      "CompletedDate": "2026-03-02"
     }
   ],
   "Actions": [
@@ -31,6 +37,15 @@
       "Reviewed": "2026-10-10",
       "WindowStart": "2026-07-01",
       "WindowEnd": "2026-09-30"
+    },
+    {
+      "Key": "backup",
+      "Status": "Approved",
+      "Owner": "Synthetic private owner from an earlier review",
+      "Reference": "CHG-OLD-78",
+      "Reviewed": "2026-07-10",
+      "WindowStart": "2026-04-01",
+      "WindowEnd": "2026-06-30"
     }
   ],
   "Impact": {

@@ -20,12 +20,12 @@
     "Value": 30
   },
   {
-    "Scope": "synthetic-workspace",
+    "Scope": "LAW-AE2D4C6B8-A0F1-4E3D-9C5B-7A9F1E3D5C7BF",
     "Metric": "Total rules",
     "Value": 10
   },
   {
-    "Scope": "synthetic-workspace",
+    "Scope": "LAW-AE2D4C6B8-A0F1-4E3D-9C5B-7A9F1E3D5C7BF",
     "Metric": "Enabled rules",
     "Value": 0
   }

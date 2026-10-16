@@ -1,0 +1,9 @@
+[
+  {
+    "VmId": "/subscriptions/x/synthetic-private-vm",
+    "VmName": "synthetic-private-vm",
+    "DefenderExtension": 0,
+    "ThirdPartyEdr": true,
+    "Appliance": false
+  }
+]

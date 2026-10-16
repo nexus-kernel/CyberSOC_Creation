@@ -19,8 +19,8 @@
       "AccessTenant": "9e8d7c6b-5a49-4382-a716-f5e4d3c2b1a0"
     },
     {
-      "Name": "synthetic-workspace",
-      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-synthetic-private/providers/Microsoft.OperationalInsights/workspaces/synthetic-workspace",
+      "Name": "law-ae2d4c6b8-a0f1-4e3d-9c5b-7a9f1e3d5c7bf",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-synthetic-private/providers/Microsoft.OperationalInsights/workspaces/law-ae2d4c6b8-a0f1-4e3d-9c5b-7a9f1e3d5c7bf",
       "CustomerId": "c4a7e1d9-8b2f-4c6a-9e3d-5b7f1a2c4e68",
       "SubscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
       "RetentionDays": 365,
