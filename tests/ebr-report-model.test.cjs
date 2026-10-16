@@ -394,10 +394,15 @@ test('the MFA method update appears only when retiring methods are in use, and i
   put(p, 'IA.2', [{ Bucket: 'Retiring: SMS or voice', DistinctUsers: 7 }, { Bucket: 'Phishing-resistant', DistinctUsers: 3 }, { Bucket: 'Authenticator or OTP', DistinctUsers: 50 }])
   const m = build(p)
   assert.equal(m.mfaMethods.retiring, 7)
-  assert.match(m.whatNext, /MFA method update already scoped ahead of February 1, 2027/)
+  assert.match(m.whatNext, /the proposed hardening roadmap and the recommended MFA method update ahead of February 1, 2027\./)
+  assert.ok(!/already scoped|sequenced hardening/.test(m.whatNext), 'the summary never says the update is already scoped')
   const update = m.priorities.find(x => x.id === 'IA.2')
   assert.equal(update.title, 'MFA method update')
   assert.match(update.action, /Microsoft Authenticator or a phishing-resistant method/)
+  // The outcome is measurable, never a promise that the date arrives as a non-event (Oct 16, 2026).
+  assert.equal(update.success, 'Every affected user registered on a replacement method before February 1, 2027, the fallback tested, and no rise in failed sign-ins after enforcement.')
+  assert.equal(m.mfaMethods.outcome, update.success)
+  assert.ok(!/non-event|no sign-in is blocked/.test(JSON.stringify(m)), 'no outcome promise')
   assert.ok(!/passwordless|passkey/i.test(JSON.stringify([m.priorities, m.whatNext, m.pillars])), 'no passwordless or passkey wording')
   put(p, 'IA.2', [{ Bucket: 'Authenticator or OTP', DistinctUsers: 50 }])
   assert.ok(!/February/.test(build(p).whatNext))
@@ -1505,4 +1510,48 @@ test('a score movement that rounds to zero is no gain, so no surface prints up 0
   assert.ok(!/Up 0 points/.test(JSON.stringify([m.headline, m.tiers])), 'no surface reads up 0 points')
   p.context.TenantScore.Current = 451
   assert.deepEqual(build(p).tenantScore.delta, { points: 0.1, since: 'Jul 2026', from: 45 })
+})
+test('an Actions record carries a reviewed status only when it names a known key, a known status and the period it covers', () => {
+  const record = (extra = {}) => ({ Key: 'critical', Status: 'Scheduled', Owner: 'Client infrastructure team', TargetDate: '2026-11-30', Reference: 'CHG-400', Reviewed: '2026-10-10', WindowStart: '2025-11-01', WindowEnd: '2026-09-30', ...extra })
+  const withActions = (actions, delivered = []) => { const p = pack(); p.context = { Actions: actions, Delivered: delivered }; return build(p) }
+  const m = withActions([record()])
+  assert.deepEqual(m.actions, [{ key: 'critical', status: 'Scheduled', label: 'Scheduled', owner: 'Client infrastructure team', targetDate: 'Nov 30, 2026', verification: '', reference: 'CHG-400', reviewed: 'Oct 10, 2026', source: 'Reviewed action status CHG-400, Oct 10, 2026, from the reviewed context file.' }])
+  assert.ok(!m.review.some(r => r.title === 'Action status needs review'))
+  const omitted = (actions, reason, delivered) => {
+    const built = withActions(actions, delivered)
+    assert.deepEqual(built.actions, [], reason.source)
+    assert.ok(built.review.some(r => r.title === 'Action status needs review' && reason.test(r.text)), reason.source)
+  }
+  omitted([record({ Key: 'everything' })], /its Key is not one of drift, critical/)
+  omitted([record({ Status: 'Done' })], /its Status is not one of Proposed, PendingValidation, AwaitingApproval, Approved, Scheduled, InProgress, Verified/)
+  omitted([record({ Reference: '' })], /lacks a Reference, a Reviewed date/)
+  omitted([record({ WindowStart: '2026-07-01' })], /covers Jul 1 to Sep 30, 2026 and this pack's alert period is Nov 1, 2025 to Sep 30, 2026/)
+  omitted([record({ Reviewed: '2026-10-01' })], /dated Oct 1, 2026, before the evidence was collected on Oct 8, 2026/)
+  omitted([record({ TargetDate: '2026-13-01' })], /TargetDate is not a date/)
+  omitted([record({ TargetDate: null })], /a Scheduled item needs a TargetDate/)
+  omitted([record({ Status: 'Verified' })], /a Verified item needs a Delivered record in this alert period with the same Reference/)
+  omitted([record({ Status: 'Verified' })], /same Reference/, [{ Title: 'Patch run', Outcome: 'Patched.', Reference: 'CHG-999', CompletedDate: '2026-09-01' }])
+  // A second record for the same key is omitted, and the first stands.
+  const twice = withActions([record(), record({ Status: 'Approved' })])
+  assert.deepEqual(twice.actions.map(x => x.status), ['Scheduled'])
+  assert.ok(twice.review.some(r => /record for critical was omitted because another record already carries the same Key/.test(r.text)))
+  // Verified stands only beside a Delivered record with the same reference, and a status needs no owner or target.
+  const verified = withActions([record({ Status: 'Verified', Owner: '', TargetDate: '', Verification: 'BKL.1 reads no critical finding.' })], [{ Title: 'Patch run', Outcome: 'Patched.', Reference: 'CHG-400', CompletedDate: '2026-09-01' }])
+  assert.deepEqual(verified.actions.map(x => [x.label, x.owner, x.targetDate, x.verification]), [['Verified', '', '', 'BKL.1 reads no critical finding.']])
+  assert.deepEqual(withActions([record({ Status: 'InProgress', TargetDate: undefined })]).actions.map(x => x.label), ['In progress'])
+  assert.deepEqual(build(pack()).actions, [], 'no record, no status')
+})
+test('the roadmap page words planned work as a recommendation and never promises the MFA method update as a non-event', () => {
+  const p = pack(); alerts(p)
+  put(p, 'IA.2', [{ Bucket: 'Retiring: SMS or voice', DistinctUsers: 7 }])
+  put(p, 'BKL.1', [{ Scope: 'Azure VM', Software: 'Application', VulnerabilitySeverityLevel: 'Critical', ExploitableCves: 6, Devices: 3 }])
+  const nodes = {}
+  const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(p) : '', addEventListener() {} }) }
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+  const html = nodes.report.innerHTML
+  assert.ok(html.includes('Atmosera recommends staging each enforcement in an audit or report-only mode where the control supports one, reviewing it with your team, then turning it on.'))
+  assert.ok(html.includes('<h3>How this order is proposed</h3><p>Every item on this board comes from a reading in the collected evidence. The order is a recommendation for agreement at this review'))
+  assert.ok(html.includes('Atmosera recommends moving each one to a stronger method well ahead of the date.</h3>'))
+  assert.ok(html.includes('<p class="success"><strong>Outcome</strong> Every affected user registered on a replacement method before February 1, 2027, the fallback tested, and no rise in failed sign-ins after enforcement.</p>'))
+  assert.ok(!/waits on discovery|scoped and sequenced|already scoped|Every enforcement is staged|non-event|No blocked sign-ins|no sign-in is blocked|\bscheduled\b/i.test(html), html.match(/.{0,60}(waits on discovery|scoped and sequenced|already scoped|Every enforcement is staged|non-event|blocked sign-ins|scheduled).{0,60}/i)?.[0])
 })

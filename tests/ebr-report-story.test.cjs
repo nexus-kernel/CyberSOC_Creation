@@ -300,3 +300,96 @@ test('MFA at sign-in and MFA at the admin portals below E together read as one g
   p.results['IA.8-CA'][0].PolicyState = 'Enforced'
   assert.deepEqual(story(p).s.drift.filter(c => /^Multifactor authentication/.test(c.label)).map(c => c.id), ['IA.1-ADMINPORTAL'])
 })
+test('no roadmap evidence, ask or takeaway says scheduled, approved, completed, implemented or verified unless the matching Actions record is present', () => {
+  const STATUS = /\b(scheduled|approved|completed|implemented|verified)\b/i
+  // Every control below E, so every catalog item and ask is on the roadmap, beside the pack as collected.
+  const everything = context => { const p = quarterPack(); p.context = context; const m = build(p); for (const c of m.controls) Object.assign(c, { mark: 'N', pct: 10, good: 1, total: 10, measured: true, na: false, value: '1 of 10', boolean: false }); return buildStory(m, p) }
+  const collected = context => { const p = quarterPack(); p.context = context; return buildStory(build(p), p) }
+  const strings = s => [
+    // carries: the string that names the reviewed status when the item has a record. Ask titles and short labels never do.
+    ...s.roadmap.flatMap(h => h.items.map(i => ({ key: i.key, action: i.action, carries: true, text: i.evidence }))),
+    ...s.asks.flatMap(a => [[a.title, false], [a.body, true], [a.short, false]].map(([text, carries]) => ({ key: a.key, action: a.action, carries, text }))),
+    ...Object.entries(s.takeaways).map(([key, text]) => ({ key: `takeaway:${key}`, action: null, carries: false, text })),
+    { key: 'drift', action: s.roadmap[0].items.find(i => i.key === 'drift')?.action || null, carries: true, text: s.driftNote }
+  ]
+  // Without a context record nothing says an item is scheduled, approved or complete, and the rewritten lines read as recommendations.
+  for (const s of [collected(null), everything(null)]) {
+    for (const x of strings(s)) assert.ok(!STATUS.test(x.text), `${x.key}: ${x.text}`)
+    assert.ok(!/schedules each fix|scoped and sequenced|on schedule|non-event/i.test(JSON.stringify(s)))
+  }
+  const plain = collected(null)
+  assert.equal(plain.roadmap[0].items.find(i => i.key === 'critical').evidence, '7 critical exploitable findings. Atmosera recommends validating the affected workloads and agreeing remediation or compensating controls with the owners inside the patch cadence.')
+  assert.equal(plain.driftNote, 'Below the baseline at collection. Atmosera recommends closing each gap first.')
+  assert.equal(plain.takeaways.roadmap, 'Every control below enforced is proposed in one of three horizons, by risk and by what each needs from your team.')
+  assert.match(plain.takeaways.decisions, /approval or access from your team to move the roadmap forward\.$/)
+  // With a record for every item on the roadmap and every ask, each one carries its own status and nothing else does.
+  const keys = [...new Set(strings(everything(null)).map(x => x.key).filter(k => !k.startsWith('takeaway:') && k !== 'other'))]
+  assert.ok(keys.length >= 15, keys.join(', '))
+  const record = (Key, Status) => ({ Key, Status, Owner: 'Client identity owner', TargetDate: '2026-12-15', Reference: `CHG-${Key}`, Reviewed: '2026-10-14', WindowStart: '2026-07-01', WindowEnd: '2026-09-30' })
+  for (const [Status, word] of [['Approved', 'approved'], ['Scheduled', 'scheduled'], ['InProgress', 'in progress'], ['Verified', 'verified'], ['AwaitingApproval', 'awaiting approval'], ['PendingValidation', 'pending validation']]) {
+    const delivered = Status === 'Verified' ? keys.map(k => ({ Title: k, Outcome: 'Done.', Reference: `CHG-${k}`, CompletedDate: '2026-09-15' })) : []
+    const s = everything({ Actions: keys.map(k => record(k, Status)), Delivered: delivered })
+    for (const x of strings(s)) {
+      if (x.action && x.carries) {
+        assert.ok(new RegExp(`\\b${word}\\b`, 'i').test(x.text), `${x.key} should carry ${word}: ${x.text}`)
+        assert.ok(!STATUS.test(x.text.replace(new RegExp(`\\b${word}\\b`, 'gi'), '')), `${x.key} carries another status: ${x.text}`)
+      } else assert.ok(!STATUS.test(x.text), `${x.key} carries a status it has no record for: ${x.text}`)
+    }
+  }
+  // One record changes its own item only.
+  const one = collected({ Actions: [record('critical', 'Scheduled')] })
+  const critical = one.roadmap[0].items.find(i => i.key === 'critical')
+  assert.equal(critical.evidence, '7 critical exploitable findings. Scheduled, owner Client identity owner, target Dec 15, 2026 (CHG-critical, reviewed Oct 14, 2026).')
+  assert.equal(critical.action.key, 'critical')
+  for (const x of strings(one).filter(x => x.key !== 'critical')) assert.ok(!STATUS.test(x.text), `${x.key}: ${x.text}`)
+  assert.equal(one.driftNote, 'Below the baseline at collection. Atmosera recommends closing each gap first.')
+  const drift = collected({ Actions: [record('drift', 'InProgress')] })
+  assert.equal(drift.driftNote, 'Below the baseline at collection. Fixes in progress (CHG-drift).')
+  const ask = collected({ Actions: [record('idp', 'AwaitingApproval')] }).asks.find(a => a.key === 'idp')
+  assert.equal(ask.body, 'Sign-in and user risk policies for all users, with leaked credential response. Awaiting approval, owner Client identity owner, target Dec 15, 2026 (CHG-idp, reviewed Oct 14, 2026).')
+  assert.equal(ask.title, 'Approve the user-risk policy', 'an ask still awaiting approval keeps its title')
+  assert.equal(ask.bodyText, 'Sign-in and user risk policies for all users, with leaked credential response.')
+})
+test('an ask whose reviewed record settles the decision leaves the asks before the limit and the count, and its roadmap item keeps the status', () => {
+  const record = (Key, Status) => ({ Key, Status, TargetDate: '2026-12-15', Reference: `CHG-${Key}`, Reviewed: '2026-10-12', WindowStart: '2026-07-01', WindowEnd: '2026-09-30' })
+  // The quarter pack asks for methods, access, idp and segment. An open consent setting adds a Next horizon ask ahead
+  // of segment, so segment is the fifth candidate and falls outside the four.
+  const withConsent = actions => { const p = quarterPack(); p.manifest.push({ ResultId: 'IA.13', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' }); p.results['IA.13'] = [{ UserConsent: 'Allowed', AdminConsentWorkflow: false, Governed: false }]; p.context = actions ? { Actions: actions } : null; return buildStory(build(p), p) }
+  assert.deepEqual(withConsent(null).asks.map(a => a.key), ['methods', 'access', 'idp', 'consent'])
+  for (const Status of ['Approved', 'Scheduled', 'InProgress']) {
+    const s = withConsent([record('idp', Status)])
+    assert.deepEqual(s.asks.map(a => a.key), ['methods', 'access', 'consent', 'segment'], `${Status} frees its slot for the pending segment ask`)
+    assert.ok(!s.asks.some(a => a.title === 'Approve the user-risk policy'))
+    assert.ok(!s.summaryAsks.some(a => /user-risk/.test(a.label)), 'the executive summary never asks for it either')
+    assert.equal(s.takeaways.decisions, 'Four items need approval or access from your team to move the roadmap forward.')
+    assert.deepEqual(s.settledAsks.map(a => a.key), ['idp'])
+    assert.match(s.roadmap.flatMap(h => h.items).find(i => i.key === 'idp').evidence, new RegExp(`\\(CHG-idp, reviewed Oct 12, 2026\\)`), 'the roadmap item carries the status instead')
+  }
+  // Verified needs its Delivered record, and settles the ask the same way.
+  const p = quarterPack(); p.context = { Actions: [record('methods', 'Verified'), record('segment', 'Verified')], Delivered: [{ Title: 'Method move', Outcome: 'Done.', Reference: 'CHG-methods', CompletedDate: '2026-09-20' }, { Title: 'Segmentation', Outcome: 'Done.', Reference: 'CHG-segment', CompletedDate: '2026-09-20' }] }
+  const verified = buildStory(build(p), p)
+  assert.deepEqual(verified.asks.map(a => a.key), ['access', 'idp'])
+  assert.deepEqual(verified.summaryAsks.map(a => a.label), ['Approve the user-risk policy'])
+  assert.equal(verified.takeaways.decisions, 'Two items need approval or access from your team to move the roadmap forward.')
+  // A pending status keeps the ask, with its status.
+  assert.deepEqual(withConsent([record('idp', 'PendingValidation')]).asks.map(a => a.key), ['methods', 'access', 'idp', 'consent'])
+})
+test('every roadmap item and ask key the story builds is a key the Actions record accepts', () => {
+  const { ACTION_KEYS } = require('../report/report-model.js')
+  const keys = new Set(['drift', 'critical', 'methods', 'access', ...CATALOG.map(e => e.key)])
+  assert.deepEqual([...keys].sort(), [...ACTION_KEYS].sort())
+})
+test('a reviewed status on the read access ask never removes it, since no status shows the permission was provisioned', () => {
+  // DP.8 could not be read for lack of permission, so the quarter pack asks for read access.
+  const record = Status => ({ Key: 'access', Status, TargetDate: '2026-12-15', Reference: 'CHG-access', Reviewed: '2026-10-12', WindowStart: '2026-07-01', WindowEnd: '2026-09-30' })
+  const only = actions => { const p = quarterPack(); p.context = actions ? { Actions: actions, Delivered: [{ Title: 'Access', Outcome: 'Granted.', Reference: 'CHG-access', CompletedDate: '2026-09-20' }] } : null; return buildStory(build(p), p) }
+  const before = only(null).asks.map(a => a.key)
+  assert.ok(before.includes('access'))
+  for (const [Status, label] of [['Approved', 'Approved'], ['Scheduled', 'Scheduled'], ['InProgress', 'In progress'], ['Verified', 'Verified']]) {
+    const s = only([record(Status)])
+    assert.deepEqual(s.asks.map(a => a.key), before, `${Status} keeps the access ask and the rest in place`)
+    assert.equal(s.asks.find(a => a.key === 'access').body, `Sharing settings. ${label}, target Dec 15, 2026 (CHG-access, reviewed Oct 12, 2026).`)
+    assert.equal(s.takeaways.decisions, `${['', 'One', 'Two', 'Three', 'Four'][before.length]} ${before.length === 1 ? 'item needs' : 'items need'} approval or access from your team to move the roadmap forward.`)
+    assert.deepEqual(s.settledAsks, [])
+  }
+})

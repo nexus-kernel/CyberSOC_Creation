@@ -103,7 +103,7 @@ async function main() {
     [/^Microsoft tenant Secure Score$/, 'Tenant Secure Score'], [/^High severity assessments healthy$/, 'High severity findings healthy'], [/^Resources assessed by Defender for Cloud$/, 'Resources assessed']
   ]
   const tierLabel = r => { const hit = TIER_SHORT.find(([re]) => re.test(r.label)); if (hit) return hit[1]; return /^TIER\./.test(r.id) ? r.label : sentence(shortName(r)) }
-  const tierDefs = [['outcomes', 'Tier 1 · Outcomes', 'Did the program hold'], ['controls', 'Tier 2 · Control effectiveness', 'What is actually enforced'], ['hardening', 'Tier 3 · Hardening next', 'Scoped and sequenced'], ['benchmark', 'Tier 4 · Vendor benchmark', 'Context, not the objective']]
+  const tierDefs = [['outcomes', 'Tier 1 · Outcomes', 'Did the program hold'], ['controls', 'Tier 2 · Control effectiveness', 'What is actually enforced'], ['hardening', 'Tier 3 · Hardening next', 'Proposed in priority order'], ['benchmark', 'Tier 4 · Vendor benchmark', 'Context, not the objective']]
   const tierPad = 0.25, tierGap = 0.3, tierW = (CW - 2 * tierPad - 3 * tierGap) / 4, tierValueW = 0.8, tierLabelW = tierW - tierValueW - 0.05
   const tierRows = tierDefs.map(([key]) => m.tiers[key].slice(0, 3).map(r => ({ ...r, short: tierLabel(r) })))
   const tierRowH = r => Math.min(2, lines(r.short, tierLabelW, 9)) * 0.16 + 0.09
@@ -381,7 +381,17 @@ async function main() {
     // Drift panel.
     const px = X0 + mw + 0.4, pw = CW - mw - 0.4
     card(s, px, TOP, pw, BOTTOM - TOP, 'Drift panel')
-    text(s, [{ text: 'Foundational gaps', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: st.drift.length ? 'Below the baseline at collection. Atmosera schedules each fix first.' : st.licensed.length ? 'Every foundational control Atmosera can fix reads E. The one below needs licensing.' : 'No foundational gaps. Every measured foundational control reads E.', options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }], { x: px + 0.3, y: TOP + 0.25, w: pw - 0.6, h: 1.0, objectName: 'Drift heading' })
+    // The note under the title ends above the first item's rule (TOP + 1.02), which leaves room for two 12 pt lines.
+    // A reviewed drift reference too long for that is cut with three dots, and the speaker notes carry the full line.
+    const headW = pw - 0.6, headRoom = (1.1 - 0.08 - 0.25) - 18 / 72 * 1.2 - 4 / 72
+    let driftNote = st.driftNote
+    if (st.drift.length && st.driftAction && lines(glue(driftNote), headW, 12) * 12 / 72 * 1.2 > headRoom) {
+      const ref = st.driftAction.reference, note = r => `Below the baseline at collection. Fixes ${st.driftAction.label.toLowerCase()} (${r}).`
+      let n = ref.length
+      while (n > 8 && lines(glue(note(`${ref.slice(0, n)}...`)), headW, 12) * 12 / 72 * 1.2 > headRoom) n--
+      driftNote = note(`${ref.slice(0, n)}...`)
+    }
+    text(s, [{ text: 'Foundational gaps', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: st.drift.length ? driftNote : st.licensed.length ? 'Every foundational control Atmosera can fix reads E. The one below needs licensing.' : 'No foundational gaps. Every measured foundational control reads E.', options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }], { x: px + 0.3, y: TOP + 0.25, w: pw - 0.6, h: 1.0, objectName: 'Drift heading' })
     let dy = TOP + 1.1
     // Each item takes the lines its label and figure line need. Items stop above the legend and the tail line
     // (the gaps left in the register, and any control that needs a license), so nothing overlaps.
@@ -410,6 +420,7 @@ async function main() {
       'Foundational controls are the baseline the service holds every environment to, and each is expected to read enforced at every review. One that reads below E is a gap against that baseline. Atmosera owns the fix and sets a fix date at this review, and it is first on the roadmap. Defense in depth controls are layered on top, and each waits on something your team approves, schedules or licenses. Every reading describes the state at collection, not a change since the last review.',
       'E means 90 percent or more of in-scope resources, P 50 to 89 percent and N below 50 percent. A policy that stops short of every user on every application in every condition reads P however high the sign-in ratio behind it.',
       st.ungathered.length ? `${plural(st.ungathered.length, 'control', 'controls')} could not be graded from the collected evidence and ${st.ungathered.length === 1 ? 'is' : 'are'} listed in the appendix.` : '',
+      st.drift.length && st.driftAction ? `Foundational fixes: ${st.driftAction.label.toLowerCase()}, from the reviewed action record ${st.driftAction.reference}, reviewed ${st.driftAction.reviewed}.` : '',
       m.pillars.map(p => `${p.name}. ${p.headline}. ${p.narrative}`)
     ]))
 
@@ -519,7 +530,7 @@ async function main() {
     const sw = (CW - 2.1) / 3
     text(s, [{ text: lead, options: { bold: true, color: C.accent2 } }, { text: rest, options: { color: C.text1 } }], { x: X0 + 2.05 + i * sw, y: stripY, w: sw - 0.1, h: 0.7, fontSize: 12, valign: 'middle', objectName: `Step ${i + 1}` })
   })
-  s.addNotes(notesOf([`Priorities reflect the evidence collected ${m.readDate}. Horizons are proposed for agreement today. Every enforcement is staged in audit or report-only mode, reviewed with your team, then turned on.`,
+  s.addNotes(notesOf([`Priorities reflect the evidence collected ${m.readDate}. Horizons are proposed for agreement today. Atmosera recommends staging each enforcement in an audit or report-only mode where the control supports one, reviewing it with your team, then turning it on.`,
     st.drift.length ? 'Closing the foundational gaps is Atmosera\'s work, with a fix date set at this review.' : '',
     m.priorities.map(p => `${p.title}. ${p.action} Outcome: ${p.success}`), st.headroom]))
 
@@ -571,7 +582,7 @@ async function main() {
       text(s, fmt(v), { x: X0 + lw - 0.75, y, w: 0.75, h: 0.35, fontSize: 14, bold: true, color: C.text2, align: 'right', valign: 'middle', objectName: `Method ${i + 1} value` })
     })
     text(s, methods.authenticator > 0 ? `${plural(methods.authenticator, 'user already signs', 'users already sign')} in with Microsoft Authenticator, the method the ${plural(methods.retiring, 'affected user moves', 'affected users move')} to.` : `The ${plural(methods.retiring, 'affected user moves', 'affected users move')} to Microsoft Authenticator or a phishing-resistant method.`, { x: X0, y: TOP + 3.65, w: lw, h: 0.5, fontSize: 12, color: C.accent6, objectName: 'Methods caption' })
-    const steps = [['Notify the affected users', `Each of the ${plural(methods.retiring, 'user', 'users')} on text message or voice is told what to change and by when.`], ['Register a stronger method', 'Microsoft Authenticator, or a phishing-resistant method where the device allows it, in guided waves.'], ['Remove the retiring methods', 'Text message and voice leave the allowed methods under change control, group by group.'], ['Confirm readiness early', `A final sweep before ${methods.deadline}. No blocked sign-ins.`]]
+    const steps = [['Notify the affected users', `Each of the ${plural(methods.retiring, 'user', 'users')} on text message or voice is told what to change and by when.`], ['Register a stronger method', 'Microsoft Authenticator, or a phishing-resistant method where the device allows it, in guided waves.'], ['Remove the retiring methods', 'Text message and voice leave the allowed methods under change control, group by group.'], ['Confirm readiness early', `A final sweep before ${methods.deadline} confirms each affected user holds a replacement method.`]]
     const sx = X0 + lw + 0.5, sw = CW - lw - 0.5
     steps.forEach(([head, body], i) => {
       const y = TOP + i * 1.08
@@ -579,7 +590,7 @@ async function main() {
       text(s, [{ text: head, options: { fontSize: 17, bold: true, color: C.text2, breakLine: true } }, { text: body, options: { fontSize: 13, color: C.text1, paraSpaceBefore: 2 } }], { x: sx + 0.7, y, w: sw - 0.7, h: 0.95, objectName: `Step ${i + 1}` })
     })
     card(s, X0, BOTTOM - 0.7, CW, 0.7, 'Outcome strip')
-    text(s, [{ text: 'OUTCOME   ', options: { bold: true, color: C.text2, charSpacing: 1.5, fontSize: 11 } }, { text: `${methods.deadline} arrives as a non-event: every user signs in with a stronger method, and no sign-in is blocked.`, options: { color: C.text1, fontSize: 13 } }], { x: X0 + 0.25, y: BOTTOM - 0.7, w: CW - 0.5, h: 0.7, valign: 'middle', objectName: 'Outcome' })
+    text(s, [{ text: 'OUTCOME   ', options: { bold: true, color: C.text2, charSpacing: 1.5, fontSize: 11 } }, { text: methods.outcome, options: { color: C.text1, fontSize: 13 } }], { x: X0 + 0.25, y: BOTTOM - 0.7, w: CW - 0.5, h: 0.7, valign: 'middle', objectName: 'Outcome' })
     s.addNotes(notesOf([`${plural(methods.retiring, 'user', 'users')} signed in with text message or voice over the last 30 days. Microsoft retires these methods on ${methods.deadline}, so each of these users updates their MFA method before then.`, methods.authenticator ? `${plural(methods.authenticator, 'user already uses', 'users already use')} Microsoft Authenticator, the method the affected users move to.` : '', 'The plan notifies the affected users, registers each one on Microsoft Authenticator or a phishing-resistant method in guided waves, removes text message and voice from the allowed methods under change control, and confirms readiness with a final sweep before the deadline.']))
   }
 
@@ -595,14 +606,29 @@ async function main() {
       const wide = i === st.asks.length - 1 && st.asks.length % 2 === 1 && st.asks.length > 1
       const x = 0.7 + (wide ? 0 : (i % 2) * (aw + 0.25)), y = 2.45 + Math.floor(i / 2) * (ah + 0.25), cw = wide ? 9.7 : aw, ch = wide ? Math.min(ah, 1.4) : ah
       s.addShape(pres.shapes.RECTANGLE, { x, y, w: cw, h: ch, fill: { color: HEX.dk2, transparency: 12 }, line: { color: HEX.accent5, width: 0.75 }, objectName: `Ask ${i + 1} card` })
-      text(s, [{ text: String(i + 1).padStart(2, '0'), options: { fontSize: 14, bold: true, color: C.accent1, breakLine: true } }, { text: a.title, options: { fontSize: 18, bold: true, color: C.background1, breakLine: true, paraSpaceBefore: 4 } }, { text: a.body, options: { fontSize: 13, color: C.background2, paraSpaceBefore: 4 } }], { x: x + 0.3, y: y + 0.2, w: cw - 0.6, h: ch - 0.3, objectName: `Ask ${i + 1}` })
+      // A reviewed status line sits under the body. The body steps down from 13 pt to 10 pt until the card holds it.
+      // If it still does not fit, the owner is cut first, then the reference, each with three dots, so the status, the
+      // target date and the review date stay. The speaker notes keep the full attribution.
+      const tw = cw - 0.6, th = ch - 0.3, x0 = a.action
+      const tall = (size, status) => (14 + 4) / 72 * 1.2 + lines(glue(a.title), tw, 18, true) * 18 / 72 * 1.2 + 4 / 72 + lines(glue(a.bodyText), tw, size) * size / 72 * 1.2 + (status ? 4 / 72 + lines(glue(status), tw, size - 1) * (size - 1) / 72 * 1.2 : 0)
+      const dots = (t, n) => n >= t.length ? t : `${t.slice(0, n).replace(/[\s,.]+$/, '')}...`
+      const statusOf = (owner, ref) => x0 ? `${x0.label}${owner ? `, owner ${owner}` : ''}${x0.targetDate ? `, target ${x0.targetDate}` : ''} (${ref}, reviewed ${x0.reviewed}).` : ''
+      let status = x0 ? statusOf(x0.owner, x0.reference) : ''
+      const size = [13, 12, 11, 10].find(n => tall(n, status) <= th) || 10
+      if (x0 && tall(size, status) > th) {
+        let o = x0.owner.length, r = x0.reference.length
+        while (o > 0 && tall(size, statusOf(dots(x0.owner, o), x0.reference)) > th) o--
+        while (r > 8 && tall(size, statusOf(o ? dots(x0.owner, o) : '', dots(x0.reference, r))) > th) r--
+        status = statusOf(o ? dots(x0.owner, o) : '', dots(x0.reference, r))
+      }
+      text(s, [{ text: String(i + 1).padStart(2, '0'), options: { fontSize: 14, bold: true, color: C.accent1, breakLine: true } }, { text: a.title, options: { fontSize: 18, bold: true, color: C.background1, breakLine: true, paraSpaceBefore: 4 } }, { text: a.bodyText, options: { fontSize: size, color: C.background2, paraSpaceBefore: 4, breakLine: !!status } }, ...(status ? [{ text: status, options: { fontSize: size - 1, color: C.background2, paraSpaceBefore: 4 } }] : [])], { x: x + 0.3, y: y + 0.2, w: tw, h: th, objectName: `Ask ${i + 1}` })
     })
   } else {
     s.addShape(pres.shapes.RECTANGLE, { x: 0.7, y: 2.55, w: 9.7, h: 1.3, fill: { color: HEX.dk2, transparency: 12 }, line: { color: HEX.accent5, width: 0.75 }, objectName: 'No asks card' })
     text(s, 'Nothing needs approval or access from your team before the next review. The roadmap proceeds as sequenced.', { x: 1.0, y: 2.55, w: 9.1, h: 1.3, fontSize: 16, color: C.background1, valign: 'middle', objectName: 'No asks' })
   }
   text(s, 'At the next review we recollect the evidence and verify each outcome.', { x: 0.7, y: 6.82, w: 9.7, h: 0.35, fontSize: 13, color: C.background2, objectName: 'Next review' })
-  s.addNotes(notesOf(['Close on the decisions. Each one unblocks a roadmap item, or lets us grade a control we cannot see today.', st.asks.map(a => `${a.title}. ${a.body}`)]))
+  s.addNotes(notesOf(['Close on the decisions. Each one unblocks a roadmap item, or lets us grade a control we cannot see today.', st.asks.map(a => `${a.title}. ${a.body}`), st.settledAsks.length ? `No longer asked, from reviewed action records: ${st.settledAsks.map(a => `${a.title}, ${a.status}`).join('. ')}.` : '']))
 
   // Appendix: the control register, two pillars per slide, and on A3 how we grade.
   if (balanced) {
@@ -665,7 +691,7 @@ async function main() {
     text(s, 'How we grade posture', { x: gx, y: TOP - 0.05, w: half, h: 0.4, fontSize: 18, bold: true, color: C.text2, objectName: 'Grading heading' })
     rule(s, gx, TOP + 0.4, half, C.text2, 1, 'Grading rule')
     const bench = m.tiers.benchmark.slice(0, 4).map(r => `${r.label} ${r.value}`).join(' · ')
-    const grade = [['Outcomes', 'Did the program hold? Alerts, confirmed threats, impact.'], ['Control effectiveness', 'What is actually enforced, graded E, P or N. An E that leaves resources out lists its exceptions.'], ['Hardening next', 'Scoped and sequenced on the roadmap.'], ['Vendor benchmark, as context', bench || 'Microsoft scores are read as context, never as the objective.']]
+    const grade = [['Outcomes', 'Did the program hold? Alerts, confirmed threats, impact.'], ['Control effectiveness', 'What is actually enforced, graded E, P or N. An E that leaves resources out lists its exceptions.'], ['Hardening next', 'Proposed in priority order on the roadmap.'], ['Vendor benchmark, as context', bench || 'Microsoft scores are read as context, never as the objective.']]
     let gy = TOP + 0.55
     grade.forEach(([head, body], i) => {
       const h = 0.3 + lines(body, half - 0.5, 12) * 0.2 + 0.12
