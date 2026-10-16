@@ -196,11 +196,9 @@ Describe 'Offline HTML report generation' {
         $p = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
         $p.ClientName = '</script><script>alert(1)</script>'
         $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
-        foreach ($file in @(& $generator -SkipDeck -EvidencePath $pack)) {
-            $html = Get-Content $file -Raw
-            $html | Should -Not -Match '<script>alert\(1\)</script>' -Because $file
-            $html | Should -Match '\\u003c/script\\u003e' -Because $file
-        }
+        $files = @(& $generator -SkipDeck -EvidencePath $pack)
+        foreach ($file in $files) { Get-Content $file -Raw | Should -Not -Match '<script>alert\(1\)</script>' -Because $file }
+        Get-Content $files[0] -Raw | Should -Match '\\u003c/script\\u003e' -Because 'the internal edition escapes its embedded data'
     }
     It 'continues with a review item when a selected result file is malformed' {
         '{invalid' | Set-Content (Join-Path $pack 'results/OUT.5.json')
@@ -287,71 +285,49 @@ Describe 'Onboarding gaps and patch exclusions (collector 1.14.0)' {
         $html | Should -Not -Match 'secret-cs|secret-fw|secret-legacy|FalconSensorWindows|"Evidence"|"DeviceName"'
     }
 }
-Describe 'Client and internal editions of the HTML' {
+Describe 'Client and internal editions of the HTML' -Skip:(-not (Get-Command node -ErrorAction SilentlyContinue)) {
     BeforeAll {
         $guid = '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-        function Get-EmbeddedData([string]$Html) { [regex]::Match($Html, '<script id="report-data" type="application/json">([\s\S]*?)</script>').Groups[1].Value | ConvertFrom-Json }
     }
     BeforeEach {
         $pack = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures/offline-pack') -Destination $pack -Recurse
         $context = Join-Path $PSScriptRoot 'fixtures/offline-context.json'
     }
-    It 'writes the internal edition with the presenter notes and the client edition without them, side by side' {
-        $files = @(& $generator -SkipDeck -EvidencePath $pack -ContextPath $context)
+    It 'writes the internal edition with the data and presenter notes, and the client edition with the rendered pages only' {
+        $files = @(& $generator -SkipDeck -EvidencePath $pack -ContextPath $context -Depth Detailed)
         $files | ForEach-Object { Split-Path -Leaf $_ } | Should -Be @('03-security-report.html', '03-security-report.client.html')
         $internal = Get-Content $files[0] -Raw
         $client = Get-Content $files[1] -Raw
         $internal | Should -Match '<button id="review-toggle" aria-expanded="false" aria-controls="review">Presenter notes</button>'
         $internal | Should -Match '<aside id="review" hidden'
-        $internal | Should -Match 'Collection register'
+        $internal | Should -Match '<script id="report-data" type="application/json">'
+        $internal | Should -Match '<main id="report" tabindex="-1"></main>' -Because 'the internal edition renders its pages in the browser'
         $client | Should -Not -MatchExactly 'Presenter notes'
-        $client | Should -Not -Match 'review-toggle|id="review"|Collection register|Response timing cohort|Prepare the conversation'
-        $client | Should -Not -Match '__REVIEW_|__DATA__'
-        $client | Should -Match '"edition":"client"'
+        $client | Should -Not -Match 'review-toggle|id="review"|Collection register|Response timing cohort|Prepare the conversation|report-data|EbrReport|__[A-Z_]+__'
+        ([regex]::Matches($client, '<script\b')).Count | Should -Be 1 -Because 'only the toolbar script remains'
+        $client | Should -Match '<title>Synthetic validation only \| Security business review</title>'
+        $client | Should -Match '<option value="detailed" selected>'
+        $client | Should -Match '<h1>Security: Executive Summary</h1>' -Because 'the pages are already rendered'
     }
-    It 'embeds no GUID, subscription ID or workspace resource ID anywhere in the client file, and keeps them in the internal one' {
-        $files = @(& $generator -SkipDeck -EvidencePath $pack -ContextPath $context)
+    It 'shows no GUID, subscription ID or workspace resource ID anywhere in the client file, and masks a GUID between hexadecimal characters' {
+        $files = @(& $generator -SkipDeck -EvidencePath $pack -ContextPath $context -Depth Detailed)
         $internal = Get-Content $files[0] -Raw
         $client = Get-Content $files[1] -Raw
         ([regex]::Matches($internal, $guid)).Count | Should -BeGreaterThan 5
-        $client | Should -Not -Match $guid
-        $client | Should -Not -Match '/subscriptions/|rg-synthetic|AccessTenant|"Warnings"|"TenantId"|"Rows"'
-        $data = Get-EmbeddedData $client
-        $data.parameters.SubscriptionCount | Should -Be 2
-        $data.parameters.PSObject.Properties.Name | Should -Not -Contain 'Subscriptions'
-        @($data.parameters.Workspaces | ForEach-Object { '{0}|{1}|{2}' -f $_.Name, $_.CustomerId, $_.RetentionDays }) | Should -Be @('DefaultWorkspace-[id 1]-EUS|[workspace 1]|90', 'law-a[id 2]f|[workspace 2]|365') -Because 'a GUID between hexadecimal characters is masked too'
         $internal | Should -Match 'law-ae2d4c6b8-a0f1-4e3d-9c5b-7a9f1e3d5c7bf'
-        $client | Should -Not -Match 'e2d4c6b8'
-        @($data.results.'DR.9' | ForEach-Object { $_.Scope } | Select-Object -Unique) | Should -Be @('All workspaces', 'DefaultWorkspace-[id 1]-EUS', 'LAW-A[id 2]F') -Because 'a GUID reads as the same placeholder in every case and every field'
-        $data.context.Impact.Reference | Should -Be 'Review [id 3]'
-        $data.parameters.DefenderApi | Should -Be 'Not available'
-        $data.parameters.TenantWideTables.SigninLogs | Should -Be 'DefaultWorkspace-[id 1]-EUS'
-        @($data.manifest | Where-Object ResultId -eq 'IA.11').AccessGap | Should -BeTrue -Because 'the read access ask still finds its gap'
-    }
-    It 'leaves out the results and fields only the presenter notes read, and the context records the model omits' {
-        $files = @(& $generator -SkipDeck -EvidencePath $pack -ContextPath $context)
-        $internal = Get-EmbeddedData (Get-Content $files[0] -Raw)
-        $client = Get-Content $files[1] -Raw
-        $data = Get-EmbeddedData $client
-        foreach ($id in 'P0.1', 'P0.1-BY-WORKSPACE', 'EW.1-EDR', 'DR.12', 'IA.14', 'OUT.7') {
-            $internal.results.PSObject.Properties.Name | Should -Contain $id
-            $data.results.PSObject.Properties.Name | Should -Not -Contain $id
-        }
-        @($data.results.'DP.1-CONTAINERS')[0].PSObject.Properties.Name | Should -Be @('Containers', 'PrivateContainers')
-        @($data.results.'P0.1-XDRDUP')[0].PSObject.Properties.Name | Should -Be @('InMultipleWorkspaces')
-        @($internal.results.'DP.1-CONTAINERS')[0].ExposedContainers | Should -Be 2
-        $client | Should -Not -Match '"(ExposedContainers|AccountsExposed|AccountsUnread|XdrIncidents|MfaSessionLinkedOnly|UsersAlwaysMfa)"'
-        $client | Should -Not -Match 'CHG-401|CHG-OLD-77|CHG-OLD-78|Synthetic private owner|synthetic-private'
-        @($data.context.Actions).Count | Should -Be 1
-        @($data.context.Delivered).Count | Should -Be 1
+        $client | Should -Not -Match $guid
+        $client | Should -Not -Match 'e2d4c6b8|/subscriptions/|rg-synthetic|example-tenant|synthetic-private|CHG-401|CHG-OLD'
+        $client | Should -Match '<td>law-a\[id \d+\]f</td>'
+        $client | Should -Match '<td>DefaultWorkspace-\[id \d+\]-EUS</td>'
+        $client | Should -Match '2 subscriptions · 2 Sentinel workspaces'
+        $client | Should -Match 'DR\.9\. Read Oct 8, 2026\.'
     }
     It 'keeps the evidence file notes in the internal edition only' {
         '{invalid' | Set-Content (Join-Path $pack 'results/OUT.5.json')
         $files = @(& $generator -SkipDeck -EvidencePath $pack)
         Get-Content $files[0] -Raw | Should -Match 'OUT.5 could not be read'
         Get-Content $files[1] -Raw | Should -Not -Match 'OUT.5 could not be read'
-        (Get-EmbeddedData (Get-Content $files[1] -Raw)).issues.Count | Should -Be 0
     }
     It 'names the client edition after -OutputPath' {
         $out = Join-Path $TestDrive 'out/Client-Security-Review.html'
@@ -359,5 +335,17 @@ Describe 'Client and internal editions of the HTML' {
         $files[0] | Should -Be $out
         $files[1] | Should -Be (Join-Path $TestDrive 'out/Client-Security-Review.client.html')
         Test-Path -LiteralPath $files[1] | Should -BeTrue
+    }
+}
+Describe 'Client edition without Node.js' {
+    It 'writes the internal edition only and warns that the client edition was not written' {
+        $pack = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures/offline-pack') -Destination $pack -Recurse
+        Mock Get-Command { $null } -ParameterFilter { $Name -eq 'node' }
+        $files = @(& $generator -SkipDeck -EvidencePath $pack -WarningVariable warned -WarningAction SilentlyContinue)
+        $files.Count | Should -Be 1
+        $files[0] | Should -Match '03-security-report\.html$'
+        Test-Path -LiteralPath ([IO.Path]::ChangeExtension($files[0], '.client.html')) | Should -BeFalse
+        "$warned" | Should -Match 'client edition of the report was not written'
     }
 }

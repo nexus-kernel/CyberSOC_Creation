@@ -98,8 +98,7 @@
       client: clean(p.ClientName || 'Client security review'),
       period: { start: p.WindowStart, end: p.WindowEnd, label: span(p.WindowStart, p.WindowEnd), months: windowValid ? monthsBetween(p.WindowStart, p.WindowEnd) + 1 : null, valid: windowValid },
       readDate,
-      // The client edition embeds the subscription count in place of the subscription IDs.
-      subscriptions: count(p.SubscriptionCount) ?? new Set(array(p.Subscriptions).map(s => String(s).toLowerCase())).size,
+      subscriptions: new Set(array(p.Subscriptions).map(s => String(s).toLowerCase())).size,
       workspaces: [...new Map(array(p.Workspaces).map(w => [String(w.CustomerId || w.ResourceId || w.Name).toLowerCase(), w])).values()],
       depth: ['brief', 'balanced', 'detailed'].includes(data.depth) ? data.depth : 'balanced',
       service: null, headline: [], tiers: { outcomes: [], controls: [], hardening: [], benchmark: [] }, tierSummary: null, whatNext: '',
@@ -1230,7 +1229,7 @@
     for (const c of (m.tenantScore?.categories || [])) { if (m.tiers.benchmark.length < 6) row('benchmark', `${c.label} category score`, pctText(c.pct), 'POS.6') }
     m.whatNext = `The foundational and defense in depth controls we hold this environment to across five pillars, the status of each, ${m.period.months ? `${plural(m.period.months, 'month', 'months')} of measured outcomes` : 'the measured outcomes'}, the proposed hardening roadmap${m.mfaMethods && m.mfaMethods.retiring > 0 ? ` and the recommended MFA method update ahead of ${RETIREMENT.text}` : ''}.`
 
-    // Evidence review notes and boundaries.
+    // Presenter notes and boundaries.
     const manual = m.manifest.filter(r => r.status === 'MANUAL').map(r => r.id)
     if (manual.length) note('Manual portal readings', `${manual.join(', ')} are portal readings. Complete them before the review if the related statements are needed.`)
     const partials = m.manifest.filter(r => r.status === 'PARTIAL' && !r.id.endsWith('-BY-WORKSPACE'))

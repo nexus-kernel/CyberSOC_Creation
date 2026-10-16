@@ -477,14 +477,13 @@ test('real packs agree with their client-level source results and expose no priv
     assert.equal(m.workspaces.length, data.parameters.Workspaces.length)
     for (const field of ['ClassificationComment', 'AccountUpn', 'VmName', 'DeviceName', 'SubnetName', '"Title"', 'AccountDisplayName']) assert.ok(!html.includes(field), `${dir} embeds ${field}`)
     assert.ok(!/\bincidents?\b/i.test(visible(m)), dir)
-    // The client edition beside it holds no GUID and reads the same subscription and workspace counts.
+    // The client edition beside it carries no GUID, no embedded data and no presenter notes.
     const clientFile = path.join(root, dir, '03-security-report.client.html')
     if (fs.existsSync(clientFile)) {
       const client = fs.readFileSync(clientFile, 'utf8')
-      assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(client), `${dir} client edition embeds a GUID`)
-      assert.ok(!client.includes('Presenter notes'), `${dir} client edition carries the presenter notes`)
-      const mc = build(JSON.parse(client.match(/<script id="report-data" type="application\/json">([\s\S]*?)<\/script>/)[1]))
-      assert.deepEqual([mc.subscriptions, mc.workspaces.length, mc.alerts?.raised], [m.subscriptions, m.workspaces.length, m.alerts?.raised], dir)
+      assert.ok(!/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(client), `${dir} client edition holds a GUID`)
+      assert.ok(!/Presenter notes|report-data|EbrReport/.test(client), `${dir} client edition carries data or presenter notes`)
+      for (const n of m.presenter) assert.ok(!client.includes(n.text), `${dir} client edition holds ${n.title}`)
     }
   }
 })

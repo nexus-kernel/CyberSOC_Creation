@@ -5,10 +5,11 @@
     Offline only. Reads the manifest and selected aggregate evidence, then embeds the report
     assets in one HTML file. No Azure sign-in, network requests or source evidence changes.
     Requires the adjacent report folder when generating a report. The generated HTML is portable.
-    Writes two editions of the HTML. 03-security-report.html is the internal edition, with the presenter notes,
-    the evidence review and the collection register. 03-security-report.client.html is the client edition, for
-    sending to the client: no presenter notes toggle or aside, no data that only they read, subscription IDs as a
-    count and no workspace IDs or other GUIDs. With -OutputPath the client edition takes the same name ending in
+    Writes two editions of the HTML. 03-security-report.html is the internal edition, with the embedded data, the
+    presenter notes, the evidence review and the collection register. 03-security-report.client.html is the client
+    edition, for sending to the client: the same pages rendered ahead of time through report/build-client-report.cjs,
+    with no embedded data, no report model, no presenter notes and no GUIDs. It needs Node.js, and without it only the
+    internal edition is written, with a warning. With -OutputPath the client edition takes the same name ending in
     .client.html.
     Also writes the PowerPoint edition beside it (03-security-report.pptx) from the same data,
     through report/build-report-deck.cjs, when Node.js and pptxgenjs are available. Its speaker
@@ -305,125 +306,10 @@ $data = [ordered]@{
     issues = @($issues)
     context = $context
 }
-# The client edition, for sending to the client, embeds only what its pages read. It leaves out what only the
-# presenter notes read: the evidence file notes, the manifest row counts behind the collection register, the context
-# TenantId, context records the model is certain to omit, the parameters the model does not read (the access tenant,
-# warnings and API diagnostics), the results and fields listed below, and every result field whose name the report
-# code never reads. Subscription IDs become their count. Each workspace keeps its name and retention, and its
-# CustomerId or ResourceId becomes a placeholder. Every GUID left in the data, such as one inside a default workspace
-# name or a context Reference, becomes the same [id N] placeholder wherever it appears, so names still match across
-# results. Evidence IDs and read dates stay in the source lines.
-# Results no client page reads: P0.1 and the trailing three month timings are not read, and P0.1-BY-WORKSPACE, EW.1-EDR,
-# DR.12 and IA.14 feed presenter notes only. Fields listed beside a result feed presenter notes only: the XDR count, the
-# anonymously readable containers and unread accounts, members covered only by session inference, the federation
-# provider and its MFA behaviour, and the identities a location policy excludes.
-$clientOmit = @{
-    'P0.1' = '*'; 'P0.1-BY-WORKSPACE' = '*'; 'OUT.2-RECENT' = '*'; 'OUT.2-RECENT-ANALYST' = '*'; 'DP.5' = '*'; 'BKL.2' = '*'
-    'POS.6-CATEGORIES' = '*'; 'OUT.7' = '*'; 'NB.2' = '*'; 'IA.8' = '*'; 'EW.1-EDR' = '*'; 'DR.12' = '*'; 'IA.14' = '*'
-    'P0.1-XDRDUP' = @('XdrIncidents')
-    'DP.1-CONTAINERS' = @('Accounts', 'AccountsUnread', 'ExposedContainers', 'AccountsExposed')
-    'IA.1' = @('MfaSessionLinkedOnly')
-    'IA.1-FEDERATION' = @('Provider', 'MfaBehavior')
-    'IA.8-CA' = @('ExcludedIdentities', 'Control')
-    'OUT.3' = @('TruePositive', 'FalsePositive')
-    'OUT.6' = @('ProductName')
-}
-# A context record the model is certain to omit, by the checks report-model.js applies that do not depend on the
-# evidence, is left out of the client edition. A record the model may still use is kept.
-# Values are read as the embedded JSON writes them, since ConvertFrom-Json turns a timestamp into a DateTime.
-function Get-EbrJsonText($Value) { if ($null -eq $Value) { '' } elseif ($Value -is [string]) { $Value } else { (ConvertTo-Json -InputObject $Value -Compress).Trim('"') } }
-function Test-EbrDay($Value) { $s = Get-EbrJsonText $Value; $d = [datetime]::MinValue; $s -match '^\d{4}-\d{2}-\d{2}$' -and [datetime]::TryParseExact($s, 'yyyy-MM-dd', [cultureinfo]::InvariantCulture, 'None', [ref]$d) }
-function Get-EbrIsoDay($Value) { $s = Get-EbrJsonText $Value; if ($s.Length -gt 10) { $s.Substring(0, 10) } else { $s } }
-function Select-EbrClientContext($Context, $Parameters) {
-    if ($null -eq $Context) { return $null }
-    $c = $Context | Select-Object -Property * -ExcludeProperty TenantId
-    $start = Get-EbrJsonText $Parameters.WindowStart; $end = Get-EbrJsonText $Parameters.WindowEnd; $read = Get-EbrIsoDay $Parameters.PostureReadDate
-    $window = (Test-EbrDay $start) -and (Test-EbrDay $end) -and [string]::CompareOrdinal($start, $end) -le 0
-    $blank = { param($v) [string]::IsNullOrWhiteSpace([string]$v) }
-    # A record bound to another alert period, or missing its reference or dates, is omitted.
-    $outOfPeriod = { param($r) (& $blank $r.Reference) -or -not (Test-EbrDay (Get-EbrIsoDay $r.Reviewed)) -or -not (Test-EbrDay (Get-EbrIsoDay $r.WindowStart)) -or -not (Test-EbrDay (Get-EbrIsoDay $r.WindowEnd)) -or -not $window -or (Get-EbrIsoDay $r.WindowStart) -cne $start -or (Get-EbrIsoDay $r.WindowEnd) -cne $end }
-    if ($null -ne $c.ServiceStartDate -and -not ((Test-EbrDay $c.ServiceStartDate) -and (Test-EbrDay $Parameters.PostureReadDate) -and [string]::CompareOrdinal((Get-EbrJsonText $c.ServiceStartDate), (Get-EbrJsonText $Parameters.PostureReadDate)) -le 0)) { $c.ServiceStartDate = $null }
-    if ($null -ne $c.Delivered) {
-        $c.Delivered = @(@($c.Delivered) | Where-Object {
-                $_ -and -not (& $blank $_.Title) -and -not (& $blank $_.Outcome) -and -not (& $blank $_.Reference) -and (Test-EbrDay $_.CompletedDate) -and $window -and
-                [string]::CompareOrdinal((Get-EbrJsonText $_.CompletedDate), $start) -ge 0 -and [string]::CompareOrdinal((Get-EbrJsonText $_.CompletedDate), $end) -le 0 })
-    }
-    if ($null -ne $c.Actions) {
-        $keys = @('drift', 'critical', 'methods', 'access', 'idp', 'phish', 'consent', 'workload', 'logging', 'kvrbac', 'diskenc', 'containers', 'vulnassess', 'segment', 'windows', 'backup', 'vmplatform', 'pim', 'allowlist', 'sharing', 'mdi')
-        $statuses = @('Proposed', 'PendingValidation', 'AwaitingApproval', 'Approved', 'Scheduled', 'InProgress', 'Verified')
-        $c.Actions = @(@($c.Actions) | Where-Object {
-                $target = if ($null -eq $_.TargetDate -or [string]$_.TargetDate -eq '') { $null } else { Get-EbrIsoDay $_.TargetDate }
-                # The model reads the key after its copy normalization, which can only remove characters that are not letters.
-                $_ -and (([string]$_.Key) -creplace '[^A-Za-z]', '') -cin $keys -and [string]$_.Status -cin $statuses -and -not (& $outOfPeriod $_) -and
-                (Test-EbrDay $read) -and [string]::CompareOrdinal((Get-EbrIsoDay $_.Reviewed), $read) -ge 0 -and
-                ($null -eq $target -or (Test-EbrDay $target)) -and -not ([string]$_.Status -ceq 'Scheduled' -and $null -eq $target) })
-    }
-    foreach ($name in 'Impact', 'OpenAlertNote') {
-        $r = $c.$name
-        if ($null -ne $r -and ($r -isnot [pscustomobject] -or (& $outOfPeriod $r) -or [string]::CompareOrdinal((Get-EbrIsoDay $r.Reviewed), $end) -lt 0)) { $c.$name = $null }
-    }
-    $c
-}
-function ConvertTo-EbrClientData($Data) {
-    $p = $Data.parameters
-    $keys = @{}
-    $placeholder = { param($value, $label) $k = ([string]$value).ToLowerInvariant(); if (-not $keys.ContainsKey($k)) { $keys[$k] = '[{0} {1}]' -f $label, ($keys.Count + 1) }; $keys[$k] }
-    $workspaces = @(foreach ($w in @($p.Workspaces | Where-Object { $null -ne $_ })) {
-            $o = [ordered]@{ Name = $w.Name; RetentionDays = $w.RetentionDays }
-            if ($w.CustomerId) { $o.CustomerId = & $placeholder $w.CustomerId 'workspace' }
-            elseif ($w.ResourceId) { $o.ResourceId = & $placeholder $w.ResourceId 'workspace' }
-            [pscustomobject]$o
-        })
-    $subscriptions = @(@($p.Subscriptions) | Where-Object { $null -ne $_ } | ForEach-Object { ([string]$_).ToLowerInvariant() } | Sort-Object -Unique).Count
-    $defender = [string]$p.DefenderApi
-    $results = [ordered]@{}
-    foreach ($id in $Data.results.Keys) {
-        $omit = $clientOmit[$id]
-        if ($omit -eq '*') { continue }
-        $results[$id] = @(foreach ($r in @($Data.results[$id])) {
-                $o = [ordered]@{}
-                foreach ($prop in $r.PSObject.Properties) { if ($prop.Name -cnotin $omit -and $codeTokens.Contains($prop.Name)) { $o[$prop.Name] = $prop.Value } }
-                [pscustomobject]$o
-            })
-    }
-    [ordered]@{
-        version = $Data.version
-        depth = $Data.depth
-        edition = 'client'
-        parameters = [pscustomobject]@{
-            ClientName = $p.ClientName; WindowStart = $p.WindowStart; WindowEnd = $p.WindowEnd; PostureReadDate = $p.PostureReadDate
-            ManagedRgPattern = $p.ManagedRgPattern; TicketPattern = $p.TicketPattern; PatchCadenceDays = $p.PatchCadenceDays
-            SubscriptionCount = $subscriptions; Workspaces = $workspaces
-            TenantWideTables = [pscustomobject]@{ SigninLogs = $p.TenantWideTables.SigninLogs }
-            # Only whether Advanced Hunting was available reaches a client page. The reason it was not is a presenter note.
-            DefenderApi = $(if (-not $defender -or $defender -ieq 'available') { $defender } else { 'Not available' })
-        }
-        manifest = @($Data.manifest | Select-Object ResultId, Status, ReadTimeUtc, NotOnboarded, AccessGap)
-        results = $results
-        issues = @()
-        context = Select-EbrClientContext $Data.context $p
-    }
-}
-# Any GUID-shaped run, even inside a longer run of hexadecimal characters, so a name such as a<GUID>f is masked too.
-$guidPattern = '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-function ConvertTo-EbrEmbeddedJson($InputObject, [switch]$MaskGuids) {
-    $text = ConvertTo-Json -InputObject $InputObject -Depth 15 -Compress
-    if ($MaskGuids) {
-        # A GUID holds no JSON escape characters, so replacing it in the serialized text changes string values only.
-        $ids = @{}
-        $text = [regex]::Replace($text, $guidPattern, { param($match) $k = $match.Value.ToLowerInvariant(); if (-not $ids.ContainsKey($k)) { $ids[$k] = '[id {0}]' -f ($ids.Count + 1) }; $ids[$k] })
-    }
-    # Escape HTML-sensitive characters even inside application/json script elements.
-    $text = $text.Replace('&', '\u0026').Replace('<', '\u003c').Replace('>', '\u003e')
-    $text.Replace([string][char]0x2028, '\u2028').Replace([string][char]0x2029, '\u2029')
-}
-# Result fields are read by name only, so a field whose name the report code never mentions is read by no page.
-$codeTokens = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
-foreach ($file in 'report-model.js', 'report-story.js', 'report-render.js') {
-    foreach ($t in [regex]::Matches((Get-Content -LiteralPath (Join-Path $assets $file) -Raw), '[A-Za-z_][A-Za-z0-9_]*')) { [void]$codeTokens.Add($t.Value) }
-}
-$json = ConvertTo-EbrEmbeddedJson $data
-$clientJson = ConvertTo-EbrEmbeddedJson (ConvertTo-EbrClientData $data) -MaskGuids
+# Escape HTML-sensitive characters even inside application/json script elements.
+$json = ConvertTo-Json -InputObject $data -Depth 15 -Compress
+$json = $json.Replace('&', '\u0026').Replace('<', '\u003c').Replace('>', '\u003e')
+$json = $json.Replace([string][char]0x2028, '\u2028').Replace([string][char]0x2029, '\u2029')
 $template = Get-Content -LiteralPath (Join-Path $assets 'report.html') -Raw
 $css = Get-Content -LiteralPath (Join-Path $assets 'report.css') -Raw
 $background = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $assets 'assets/template-background.jpg')))
@@ -431,24 +317,55 @@ $css = $css.Replace('__BACKGROUND__', $background)
 $model = Get-Content -LiteralPath (Join-Path $assets 'report-model.js') -Raw
 $render = Get-Content -LiteralPath (Join-Path $assets 'report-render.js') -Raw
 $review = Get-Content -LiteralPath (Join-Path $assets 'report-review.js') -Raw
-$template = $template.Replace('__CSS__', $css).Replace('__MODEL__', $model).Replace('__RENDER__', $render)
-# The internal edition carries the presenter notes toggle, the aside and the script that fills it. The client edition
-# carries none of them.
-$html = $template.Replace('__REVIEW_TOGGLE__', '    <button id="review-toggle" aria-expanded="false" aria-controls="review">Presenter notes</button>')
-$html = $html.Replace('__REVIEW_ASIDE__', '<aside id="review" hidden aria-label="Presenter notes and evidence review"></aside>')
-$html = $html.Replace('__REVIEW_SCRIPT__', "<script>$review</script>").Replace('__DATA__', $json)
-$clientHtml = ($template -replace '(?m)^__REVIEW_(TOGGLE|ASIDE|SCRIPT)__\r?\n', '').Replace('__DATA__', $clientJson)
-if ($clientHtml -cmatch 'Presenter notes|review-toggle|__REVIEW_' -or $clientHtml -match $guidPattern) { throw 'The client edition of the report still carries presenter material or a GUID, so it was not written.' }
+$controls = Get-Content -LiteralPath (Join-Path $assets 'report-controls.js') -Raw
+$template = $template.Replace('__CSS__', $css).Replace('__CONTROLS__', $controls)
 if (-not $OutputPath) { $OutputPath = Join-Path $pack '03-security-report.html' }
 $destination = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
 if ([IO.Path]::GetExtension($destination) -ine '.html') { throw 'OutputPath must end in .html.' }
-$clientDestination = [IO.Path]::ChangeExtension($destination, '.client.html')
 $parent = Split-Path -Parent $destination
 if (-not (Test-Path -LiteralPath $parent -PathType Container)) { [void](New-Item -ItemType Directory -Path $parent -Force) }
+
+# The internal edition embeds the data, the report model and the renderer, and carries the presenter notes toggle,
+# the aside and the script that fills it.
+$scripts = "<noscript>This report requires JavaScript to display the embedded evidence. Enable JavaScript and reopen this local file.</noscript>`n" +
+    "<script id=""report-data"" type=""application/json"">__DATA__</script>`n<script>$model</script>`n<script>$render</script>`n<script>$review</script>"
+$html = $template.Replace('__REVIEW_TOGGLE__', '    <button id="review-toggle" aria-expanded="false" aria-controls="review">Presenter notes</button>')
+$html = $html.Replace('__REVIEW_ASIDE__', '<aside id="review" hidden aria-label="Presenter notes and evidence review"></aside>').Replace('__REPORT__', '')
+$html = $html.Replace('__SCRIPTS__', $scripts).Replace('__DATA__', $json)
 [IO.File]::WriteAllText($destination, $html, [Text.UTF8Encoding]::new($false))
 Write-Output $destination
-[IO.File]::WriteAllText($clientDestination, $clientHtml, [Text.UTF8Encoding]::new($false))
-Write-Output $clientDestination
+
+# The client edition carries the report pages already rendered, by report/build-client-report.cjs from the same data,
+# and the toolbar script only: no embedded data, no report model, so none of the presenter notes, evidence review,
+# timing rationale or collection register, and none of the subscription, workspace or other identifiers in the data.
+# Every GUID on the rendered pages, such as one inside a default workspace name or a context Reference, becomes the
+# same [id N] placeholder wherever it appears. The builder refuses to write a client edition that still holds a GUID
+# or presenter material. It needs Node.js, like the PowerPoint edition, and without it only the internal edition is
+# written, with a warning.
+$guidPattern = '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+$clientDestination = [IO.Path]::ChangeExtension($destination, '.client.html')
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) { Write-Warning 'Node.js was not found, so the client edition of the report was not written. Do not send the internal edition to the client.' }
+else {
+    $dataFile = Join-Path ([IO.Path]::GetTempPath()) ('ebr-client-{0}.json' -f [guid]::NewGuid())
+    $pagesFile = Join-Path ([IO.Path]::GetTempPath()) ('ebr-client-pages-{0}.json' -f [guid]::NewGuid())
+    try {
+        [IO.File]::WriteAllText($dataFile, $json, [Text.UTF8Encoding]::new($false))
+        $built = & node (Join-Path $assets 'build-client-report.cjs') $dataFile $pagesFile 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "The client edition of the report was not written. $built" }
+        $pages = [IO.File]::ReadAllText($pagesFile, [Text.Encoding]::UTF8) | ConvertFrom-Json
+    }
+    finally { Remove-Item -LiteralPath $dataFile, $pagesFile -Force -ErrorAction SilentlyContinue }
+    $ids = @{}
+    $mask = { param($text) [regex]::Replace([string]$text, $guidPattern, { param($match) $k = $match.Value.ToLowerInvariant(); if (-not $ids.ContainsKey($k)) { $ids[$k] = '[id {0}]' -f ($ids.Count + 1) }; $ids[$k] }) }
+    $title = [Net.WebUtility]::HtmlEncode((& $mask $pages.title))
+    $clientHtml = $template -replace '(?m)^__REVIEW_(TOGGLE|ASIDE)__\r?\n', ''
+    $clientHtml = $clientHtml.Replace('<title>Security business review</title>', "<title>$title</title>").Replace("<option value=""$($Depth.ToLowerInvariant())"">", "<option value=""$($Depth.ToLowerInvariant())"" selected>")
+    $clientHtml = $clientHtml -replace '(?m)^__SCRIPTS__\r?\n', ''
+    $clientHtml = $clientHtml.Replace('__REPORT__', (& $mask $pages.html))
+    if ($clientHtml -cmatch 'Presenter notes|review-toggle|report-data|EbrReport|__[A-Z_]+__' -or $clientHtml -match $guidPattern) { throw 'The client edition of the report still carries presenter material, report data or a GUID, so it was not written.' }
+    [IO.File]::WriteAllText($clientDestination, $clientHtml, [Text.UTF8Encoding]::new($false))
+    Write-Output $clientDestination
+}
 
 # PowerPoint edition. The deck builder reads the same aggregate data the HTML embeds, so it sees
 # nothing the HTML does not. A missing Node.js or pptxgenjs leaves the HTML in place with a warning.

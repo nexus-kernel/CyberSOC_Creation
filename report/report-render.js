@@ -162,13 +162,6 @@
   report.innerHTML = summary + outcomes + measured + controls + roadmap + posture
   document.title = `${m.client} | Security business review`
 
-  const depth = document.getElementById('depth')
-  depth.value = m.depth
-  function setDepth() {
-    document.body.dataset.depth = depth.value
-    document.querySelectorAll('.additional, .data-details').forEach(d => { d.open = depth.value === 'detailed' })
-  }
-  depth.addEventListener('change', setDepth)
-  setDepth()
-  document.getElementById('print').addEventListener('click', () => window.print())
+  // The depth selector and the print button are wired by report-controls.js, which both editions carry.
+  document.getElementById('depth').value = m.depth
 })()
