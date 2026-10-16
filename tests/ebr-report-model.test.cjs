@@ -885,6 +885,15 @@ test('the detection statement says every alert only from a complete DR.10 readin
       assert.ok(!/alerts? resolved|been resolved/i.test(page), `${label}: the disposition panel says closed, never resolved`)
     }
   }
+  // Beside the period's figures the page labels the DR.10 window, on the pillar statement and the register row, and
+  // names the period's unclassified closures beside it.
+  const windowed = pack(); alerts(windowed); readings(windowed, true)
+  put(windowed, 'OUT.1', [{ Raised: 100, Closed: 100, Open: 0, TruePositive: 3, ClosedUnclassified: 5 }])
+  const windowedPage = renderHtml(windowed)
+  assert.ok(windowedPage.includes('<h4>100 of 100 alerts closed in the last 30 days carry a documented disposition</h4><p>The SOC triaged 100 alerts Nov 1, 2025 to Sep 30, 2026. 100 were closed.'), 'the pillar statement names the DR.10 window')
+  assert.match(windowedPage, /<h4>100 of 100 alerts closed in the last 30 days carry a documented disposition<\/h4><p>[^<]*5 closed alerts carry no recorded classification\./)
+  assert.match(windowedPage, /<h4>Alerts closed with a documented disposition<\/h4><p>Alerts closed in the last 30 days that carry a classification and a closing comment\.<\/p>/)
+  assert.ok(windowedPage.includes('5 closed alerts carry no recorded classification.</p>'), 'the disposition panel names the unclassified closures')
   // The page carries the same statement the model earned.
   drop(p, 'DR.10')
   const page = renderHtml(p)
