@@ -1218,7 +1218,7 @@ test('Arc-enabled servers are named in the endpoint notes and reconcile the inve
 test('the Defender for Cloud score movement is measured to the current score, so the points and the percentage reconcile', () => {
   const p = pack()
   put(p, 'POS.1', [{ Current: 132.75, Max: 232, Percent: 57.2, Subscriptions: 1 }])
-  put(p, 'POS.7', [{ Month: '2026-07-01', Current: 123.82, Max: 238, Percent: 52 }, { Month: '2026-08-01', Current: 114.09, Max: 232, Percent: 49.2 }, { Month: '2026-10-01', Current: 133.32, Max: 232, Percent: 57.5 }])
+  put(p, 'POS.7', [{ Month: '2026-07-01', Current: 120.64, Max: 232, Percent: 52 }, { Month: '2026-08-01', Current: 114.09, Max: 232, Percent: 49.2 }, { Month: '2026-10-01', Current: 133.32, Max: 232, Percent: 57.5 }])
   const m = build(p)
   assert.equal(m.cloudScore.value, 57.2)
   assert.deepEqual(m.cloudScore.delta, { points: 5.2, since: 'Jul 2026', from: 52 })
@@ -1228,6 +1228,51 @@ test('the Defender for Cloud score movement is measured to the current score, so
   p.results['POS.1'][0].Current = 132.75
   p.results['POS.7'][2].Percent = 50
   assert.deepEqual(build(p).cloudScore.delta, { points: 5.2, since: 'Jul 2026', from: 52 })
+})
+test('the Defender for Cloud movement is refused when the first month and the current reading differ in maximum', () => {
+  const p = pack()
+  put(p, 'POS.1', [{ Current: 132.75, Max: 232, Percent: 57.2, Subscriptions: 1 }])
+  put(p, 'POS.7', [{ Month: '2026-07-01', Current: 123.82, Max: 238, Percent: 52 }, { Month: '2026-10-01', Current: 133.32, Max: 232, Percent: 57.5 }])
+  let m = build(p)
+  assert.equal(m.cloudScore.delta, null, 'a maximum of 238 then 232 is a different evaluated scope, so no gain prints')
+  assert.match(m.headline.find(t => /Defender for Cloud/.test(t.label)).sub, /^Classic Defender for Cloud score$/)
+  assert.equal(m.presenter.find(n => n.title === 'Defender for Cloud score movement').text, 'The continuous export reads a maximum of 238 points in Jul 2026 and the current reading 232 points, so the evaluated scope or the scoring changed between them. The two are not compared and the score reads as current state. The report shows the monthly trend beside it.')
+  assert.deepEqual(m.cloudScore.trend.map(r => r.pct), [52, 57.5], 'the monthly trend is still shown')
+  delete p.results['POS.7'][0].Max
+  m = build(p)
+  assert.equal(m.cloudScore.delta, null, 'a first month with no maximum is never compared')
+  assert.match(m.presenter.find(n => n.title === 'Defender for Cloud score movement').text, /^The continuous export records no maximum for Jul 2026, so it is not compared/)
+})
+test('each score records its model, where it was read, its scope as a count and its read date', () => {
+  const p = pack()
+  p.parameters.Subscriptions = ['11111111-2222-3333-4444-555555555555', '66666666-7777-8888-9999-000000000000']
+  put(p, 'POS.1', [{ Current: 40, Max: 80, Percent: 50, Subscriptions: 2 }])
+  put(p, 'POS.6', [{ ReadDate: '2026-10-10', Current: 412.5, Max: 1000, Percent: 41.25 }])
+  let m = build(p)
+  assert.deepEqual([m.cloudScore.model, m.cloudScore.origin, m.cloudScore.scope, m.cloudScore.read], ['Classic Defender for Cloud secure score', 'Azure Resource Graph', '2 subscriptions', 'Oct 8, 2026'])
+  assert.equal(m.cloudScore.note, 'Classic Defender for Cloud secure score across 2 subscriptions, calculated by Microsoft. Read Oct 8, 2026 from Azure Resource Graph.')
+  assert.deepEqual([m.tenantScore.model, m.tenantScore.origin, m.tenantScore.scope, m.tenantScore.read], ['Microsoft Secure Score', 'Microsoft Graph', 'Microsoft 365 tenant', 'Oct 10, 2026'])
+  assert.equal(m.tenantScore.note, 'Microsoft Secure Score for the Microsoft 365 tenant, calculated by Microsoft. Read Oct 10, 2026 from Microsoft Graph.')
+  assert.ok(!/11111111|66666666/.test(JSON.stringify([m.cloudScore, m.tenantScore])), 'no subscription ID reaches either score')
+  assert.match(m.presenter.find(n => n.title === 'Score across subscriptions').text, /weights each one by its healthy and unhealthy resources, so the portal percentage can differ from this one\.$/)
+  p.context = { TenantScore: { Current: 45, Max: 100, ReadDate: '2026-10-08', Source: 'Dated portal capture' } }
+  m = build(p)
+  assert.equal(m.tenantScore.origin, 'a reviewed portal reading')
+  assert.equal(m.tenantScore.note, 'Microsoft Secure Score for the Microsoft 365 tenant, calculated by Microsoft. Read Oct 8, 2026 from a reviewed portal reading.')
+})
+test('each score control carries its healthy of assessed resources, and missing or zero totals carry none', () => {
+  const p = pack()
+  put(p, 'POS.3', [
+    { Control: 'Remediate vulnerabilities', Current: 0.31, Max: 6, Healthy: 4, Unhealthy: 74 },
+    { Control: 'Enable MFA', Current: 10, Max: 10, Healthy: 1, Unhealthy: 0 },
+    { Control: 'Apply system updates', Current: 2, Max: 6 },
+    { Control: 'Restrict unauthorized network access', Current: 0, Max: 4, Healthy: 0, Unhealthy: 0 }
+  ])
+  const c = Object.fromEntries(build(p).posture.scoreControls.map(x => [x.label, x]))
+  assert.deepEqual([c['Remediate vulnerabilities'].healthy, c['Remediate vulnerabilities'].resources], [4, 78])
+  assert.deepEqual([c['Enable MFA'].healthy, c['Enable MFA'].resources], [1, 1])
+  assert.equal(c['Apply system updates'].resources, null, 'missing counts give no total')
+  assert.equal(c['Restrict unauthorized network access'].resources, null, 'zero resources give no total, never 0 of 0')
 })
 test('the benchmark meter reads the Microsoft cloud security benchmark alone when a preview edition or another standard is assigned too', () => {
   const p = pack()
@@ -1467,25 +1512,36 @@ test('every client-facing string keeps to the copy rules: no semicolons, arrows 
   assert.ok(!/[\u{1F300}-\u{1FAFF}☀-➿]/u.test(text), 'emoji')
   assert.ok(!/[<>]/.test(text), text.match(/.{0,60}[<>].{0,60}/)?.[0])
 })
-test('tenant score movement compares each snapshot against its own maximum', () => {
+test('tenant score movement is refused when the two readings differ in maximum or in model', () => {
   const p = pack()
   put(p, 'POS.6', [{ ReadDate: '2026-10-10', Current: 450, Max: 1000, Percent: 45 }])
   put(p, 'POS.6-TREND', [{ Date: '2026-07-15', Current: 400, Max: 800, Percent: 50 }, { Date: '2026-10-10', Current: 450, Max: 1000, Percent: 45 }])
   assert.equal(build(p).tenantScore.delta, null, 'a wider maximum that lowers the percentage prints no gain')
   p.results['POS.6-TREND'][0] = { Date: '2026-07-15', Current: 320, Max: 800, Percent: 40 }
-  assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 })
+  let m = build(p)
+  assert.equal(m.tenantScore.delta, null, 'a maximum of 800 then 1000 is a different evaluated scope, so 40% to 45% is not compared')
+  assert.equal(m.review.find(n => n.title === 'Microsoft tenant Secure Score movement').text, 'The earlier reading from Jul 15, 2026 has a maximum of 800 points and the current reading 1,000 points, so the evaluated scope or the scoring changed between them. The two are not compared and the score reads as current state.')
+  p.results['POS.6-TREND'][0] = { Date: '2026-07-15', Current: 400, Max: 1000, Percent: 40 }
+  assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 }, 'the same model and maximum are compared')
   // The context file takes PreviousMax. Without it, the POS.6-TREND snapshot dated PreviousReadDate supplies the
   // maximum, and without that the movement line is omitted rather than taken against the current maximum.
-  p.context = { TenantScore: { Current: 450, Max: 1000, ReadDate: '2026-10-01', Source: 'Portal reading', Previous: 400, PreviousMax: 800, PreviousReadDate: '2026-07-10' } }
+  p.context = { TenantScore: { Current: 450, Max: 1000, ReadDate: '2026-10-01', Source: 'Portal reading', Previous: 320, PreviousMax: 800, PreviousReadDate: '2026-07-10' } }
   assert.equal(build(p).tenantScore.delta, null)
   delete p.context.TenantScore.PreviousMax
   const omitted = build(p)
   assert.equal(omitted.tenantScore.delta, null, 'no snapshot is dated Jul 10, so nothing stands in for the maximum')
   assert.ok(omitted.review.some(n => n.title === 'Microsoft tenant Secure Score movement'))
   p.context.TenantScore.PreviousReadDate = '2026-07-15'
-  assert.equal(build(p).tenantScore.delta, null, 'the Jul 15 snapshot carries a maximum of 800, so 400 is 50% and no gain prints')
-  p.context.TenantScore.Previous = 320
-  assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 })
+  p.context.TenantScore.Previous = 400
+  assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 }, 'the Jul 15 snapshot carries the same maximum of 1000')
+  // A reading from another scoring model is never compared, whatever its maximum.
+  p.context.TenantScore.PreviousModel = 'Risk-based Cloud Secure Score'
+  m = build(p)
+  assert.equal(m.tenantScore.delta, null)
+  assert.equal(m.review.find(n => n.title === 'Microsoft tenant Secure Score movement').text, 'The earlier reading from Jul 15, 2026 uses Risk-based Cloud Secure Score and the current reading uses Microsoft Secure Score, so the two are not compared and the score reads as current state.')
+  assert.ok(!/Up \d/.test(JSON.stringify(m.headline)), 'no movement line on any tile')
+  p.context.TenantScore.PreviousModel = 'microsoft secure score'
+  assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 }, 'the model name is matched without regard to case')
 })
 test('the three threat measures stay apart, and only a reviewed context record prints an impact determination', () => {
   const gate = 'Based on the tactics Sentinel recorded on the alerts, none of the confirmed threats carried an exfiltration or impact tactic. Additional investigation evidence is required to confirm whether any data exposure or business impact occurred.'
@@ -1638,4 +1694,35 @@ test('the roadmap page words planned work as a recommendation and never promises
   assert.ok(!/already sign in with Microsoft Authenticator|need to update their MFA method|Register a stronger method/.test(html))
   assert.ok(html.includes('<p class="success"><strong>Outcome</strong> Every affected user registered on a replacement method before February 1, 2027 (July 1, 2027 for Global Administrators and external users), the fallback tested, and no rise in failed sign-ins after enforcement.</p>'))
   assert.ok(!/waits on discovery|scoped and sequenced|already scoped|Every enforcement is staged|non-event|No blocked sign-ins|no sign-in is blocked|\bscheduled\b/i.test(html), html.match(/.{0,60}(waits on discovery|scoped and sequenced|already scoped|Every enforcement is staged|non-event|blocked sign-ins|scheduled).{0,60}/i)?.[0])
+})
+test('the posture page states how a score control earns points, the healthy resources per control and the model of each score', () => {
+  const p = pack()
+  put(p, 'POS.1', [{ Current: 40, Max: 80, Percent: 50, Subscriptions: 2 }])
+  put(p, 'POS.6', [{ ReadDate: '2026-10-10', Current: 412.5, Max: 1000, Percent: 41.25 }])
+  put(p, 'POS.3', [
+    { Control: 'Remediate vulnerabilities', Current: 0.31, Max: 6, Healthy: 4, Unhealthy: 74 },
+    { Control: 'Enable MFA', Current: 9, Max: 10, Healthy: 1, Unhealthy: 0 },
+    { Control: 'Restrict unauthorized network access', Current: 0, Max: 4, Healthy: 0, Unhealthy: 0 },
+    // Two subscriptions summed by POS.3: 1 healthy of 1 earns the whole max of 6 in one, 0 of 99 earns nothing in the
+    // other, so the row reads 50% of its points with 1 of 100 resources healthy.
+    { Control: 'Apply system updates', Current: 6, Max: 12, Healthy: 1, Unhealthy: 99 }
+  ])
+  const nodes = {}
+  const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(p) : '', addEventListener() {} }) }
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+  const html = nodes.report.innerHTML
+  assert.ok(!/all or nothing|no visible movement until a control completes/.test(html), 'the all-or-nothing claim is gone')
+  assert.ok(html.includes('Microsoft score controls ranked by the points still available. Defender for Cloud secure score provides a standardized view of assessed cloud security controls. Within each subscription, a control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources in that subscription, so points can be gained before a control completes. The points and resource counts shown for each control are added across subscriptions, so the share of resources healthy can differ from the share of points earned.'))
+  assert.ok(html.includes('<h4>Apply system updates</h4><p class="small">1 of 100 resources healthy</p></div>') && html.includes('aria-label="Apply system updates: 50%"'), 'the summed row keeps its points share beside its resource count')
+  assert.ok(html.includes('<h4>Remediate vulnerabilities</h4><p class="small">4 of 78 resources healthy</p>'))
+  assert.ok(html.includes('<h4>Enable MFA</h4><p class="small">1 of 1 resource healthy</p>'))
+  assert.ok(html.includes('<h4>Restrict unauthorized network access</h4></div>'), 'a control with no assessed resources prints no count')
+  assert.ok(!/0 of 0/.test(html))
+  // With one subscription the formula holds for the row itself, so the summed-rows sentence is left out.
+  p.results['POS.1'][0].Subscriptions = 1
+  const single = build(p).posture.scoreControlBasis
+  assert.ok(single.includes('Within each subscription, a control earns points') && !/added across subscriptions/.test(single), single)
+  assert.ok(html.includes('Classic Defender for Cloud secure score across 2 subscriptions, calculated by Microsoft. Read Oct 8, 2026 from Azure Resource Graph.'))
+  assert.ok(html.includes('Microsoft Secure Score for the Microsoft 365 tenant, calculated by Microsoft. Read Oct 10, 2026 from Microsoft Graph.'))
+  assert.ok(!/;/.test(html.replace(/&[a-z#0-9]+;/gi, '').replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>|style="[^"]*"/g, '')), 'no semicolon in the visible copy')
 })

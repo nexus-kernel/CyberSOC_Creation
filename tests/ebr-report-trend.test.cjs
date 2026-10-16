@@ -11,7 +11,7 @@ const { JSZip } = require('../report/deck-common.cjs')
 // Exercise both real renderers: a monthly chart is evidence, not a positive-change badge.
 for (const [name, values] of [['declining', [60, 55, 50]], ['flat', [50, 50, 50]], ['rising', [40, 45, 50]], ['one reading', [50]], ['no history', []]]) {
   test(`HTML and PowerPoint retain ${name} cloud history when sufficient`, async () => {
-    const trend = values.map((Percent, i) => ({ Month: `2026-0${i + 7}-01`, Percent }))
+    const trend = values.map((Percent, i) => ({ Month: `2026-0${i + 7}-01`, Current: Percent, Max: 100, Percent }))
     // Invalid readings must not manufacture sufficient history or reach either chart.
     trend.push({ Month: 'invalid', Percent: 65 }, { Month: '2026-10-01', Percent: 101 }, { Month: '2026-10-01', Percent: -1 }, { Month: '2026-10-01', Percent: null })
     const data = {

@@ -928,7 +928,17 @@
       }
     }
 
-    // Scores and posture.
+    // Scores and posture. Each score records its model, where it was read, its scope and its read date (Oct 16, 2026).
+    // Defender for Cloud offers two models with different calculations and values: the classic secure score in the
+    // Azure portal, which Resource Graph (POS.1, securescores) and the continuous export (POS.7) carry, and the
+    // risk-based Cloud Secure Score in the Defender portal, which no query here reads. Microsoft Secure Score is a
+    // separate score for the Microsoft 365 tenant. The scope is a count, never an identifier.
+    // A movement line compares two readings only when both use the same model and the same maximum. A different
+    // maximum means the evaluated scope or the scoring changed between them, so the score reads as current state and
+    // the evidence review or presenter notes name the two readings.
+    const CLOUD_MODEL = 'Classic Defender for Cloud secure score', TENANT_MODEL = 'Microsoft Secure Score'
+    const sameModel = (a, b) => clean(a).toLowerCase() === clean(b).toLowerCase()
+    const sameMax = (a, b) => num(a) > 0 && num(b) > 0 && Number(a).toFixed(2) === Number(b).toFixed(2)
     const cloud = one('POS.1')
     const scoreValid = cloud && num(cloud.Current) !== null && num(cloud.Max) > 0 && cloud.Current <= cloud.Max
     const trendRows = rows('POS.7').filter(r => validDate(iso(r.Month)) && num(r.Percent) !== null && Number(r.Percent) <= 100).sort((a, b) => iso(a.Month).localeCompare(iso(b.Month)))
@@ -941,11 +951,16 @@
       // last point is not the truth about today.
       // The movement is stated in percentage points with the starting percentage (from), never as points available.
       // A movement that rounds to zero is no gain: the score then reads as current state everywhere.
-      const cloudPoints = trendRows.length >= 2 ? Number((value - Number(first.Percent)).toFixed(1)) : null
+      // Both readings are the classic model, so the gate is the maximum: the first month's against the current one.
+      const cloudComparable = trendRows.length >= 2 && sameMax(first.Max, cloud.Max)
+      const cloudPoints = cloudComparable ? Number((value - Number(first.Percent)).toFixed(1)) : null
       const delta = cloudPoints !== null && cloudPoints > 0 ? { points: cloudPoints, since: monthLabel(first.Month), from: Number(first.Percent) } : null
-      m.cloudScore = { value, current: Number(cloud.Current), max: Number(cloud.Max), subscriptions: count(cloud.Subscriptions), delta, trend: trendRows.map(r => ({ label: monthLabel(r.Month), pct: Number(r.Percent) })), note: `Secure score across ${plural(cloud.Subscriptions, 'subscription', 'subscriptions')}, calculated by Microsoft.`, source: source('POS.1') }
-      if (trendRows.length >= 2 && !delta) presenter('Defender for Cloud score movement', `The continuous export shows ${pctText(first.Percent)} in ${monthLabel(first.Month)} and ${pctText(last.Percent)} in ${monthLabel(last.Month)}. The report shows the monthly trend, including declines, beside the current score. Changes in the measurement model, scope or weighting can move the score without a change in the underlying controls.`)
+      const scope = plural(cloud.Subscriptions, 'subscription', 'subscriptions'), readTime = index.get('POS.1')?.ReadTimeUtc, read = validDate(iso(readTime)) ? date(readTime) : null
+      m.cloudScore = { value, current: Number(cloud.Current), max: Number(cloud.Max), subscriptions: count(cloud.Subscriptions), model: CLOUD_MODEL, origin: 'Azure Resource Graph', scope, read, basis: `${CLOUD_MODEL} across ${scope}. ${read ? `Read ${read} from Azure Resource Graph.` : 'Read from Azure Resource Graph.'}`, delta, trend: trendRows.map(r => ({ label: monthLabel(r.Month), pct: Number(r.Percent) })), note: `${CLOUD_MODEL} across ${scope}, calculated by Microsoft. ${read ? `Read ${read} from Azure Resource Graph.` : 'Read from Azure Resource Graph, with no read date recorded.'}`, source: source('POS.1') }
+      if (trendRows.length >= 2 && !cloudComparable) presenter('Defender for Cloud score movement', num(first.Max) > 0 ? `The continuous export reads a maximum of ${fmt(Number(first.Max))} points in ${monthLabel(first.Month)} and the current reading ${fmt(Number(cloud.Max))} points, so the evaluated scope or the scoring changed between them. The two are not compared and the score reads as current state. The report shows the monthly trend beside it.` : `The continuous export records no maximum for ${monthLabel(first.Month)}, so it is not compared with the current reading and the score reads as current state. The report shows the monthly trend beside it.`)
+      else if (trendRows.length >= 2 && !delta) presenter('Defender for Cloud score movement', `The continuous export shows ${pctText(first.Percent)} in ${monthLabel(first.Month)} and ${pctText(last.Percent)} in ${monthLabel(last.Month)}. The report shows the monthly trend, including declines, beside the current score. Changes in the measurement model, scope or weighting can move the score without a change in the underlying controls.`)
       if (count(cloud.Subscriptions) !== m.subscriptions) presenter('Score subscription scope', `The cloud score covers ${fmt(cloud.Subscriptions)} of ${fmt(m.subscriptions)} in-scope subscriptions.`)
+      if (count(cloud.Subscriptions) > 1) presenter('Score across subscriptions', `POS.1 adds the points of ${scope}. When the Azure portal combines subscriptions, Microsoft weights each one by its healthy and unhealthy resources, so the portal percentage can differ from this one.`)
     } else unmeasured('POS.1', 'Defender for Cloud score', state('POS.1'))
     // Tenant Secure Score: the reviewed context file wins, otherwise the Graph reading (POS.6) with movement from the 90-day trend.
     const pos6 = one('POS.6')
@@ -967,12 +982,20 @@
       const value = pct(tenant.Current, tenant.Max)
       const snapshot = validDate(tenant.PreviousReadDate) ? trend6.find(r => iso(r.Date) === iso(tenant.PreviousReadDate) && num(r.Max) > 0) : null
       const previousMax = num(tenant.PreviousMax) > 0 ? Number(tenant.PreviousMax) : snapshot ? Number(snapshot.Max) : null
-      const previousPct = previousMax !== null && num(tenant.Previous) !== null && tenant.Previous <= previousMax ? pct(tenant.Previous, previousMax) : null
+      // The earlier reading is compared only when it uses the same model (PreviousModel in the context file, Microsoft
+      // Secure Score when absent) and the same maximum as the current reading.
+      const previousModel = clean(tenant.PreviousModel) || TENANT_MODEL
+      const tenantComparable = previousMax !== null && sameModel(previousModel, TENANT_MODEL) && sameMax(previousMax, tenant.Max)
+      const previousPct = tenantComparable && num(tenant.Previous) !== null && tenant.Previous <= previousMax ? pct(tenant.Previous, previousMax) : null
       // A movement that rounds to zero is no gain, so no surface prints "Up 0 points".
       const tenantPoints = previousPct !== null ? Number((value - previousPct).toFixed(1)) : null
       const previous = tenantPoints !== null && tenantPoints > 0 && validDate(tenant.PreviousReadDate) ? { points: tenantPoints, since: monthLabel(tenant.PreviousReadDate), from: previousPct } : null
       if (num(tenant.Previous) !== null && previousMax === null) note('Microsoft tenant Secure Score movement', 'The context file gives a Previous reading without PreviousMax, and no POS.6-TREND snapshot is dated PreviousReadDate, so the movement line is omitted rather than measured against the current maximum. Add PreviousMax, the maximum at that reading, to show it.')
-      m.tenantScore = { value, current: Number(tenant.Current), max: Number(tenant.Max), read: date(tenant.ReadDate), delta: previous, categories, note: `Secure score for the Microsoft 365 tenant, calculated by Microsoft. Read ${date(tenant.ReadDate)}.`, source: clean(tenant.Source) }
+      const since = validDate(tenant.PreviousReadDate) ? date(tenant.PreviousReadDate) : 'an undated reading'
+      if (num(tenant.Previous) !== null && previousMax !== null && !sameModel(previousModel, TENANT_MODEL)) note('Microsoft tenant Secure Score movement', `The earlier reading from ${since} uses ${previousModel} and the current reading uses ${TENANT_MODEL}, so the two are not compared and the score reads as current state.`)
+      else if (num(tenant.Previous) !== null && previousMax !== null && !tenantComparable) note('Microsoft tenant Secure Score movement', `The earlier reading from ${since} has a maximum of ${fmt(previousMax)} points and the current reading ${fmt(Number(tenant.Max))} points, so the evaluated scope or the scoring changed between them. The two are not compared and the score reads as current state.`)
+      const origin = tenant === graphTenant ? 'Microsoft Graph' : 'a reviewed portal reading'
+      m.tenantScore = { value, current: Number(tenant.Current), max: Number(tenant.Max), model: TENANT_MODEL, origin, scope: 'Microsoft 365 tenant', read: date(tenant.ReadDate), basis: `${TENANT_MODEL}. Read ${date(tenant.ReadDate)} from ${origin}.`, delta: previous, categories, note: `${TENANT_MODEL} for the Microsoft 365 tenant, calculated by Microsoft. Read ${date(tenant.ReadDate)} from ${origin}.`, source: clean(tenant.Source) }
     } else note('Microsoft tenant Secure Score', 'Add a dated portal reading through the context file to show the tenant score beside the Defender for Cloud score. Optional Previous and PreviousReadDate fields add the movement line.')
     const high = rows('POS.4').find(r => /High/i.test(r.Severity))
     // POS.5 carries every assigned standard. The Microsoft cloud security benchmark is the one reported, so a preview
@@ -996,7 +1019,19 @@
       estate: sum(rows('P0.5'), 'Resources'), assessed: count(one('POS.2')?.AssessedResources),
       highHealthy: high && count(high.Healthy) !== null && count(high.Total) > 0 ? { good: high.Healthy, total: high.Total, pct: pct(high.Healthy, high.Total), source: source('POS.4') } : null,
       benchmark: bench.length ? { passed: sum(bench, 'Passed'), total: sum(bench, 'Passed') + sum(bench, 'Failed'), pct: pct(sum(bench, 'Passed'), sum(bench, 'Passed') + sum(bench, 'Failed')), source: source('POS.5') } : null,
-      scoreControls: rows('POS.3').filter(r => num(r.Current) !== null && num(r.Max) > 0 && r.Current <= r.Max).map(r => ({ label: clean(r.Control), pct: pct(r.Current, r.Max), remaining: Number((r.Max - r.Current).toFixed(2)), healthy: count(r.Healthy), unhealthy: count(r.Unhealthy) })).sort((a, b) => b.remaining - a.remaining),
+      // Healthy of assessed resources per control: resources is null when either count is missing or both are zero,
+      // so no surface prints 0 of 0.
+      scoreControls: rows('POS.3').filter(r => num(r.Current) !== null && num(r.Max) > 0 && r.Current <= r.Max).map(r => {
+        const healthy = count(r.Healthy), unhealthy = count(r.Unhealthy)
+        const resources = healthy !== null && unhealthy !== null && healthy >= 0 && unhealthy >= 0 && healthy + unhealthy > 0 ? healthy + unhealthy : null
+        return { label: clean(r.Control), pct: pct(r.Current, r.Max), remaining: Number((r.Max - r.Current).toFixed(2)), healthy, unhealthy, resources }
+      }).sort((a, b) => b.remaining - a.remaining),
+      // How a classic score control earns points, from Microsoft's secure score page (dated Jun 30, 2026): within a
+      // subscription or connector, the current score is the score per resource (the maximum over the healthy and
+      // unhealthy resources) times the healthy resources, so a control gains points before it completes. POS.3 adds
+      // the points and the resource counts of each control across subscriptions, so with more than one subscription
+      // (or an unknown count) the page says the healthy share can differ from the share of points earned.
+      scoreControlBasis: `Defender for Cloud secure score provides a standardized view of assessed cloud security controls. Within each subscription, a control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources in that subscription, so points can be gained before a control completes.${(count(cloud?.Subscriptions) ?? m.subscriptions) === 1 ? '' : ' The points and resource counts shown for each control are added across subscriptions, so the share of resources healthy can differ from the share of points earned.'} Changes in the score may reflect remediation activity, changes to the evaluated resource population, or differences in the underlying scoring model. Atmosera evaluates the individual findings, the affected resources and the controls in force alongside the Microsoft-calculated score.`,
       scoreControlSource: source('POS.3'), telemetryTables: telemetry, rules: ruleTotal !== null ? { total: ruleTotal, enabled: ruleEnabled } : null
     }
 
