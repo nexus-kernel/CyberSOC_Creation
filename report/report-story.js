@@ -49,8 +49,9 @@
 
   // Roadmap catalog for defense in depth controls (foundational controls below E are drift and go to Now).
   // Horizons follow the "why it waits" column of the controls baseline: Next needs configuration or an
-  // approval, Later needs a maintenance window, a design change or licensing. Every below-E control
-  // must match an item here (tests/ebr-report-story.test.cjs enforces it).
+  // approval, Later needs a maintenance window, a design change or licensing. Every below-E defense in depth
+  // control must match an item here (tests/ebr-report-story.test.cjs enforces it). Analytics rules and threat
+  // intelligence are foundational since Oct 16, 2026, so they left the detect item, which became vulnassess.
   const CATALOG = [
     { key: 'idp', horizon: 'next', title: 'Identity Protection user risk', match: /^Identity Protection/, ask: { title: 'Approve the user-risk policy', body: 'Sign-in and user risk policies for all users, with leaked credential response.' } },
     { key: 'phish', horizon: 'next', title: 'Advanced anti-phishing', match: /^Advanced anti-phishing/ },
@@ -60,7 +61,7 @@
     { key: 'kvrbac', horizon: 'next', title: 'Key Vault access model', match: /^Key Vault access governed/ },
     { key: 'diskenc', horizon: 'next', title: 'Endpoint disk encryption', match: /^Endpoint disk encryption/ },
     { key: 'containers', horizon: 'next', title: 'Public blob containers', match: /^Blob containers closed/, ask: { title: 'Confirm which public containers are intended', body: 'Containers set to public access are made private unless they serve public content by design.' } },
-    { key: 'detect', horizon: 'next', title: 'Detection content', match: /^(Analytics rules|Threat intelligence|Vulnerability assessment)/ },
+    { key: 'vulnassess', horizon: 'next', title: 'Vulnerability assessment coverage', match: /^Vulnerability assessment/ },
     { key: 'segment', horizon: 'later', title: 'Network segmentation and exposure', match: /^(Workload subnets|Storage accounts closed to public)/, priority: 'NB.1', ask: { title: 'Agree a segmentation design and change windows', body: 'Network security groups or firewall routes on every workload subnet, and private access for storage.' } },
     { key: 'windows', horizon: 'later', title: 'Windows protocol hardening', match: /^(Remote Desktop|NTLMv2|Directory traffic|Credential protection)/ },
     { key: 'backup', horizon: 'later', title: 'Backup coverage', match: /^Azure Backup/, priority: 'DP.5b', ask: { title: 'Agree which machines persist and approve backup cost', body: 'Azure Backup on every persistent virtual machine, with pooled session hosts excluded by agreement.' } },
@@ -68,8 +69,10 @@
     { key: 'pim', horizon: 'later', title: 'Privileged role eligibility', match: /^Privileged roles/ },
     { key: 'allowlist', horizon: 'later', title: 'Application allow-listing', match: /^Application allow-listing/ },
     { key: 'sharing', horizon: 'later', title: 'Collaboration sharing boundaries', match: /^Collaboration sharing/ },
-    // Foundational, but it needs a license and sensors from the client, so it is never Atmosera's 30 day fix.
-    { key: 'mdi', horizon: 'later', title: 'Defender for Identity deployment', match: /^Defender for Identity sensors/, ask: { title: 'Approve Defender for Identity licensing', body: 'Licensing and a sensor on each domain controller, so identity attacks on the directory are detected.' } }
+    // Defense in depth since Oct 16, 2026: it needs a license and a sensor on each domain controller from the client.
+    // Domain controller telemetry comes from the same sensors, so its gap joins this item. The licensing ask is raised
+    // only by the sensor control (askOn): with sensors healthy, a telemetry gap is an ingestion fault, not licensing.
+    { key: 'mdi', horizon: 'later', title: 'Defender for Identity deployment', match: /^(Defender for Identity sensors|Domain controller telemetry)/, askOn: /^Defender for Identity sensors/, ask: { title: 'Approve Defender for Identity licensing', body: 'Licensing and a sensor on each domain controller, so identity attacks on the directory are detected.' } }
   ]
   const HORIZONS = [
     { key: 'now', label: 'Now', when: 'Next 30 days' },
@@ -121,12 +124,12 @@
     // Drift and controls.
     const measured = tier => m.controls.filter(c => c.tier === tier && c.mark)
     const enforced = tier => measured(tier).filter(c => c.mark === 'E')
-    // Foundational gaps: every foundational control below E, except one that needs a license the client holds,
-    // which goes to Later through the catalog with its ask. One MFA gap: the admin portal policy is part of the
-    // same Conditional Access work as MFA at sign-in, so when both read below E the gaps panel, the roadmap and
-    // the summary name the sign-in gap once, with the admin portal reading folded into its figure line. The
+    // Foundational gaps: every foundational control below E. Defender for Identity, which needs a license and
+    // sensors from the client, is defense in depth since Oct 16, 2026 and goes to Later through the catalog.
+    // One MFA gap: the admin portal policy is part of the same Conditional Access work as MFA at sign-in, so
+    // when both read below E the gaps panel, the roadmap and the summary name the sign-in gap once, with the admin portal reading folded into its figure line. The
     // counts still cover every control, and the register in the appendix keeps both rows (Oct 14, 2026).
-    s.driftControls = m.controls.filter(c => c.tier === 'foundational' && below(c) && !c.needsLicense).map(safe)
+    s.driftControls = m.controls.filter(c => c.tier === 'foundational' && below(c)).map(safe)
     const mfaGap = s.driftControls.find(c => /^Multifactor authentication required at sign-in/.test(c.label))
     const portalGap = s.driftControls.find(c => /^Multifactor authentication at admin portal/.test(c.label))
     if (mfaGap && portalGap) {
@@ -134,7 +137,6 @@
       mfaGap.detail = [mfaGap.detail, `admin portals ${(portalGap.detail || portalGap.valueText).toLowerCase()}`].filter(Boolean).join(' · ')
     }
     s.drift = s.driftControls.filter(c => c !== portalGap || !mfaGap)
-    s.licensed = m.controls.filter(c => c.tier === 'foundational' && below(c) && c.needsLicense).map(safe)
     s.ungathered = m.controls.filter(ungathered).map(safe)
     s.foundational = { enforced: enforced('foundational').length, measured: measured('foundational').length }
     s.defense = { enforced: enforced('defense').length, measured: measured('defense').length }
@@ -244,12 +246,9 @@
     const gap = id => (data.manifest || []).some(r => r.ResultId === id && (r.AccessGap === true || String(r.AccessGap).toLowerCase() === 'true'))
     const unread = s.ungathered.filter(c => gap(c.id))
     if (unread.length) asks.push({ kind: 'access', key: 'access', lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
-    // An item that holds a foundational control (one that needs a license, routed through the catalog) is asked
-    // for ahead of the defense in depth items, whatever its horizon.
-    const askItems = HORIZONS.flatMap(h => items[h.key]).map((item, i) => ({ item, i })).sort((a, b) => (a.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) - (b.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) || a.i - b.i).map(x => x.item)
-    for (const item of askItems) {
+    for (const item of HORIZONS.flatMap(h => items[h.key])) {
       const entry = CATALOG.find(e => e.key === item.key)
-      if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N') && open(entry.key, entry.ask.title)) asks.push({ kind: 'approval', key: entry.key, lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
+      if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N' && (!entry.askOn || entry.askOn.test(c.label))) && open(entry.key, entry.ask.title)) asks.push({ kind: 'approval', key: entry.key, lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
     }
     // The deck sizes the card text from bodyText and the action, and keeps the full body with its attribution in the notes.
     s.asks = asks.slice(0, 4).map(x => { const action = actionOf(x.key); return { ...x, action, bodyText: x.body, body: clean(withStatus(x.body, action)) } })
@@ -263,7 +262,7 @@
     ].filter(Boolean).slice(0, 3)
     const watch = []
     if (m.criticalCves > 0) watch.push({ value: fmt(m.criticalCves), label: m.criticalCves === 1 ? 'critical exploitable vulnerability open' : 'critical exploitable vulnerabilities open' })
-    const belowCount = s.driftControls.length + s.licensed.length
+    const belowCount = s.driftControls.length
     if (belowCount) watch.push({ value: fmt(belowCount), label: belowCount === 1 ? 'foundational control reads below enforced' : 'foundational controls read below enforced' })
     const singular = label => [['Members who', 'Member who'], ['Members', 'Member'], ['Users', 'User'], ['Devices', 'Device'], ['AI service resources', 'AI service resource'], ['Resources', 'Resource'], ['Virtual machines', 'Virtual machine'], ['Workload subnets', 'Workload subnet'], ['Key Vaults', 'Key Vault'], ['Storage accounts', 'Storage account'], ['Critical exploitable findings', 'Critical exploitable finding']].reduce((l, [many, one]) => l.startsWith(many + ' ') ? one + l.slice(many.length) : l, label)
     for (const h of (m.hardening || []).filter(x => x.rank < 99 && !['BKL.1', 'IA.2'].includes(x.id))) {
@@ -321,7 +320,7 @@
       // The threats slide is built whenever the pack has true positives, with or without an examples table, so
       // the takeaway needs no examples either.
       threats: (a && a.truePositives > 0) || m.threats ? `${a && a.truePositives ? `The SOC classified ${plural(a.truePositives, 'alert', 'alerts')} as ${a.truePositives === 1 ? 'a true positive' : 'true positives'} ${s.periodPhrase}.` : 'Alerts were classified as true positives by the SOC.'}${threatLine ? ` ${sentence(threatLine)}.` : ''}${impactLine ? ` ${sentence(impactLine)}.` : ''}` : '',
-      posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced.${belowCount ? ` ${sentence(word(belowCount))} ${belowCount === 1 ? 'reads' : 'read'} below the baseline${s.licensed.length ? `, ${s.driftControls.length ? `${word(s.driftControls.length)} first on the roadmap and ` : ''}${word(s.licensed.length)} waiting on licensing` : ` and ${belowCount === 1 ? 'is' : 'are'} first on the roadmap`}.` : ' None reads below the baseline.'}` : 'Control readings are completed in the review.',
+      posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced.${belowCount ? ` ${sentence(word(belowCount))} ${belowCount === 1 ? 'reads' : 'read'} below the baseline and ${belowCount === 1 ? 'is' : 'are'} first on the roadmap.` : ' None reads below the baseline.'}` : 'Control readings are completed in the review.',
       roadmap: 'Every control below enforced is proposed in one of three horizons, by risk and by what each needs from your team.',
       methods: pw ? `Microsoft retires text message and voice sign-in on ${RETIREMENT.text}. ${plural(pw.retiring, 'user', 'users')} signed in with it in the last 30 days.` : '',
       decisions: s.asks.length ? `${sentence(word(s.asks.length))} ${s.asks.length === 1 ? 'item needs' : 'items need'} approval or access from your team to move the roadmap forward.` : 'No approvals or access are needed before the next review.',

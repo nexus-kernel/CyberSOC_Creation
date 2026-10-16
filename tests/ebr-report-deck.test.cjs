@@ -303,9 +303,11 @@ test('the control register counts the exceptions of a control at E on its label 
   const xmls = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).filter(x => x.includes('register rule'))
   assert.equal(xmls.length, 3, 'the three register slides')
   const text = xmls.map(x => (x.match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => t.slice(5, -6)).join(' ')).join(' ').replace(/\u00A0/g, ' ')
-  for (const [label, count] of [['Azure virtual machines reporting to endpoint detection', '1 exception'], ['Analytics rules enabled in Sentinel', '7 exceptions'], ['Key Vault soft delete', '1 exception'], ['Multifactor authentication required at sign-in', '14 exceptions']]) {
+  for (const [label, count] of [['Azure virtual machines reporting to endpoint detection', '1 exception'], ['Endpoint sensors active on onboarded Azure virtual machines', '7 exceptions'], ['Key Vault soft delete', '1 exception'], ['Multifactor authentication required at sign-in', '14 exceptions']]) {
     assert.match(text, new RegExp(`${label}\\s+· ${count}\\b`), `${label} carries ${count}`)
   }
+  // Analytics rules are a presence check: 379 of 386 enabled reads In force, and disabled rules are no exceptions.
+  assert.match(text, /Analytics rules enabled in every Sentinel workspace In force/)
   // Every row ends inside the column the register sizes for.
   for (const xml of xmls) for (const r of xml.matchAll(/name="([^"]*) register rule"[\s\S]*?<a:off x="\d+" y="(\d+)"\/>/g)) assert.ok(Number(r[2]) <= 7.2 * EMU, `"${r[1]}" ends at ${(Number(r[2]) / EMU).toFixed(2)} in`)
   const { notes } = await read(out)
@@ -359,7 +361,8 @@ test('a register detail that wraps gets a row tall enough for every line', async
   assert.ok(gap.y + gap.h <= rule.y + 1, 'the box ends at its own rule')
   assert.ok(gap.h > 2 * 0.2 * 914400, 'the row holds the label and at least two detail lines')
 })
-test('a licensed control as the only foundational gap never reads as every foundational control enforced', async () => {
+test('Defender for Identity as the only gap is defense in depth, so the posture slide reads no foundational gaps', async () => {
+  // Defense in depth since Oct 16, 2026: it needs licensing and sensors from the client, so it sits in Later.
   const p = pack('balanced')
   p.results['DP.2'][0].PurgeProtection = 6 // no other foundational gap
   p.manifest.push({ ResultId: 'DR.11', Status: 'UNAVAILABLE', Rows: 0, ReadTimeUtc: '2026-10-08T10:00:00Z', AccessGap: false, NotOnboarded: true })
@@ -371,9 +374,9 @@ test('a licensed control as the only foundational gap never reads as every found
   const { slides } = await read(out)
   const posture = slides.find(s => s.startsWith('Control posture'))
   assert.ok(posture, 'the posture slide')
-  assert.ok(!/No foundational gaps|Every measured foundational control reads E/.test(posture), posture.match(/.{0,60}foundational control reads E.{0,20}/)?.[0])
-  assert.ok(/needs licensing and sits in Later/.test(posture))
-  assert.ok(/waiting on licensing/.test(posture))
+  assert.ok(/No foundational gaps\. Every measured foundational control reads E\./.test(posture), posture)
+  assert.ok(!/licensing/.test(posture), 'no foundational control waits on licensing')
+  assert.ok(slides.some(s => /Defender for Identity deployment/.test(s)), 'the Later item stays on the roadmap')
 })
 test('chart workbooks carry valid table ranges so Keynote and Quick Look draw the charts', async () => {
   // pptxgenjs 4.0.1 writes ref="A1:D4'" into each chart's embedded table. Apple's importer then

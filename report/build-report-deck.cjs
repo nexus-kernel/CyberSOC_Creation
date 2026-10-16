@@ -391,10 +391,10 @@ async function main() {
       while (n > 8 && lines(glue(note(`${ref.slice(0, n)}...`)), headW, 12) * 12 / 72 * 1.2 > headRoom) n--
       driftNote = note(`${ref.slice(0, n)}...`)
     }
-    text(s, [{ text: 'Foundational gaps', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: st.drift.length ? driftNote : st.licensed.length ? 'Every foundational control Atmosera can fix reads E. The one below needs licensing.' : 'No foundational gaps. Every measured foundational control reads E.', options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }], { x: px + 0.3, y: TOP + 0.25, w: pw - 0.6, h: 1.0, objectName: 'Drift heading' })
+    text(s, [{ text: 'Foundational gaps', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: st.drift.length ? driftNote : 'No foundational gaps. Every measured foundational control reads E.', options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }], { x: px + 0.3, y: TOP + 0.25, w: pw - 0.6, h: 1.0, objectName: 'Drift heading' })
     let dy = TOP + 1.1
     // Each item takes the lines its label and figure line need. Items stop above the legend and the tail line
-    // (the gaps left in the register, and any control that needs a license), so nothing overlaps.
+    // (the gaps left in the register), so nothing overlaps.
     const itemW = pw - 1.1, tailTop = BOTTOM - 0.6 - 0.62
     const shown = []
     for (const c of st.drift) {
@@ -410,10 +410,7 @@ async function main() {
       shown.push(c)
       dy += h + 0.1
     }
-    const tail = [
-      st.drift.length > shown.length ? `${plural(st.drift.length - shown.length, 'more foundational gap is', 'more foundational gaps are')} in the register.` : '',
-      st.licensed.length ? `${sentence(list(st.licensed.map(c => c.short)))} ${st.licensed.length === 1 ? 'needs' : 'need'} licensing and ${st.licensed.length === 1 ? 'sits' : 'sit'} in Later.` : ''
-    ].filter(Boolean).join(' ')
+    const tail = st.drift.length > shown.length ? `${plural(st.drift.length - shown.length, 'more foundational gap is', 'more foundational gaps are')} in the register.` : ''
     if (tail) text(s, tail, { x: px + 0.3, y: tailTop, w: pw - 0.6, h: 0.6, fontSize: 11, color: C.accent6, valign: 'bottom', objectName: 'Drift tail' })
     text(s, 'E enforced, 90% or more · P partial, 50 to 89%, or a scoped policy whatever its ratio · N not yet enforced, below 50%', { x: px + 0.3, y: BOTTOM - 0.55, w: pw - 0.6, h: 0.42, fontSize: 11, color: C.accent6, objectName: 'Mark legend' })
     s.addNotes(notesOf([
