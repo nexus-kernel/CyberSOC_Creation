@@ -379,3 +379,17 @@ test('every roadmap item and ask key the story builds is a key the Actions recor
   const keys = new Set(['drift', 'critical', 'methods', 'access', ...CATALOG.map(e => e.key)])
   assert.deepEqual([...keys].sort(), [...ACTION_KEYS].sort())
 })
+test('a reviewed status on the read access ask never removes it, since no status shows the permission was provisioned', () => {
+  // DP.8 could not be read for lack of permission, so the quarter pack asks for read access.
+  const record = Status => ({ Key: 'access', Status, TargetDate: '2026-12-15', Reference: 'CHG-access', Reviewed: '2026-10-12', WindowStart: '2026-07-01', WindowEnd: '2026-09-30' })
+  const only = actions => { const p = quarterPack(); p.context = actions ? { Actions: actions, Delivered: [{ Title: 'Access', Outcome: 'Granted.', Reference: 'CHG-access', CompletedDate: '2026-09-20' }] } : null; return buildStory(build(p), p) }
+  const before = only(null).asks.map(a => a.key)
+  assert.ok(before.includes('access'))
+  for (const [Status, label] of [['Approved', 'Approved'], ['Scheduled', 'Scheduled'], ['InProgress', 'In progress'], ['Verified', 'Verified']]) {
+    const s = only([record(Status)])
+    assert.deepEqual(s.asks.map(a => a.key), before, `${Status} keeps the access ask and the rest in place`)
+    assert.equal(s.asks.find(a => a.key === 'access').body, `Sharing settings. ${label}, target Dec 15, 2026 (CHG-access, reviewed Oct 12, 2026).`)
+    assert.equal(s.takeaways.decisions, `${['', 'One', 'Two', 'Three', 'Four'][before.length]} ${before.length === 1 ? 'item needs' : 'items need'} approval or access from your team to move the roadmap forward.`)
+    assert.deepEqual(s.settledAsks, [])
+  }
+})

@@ -381,7 +381,17 @@ async function main() {
     // Drift panel.
     const px = X0 + mw + 0.4, pw = CW - mw - 0.4
     card(s, px, TOP, pw, BOTTOM - TOP, 'Drift panel')
-    text(s, [{ text: 'Foundational gaps', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: st.drift.length ? st.driftNote : st.licensed.length ? 'Every foundational control Atmosera can fix reads E. The one below needs licensing.' : 'No foundational gaps. Every measured foundational control reads E.', options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }], { x: px + 0.3, y: TOP + 0.25, w: pw - 0.6, h: 1.0, objectName: 'Drift heading' })
+    // The note under the title ends above the first item's rule (TOP + 1.02), which leaves room for two 12 pt lines.
+    // A reviewed drift reference too long for that is cut with three dots, and the speaker notes carry the full line.
+    const headW = pw - 0.6, headRoom = (1.1 - 0.08 - 0.25) - 18 / 72 * 1.2 - 4 / 72
+    let driftNote = st.driftNote
+    if (st.drift.length && st.driftAction && lines(glue(driftNote), headW, 12) * 12 / 72 * 1.2 > headRoom) {
+      const ref = st.driftAction.reference, note = r => `Below the baseline at collection. Fixes ${st.driftAction.label.toLowerCase()} (${r}).`
+      let n = ref.length
+      while (n > 8 && lines(glue(note(`${ref.slice(0, n)}...`)), headW, 12) * 12 / 72 * 1.2 > headRoom) n--
+      driftNote = note(`${ref.slice(0, n)}...`)
+    }
+    text(s, [{ text: 'Foundational gaps', options: { fontSize: 18, bold: true, color: C.text2, breakLine: true } }, { text: st.drift.length ? driftNote : st.licensed.length ? 'Every foundational control Atmosera can fix reads E. The one below needs licensing.' : 'No foundational gaps. Every measured foundational control reads E.', options: { fontSize: 12, color: C.accent6, paraSpaceBefore: 4 } }], { x: px + 0.3, y: TOP + 0.25, w: pw - 0.6, h: 1.0, objectName: 'Drift heading' })
     let dy = TOP + 1.1
     // Each item takes the lines its label and figure line need. Items stop above the legend and the tail line
     // (the gaps left in the register, and any control that needs a license), so nothing overlaps.
@@ -410,6 +420,7 @@ async function main() {
       'Foundational controls are the baseline the service holds every environment to, and each is expected to read enforced at every review. One that reads below E is a gap against that baseline. Atmosera owns the fix and sets a fix date at this review, and it is first on the roadmap. Defense in depth controls are layered on top, and each waits on something your team approves, schedules or licenses. Every reading describes the state at collection, not a change since the last review.',
       'E means 90 percent or more of in-scope resources, P 50 to 89 percent and N below 50 percent. A policy that stops short of every user on every application in every condition reads P however high the sign-in ratio behind it.',
       st.ungathered.length ? `${plural(st.ungathered.length, 'control', 'controls')} could not be graded from the collected evidence and ${st.ungathered.length === 1 ? 'is' : 'are'} listed in the appendix.` : '',
+      st.drift.length && st.driftAction ? `Foundational fixes: ${st.driftAction.label.toLowerCase()}, from the reviewed action record ${st.driftAction.reference}, reviewed ${st.driftAction.reviewed}.` : '',
       m.pillars.map(p => `${p.name}. ${p.headline}. ${p.narrative}`)
     ]))
 

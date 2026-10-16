@@ -667,3 +667,25 @@ test('a reviewed status with a URL-length reference fits inside its decision car
     assert.ok(notes.join(' ').includes(`${url},`), 'the speaker notes keep the full reference')
   }
 })
+test('a reviewed drift status with a URL-length reference stays above the first foundational gap, and the notes keep it in full', async () => {
+  const url = 'https://example.service-now.com/change_request.do?sys_id=0123456789abcdef0123456789abcdef'
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-'))
+  const data = pack('balanced'), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  data.context = { Actions: [{ Key: 'drift', Status: 'Scheduled', TargetDate: '2026-11-30', Reference: url, Reviewed: '2026-10-16', WindowStart: '2025-11-01', WindowEnd: '2026-09-30' }] }
+  fs.writeFileSync(dataFile, JSON.stringify(data))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  let xml = ''
+  for (const n of Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n))) { const x = await zip.file(n).async('string'); if (x.includes('name="Drift heading"')) xml = x }
+  assert.ok(xml, 'the control posture slide has the gaps panel')
+  const shape = name => [...xml.matchAll(/<p:(?:sp|cxnSp)>[\s\S]*?<\/p:(?:sp|cxnSp)>/g)].map(m => m[0]).find(sp => sp.includes(`name="${name}"`))
+  const box = sp => { const [, x, y, cx, cy] = sp.match(/<a:off x="(\d+)" y="(\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/>/).map(Number); return { x: x / 914400, y: y / 914400, w: cx / 914400, h: cy / 914400 } }
+  const head = shape('Drift heading'), rule1 = shape('Drift 1 rule')
+  assert.ok(head && rule1, 'the heading and the first gap are drawn')
+  const note = [...head.matchAll(/<a:t>([^<]*)<\/a:t>/g)].map(t => t[1]).slice(1).join('')
+  assert.match(note, /^Below the baseline at collection\. Fixes scheduled \(https:\/\/\S+\.\.\.\)\.$/)
+  const end = box(head).y + 18 / 72 * 1.2 + 4 / 72 + lines(note, box(head).w, 12) * 12 / 72 * 1.2
+  assert.ok(end <= box(rule1).y + 0.005, `the note ends at ${end.toFixed(2)} in, below the first gap's rule at ${box(rule1).y.toFixed(2)} in`)
+  const { notes } = await read(out)
+  assert.ok(notes.join(' ').includes(`Foundational fixes: scheduled, from the reviewed action record ${url}, reviewed Oct 16, 2026.`))
+})

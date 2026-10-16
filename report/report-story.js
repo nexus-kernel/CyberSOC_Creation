@@ -187,6 +187,7 @@
     const statusText = x => `${statusLead(x)} (${x.reference}, reviewed ${x.reviewed})`
     const withStatus = (text, x) => !x ? text : !clean(text) ? statusText(x) : `${clean(text).replace(/\.$/, '')}. ${statusText(x)}${/\.$/.test(clean(text)) ? '.' : ''}`
     const driftAction = actionOf('drift')
+    s.driftAction = driftAction
     s.driftNote = `Below the baseline at collection. ${driftAction ? `Fixes ${driftAction.label.toLowerCase()} (${driftAction.reference}).` : 'Atmosera recommends closing each gap first.'}`
 
     // The roadmap: every below-E control mapped to a catalog item, drift first in Now.
@@ -228,9 +229,11 @@
 
     // Decisions needed: the MFA method update, read access, then approvals for items whose controls read N.
     // Each ask carries a kind, so the executive summary can leave the read access ask to the closing slide.
-    // An ask whose reviewed record reads approved, scheduled, in progress or verified is no longer a decision, so it
-    // leaves the list before the four-ask limit and the count, and its roadmap item carries the status instead. The
-    // speaker notes name it (Oct 16, 2026).
+    // An approval ask, or the MFA method update, whose reviewed record reads approved, scheduled, in progress or
+    // verified is no longer a decision, so it leaves the list before the four-ask limit and the count, and its roadmap
+    // item carries the status instead. The speaker notes name it. The read access ask is different: no status
+    // establishes that the permission was provisioned, so it stays, with its status, until a collection reads the
+    // evidence (Oct 16, 2026).
     const SETTLED = ['Approved', 'Scheduled', 'InProgress', 'Verified']
     const settled = []
     const asks = []
@@ -240,7 +243,7 @@
     // errors and packs that only need recollection are Atmosera's to resolve.
     const gap = id => (data.manifest || []).some(r => r.ResultId === id && (r.AccessGap === true || String(r.AccessGap).toLowerCase() === 'true'))
     const unread = s.ungathered.filter(c => gap(c.id))
-    if (unread.length && open('access', 'Grant read access')) asks.push({ kind: 'access', key: 'access', lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
+    if (unread.length) asks.push({ kind: 'access', key: 'access', lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
     // An item that holds a foundational control (one that needs a license, routed through the catalog) is asked
     // for ahead of the defense in depth items, whatever its horizon.
     const askItems = HORIZONS.flatMap(h => items[h.key]).map((item, i) => ({ item, i })).sort((a, b) => (a.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) - (b.item.controls.some(c => c.tier === 'foundational') ? 0 : 1) || a.i - b.i).map(x => x.item)
