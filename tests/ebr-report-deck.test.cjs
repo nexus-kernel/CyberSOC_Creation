@@ -144,6 +144,10 @@ test('the grounding slides appear at balanced depth and carry the pillar narrati
   const pillars = plain(slides.find(s => s.startsWith('Measured outcomes by pillar')) || '')
   assert.ok(pillars, 'the pillar outcomes slide')
   for (const p of m.pillars) assert.ok(pillars.includes(p.name) && pillars.includes(p.headline), p.name)
+  // The pack holds open and unclassified alerts and no DR.10 reading, so the disposition statement leads with the
+  // triaged count on the slide and in the notes.
+  assert.equal(m.pillars.find(p => p.name === 'Detection and response').headline, '100 alerts triaged Nov 1, 2025 to Sep 30, 2026')
+  assert.ok(![pillars, ...notes].some(t => t.includes('Every alert reaches a documented disposition')))
   const work = plain(slides.find(s => s.startsWith('Priority workstreams')) || '')
   assert.ok(work, 'the priority workstreams slide')
   for (const p of m.priorities.slice(0, 3)) assert.ok(work.includes(p.title) && work.includes(p.action) && work.includes(p.success), p.title)
