@@ -1,6 +1,14 @@
 # EBR security HTML report
 
-The collector creates `03-security-report.html` and its PowerPoint edition `03-security-report.pptx` in each completed evidence pack. The report works offline as a single file with embedded data, styles and graphics. Open it in a browser to view the report, change its depth, read the presenter notes or print the selected view.
+The collector creates the report in each completed evidence pack in two HTML editions, with its PowerPoint edition `03-security-report.pptx` beside them. Each HTML edition works offline as a single file with embedded data, styles and graphics. Open it in a browser to view the report, change its depth or print the selected view.
+
+| File | Edition | Who receives it |
+|---|---|---|
+| `03-security-report.client.html` | Client edition. The report pages, rendered ahead of time, with no presenter notes, embedded data or identifiers. Needs Node.js | The client |
+| `03-security-report.pptx` | PowerPoint edition. Speaker notes are talking points from client-visible text only | The client |
+| `03-security-report.html` | Internal edition. The same pages with the presenter notes, the evidence review and the collection register | Atmosera only, never the client |
+
+Both HTML editions are written on every run, so there is no edition switch. The SecOps worklist (`04-secops-worklist.md` and `.csv`) is internal too and never goes to the client.
 
 The report follows the navy, cyan and white theme of the EBR decks and the structure of the security slides: a four tile strip, the four tier "How we report posture" block, measured outcomes by pillar, the E, P, N control matrix, delivered and sequenced work with the passwordless transition, and the two Microsoft scores in context. It works for any client regardless of subscription or workspace count.
 
@@ -14,7 +22,7 @@ The report follows the navy, cyan and white theme of the EBR decks and the struc
 ./New-EbrSecurityReport.ps1 -EvidencePath './EBR-Evidence_Client_20261008-120000' -Depth Detailed -ContextPath './client-review-context.json' -OutputPath './Client-Security-Review.html'
 ```
 
-Generation requires PowerShell 5.1 or later and the adjacent `report` folder. No Azure session, browser automation package, Node installation or Python installation is required to generate or view the HTML report. The PowerPoint edition needs Node.js and pptxgenjs (`npm ci` in this folder, see [Windows setup](#windows-setup-for-the-powerpoint-edition)). Without them the HTML is still written and a warning says the deck was skipped. `-SkipDeck` writes the HTML only. The browser must support JavaScript. The completed HTML has no dependency on the original evidence folder.
+Generation requires PowerShell 5.1 or later and the adjacent `report` folder. No Azure session, browser automation package, Node installation or Python installation is required to generate or view the internal HTML edition. The client edition needs Node.js, and the PowerPoint edition needs Node.js and pptxgenjs (`npm ci` in this folder, see [Windows setup](#windows-setup-for-the-powerpoint-edition)). Without them the internal HTML is still written and a warning says which editions were skipped. `-SkipDeck` writes the two HTML editions only. With `-OutputPath` the client edition takes the same name ending in `.client.html`, for example `Client-Security-Review.client.html`. `-OutputPath` names the internal edition, so a path that already ends in `.client.html` is refused. The browser must support JavaScript. The completed HTML has no dependency on the original evidence folder.
 
 To change the default for a new collection use `./Get-EbrSecurityEvidence.ps1 -ReportDepth Brief`. Use `-SkipHtmlReport` to collect evidence without generating HTML. A report generation error preserves the collected evidence and returns exit code 2. Re-run the standalone generator after correcting the error.
 
@@ -54,7 +62,7 @@ PowerPoint, Python, LibreOffice and Chrome are not needed to build the deck. The
 | 04 The controls that matter | Balanced, Detailed | E, P, N status marks by pillar |
 | 05 What comes next | all | Verified delivery, the top three sequenced priorities, the MFA method update |
 | 06 Tenant and cloud posture | Detailed | Score rings as percentages with their movement in percentage points and the model, source, scope and read date of each score, trend, where the next points are with the healthy resources of each control, the measurement model explainer |
-| Presenter notes | screen only | Prepared answers, timing selection, evidence review, collection register |
+| Presenter notes | screen only, internal edition | Prepared answers, timing selection, evidence review, collection register |
 
 The default is Balanced. The depth selector updates the view without modifying the embedded evidence. Printing follows the selected view and excludes the presenter notes.
 
@@ -198,9 +206,17 @@ Copy `report/context.example.json`, enter the exact client and tenant from the p
 
 ## Presenter notes
 
-Open **Presenter notes** in the toolbar before the review. The section lists every figure that needs a prepared answer (open alerts, closure classification, automation share, high severity trend, workspace coverage, score movement), the response timing cohort with its figures and the notes applied, the controls that were not measured, outstanding portal readings and the collection register. It is excluded from printing. The toggle is a display choice, not an access boundary. Anyone receiving the HTML can inspect its embedded contents.
+Open **Presenter notes** in the toolbar of the internal edition, `03-security-report.html`, before the review. The section lists every figure that needs a prepared answer (open alerts, closure classification, automation share, high severity trend, workspace coverage, score movement), the response timing cohort with its figures and the notes applied, the controls that were not measured, outstanding portal readings and the collection register. It is excluded from printing. The toggle is a display choice, not an access boundary. Anyone receiving the internal edition can inspect its embedded contents, so it stays with Atmosera.
 
-The HTML embeds aggregate data and collection metadata only. Row-level results that name resources (subnets, virtual machines, privileged accounts) are reduced to counts before embedding. Incident titles are embedded only for confirmed threats with an attack stage, after screening: a title naming an email address, IP address, a host name with a domain suffix, a machine name such as DESKTOP-4F2KQ1 or FILESERVER01, a path, GUID, ticket reference or long number, or longer than 200 characters, is replaced with 'Title withheld'. An all-caps name with a digit counts as a machine name, so CVE identifiers and KB numbers are withheld too. Comments, incident numbers, ticket numbers, query text and authentication diagnostics are never embedded. The screen does not recognise a bare account name, a person's name or an unhyphenated lowercase machine name such as fileserver01, so read the confirmed threats table before delivery.
+## Client edition
+
+`03-security-report.client.html` shows the same pages as the internal edition, with the same figures, status marks, tiers and priorities. A test holds the two equal on the offline fixture, page by page and at every depth. The builder renders the pages ahead of time with `report/build-client-report.cjs`, which runs the report model and renderer in Node.js against the same data, the way the browser runs them in the internal edition. The client file then carries:
+
+- The rendered pages, the styles and `report/report-controls.js`, the toolbar script for the depth selector and the print button. Nothing else.
+- No embedded data and no report model. So it holds no presenter notes, evidence review, timing rationale or collection register. It also holds none of the wording of those notes in the report code, none of the results, fields or context records only they read, and none of the subscription, workspace, tenant or other identifiers in the data.
+- No GUID. Every GUID on the rendered pages becomes the same `[id 1]` placeholder wherever it appears, in any case and even between other hexadecimal characters. That covers the subscription ID inside a default workspace name and a GUID in a context `Reference`. The builder refuses to write a client edition that still holds a GUID, report data or the presenter notes.
+
+Evidence IDs and read dates stay in the source lines, since they carry no identifiers. The subscription and workspace counts stay in the scope line, and workspace names stay on the posture page. The client edition needs Node.js, like the PowerPoint edition. Without it only the internal edition is written, with a warning, any client edition from an earlier run is removed, and the internal edition must not be sent instead. The PowerPoint edition is unchanged. It is built from the internal data, and its speaker notes never carry the presenter notes.
 
 ## Controls standard for executives
 
@@ -219,7 +235,7 @@ Invoke-Pester ./tests/Get-EbrSecurityEvidence.Tests.ps1, ./tests/New-EbrSecurity
 ```
 
 ```bash
-node --test tests/ebr-report-model.test.cjs tests/ebr-report-story.test.cjs tests/ebr-report-deck.test.cjs
+node --test tests/ebr-report-model.test.cjs tests/ebr-report-story.test.cjs tests/ebr-report-deck.test.cjs tests/ebr-report-edition.test.cjs
 ```
 
-The model tests cover the alert vocabulary, the fixed response timing cohort, the automation adjustment, open alert handling, status marks, score movement, context validation and the real packs in this folder. The Pester tests cover generation, escaping, aggregate reduction, context acceptance and the trailing three month catalog entries. No test signs in or changes client resources.
+The model tests cover the alert vocabulary, the fixed response timing cohort, the automation adjustment, open alert handling, status marks, score movement, context validation and the real packs in this folder. The edition tests (`tests/ebr-report-edition.test.cjs`, which needs `pwsh` on PATH) generate both editions from `tests/fixtures/offline-pack` with `tests/fixtures/offline-context.json` and check that the whole client file holds no embedded data, report model, presenter or review wording or GUID, and that its pages read the same as the internal ones. The Pester tests cover generation of both editions, escaping, aggregate reduction, context acceptance and the trailing three month catalog entries. No test signs in or changes client resources.

@@ -1,0 +1,9 @@
+[
+  {
+    "SourceTable": "SecurityIncident",
+    "EarliestRecord": "2026-07-01T00:00:00Z",
+    "LatestRecord": "2026-10-07T00:00:00Z",
+    "Records": 420,
+    "Workspace": "DefaultWorkspace-5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11-EUS"
+  }
+]

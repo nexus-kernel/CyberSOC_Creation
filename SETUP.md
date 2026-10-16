@@ -36,7 +36,7 @@ pwsh ./New-EbrControlsStandard.ps1 -OutputPath ./install-check/standard.html
 pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <tenant> -SubscriptionId <subscription>
 ```
 
-Each run writes an evidence pack with the report (`03-security-report.html` and `.pptx`) and the SecOps worklist (`04-secops-worklist.md` and `.csv`). The worklist names client resources and is internal only, so it never goes to the client. Get-EbrSecurityEvidence.README.md covers parameters, permissions and sign-ins.
+Each run writes an evidence pack with the report in two HTML editions and a deck, and the SecOps worklist (`04-secops-worklist.md` and `.csv`). Send the client `03-security-report.client.html` and `03-security-report.pptx`. `03-security-report.html` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-EbrSecurityEvidence.README.md covers parameters, permissions and sign-ins.
 
 ## Integrity
 

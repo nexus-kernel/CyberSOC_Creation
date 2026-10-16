@@ -1,0 +1,32 @@
+[
+  {
+    "Scope": "All workspaces",
+    "Metric": "Total rules",
+    "Value": 40
+  },
+  {
+    "Scope": "All workspaces",
+    "Metric": "Enabled rules",
+    "Value": 30
+  },
+  {
+    "Scope": "DefaultWorkspace-5F1C2A9E-3B7D-4E21-9A6C-0D8E4F2B7C11-EUS",
+    "Metric": "Total rules",
+    "Value": 30
+  },
+  {
+    "Scope": "DefaultWorkspace-5F1C2A9E-3B7D-4E21-9A6C-0D8E4F2B7C11-EUS",
+    "Metric": "Enabled rules",
+    "Value": 30
+  },
+  {
+    "Scope": "LAW-AE2D4C6B8-A0F1-4E3D-9C5B-7A9F1E3D5C7BF",
+    "Metric": "Total rules",
+    "Value": 10
+  },
+  {
+    "Scope": "LAW-AE2D4C6B8-A0F1-4E3D-9C5B-7A9F1E3D5C7BF",
+    "Metric": "Enabled rules",
+    "Value": 0
+  }
+]

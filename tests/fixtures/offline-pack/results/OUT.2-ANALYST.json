@@ -1,0 +1,10 @@
+[
+  {
+    "Scope": "High",
+    "Incidents": 24,
+    "AutoClosed": 0,
+    "MedianTriageMin": 5,
+    "MedianCloseMin": 31,
+    "P90CloseMin": 80
+  }
+]

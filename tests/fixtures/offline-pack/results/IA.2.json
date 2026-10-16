@@ -1,0 +1,12 @@
+[
+  {
+    "Bucket": "SMS or voice",
+    "DistinctUsers": 7,
+    "SignIns": 40
+  },
+  {
+    "Bucket": "Authenticator app or OTP",
+    "DistinctUsers": 90,
+    "SignIns": 900
+  }
+]

@@ -68,7 +68,8 @@ Add-PackageItem 'EBR Security Evidence Collection Runbook.md' $false
 # .bin holds symlinks to package CLIs, which the decks never call.
 if (-not $SkipNodeModules) { Add-PackageItem 'node_modules' $true { $args[0] -notmatch '^node_modules/\.bin/' } }
 # The Python tests cover scripts that live outside this folder.
-if ($IncludeTests) { Add-PackageItem 'tests' $true { $args[0] -match '\.(Tests\.ps1|test\.cjs)$' } }
+# The edition tests generate both report editions from the synthetic offline fixture and its context file.
+if ($IncludeTests) { Add-PackageItem 'tests' $true { $args[0] -match '\.(Tests\.ps1|test\.cjs)$|^tests/fixtures/(offline-pack/|offline-context\.json$)' } }
 if ($IncludeDocs) { Add-PackageItem 'docs' }
 
 $collector = Get-Content -LiteralPath (Join-Path $root 'Get-EbrSecurityEvidence.ps1') -Raw
@@ -144,7 +145,7 @@ pwsh ./New-EbrControlsStandard.ps1 -OutputPath ./install-check/standard.html
 pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <tenant> -SubscriptionId <subscription>
 ``````
 
-Each run writes an evidence pack with the report (``03-security-report.html`` and ``.pptx``) and the SecOps worklist (``04-secops-worklist.md`` and ``.csv``). The worklist names client resources and is internal only, so it never goes to the client. Get-EbrSecurityEvidence.README.md covers parameters, permissions and sign-ins.
+Each run writes an evidence pack with the report in two HTML editions and a deck, and the SecOps worklist (``04-secops-worklist.md`` and ``.csv``). Send the client ``03-security-report.client.html`` and ``03-security-report.pptx``. ``03-security-report.html`` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-EbrSecurityEvidence.README.md covers parameters, permissions and sign-ins.
 
 ## Integrity
 
@@ -191,7 +192,7 @@ finally { $zip.Dispose(); $sha.Dispose() }
 # Reopen the zip and confirm it can run on its own.
 $expected = @(
     'Get-EbrSecurityEvidence.ps1', 'New-EbrSecurityReport.ps1', 'New-EbrSecOpsWorklist.ps1', 'New-EbrControlsStandard.ps1',
-    'report/Get-EbrCaEvaluation.ps1', 'report/report-model.js', 'report/report-render.js', 'report/report-story.js',
+    'report/Get-EbrCaEvaluation.ps1', 'report/report-model.js', 'report/report-render.js', 'report/report-review.js', 'report/report-controls.js', 'report/build-client-report.cjs', 'report/report-story.js',
     'report/report.html', 'report/report.css', 'report/standard.html', 'report/standard-render.js', 'report/controls-standard.json',
     'report/deck-common.cjs', 'report/build-report-deck.cjs', 'report/build-controls-deck.cjs', 'report/assets/template-background.jpg',
     'package.json', 'SETUP.md', 'MANIFEST.sha256'

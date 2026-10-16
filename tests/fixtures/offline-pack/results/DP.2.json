@@ -1,0 +1,8 @@
+[
+  {
+    "Vaults": 6,
+    "SoftDelete": 6,
+    "PurgeProtection": 2,
+    "RbacAuth": 3
+  }
+]

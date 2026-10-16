@@ -1,0 +1,20 @@
+[
+  {
+    "Workspace": "DefaultWorkspace-5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11-EUS",
+    "WorkspaceId": "7D3E9B2A-1C4F-4A8E-B6D2-3F5A7C9E1B20",
+    "SubscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+    "SourceTable": "SecurityIncident",
+    "EarliestRecord": "2026-07-01T00:00:00Z",
+    "LatestRecord": "2026-10-07T00:00:00Z",
+    "Records": 420
+  },
+  {
+    "Workspace": "law-ae2d4c6b8-a0f1-4e3d-9c5b-7a9f1e3d5c7bf",
+    "WorkspaceId": "c4a7e1d9-8b2f-4c6a-9e3d-5b7f1a2c4e68",
+    "SubscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+    "SourceTable": "SecurityIncident",
+    "EarliestRecord": "",
+    "LatestRecord": "",
+    "Records": 0
+  }
+]

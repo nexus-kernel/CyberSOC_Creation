@@ -28,7 +28,7 @@ Describe 'Offline HTML report generation' {
     }
     It 'embeds the selected aggregate evidence and assets without changing the evidence' {
         $before = (Get-FileHash (Join-Path $pack 'results/OUT.5.json')).Hash
-        $file = & $generator -SkipDeck -EvidencePath $pack -Depth Detailed
+        $file = (& $generator -SkipDeck -EvidencePath $pack -Depth Detailed)[0]
         $html = Get-Content $file -Raw
         $html | Should -Match 'data:image/jpeg;base64,'
         $html | Should -Match '"depth":"detailed"'
@@ -46,7 +46,7 @@ Describe 'Offline HTML report generation' {
             Set-Content (Join-Path $pack 'results/IA.1-FEDERATION.json')
         '[{"UserType":"Member","UsersSignedIn":1414,"UsersChallenged":563,"UsersAlwaysMfa":1,"UsersExternalMfa":563,"UsersEntraMfa":60,"PctChallenged":39.8,"PctAlwaysMfa":0.1,"MfaAtLeastOnce":563,"MfaEveryAppSignIn":1,"CoveredEveryAppSignIn":5,"FederatedMfaAtLeastOnce":563,"FederatedWithoutMfa":2,"NoMfaOnlyUnevaluated":550,"MfaSessionLinkedOnly":31}]' |
             Set-Content (Join-Path $pack 'results/IA.1.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"IA.1-FEDERATION":\[\{"FederatedDomains":2,"ConfigsRead":1,"Provider":"Okta","MfaBehavior":"enforceMfaByFederatedIdp","MfaBehaviorUnset":0\}\]'
         $html | Should -Match '"NoMfaOnlyUnevaluated":550,"MfaSessionLinkedOnly":31'
         $html | Should -Not -Match 'secret-domain|exk123|wsfed'
@@ -57,12 +57,12 @@ Describe 'Offline HTML report generation' {
         $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
         '[{"Members":200,"MfaRegistered":180,"MfaCapable":178,"SsprRegistered":150,"PasswordlessCapable":30,"PhishingResistant":25,"PhoneRegistered":90,"AuthenticatorRegistered":150,"PhoneOnly":12,"Admins":5,"AdminsMfaRegistered":5,"UserPrincipalName":"private@example.test","Id":"0f0e0d0c-aaaa-bbbb-cccc-000000000001"}]' |
             Set-Content (Join-Path $pack 'results/IA.5.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"AuthenticatorRegistered":150,"PhoneOnly":12,"Admins":5'
         $html | Should -Not -Match 'private@example.test|0f0e0d0c-aaaa'
     }
     It 'reduces resource-level results to counts and keeps names, titles and comments out of the report' {
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"WorkloadSubnets":2'
         $html | Should -Match '"Segmented":1'
         $html | Should -Match '"VmsWithoutBackup":2'
@@ -72,7 +72,7 @@ Describe 'Offline HTML report generation' {
     It 'reduces attack disruption results (OUT.7) to a count and never embeds their incident numbers or titles' {
         '[{"IncidentNumber":9900417,"Title":"Secret disruption title","Severity":"High","CreatedTime":"2026-08-01T00:00:00Z","Classification":"TruePositive"},{"IncidentNumber":9900418,"Title":"Secret disruption title","Severity":"Medium","CreatedTime":"2026-08-02T00:00:00Z","Classification":"TruePositive"}]' |
             Set-Content (Join-Path $pack 'results/OUT.7.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"OUT.7":\[\{"Incidents":2\}\]'
         $html | Should -Not -Match '9900417|9900418|Secret disruption title|IncidentNumber'
     }
@@ -102,7 +102,7 @@ Describe 'Offline HTML report generation' {
  {"IncidentNumber":128,"Title":"Escalated as SR 4521","Severity":"Low","CreatedTime":"2026-08-16T00:00:00Z","Tactics":"[\"Discovery\"]","ExfilOrImpactTactic":false},
  {"IncidentNumber":129,"Title":"Malware detected on FILESERVER01","Severity":"High","CreatedTime":"2026-08-17T00:00:00Z","Tactics":"[\"Execution\"]","ExfilOrImpactTactic":false}]
 '@.Replace('__LONG__', ('Repeated suspicious activity ' * 8).Trim()) | Set-Content (Join-Path $pack 'results/OUT.4.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"Threat":"Password spray attack against Microsoft Entra ID application","Tactics":"CredentialAccess","Created":"2026-07-28"'
         $html | Should -Match '"Threat":"Multi-stage incident involving Initial access and Execution on one endpoint","Tactics":"InitialAccess,Execution","Created":"2026-08-01"' -Because 'a time with no offset is read as UTC'
         $html | Should -Match '"Threat":"Suspicious behavior by cmd.exe was observed","Tactics":"Execution","Created":"2026-08-06"' -Because 'a program name is not a host name'
@@ -119,7 +119,7 @@ Describe 'Offline HTML report generation' {
         $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
         '[{"IncidentNumber":130,"Title":"Password spray attack against Microsoft Entra ID application","Severity":"Medium","CreatedTime":"2026-07-28T04:15:35Z","Tactics":"[\"CredentialAccess\"]","ExfilOrImpactTactic":false},{"IncidentNumber":131,"Title":"Suspicious inbox manipulation rule","Severity":"High","CreatedTime":"2026-07-29T00:00:00Z","Tactics":"[\"Collection\"]","ExfilOrImpactTactic":true}]' |
             Set-Content (Join-Path $pack 'results/OUT.4.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"Severity":"Medium","ExfilOrImpactTactic":false,"Threat":"Title withheld","Tactics":"","Created":""'
         $html | Should -Match '"Severity":"High","ExfilOrImpactTactic":true,"Threat":"Title withheld","Tactics":"","Created":""' -Because 'the data loss flag survives a row that could not be screened'
         ([regex]::Matches($html, 'An OUT\.4 row could not be screened, so its title was withheld')).Count | Should -Be 1 -Because 'the review note is added once per report, not once per row'
@@ -143,7 +143,7 @@ Describe 'Offline HTML report generation' {
         '[{"Flow":"Device code","UserId":"u1","UserPrincipalName":"secret-room@example.test","PolicyResults":"p1=notApplied","SignIns":4},{"Flow":"Device code","UserId":"u2","UserPrincipalName":"secret-user@example.test","PolicyResults":"","SignIns":1}]' |
             Set-Content (Join-Path $pack 'results/IA.8-SIGNINS.json')
         '[{"Name":"secret-fw","Publisher":"paloaltonetworks","ResourceId":"/subscriptions/s/x/secret-fw"}]' | Set-Content (Join-Path $pack 'results/P0.6-APPLIANCES.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"Flow":"Device code","Control":"IA.3-DEVICECODE","PolicyRead":true,"PolicySource":"Raw","PolicyState":"Enforced","EnforcedPolicies":1,"ExcludedIdentities":1,"DetailRead":true,"SignIns":5,"SucceededExcluded":4,"AccountsExcluded":1,"SucceededUngoverned":1,"AccountsUngoverned":1'
         $html | Should -Match '"Flow":"Legacy authentication","Control":"IA.3","PolicyRead":true,"PolicySource":"Raw","PolicyState":"None"'
         $html | Should -Match '"Appliances":1'
@@ -155,7 +155,7 @@ Describe 'Offline HTML report generation' {
         $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
         '[{"id":"L1","displayName":"Secret country block","state":"enabled","conditions":{"users":{"includeUsers":["All"],"excludeUsers":["u1","u2"]},"applications":{"includeApplications":["All"]},"clientAppTypes":["all"],"locations":{"includeLocations":["All"],"excludeLocations":["loc-us"]}},"grantControls":{"builtInControls":["block"]}},{"id":"L2","displayName":"MFA outside office","state":"enabled","conditions":{"users":{"includeUsers":["g1"]},"applications":{"includeApplications":["All"]},"clientAppTypes":["all"],"locations":{"includeLocations":["All"],"excludeLocations":["AllTrusted"]}},"grantControls":{"builtInControls":["mfa"]}}]' |
             Set-Content (Join-Path $pack 'results/IA.8-POLICIES.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"Flow":"Location","Control":"IA.4-LOCATION","PolicyRead":true,"PolicySource":"Raw","PolicyState":"Enforced","EnforcedPolicies":1,"ExcludedIdentities":2'
         $html | Should -Not -Match 'Secret country block|loc-us'
         $html | Should -Not -Match '"ConditionalAccessStatus"' -Because 'IA.4 no longer feeds the report'
@@ -166,7 +166,7 @@ Describe 'Offline HTML report generation' {
         $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
         '[{"Account":"secretstore1","AccountAnonymousAccess":"Allowed","Containers":10,"PublicContainers":2,"ExposedContainers":2,"PublicContainerNames":"secret-cont (Blob)","ReadStatus":"OK"},{"Account":"secretstore2","AccountAnonymousAccess":"Disabled","Containers":5,"PublicContainers":1,"ExposedContainers":0,"PublicContainerNames":"old (Container)","ReadStatus":"OK"},{"Account":"secretstore3","Containers":0,"PublicContainers":0,"ExposedContainers":0,"ReadStatus":"HTTP 403"}]' |
             Set-Content (Join-Path $pack 'results/DP.1-CONTAINERS.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"DP.1-CONTAINERS":\[\{"Accounts":3,"AccountsUnread":1,"Containers":15,"PrivateContainers":12,"ExposedContainers":2,"AccountsExposed":1\}\]'
         $html | Should -Not -Match 'secretstore|secret-cont'
     }
@@ -176,7 +176,7 @@ Describe 'Offline HTML report generation' {
         $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
         '[{"Policy":"Block Device Code Flow Enforcement","State":"enabled","IncludeUsers":"All","ExcludeUsers":"12 users","IncludeApplications":"All","ClientAppTypes":"all","AuthenticationFlows":"deviceCodeFlow","Grants":"block","Platforms":"","SignInRiskLevels":"","UserRiskLevels":"","AuthStrength":""},{"Policy":"Block legacy authentication","State":"enabled","IncludeUsers":"All","ExcludeUsers":"1 user, 1 role","IncludeApplications":"All","ClientAppTypes":"exchangeActiveSync,other","AuthenticationFlows":"","Grants":"block","Platforms":"","SignInRiskLevels":"","UserRiskLevels":"","AuthStrength":""}]' |
             Set-Content (Join-Path $pack 'results/IA.8.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"Flow":"Device code","Control":"IA.3-DEVICECODE","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"Enforced","EnforcedPolicies":1,"ExcludedIdentities":12,"DetailRead":false'
         $html | Should -Match '"Flow":"Legacy authentication","Control":"IA.3","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"Enforced","EnforcedPolicies":1,"ExcludedIdentities":2'
         $html | Should -Match '"Flow":"Admin portals","Control":"IA.1-ADMINPORTAL","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"None"'
@@ -187,7 +187,7 @@ Describe 'Offline HTML report generation' {
         $m += [pscustomobject]@{ ResultId = 'IA.8'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' }
         $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
         '[{"Policy":"Old pilot","State":"disabled","IncludeUsers":"All","IncludeApplications":"All","ClientAppTypes":"exchangeActiveSync,other","Grants":"block"}]' | Set-Content (Join-Path $pack 'results/IA.8.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"Flow":"Legacy authentication","Control":"IA.3","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"Unknown"'
         $html | Should -Match '"Flow":"Admin portals","Control":"IA.1-ADMINPORTAL","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"Unknown"'
         $html | Should -Match '"Flow":"Device code","Control":"IA.3-DEVICECODE","PolicyRead":true,"PolicySource":"Flattened","PolicyState":"None"' -Because 'security defaults do not block device code flow'
@@ -196,20 +196,19 @@ Describe 'Offline HTML report generation' {
         $p = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
         $p.ClientName = '</script><script>alert(1)</script>'
         $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
-        $file = & $generator -SkipDeck -EvidencePath $pack
-        $html = Get-Content $file -Raw
-        $html | Should -Not -Match '<script>alert\(1\)</script>'
-        $html | Should -Match '\\u003c/script\\u003e'
+        $files = @(& $generator -SkipDeck -EvidencePath $pack)
+        foreach ($file in $files) { Get-Content $file -Raw | Should -Not -Match '<script>alert\(1\)</script>' -Because $file }
+        Get-Content $files[0] -Raw | Should -Match '\\u003c/script\\u003e' -Because 'the internal edition escapes its embedded data'
     }
     It 'continues with a review item when a selected result file is malformed' {
         '{invalid' | Set-Content (Join-Path $pack 'results/OUT.5.json')
-        $file = & $generator -SkipDeck -EvidencePath $pack
+        $file = (& $generator -SkipDeck -EvidencePath $pack)[0]
         Get-Content $file -Raw | Should -Match 'OUT.5 could not be read'
     }
     It 'accepts the documented context fields and nothing else' {
         $ctx = Join-Path $TestDrive 'context.json'
         '{"ClientName":"Example Client","TenantId":"example-tenant","ServiceStartDate":"2024-01-15","TenantScore":{"Current":45,"Max":100,"ReadDate":"2026-10-08","Source":"Portal"},"Delivered":[],"Actions":[{"Key":"critical","Status":"Scheduled","Owner":"Client infrastructure team","TargetDate":"2026-11-30","Reference":"CHG-400","Reviewed":"2026-10-10","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"}],"Impact":{"Confirmed":0,"Reviewed":"2026-10-10","Reference":"CHG-123","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"},"OpenAlertNote":{"AwaitingClient":2,"InProgress":1,"Reviewed":"2026-10-10","Reference":"ZD 9900200","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"},"ResponseTargetMinutes":60,"Raised":999}' | Set-Content $ctx
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack -ContextPath $ctx) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack -ContextPath $ctx)[0] -Raw
         $html | Should -Match '"ServiceStartDate":"2024-01-15"'
         $html | Should -Match '"Impact":\{"Confirmed":0,"Reviewed":"2026-10-10","Reference":"CHG-123","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"\}'
         $html | Should -Match '"OpenAlertNote":\{"AwaitingClient":2,"InProgress":1,"Reviewed":"2026-10-10","Reference":"ZD 9900200","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"\}'
@@ -224,7 +223,7 @@ Describe 'Offline HTML report generation' {
         $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
         '[{"Scope":"High","Incidents":30,"AutoClosed":4,"MedianTriageMin":6,"MedianCloseMin":7,"P90CloseMin":95}]' | Set-Content (Join-Path $pack 'results/OUT.2.json')
         '[{"Scope":"High","Incidents":26,"AutoClosed":0,"MedianTriageMin":9,"MedianCloseMin":40,"P90CloseMin":120}]' | Set-Content (Join-Path $pack 'results/OUT.2-ANALYST.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
         $html | Should -Match '"OUT.2":\[\{"Scope":"High","Incidents":30,"AutoClosed":4,"MedianTriageMin":6,"MedianCloseMin":7,"P90CloseMin":95\}\]'
         $html | Should -Match '"OUT.2-ANALYST":\[\{"Scope":"High","Incidents":26,"AutoClosed":0,"MedianTriageMin":9,"MedianCloseMin":40,"P90CloseMin":120\}\]'
     }
@@ -239,11 +238,12 @@ Describe 'Offline HTML report generation' {
     }
     It 'writes the PowerPoint edition beside the HTML from the same aggregates, with no names in it' -Skip:(-not (Get-Command node -ErrorAction SilentlyContinue)) {
         $files = @(& $generator -EvidencePath $pack -Depth Detailed)
-        $files.Count | Should -Be 2
+        $files.Count | Should -Be 3
         $files[0] | Should -Match '03-security-report\.html$'
-        $files[1] | Should -Match '03-security-report\.pptx$'
+        $files[1] | Should -Match '03-security-report\.client\.html$'
+        $files[2] | Should -Match '03-security-report\.pptx$'
         Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $zip = [IO.Compression.ZipFile]::OpenRead($files[1])
+        $zip = [IO.Compression.ZipFile]::OpenRead($files[2])
         try {
             $parts = @($zip.Entries | Where-Object { $_.FullName -match '^ppt/(slides/slide|notesSlides/notesSlide)\d+\.xml$' })
             @($parts | Where-Object { $_.FullName -match 'slides/slide' }).Count | Should -BeGreaterThan 10
@@ -252,9 +252,9 @@ Describe 'Offline HTML report generation' {
         finally { $zip.Dispose() }
         $text | Should -Not -Match 'private@example.test|Internal notes|secret-subnet|secret-vm|Secret incident title|Private comment|object Object'
     }
-    It 'writes the HTML only with -SkipDeck' {
+    It 'writes the two HTML editions only with -SkipDeck' {
         $files = @(& $generator -SkipDeck -EvidencePath $pack)
-        $files.Count | Should -Be 1
+        $files.Count | Should -Be 2
         Test-Path ([IO.Path]::ChangeExtension($files[0], '.pptx')) | Should -BeFalse
     }
 }
@@ -275,7 +275,7 @@ Describe 'Onboarding gaps and patch exclusions (collector 1.14.0)' {
         $p | Add-Member -NotePropertyName EdrVendorPattern -NotePropertyValue 'crowdstrike|falcon'
         $p | Add-Member -NotePropertyName PatchExclusionTagPattern -NotePropertyValue '"patch"'
         $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack) -Raw
+        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
     }
     It 'embeds the gaps as counts by reason and product and never the machine names' {
         $html | Should -Match '"EW.1-GAPS":\[\{"Reason":"Covered by a third-party endpoint detection product","Product":"CrowdStrike Falcon","Devices":2,"Eligible":true,"Covered":true,"Onboarded":0,"CanBeOnboarded":1,"NotSeen":1,"Other":0\},\{"Reason":"Network virtual appliance, cannot run a sensor","Product":"","Devices":1,"Eligible":false,"Covered":false,"Onboarded":0,"CanBeOnboarded":1,"NotSeen":0,"Other":0\}\]'
@@ -283,5 +283,77 @@ Describe 'Onboarding gaps and patch exclusions (collector 1.14.0)' {
         $html | Should -Match '"EW.10-EXCLUDED":\[\{"Machines":2\}\]'
         $html | Should -Match '"EdrVendorPattern":"crowdstrike\|falcon"'
         $html | Should -Not -Match 'secret-cs|secret-fw|secret-legacy|FalconSensorWindows|"Evidence"|"DeviceName"'
+    }
+}
+Describe 'Client and internal editions of the HTML' -Skip:(-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    BeforeAll {
+        $guid = '(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+    }
+    BeforeEach {
+        $pack = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures/offline-pack') -Destination $pack -Recurse
+        $context = Join-Path $PSScriptRoot 'fixtures/offline-context.json'
+    }
+    It 'writes the internal edition with the data and presenter notes, and the client edition with the rendered pages only' {
+        $files = @(& $generator -SkipDeck -EvidencePath $pack -ContextPath $context -Depth Detailed)
+        $files | ForEach-Object { Split-Path -Leaf $_ } | Should -Be @('03-security-report.html', '03-security-report.client.html')
+        $internal = Get-Content $files[0] -Raw
+        $client = Get-Content $files[1] -Raw
+        $internal | Should -Match '<button id="review-toggle" aria-expanded="false" aria-controls="review">Presenter notes</button>'
+        $internal | Should -Match '<aside id="review" hidden'
+        $internal | Should -Match '<script id="report-data" type="application/json">'
+        $internal | Should -Match '<main id="report" tabindex="-1"></main>' -Because 'the internal edition renders its pages in the browser'
+        $client | Should -Not -MatchExactly 'Presenter notes'
+        $client | Should -Not -Match 'review-toggle|id="review"|Collection register|Response timing cohort|Prepare the conversation|report-data|EbrReport|__[A-Z_]+__'
+        ([regex]::Matches($client, '<script\b')).Count | Should -Be 1 -Because 'only the toolbar script remains'
+        $client | Should -Match '<title>Synthetic validation only \| Security business review</title>'
+        $client | Should -Match '<option value="detailed" selected>'
+        $client | Should -Match '<h1>Security: Executive Summary</h1>' -Because 'the pages are already rendered'
+    }
+    It 'shows no GUID, subscription ID or workspace resource ID anywhere in the client file, and masks a GUID between hexadecimal characters' {
+        $files = @(& $generator -SkipDeck -EvidencePath $pack -ContextPath $context -Depth Detailed)
+        $internal = Get-Content $files[0] -Raw
+        $client = Get-Content $files[1] -Raw
+        ([regex]::Matches($internal, $guid)).Count | Should -BeGreaterThan 5
+        $internal | Should -Match 'law-ae2d4c6b8-a0f1-4e3d-9c5b-7a9f1e3d5c7bf'
+        $client | Should -Not -Match $guid
+        $client | Should -Not -Match 'e2d4c6b8|/subscriptions/|rg-synthetic|example-tenant|synthetic-private|CHG-401|CHG-OLD'
+        $client | Should -Match '<td>law-a\[id \d+\]f</td>'
+        $client | Should -Match '<td>DefaultWorkspace-\[id \d+\]-EUS</td>'
+        $client | Should -Match '2 subscriptions · 2 Sentinel workspaces'
+        $client | Should -Match 'DR\.9\. Read Oct 8, 2026\.'
+    }
+    It 'keeps the evidence file notes in the internal edition only' {
+        '{invalid' | Set-Content (Join-Path $pack 'results/OUT.5.json')
+        $files = @(& $generator -SkipDeck -EvidencePath $pack)
+        Get-Content $files[0] -Raw | Should -Match 'OUT.5 could not be read'
+        Get-Content $files[1] -Raw | Should -Not -Match 'OUT.5 could not be read'
+    }
+    It 'refuses an -OutputPath that ends in .client.html, so the internal edition never takes the client name' {
+        $out = Join-Path $TestDrive 'out/Client-Security-Review.client.html'
+        { & $generator -SkipDeck -EvidencePath $pack -OutputPath $out } | Should -Throw '*cannot end in .client.html*'
+        { & $generator -SkipDeck -EvidencePath $pack -OutputPath ($out -replace 'client', 'CLIENT') } | Should -Throw '*cannot end in .client.html*'
+        Test-Path -LiteralPath $out | Should -BeFalse
+    }
+    It 'names the client edition after -OutputPath' {
+        $out = Join-Path $TestDrive 'out/Client-Security-Review.html'
+        $files = @(& $generator -SkipDeck -EvidencePath $pack -OutputPath $out)
+        $files[0] | Should -Be $out
+        $files[1] | Should -Be (Join-Path $TestDrive 'out/Client-Security-Review.client.html')
+        Test-Path -LiteralPath $files[1] | Should -BeTrue
+    }
+}
+Describe 'Client edition without Node.js' {
+    It 'writes the internal edition only, removes an earlier client edition and warns that it was not written' {
+        $pack = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures/offline-pack') -Destination $pack -Recurse
+        $stale = Join-Path $pack '03-security-report.client.html'
+        'An earlier client edition' | Set-Content $stale
+        Mock Get-Command { $null } -ParameterFilter { $Name -eq 'node' }
+        $files = @(& $generator -SkipDeck -EvidencePath $pack -WarningVariable warned -WarningAction SilentlyContinue)
+        $files.Count | Should -Be 1
+        $files[0] | Should -Match '03-security-report\.html$'
+        Test-Path -LiteralPath $stale | Should -BeFalse -Because 'a client edition from an earlier run is not left behind'
+        "$warned" | Should -Match 'client edition of the report was not written'
     }
 }
