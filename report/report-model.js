@@ -157,8 +157,30 @@
         flagged, flaggedKnown: flagged !== null && tp !== null, flaggedScope, tacticPhrase, unclassified: count(inc.ClosedUnclassified),
         source: source('OUT.1', m.ticketed ? 'Alerts that opened an Atmosera ticket, informational severity excluded.' : ''), partial: partial('OUT.1')
       }
-      if (inc.Open > 0) presenter('Open alerts', `${fmt(inc.Open)} of ${fmt(inc.Raised)} alerts created ${m.period.label} were still open at collection. The report describes these as items referred to the client for action or confirmation under the agreed notification process. Confirm with the SOC lead that this holds before the review, and have the age and severity split ready if asked.`)
-      if (count(inc.ClosedUnclassified) > 0) presenter('Closure classification', `${fmt(inc.ClosedUnclassified)} closed alerts carry no definitive classification. The report counts them as resolved and makes no claim about investigation quality.`)
+      // Open alerts at collection split into those awaiting the client and those still with Atmosera only from a
+      // reviewed OpenAlertNote record in the context file: OUT.1 holds the open count, never who holds each alert.
+      // Like the Impact record, the split is bound to the alert period it covers and must account for every open
+      // alert, so a context file reused from an earlier period never splits a later count. Without it every surface
+      // names both possibilities in one sentence (Oct 16, 2026).
+      const openRecord = context.OpenAlertNote
+      if (openRecord !== undefined && openRecord !== null && inc.Open > 0) {
+        const record = typeof openRecord === 'object' ? openRecord : {}
+        const awaiting = count(record.AwaitingClient), inProgress = count(record.InProgress)
+        const reviewed = iso(record.Reviewed), recordStart = iso(record.WindowStart), recordEnd = iso(record.WindowEnd)
+        const omitted = reason => note('Open alert status needs review', `The context OpenAlertNote record was omitted because ${reason} Correct it before presenting, or remove it to keep the combined open alert sentence.`)
+        if (awaiting === null || inProgress === null || awaiting < 0 || inProgress < 0 || !validDate(reviewed) || !clean(record.Reference) || !validDate(recordStart) || !validDate(recordEnd)) omitted('it lacks an AwaitingClient or InProgress count, a Reviewed date, a Reference, or the WindowStart and WindowEnd of the alert period it covers.')
+        else if (!windowValid || recordStart !== p.WindowStart || recordEnd !== p.WindowEnd) omitted(`it covers ${span(recordStart, recordEnd)} and this pack's alert period is ${m.period.label}.`)
+        else if (reviewed < p.WindowEnd) omitted(`its review is dated ${date(reviewed)}, before the alert period ended on ${date(p.WindowEnd)}.`)
+        else if (awaiting + inProgress !== inc.Open) omitted(`it accounts for ${plural(awaiting + inProgress, 'open alert', 'open alerts')} and the pack holds ${fmt(inc.Open)}.`)
+        else m.alerts.openSplit = { awaiting, inProgress, reference: clean(record.Reference), reviewed: date(reviewed), source: `Reviewed open alert status ${clean(record.Reference)}, ${date(reviewed)}, from the reviewed context file.` }
+      }
+      // The sentence every surface uses for the open alerts, after the closed count.
+      const were = n => n === 1 ? 'was' : 'were'
+      const split = m.alerts.openSplit
+      if (split) split.phrase = [split.awaiting > 0 ? `${fmt(split.awaiting)} ${were(split.awaiting)} awaiting client action or confirmation` : '', split.inProgress > 0 ? `${fmt(split.inProgress)} ${were(split.inProgress)} still in progress with Atmosera` : ''].filter(Boolean).join(' and ')
+      m.alerts.openSentence = inc.Open > 0 ? `${split ? split.phrase : `${fmt(inc.Open)} ${were(inc.Open)} pending client action, confirmation or continued investigation`} at the reporting cutoff.` : ''
+      if (inc.Open > 0) presenter('Open alerts', `${fmt(inc.Open)} of ${fmt(inc.Raised)} alerts created ${m.period.label} were still open at collection. ${split ? `The reviewed record ${split.reference} splits them: ${fmt(split.awaiting)} awaiting client action or confirmation and ${fmt(split.inProgress)} still in progress with Atmosera.` : 'The report describes them as pending client action, confirmation or continued investigation. Add a reviewed OpenAlertNote record to the context file to split them, and have the age and severity split ready if asked.'}`)
+      if (count(inc.ClosedUnclassified) > 0) presenter('Closure classification', `${fmt(inc.ClosedUnclassified)} closed alerts carry no definitive classification. The report counts them as closed, never as resolved, and makes no claim about investigation quality.`)
       if (analystMode) presenter('Automation share', `${fmt(allRow.AutoClosed)} of ${fmt(allRow.Incidents)} closed alerts (${pctText(m.alerts.autoShare)}) were closed by automation rules. The headline counts exclude them and the automation volume is shown as a supporting line.`)
       else if (autoValid && autoShare >= 0.25) presenter('Automation share', `${fmt(allRow.AutoClosed)} of ${fmt(allRow.Incidents)} closed alerts (${pctText(m.alerts.autoShare)}) were closed by automation rules. Below the 50 percent threshold, so headline counts include them.`)
     } else if (alertsAllowed) unmeasured('OUT.1', 'Alerts triaged', inc ? 'the combined result does not reconcile' : state('OUT.1'))
@@ -950,21 +972,38 @@
     }
     {
       const parts = []
-      if (m.alerts) parts.push(`${fmt(m.alerts.triaged)} alerts ${m.ticketed ? 'opened a ticket with the managed service and were worked to a disposition' : 'were triaged'} ${m.period.label}${m.alerts.analystMode ? `, with ${fmt(m.alerts.automation)} more resolved by automation rules` : ''}.`)
+      // Triage, closure and open status are kept apart: OUT.1 records that an alert closed, not how it was resolved,
+      // and unclassified closures are named beside the closed count (Oct 16, 2026).
+      if (m.alerts) {
+        const a = m.alerts
+        parts.push(`The SOC triaged ${plural(a.triaged, 'alert', 'alerts')}${m.ticketed ? ` associated with the managed security service` : ''} ${m.period.label}.`)
+        parts.push(`${fmt(a.closed)} ${a.closed === 1 ? 'was' : 'were'} closed.${a.openSentence ? ` ${a.openSentence}` : ''}`)
+        if (a.analystMode) parts.push(`Automation rules closed ${fmt(a.automation)} more.`)
+        if (a.unclassified > 0) parts.push(`${plural(a.unclassified, 'closed alert carries', 'closed alerts carry')} no recorded classification.`)
+      }
       if (m.response) parts.push(`${m.response.scope === 'High' ? 'High severity alerts' : 'Alerts'} closed at a median of ${m.response.median.value}${m.response.analyst ? ' once automation closures are set aside' : ''}.`)
       if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
       if (ruleControl && ruleControl.pct !== null) parts.push(`${fmt(ruleControl.good)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
-      // The disposition statement says every alert, so only a complete DR.10 reading of every workspace earns it. A
-      // DR.10 reading of every workspace that leaves closures undocumented replaces it with its own ratio. Otherwise
-      // (DR.10 missing, unavailable, ungathered, without closures in the last 30 days, or partial because a workspace
-      // failed or was excluded) the statement leads with the triaged count from OUT.1, the figure the pillar's source
-      // line cites, so a partial DR.10 ratio never reads as the whole tenant. OUT.1 alone shows nothing about closing
-      // comments and can hold open or unclassified alerts (Oct 16, 2026).
+      // The disposition statement says every alert, so it needs a complete DR.10 reading of every workspace and an
+      // OUT.1 reading with no open alert and no unclassified closure. Open alerts at the reporting cutoff lead the
+      // statement with the closed and open counts from OUT.1. Otherwise a DR.10 reading of every workspace that
+      // leaves closures undocumented, or that sits beside unclassified closures, gives its own ratio with its window.
+      // Otherwise (DR.10 missing, unavailable, ungathered, without closures in the last 30 days, or partial because a
+      // workspace failed or was excluded) the statement leads with the triaged count from OUT.1, the figure the
+      // pillar's source line cites, so a partial DR.10 ratio never reads as the whole tenant. OUT.1 alone shows
+      // nothing about closing comments, so it never earns every on its own (Oct 16, 2026).
       const wholeDispositions = dispositions && dispositions.pct !== null && !partial('DR.10')
-      const disposition = !m.alerts ? null : wholeDispositions && complete(dispositions) ? 'Every alert reaches a documented disposition' : wholeDispositions ? `${measureText(dispositions)} alerts closed in the last 30 days carry a documented disposition` : `${plural(m.alerts.triaged, 'alert', 'alerts')} triaged ${m.period.label}`
+      const openLead = !!m.alerts && m.alerts.open > 0
+      const dispositionLed = !!m.alerts && !openLead && wholeDispositions
+      const disposition = !m.alerts ? null
+        : openLead ? `${fmt(m.alerts.closed)} of ${plural(m.alerts.triaged, 'alert', 'alerts')} closed, ${fmt(m.alerts.open)} open at the reporting cutoff`
+        : dispositionLed && complete(dispositions) && m.alerts.unclassified === 0 ? 'Every alert closed with a documented disposition'
+        : dispositionLed ? `${measureText(dispositions)} alerts closed in the last 30 days carry a documented disposition`
+        : `${plural(m.alerts.triaged, 'alert', 'alerts')} triaged ${m.period.label}`
       const headline = disposition || band(plan, 'Workload protection covers the resource estate', `Workload protection covers ${measureText(plan)} eligible resources, ${remaining(plan)}`, 'Workload protection covers most of the resource estate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
       // When DR.10 earns the statement the source line cites it beside OUT.1, so the statement traces to its evidence.
-      const detectionSource = !m.alerts ? plan.source : wholeDispositions ? `${m.alerts.source} ${dispositions.source}` : m.alerts.source
+      // A reviewed open alert split in the narrative cites its record as well.
+      const detectionSource = !m.alerts ? plan.source : [m.alerts.source, dispositionLed ? dispositions.source : '', m.alerts.openSplit ? m.alerts.openSplit.source : ''].filter(Boolean).join(' ')
       pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : ruleControl, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, detectionSource)
     }
 
@@ -973,7 +1012,7 @@
     if (m.service) tile('Months of managed security', fmt(m.service.months), 'Continuous coverage, not project work', `Service start ${m.service.start}, from the reviewed context file.`)
     else if (m.posture.assessed !== null) tile('Azure resources assessed by Defender for Cloud', fmt(m.posture.assessed), m.posture.estate !== null ? `Across ${fmt(m.posture.estate)} resources in the estate` : 'Continuous posture assessment', source('POS.2'))
     else if (m.posture.estate !== null) tile('Azure resources in the estate', fmt(m.posture.estate), 'Under managed security coverage', source('P0.5'))
-    if (m.alerts) tile('Alerts triaged', fmt(m.alerts.triaged), m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} resolved by automation rules` : m.alerts.truePositives > 0 ? `${plural(m.alerts.truePositives, 'confirmed threat', 'confirmed threats')}, classified by the SOC` : m.detections ? `Across ${m.detections.sources}` : m.period.label, m.alerts.source)
+    if (m.alerts) tile('Alerts triaged', fmt(m.alerts.triaged), m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} closed by automation rules` : m.alerts.truePositives > 0 ? `${plural(m.alerts.truePositives, 'confirmed threat', 'confirmed threats')}, classified by the SOC` : m.detections ? `Across ${m.detections.sources}` : m.period.label, m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
     // The 90th percentile is creation to recorded close, so the line claims triage and closure, never investigation
     // completion or resolution quality, which the evidence does not hold.
@@ -990,13 +1029,13 @@
     const row = (tier, label, value, id) => { if (value !== null && value !== undefined && value !== '' && value !== 'Not available') m.tiers[tier].push({ label: clean(label), value: clean(String(value)), id }) }
     if (m.alerts) {
       // The deck band shows the first three rows, so the tier leads with what "Did the program hold" names: alerts,
-      // confirmed threats and the reviewed impact determination when the context file holds one. The resolved
+      // confirmed threats and the reviewed impact determination when the context file holds one. The closed
       // share and the tactic reading follow. Tactic-qualified: the count is of tactics recorded on the alert,
       // never a verified outcome.
       row('outcomes', 'Alerts triaged', fmt(m.alerts.triaged), 'OUT.1')
       if (m.alerts.truePositives !== null) row('outcomes', 'Confirmed threats', fmt(m.alerts.truePositives), 'OUT.1')
       if (m.impact && m.alerts.truePositives > 0) row('outcomes', 'Confirmed data exposure or business impact', fmt(m.impact.confirmed), 'CONTEXT')
-      if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts resolved and closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
+      if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
       if (m.alerts.flaggedKnown) row('outcomes', `True positives whose alerts carried ${m.alerts.tacticPhrase}`, `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
     }
     if (m.response) {

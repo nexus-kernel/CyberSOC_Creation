@@ -4,5 +4,6 @@
   "ServiceStartDate": null,
   "TenantScore": null,
   "Delivered": [],
-  "Impact": null
+  "Impact": null,
+  "OpenAlertNote": null
 }

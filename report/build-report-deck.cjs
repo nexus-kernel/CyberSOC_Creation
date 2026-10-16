@@ -206,8 +206,9 @@ async function main() {
       s.addTable([head, ...body], { x: q.x, y: q.y - 0.05, w: qw, colW: [qw * 0.34, qw * 0.2, qw * 0.21, qw * 0.25], rowH: 0.34, margin: [0.03, 0.08, 0.03, 0.08], objectName: 'Time to close table' })
       text(s, 'Medians under 20 minutes are not presented. 90% within is the 90th percentile.', { x: q.x, y: q.y + 0.34 * (body.length + 1) + 0.05, w: qw, h: 0.3, fontSize: 10, color: C.accent6, objectName: 'Time to close caption' })
     } else text(s, 'Response timing is confirmed in the review.', { x: q.x, y: q.y, w: qw, h: 0.4, fontSize: 13, color: C.accent6, objectName: 'Time to close empty' })
-    // How closed alerts were resolved. Open alerts appear only as the referral sentence.
-    q = quad(2, 'How closed alerts were resolved')
+    // How closed alerts were classified. Open alerts appear only as the referral sentence, split by owner only from
+    // the reviewed OpenAlertNote record.
+    q = quad(2, 'How closed alerts were classified')
     if (m.alerts) {
       const a = m.alerts
       text(s, 'Closed by the SOC', { x: q.x, y: q.y - 0.05, w: qw - 1.2, h: 0.32, fontSize: 15, bold: true, color: C.text2, objectName: 'Closed label' })
@@ -225,7 +226,7 @@ async function main() {
         text(s, label, { x: lx + 0.2, y: ly, w: w - 0.15, h: 0.28, fontSize: 12, color: C.text1, objectName: `Legend ${l}` })
         lx += w + 0.2
       })
-      if (a.open > 0) text(s, `${fmt(a.open)} more ${a.open === 1 ? 'is' : 'are'} referred to your team for action or confirmation under the agreed notification process, or still in progress.`, { x: q.x, y: ly + 0.42, w: qw, h: 0.65, fontSize: 12, color: C.accent6, objectName: 'Referral note' })
+      if (a.open > 0) text(s, a.openSplit ? `${fmt(a.open)} more ${a.open === 1 ? 'was' : 'were'} open at the reporting cutoff. Of these, ${a.openSplit.phrase}.` : `${fmt(a.open)} more ${a.open === 1 ? 'is' : 'are'} referred to your team for action or confirmation under the agreed notification process, or still in progress.`, { x: q.x, y: ly + 0.42, w: qw, h: 0.65, fontSize: 12, color: C.accent6, objectName: 'Referral note' })
     } else text(s, 'The combined alert result is reconciled before dispositions are presented.', { x: q.x, y: q.y, w: qw, h: 0.6, fontSize: 13, color: C.accent6, objectName: 'Disposition pending' })
     // Detections by source.
     q = quad(3, m.detections ? `${fmt(m.detections.total)} detections, by source` : 'Detections by source')
@@ -242,7 +243,7 @@ async function main() {
     s.addNotes(notesOf([
       m.ticketed ? 'An alert is a Sentinel record that opened a ticket with the managed security service. Informational severity is excluded, and detections are the records correlated into those alerts.' : 'Detections from Sentinel, Defender for Cloud and the Defender services are correlated into alerts.',
       m.alerts ? `Closed alerts: ${fmt(m.alerts.benign)} benign positive, ${fmt(m.alerts.falsePositives)} false positive, ${fmt(m.alerts.truePositives)} true positive, ${fmt(m.alerts.unclassified)} unclassified.` : '',
-      m.alerts && m.alerts.open > 0 ? 'The remaining alerts are referred to your team for action or confirmation under the agreed notification process, or are still under investigation.' : '',
+      m.alerts && m.alerts.open > 0 ? (m.alerts.openSplit ? `Of the alerts open at the reporting cutoff, ${m.alerts.openSplit.phrase}.` : 'The remaining alerts are referred to your team for action or confirmation under the agreed notification process, or are still under investigation.') : '',
       'Response times run from alert creation to recorded close. Medians under 20 minutes are not presented, so the 90th percentile carries the speed story where the median is faster.'
     ]))
 
@@ -306,7 +307,7 @@ async function main() {
         m.threats && m.threats.alerts > 0 ? [fmt(high), high === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(m.threats.alerts, 'confirmed alert', 'confirmed alerts')} grouped above, at the severity Sentinel recorded.`] : null,
         st.speed ? [st.speed.value, sentence(st.speed.label), st.speed.sub] : null
       ].filter(Boolean).slice(0, 4)
-      const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages every alert and confirms its severity'], ['3 Classify', ' the SOC records a true-positive classification on the alert'], ['4 Impact', ' confirmed only from reviewed investigation records']]
+      const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages each alert and confirms its severity'], ['3 Classify', ' the SOC records a true-positive classification on the alert'], ['4 Impact', ' confirmed only from reviewed investigation records']]
       const STRIP_H = 0.85, cardTop = TOP + tableH + CAPTION_H + 0.2
       const roomWithStrip = BOTTOM - STRIP_H - 0.25 - cardTop, roomAlone = BOTTOM - cardTop
       const cardH = outcomeCards.length && roomWithStrip >= 1.1 ? Math.min(1.6, roomWithStrip) : outcomeCards.length && roomAlone >= 1.1 ? Math.min(1.6, roomAlone) : 0
