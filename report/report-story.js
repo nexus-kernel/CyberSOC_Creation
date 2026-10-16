@@ -70,8 +70,9 @@
     { key: 'allowlist', horizon: 'later', title: 'Application allow-listing', match: /^Application allow-listing/ },
     { key: 'sharing', horizon: 'later', title: 'Collaboration sharing boundaries', match: /^Collaboration sharing/ },
     // Defense in depth since Oct 16, 2026: it needs a license and a sensor on each domain controller from the client.
-    // Domain controller telemetry comes from the same sensors, so its gap joins this item and its ask.
-    { key: 'mdi', horizon: 'later', title: 'Defender for Identity deployment', match: /^(Defender for Identity sensors|Domain controller telemetry)/, ask: { title: 'Approve Defender for Identity licensing', body: 'Licensing and a sensor on each domain controller, so identity attacks on the directory are detected.' } }
+    // Domain controller telemetry comes from the same sensors, so its gap joins this item. The licensing ask is raised
+    // only by the sensor control (askOn): with sensors healthy, a telemetry gap is an ingestion fault, not licensing.
+    { key: 'mdi', horizon: 'later', title: 'Defender for Identity deployment', match: /^(Defender for Identity sensors|Domain controller telemetry)/, askOn: /^Defender for Identity sensors/, ask: { title: 'Approve Defender for Identity licensing', body: 'Licensing and a sensor on each domain controller, so identity attacks on the directory are detected.' } }
   ]
   const HORIZONS = [
     { key: 'now', label: 'Now', when: 'Next 30 days' },
@@ -247,7 +248,7 @@
     if (unread.length) asks.push({ kind: 'access', key: 'access', lead: plural(unread.length, 'control', 'controls'), title: `Grant read access for ${unread.length === 1 ? 'one ungraded control' : `${word(unread.length)} ungraded controls`}`, body: `${sentence(list(unread.map(short)))}.`, short: 'Grant the read access needed to grade them' })
     for (const item of HORIZONS.flatMap(h => items[h.key])) {
       const entry = CATALOG.find(e => e.key === item.key)
-      if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N') && open(entry.key, entry.ask.title)) asks.push({ kind: 'approval', key: entry.key, lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
+      if (asks.length < 4 && entry && entry.ask && item.controls.some(c => c.mark === 'N' && (!entry.askOn || entry.askOn.test(c.label))) && open(entry.key, entry.ask.title)) asks.push({ kind: 'approval', key: entry.key, lead: plural(item.controls.length, 'control', 'controls'), title: entry.ask.title, body: entry.ask.body, short: entry.ask.title })
     }
     // The deck sizes the card text from bodyText and the action, and keeps the full body with its attribution in the notes.
     s.asks = asks.slice(0, 4).map(x => { const action = actionOf(x.key); return { ...x, action, bodyText: x.body, body: clean(withStatus(x.body, action)) } })

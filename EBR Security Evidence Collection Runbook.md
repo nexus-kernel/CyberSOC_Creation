@@ -1647,15 +1647,16 @@ Get-MgAdminSharepointSetting |
 | DR-F2 | Every alert triaged to a documented disposition | F | Closed alerts with a classification and a closing comment, alerts linked to an incident | DR.10, OUT.1, DR.1 |
 | DR-F3 | Cloud workload protection enabled across the resource estate | F | Plan-covered resources over plan-eligible resources | DR.2 |
 | DR-F4 | Security telemetry centrally collected and retained | F | Retention days and active data types | P0.2, DR.3 |
-| DR-F5 | Domain controller telemetry collected continuously (US Claims) | F | Healthy sensors over sensors registered, and domain controllers emitting events | DR.11, DR.4 |
+| DR-F5 | Analytics rules enabled in Sentinel | F | Enabled rules over all analytics rules in the workspaces | DR.9 |
 | DR-F6 | Vulnerability assessment running estate-wide (DRB) | F | Onboarded devices with a software inventory | DR.5, DFC.1 |
+| DR-F7 | Threat intelligence indicators ingested tenant-wide | F | Indicators available for matching. TI match alerts (DR.8) are context, not graded | DR.7, DR.8 |
 | DR-D1 | Diagnostic logging enabled on all platform resources | D | Resources with every logging assessment healthy, and initiative compliance once assigned | DR.13, DR.6-INITIATIVE, DR.6 |
 | DR-D2 | Vulnerability assessment running estate-wide (US Claims) | D | Same measure as DR-F6 | DR.5, DFC.1 |
-| DR-D3 | Threat intelligence indicators ingested and matched | D | Indicators ingested and TI match alerts raised | DR.7, DR.8 |
-| DR-D4 | Detection content engineered and tuned to this environment | D | Enabled rules, rules modified in the window, noise trend | DR.9, OUT.3 |
+| DR-D3 | Defender for Identity sensors healthy on domain controllers | D | Healthy sensors over sensors registered | DR.11 |
+| DR-D4 | Domain controller telemetry collected continuously | D | Domain controllers emitting events | DR.4 |
 | DR-D5 | Automated attack disruption active on identity threats | D | Disruption-tagged incidents, and the automation level of each device group | OUT.7, DR.12 |
 
-DR-F5 is out of scope for a client with no on-premises Active Directory, which applies to US Claims now that directory sync is retired. Mark it out of scope rather than E.
+Since Oct 16, 2026 analytics rules and threat intelligence ingestion are foundational, since both are switched on at build, and Defender for Identity sensors and domain controller telemetry are defense in depth, since they need licensing and a sensor on each domain controller from the client. Tuning against operating history and blocking on matched indicators are not graded. DR-D3 and DR-D4 are out of scope for a client with no on-premises Active Directory, which applies to US Claims now that directory sync is retired. Mark them out of scope rather than E.
 
 **DR.1 Alerts not linked to any incident** (Log Analytics)
 

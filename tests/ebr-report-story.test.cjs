@@ -159,6 +159,14 @@ test('Defender for Identity and domain controller telemetry gaps sit in Later wi
   q.manifest.push({ ResultId: 'DR.4', Status: 'EMPTY', Rows: 0, ReadTimeUtc: '2026-10-12T10:00:00Z' }); q.results['DR.4'] = []
   const asks = buildStory(build(q), q).asks.filter(a => a.key === 'mdi')
   assert.deepEqual(asks.map(a => a.lead), ['2 controls'], 'one licensing ask covers both')
+  // Sensors licensed and healthy with no domain controller events is an ingestion fault: the telemetry gap stays in
+  // the Later item, but never asks the client to license what it already holds.
+  const t = JSON.parse(JSON.stringify(q))
+  t.manifest = t.manifest.filter(r => r.ResultId !== 'DR.11'); t.manifest.push({ ResultId: 'DR.11', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' })
+  t.results['DR.11'] = [{ Sensors: 4, Healthy: 4 }]
+  const licensed = buildStory(build(t), t)
+  assert.deepEqual(licensed.roadmap.find(h => h.key === 'later').items.find(i => i.key === 'mdi').controls.map(c => c.id), ['DR.4'])
+  assert.ok(!licensed.asks.some(a => a.key === 'mdi'), 'no licensing ask for a telemetry-only gap')
   // With Defender for Identity as the only gap, the foundational controls all read E and nothing says otherwise.
   const m2 = build(p)
   for (const c of m2.controls) if (c.tier === 'foundational' && c.mark) Object.assign(c, { mark: 'E', pct: 100 })
