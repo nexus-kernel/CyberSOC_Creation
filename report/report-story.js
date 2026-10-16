@@ -145,7 +145,7 @@
     // The alert KPI carries the period, or the automation line, as the HTML tile does. The detection count stays
     // on the operations slide, where the chart explains it.
     const kpis = []
-    if (m.alerts) kpis.push({ value: fmt(m.alerts.triaged), label: 'Alerts triaged', sub: m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} resolved by automation rules` : m.period.label, area: 'alerts' })
+    if (m.alerts) kpis.push({ value: fmt(m.alerts.triaged), label: 'Alerts triaged', sub: m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} closed by automation rules` : m.period.label, area: 'alerts' })
     // Tactic-qualified: the count is of tactics recorded on the alert (the model names the scope and the phrase),
     // never a verified outcome, so the label says carried, never reached. A true positive is a classification the
     // SOC recorded, so the sub-line says classified, never investigated or closed. A confirmed impact from the
@@ -172,7 +172,10 @@
       winAt(/^Multifactor authentication required at sign-in/, 'identity', 'users challenged for MFA at sign-in', 'Members who signed in over the last 30 days.', 'multifactor authentication required at sign-in by Conditional Access policy', 'An enabled policy for all users on every application.'),
       winAt(/^Operating system findings/, 'endpoint', 'machines patched inside the agreed cadence', c => c.good === c.total ? 'No critical or security patch past the cadence at collection.' : `${plural(c.total - c.good, 'machine carries', 'machines carry')} a critical or security patch past the cadence at collection.`) || winAt(/^Azure virtual machines reporting/, 'endpoint', 'Azure virtual machines reporting to endpoint detection', 'Seen in the last 7 days.'),
       m.mailRemoved > 0 && find(/^Malicious mail removed/)?.mark === 'E' ? { area: 'data', eyebrow: 'Email protection', value: fmt(m.mailRemoved), label: 'malicious messages removed after delivery', sub: 'Zero-hour auto purge and automated remediation, last 30 days.', source: find(/^Malicious mail removed/).source } : winAt(/^Managed disks/, 'data', 'managed disks encrypted at rest', 'Platform or customer managed keys, at collection.'),
-      winAt(/^Alerts closed with a documented/, 'detection', 'alerts closed with a documented disposition', 'Classification and closing comment, last 30 days.'),
+      // The DR.10 win reads the last 30 days beside quarterly figures, so its label names the window and its sub-line
+      // names the unclassified closures from OUT.1 when there are any: alerts created in the period and closed by collection,
+      // since OUT.1 reads the latest state at collection (Oct 16, 2026).
+      winAt(/^Alerts closed with a documented/, 'detection', 'alerts closed in the last 30 days with a documented disposition', a && a.unclassified > 0 ? `Classification and closing comment. ${plural(a.unclassified, 'alert', 'alerts')} created ${s.periodPhrase} and closed by collection ${a.unclassified === 1 ? 'carries' : 'carry'} no classification.` : 'Classification and closing comment.'),
       winAt(/^Encryption in transit/, 'network', 'published web apps enforcing HTTPS only', 'At collection.')
     ].filter(Boolean)
     const EYEBROW = { identity: 'Identity', endpoint: 'Endpoint', data: 'Data protection', detection: 'Detection', network: 'Network' }

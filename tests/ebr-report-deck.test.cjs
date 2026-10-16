@@ -135,6 +135,44 @@ test('slide text follows the copy rules and speaker notes never carry the presen
   assert.ok(!/\bat build\b|\bdrift|\bregress|\bsince the last review\b(?! )/i.test(all.replace(/not a change since the last review/g, '')), all.match(/.{0,50}(at build|drift|regress).{0,50}/i)?.[0])
   assert.ok(!/\bat build\b|\bdrift|\bregress/i.test(spoken), spoken.match(/.{0,50}(at build|drift|regress).{0,50}/i)?.[0])
 })
+function deckOf(data) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  fs.writeFileSync(dataFile, JSON.stringify(data))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  return out
+}
+// DR.10 reads the last 30 days and the win sits beside the period's figures, so the win names its window and the
+// period's unclassified closures from OUT.1 (Oct 16, 2026).
+test('the DR.10 win names its window and the unclassified closures, and the operations slide says closed, never resolved', async () => {
+  const plain = s => s.replace(/ /g, ' ')
+  const data = pack('balanced')
+  data.manifest.push({ ResultId: 'DR.10', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-08T10:00:00Z' }); data.results['DR.10'] = [{ Closed: 40, Documented: 40 }]
+  const { slides, notes } = await read(deckOf(data))
+  const wins = plain(slides.find(s => /^(Summary )?(Quarter wins|Wins this period)/.test(plain(s))) || slides.find(s => /Wins this period|Quarter wins/.test(s)) || '')
+  assert.ok(wins.includes('40 of 40') && wins.includes('alerts closed in the last 30 days with a documented disposition'), wins)
+  assert.ok(wins.includes('Classification and closing comment. 5 alerts created from Nov 1, 2025 to Sep 30, 2026 and closed by collection carry no classification.'), wins)
+  const ops = plain(slides.find(s => /HOW CLOSED ALERTS WERE/i.test(s)) || '')
+  assert.ok(/HOW CLOSED ALERTS WERE CLASSIFIED/i.test(ops) && !/resolved/i.test(ops), ops)
+  assert.ok(![...slides, ...notes].some(t => /every alert|worked to a disposition/i.test(plain(t))), [...slides, ...notes].map(plain).join(' ').match(/.{0,80}(every alert|worked to a disposition).{0,80}/i)?.[0])
+  // With nothing unclassified the sub-line names the measure alone, and the label still carries the window.
+  data.results['OUT.1'] = [{ Raised: 100, Closed: 80, Open: 20, TruePositive: 3, ClosedUnclassified: 0 }]
+  const clean = plain((await read(deckOf(data))).slides.find(s => /Wins this period|Quarter wins/.test(s)) || '')
+  assert.ok(clean.includes('alerts closed in the last 30 days with a documented disposition Classification and closing comment.') && !clean.includes('carry no classification'), clean)
+})
+// A reviewed OpenAlertNote split is cited on the operations slide's own notes, not only on the pillar notes.
+test('the operations slide splits the open alerts from a reviewed record and cites it in its notes', async () => {
+  const plain = s => s.replace(/\u00A0/g, ' ')
+  const data = pack('balanced')
+  data.parameters.TenantId = 't'
+  data.context = { ClientName: 'Example', TenantId: 't', OpenAlertNote: { AwaitingClient: 12, InProgress: 8, Reviewed: '2026-10-10', Reference: 'ZD 9900200', WindowStart: '2025-11-01', WindowEnd: '2026-09-30' } }
+  const { slides, notes } = await read(deckOf(data))
+  const index = slides.findIndex(s => /HOW CLOSED ALERTS WERE CLASSIFIED/i.test(s))
+  assert.ok(index >= 0, 'the operations slide')
+  assert.ok(plain(slides[index]).includes('20 more were open at collection. Of these, 12 were awaiting client action or confirmation and 8 were still in progress with Atmosera.'), plain(slides[index]))
+  const opsNotes = plain(notes[index])
+  assert.ok(opsNotes.includes('Of the alerts open at collection, 12 were awaiting client action or confirmation and 8 were still in progress with Atmosera.') && opsNotes.includes('Reviewed open alert status ZD 9900200, Oct 10, 2026, from the reviewed context file.'), opsNotes)
+  assert.ok(![...slides, ...notes].some(t => /reporting cutoff/i.test(t)))
+})
 test('the grounding slides appear at balanced depth and carry the pillar narratives, the priority workstreams and the scope', async () => {
   const { data, out } = deck('balanced', examples)
   const m = build(data)
@@ -144,10 +182,10 @@ test('the grounding slides appear at balanced depth and carry the pillar narrati
   const pillars = plain(slides.find(s => s.startsWith('Measured outcomes by pillar')) || '')
   assert.ok(pillars, 'the pillar outcomes slide')
   for (const p of m.pillars) assert.ok(pillars.includes(p.name) && pillars.includes(p.headline), p.name)
-  // The pack holds open and unclassified alerts and no DR.10 reading, so the disposition statement leads with the
-  // triaged count on the slide and in the notes.
-  assert.equal(m.pillars.find(p => p.name === 'Detection and response').headline, '100 alerts triaged Nov 1, 2025 to Sep 30, 2026')
-  assert.ok(![pillars, ...notes].some(t => t.includes('Every alert reaches a documented disposition')))
+  // The pack holds open and unclassified alerts, so the disposition statement leads with the closed and open counts
+  // on the slide and in the notes, and no slide or note says every alert or worked to a disposition.
+  assert.equal(m.pillars.find(p => p.name === 'Detection and response').headline, '80 of 100 alerts closed, 20 open at collection')
+  assert.ok(![...slides, ...notes].some(t => /every alert|worked to a disposition/i.test(plain(t))), [...slides, ...notes].map(plain).join(' ').match(/.{0,60}(every alert|worked to a disposition).{0,60}/i)?.[0])
   const work = plain(slides.find(s => s.startsWith('Priority workstreams')) || '')
   assert.ok(work, 'the priority workstreams slide')
   for (const p of m.priorities.slice(0, 3)) assert.ok(work.includes(p.title) && work.includes(p.action) && work.includes(p.success), p.title)

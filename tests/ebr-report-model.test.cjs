@@ -88,7 +88,7 @@ test('automation closures above half are removed from the headline count and sho
   assert.equal(m.alerts.analystMode, true)
   assert.equal(m.alerts.triaged, 50)
   assert.equal(m.alerts.closed, 30)
-  assert.match(m.headline.find(t => t.label === 'Alerts triaged').sub, /Plus 50 resolved by automation rules/)
+  assert.match(m.headline.find(t => t.label === 'Alerts triaged').sub, /Plus 50 closed by automation rules/)
   const low = pack(); alerts(low, { auto: 20 })
   assert.equal(build(low).alerts.triaged, 100)
 })
@@ -100,11 +100,12 @@ test('open alerts never reach the executive page or the roadmap, and are framed 
   assert.ok(m.presenter.some(n => n.title === 'Open alerts' && /20 of 100/.test(n.text)))
   assert.equal(m.alerts.open, 20)
 })
-test('a weak resolved share stays off the executive tier while a strong one is shown', () => {
+test('a weak closed share stays off the executive tier while a strong one is shown', () => {
   const p = pack(); alerts(p)
-  assert.ok(!build(p).tiers.outcomes.some(r => /resolved/.test(r.label)))
+  assert.ok(!build(p).tiers.outcomes.some(r => r.label === 'Alerts closed'))
   p.results['OUT.1'][0].Closed = 95; p.results['OUT.1'][0].Open = 5
-  assert.ok(build(p).tiers.outcomes.some(r => /resolved/.test(r.label) && r.value === '95%'))
+  assert.ok(build(p).tiers.outcomes.some(r => r.label === 'Alerts closed' && r.value === '95%'))
+  assert.ok(!build(p).tiers.outcomes.some(r => /resolved/.test(r.label)), 'the tier says closed, never resolved')
 })
 test('high severity increases become presenter notes, not client notices', () => {
   const p = pack(); alerts(p)
@@ -787,8 +788,10 @@ function readings(p, full = false) {
   put(p, 'DR.10', [{ Closed: 100, Documented: 100 - left(3) }])
 }
 const drop = (p, ...ids) => { for (const id of ids) { p.manifest = p.manifest.filter(r => r.ResultId !== id); delete p.results[id] } }
+// OUT.1 with every alert closed and classified, so the disposition statement rests on DR.10 alone.
+const settled = p => put(p, 'OUT.1', [{ Raised: 100, Closed: 100, Open: 0, TruePositive: 3, ClosedUnclassified: 0 }])
 test('a reading at E that leaves resources out never reads every, all or none, and counts its exceptions', () => {
-  const p = pack(); alerts(p); readings(p)
+  const p = pack(); alerts(p); settled(p); readings(p)
   let m = build(p)
   const ratios = m.controls.filter(c => !c.boolean && c.pct !== null)
   assert.ok(ratios.length >= 15 && ratios.every(c => c.mark === 'E' && c.good < c.total), ratios.map(c => `${c.label} ${c.value}`).join(', '))
@@ -822,10 +825,10 @@ test('a reading at E that leaves resources out never reads every, all or none, a
     'Workload protection covers 195 of 200 eligible resources, with 5 remaining'
   ])
   // With nothing left out the same readings earn every and all, and no control counts an exception.
-  const full = pack(); alerts(full); readings(full, true)
+  const full = pack(); alerts(full); settled(full); readings(full, true)
   m = build(full)
   assert.ok(m.controls.every(c => !c.exceptions), m.controls.filter(c => c.exceptions).map(c => c.label).join(', '))
-  assert.deepEqual(m.pillars.map(x => x.headline), ['Sign-ins are challenged for multifactor authentication', 'Every eligible Azure virtual machine reports to endpoint detection', 'Encryption in transit enforced on every published service', 'Data in transit and key material are protected', 'Every alert reaches a documented disposition'])
+  assert.deepEqual(m.pillars.map(x => x.headline), ['Sign-ins are challenged for multifactor authentication', 'Every eligible Azure virtual machine reports to endpoint detection', 'Encryption in transit enforced on every published service', 'Data in transit and key material are protected', 'Every alert closed with a documented disposition'])
   assert.match(pillarOf(m, 'Network and boundary').narrative, /Every published web app enforces HTTPS\./)
   assert.match(pillarOf(m, 'Data protection').narrative, /^All storage accounts require secure transfer and refuse public network access\. Soft delete protects every Key Vault and purge protection is in force\. Every virtual machine carries a backup policy\.$/)
   assert.ok(!pillarOf(m, 'Endpoint and workload').keep, 'no machine is outside an active sensor')
@@ -833,39 +836,103 @@ test('a reading at E that leaves resources out never reads every, all or none, a
   put(full, 'DP.2', [{ Vaults: 20, SoftDelete: 19, PurgeProtection: 19, RbacAuth: 20 }])
   assert.equal(pillarOf(build(full), 'Data protection').headline, 'Secure transfer is required on every storage account')
 })
-// OUT.1 alone shows nothing about closing comments, so without a DR.10 reading of every workspace the disposition
-// statement leads with the triaged count, whether OUT.1 holds open alerts, unclassified closures or neither. A partial
-// DR.10 reading covers only the workspaces that answered, and the pillar cites OUT.1, so its ratio never leads the
-// pillar, even when nothing it read is undocumented (Oct 16, 2026).
-test('the detection statement says every alert only from a complete DR.10 reading', () => {
+// The disposition statement says every alert only from a complete DR.10 reading of every workspace beside an OUT.1
+// reading with no open alert and no unclassified closure. Open alerts lead with the closed and open counts from OUT.1.
+// Otherwise a DR.10 reading of every workspace gives its own ratio with its window, and without one the statement
+// leads with the triaged count. A partial DR.10 reading covers only the workspaces that answered, and the pillar
+// cites OUT.1, so its ratio never leads the pillar, even when nothing it read is undocumented (Oct 16, 2026).
+const renderHtml = data => {
+  const nodes = {}
+  const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(data) : '', addEventListener() {} }) }
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+  return nodes.report.innerHTML
+}
+test('the detection statement says every alert only from a complete DR.10 reading and nothing open or unclassified', () => {
   const detection = p => build(p).pillars.find(x => x.name === 'Detection and response')
   const TRIAGED = '100 alerts triaged Nov 1, 2025 to Sep 30, 2026'
-  const p = pack(); alerts(p); readings(p, true)
+  const BOTH = 'OUT.1. Read Oct 8, 2026. DR.10. Read Oct 8, 2026.', OUT1 = 'OUT.1. Read Oct 8, 2026.'
+  const p = pack(); alerts(p); settled(p); readings(p, true)
   // When DR.10 earns the statement, every alert or its own ratio, the source line cites it beside OUT.1.
-  assert.deepEqual([detection(p).headline, detection(p).source], ['Every alert reaches a documented disposition', 'OUT.1. Read Oct 8, 2026. DR.10. Read Oct 8, 2026.'])
-  const undocumented = pack(); alerts(undocumented); readings(undocumented, true)
+  assert.deepEqual([detection(p).headline, detection(p).source], ['Every alert closed with a documented disposition', BOTH])
+  assert.equal(detection(p).narrative.split('. ').slice(0, 2).join('. '), 'The SOC triaged 100 alerts Nov 1, 2025 to Sep 30, 2026. By collection, 100 were closed')
+  const undocumented = pack(); alerts(undocumented); settled(undocumented); readings(undocumented, true)
   put(undocumented, 'DR.10', [{ Closed: 100, Documented: 97 }])
-  assert.deepEqual([detection(undocumented).headline, detection(undocumented).source], ['97 of 100 alerts closed in the last 30 days carry a documented disposition', 'OUT.1. Read Oct 8, 2026. DR.10. Read Oct 8, 2026.'])
-  const outcomes =[{ Open: 20, ClosedUnclassified: 5 }, { Open: 20, ClosedUnclassified: 0 }, { Open: 0, ClosedUnclassified: 5 }, { Open: 0, ClosedUnclassified: 0 }]
+  assert.deepEqual([detection(undocumented).headline, detection(undocumented).source], ['97 of 100 alerts closed in the last 30 days carry a documented disposition', BOTH])
+  const outcomes = [{ Open: 20, ClosedUnclassified: 5 }, { Open: 20, ClosedUnclassified: 0 }, { Open: 0, ClosedUnclassified: 5 }, { Open: 0, ClosedUnclassified: 0 }]
+  const whole = [['complete', () => {}], ['undocumented', q => put(q, 'DR.10', [{ Closed: 100, Documented: 97 }])]]
   const unmeasured = [['missing', q => drop(q, 'DR.10')], ['unavailable', q => put(q, 'DR.10', [], 'UNAVAILABLE')], ['not readable', q => put(q, 'DR.10', [{ Closed: null, Documented: null }])],
     ['ungathered', q => put(q, 'DR.10', [{ Closed: 100, Documented: 101 }])], ['without closures', q => put(q, 'DR.10', [{ Closed: 0, Documented: 0 }])],
     ['partial with every closure documented', q => put(q, 'DR.10', [{ Closed: 100, Documented: 100 }], 'PARTIAL')], ['partial with closures undocumented', q => put(q, 'DR.10', [{ Closed: 100, Documented: 97 }], 'PARTIAL')]]
-  for (const { Open, ClosedUnclassified } of outcomes) for (const [how, unset] of unmeasured) {
+  for (const { Open, ClosedUnclassified } of outcomes) for (const [how, unset] of [...whole, ...unmeasured]) {
     const q = pack(); alerts(q); readings(q, true)
     put(q, 'OUT.1', [{ Raised: 100, Closed: 100 - Open, Open, TruePositive: 3, ClosedUnclassified }])
     unset(q)
-    const row = detection(q), label = `DR.10 ${how}, ${Open} open, ${ClosedUnclassified} unclassified`
-    assert.equal(row.headline, TRIAGED, label)
-    assert.equal(row.source, 'OUT.1. Read Oct 8, 2026.', `${label}: the headline's figure is the one the source line cites`)
-    for (const t of [row.headline, row.narrative]) assert.ok(!ABSOLUTE.test(t) && !/;|\bincidents?\b|contain|impact/i.test(t), `${label}: ${t}`)
+    const m = build(q), row = m.pillars.find(x => x.name === 'Detection and response'), label = `DR.10 ${how}, ${Open} open, ${ClosedUnclassified} unclassified`
+    const dr10 = whole.some(([w]) => w === how)
+    const expected = Open > 0 ? [`${100 - Open} of 100 alerts closed, ${Open} open at collection`, OUT1]
+      : !dr10 ? [TRIAGED, OUT1]
+      : how === 'complete' && !ClosedUnclassified ? ['Every alert closed with a documented disposition', BOTH]
+      : [`${how === 'complete' ? 100 : 97} of 100 alerts closed in the last 30 days carry a documented disposition`, BOTH]
+    assert.deepEqual([row.headline, row.source], expected, `${label}: the headline's figure is the one the source line cites`)
+    // Triage, closure, open status and classification are kept apart in the narrative.
+    assert.ok(row.narrative.startsWith(`The SOC triaged 100 alerts Nov 1, 2025 to Sep 30, 2026. By collection, ${100 - Open} were closed.${Open ? ` ${Open} were pending client action, confirmation or continued investigation at collection.` : ''}`), `${label}: ${row.narrative}`)
+    assert.equal(row.narrative.includes(`${ClosedUnclassified} closed alerts carry no recorded classification.`), ClosedUnclassified > 0, label)
+    for (const t of [row.headline, row.narrative].filter(t => t !== 'Every alert closed with a documented disposition')) assert.ok(!ABSOLUTE.test(t) && !/;|\bincidents?\b|contain|impact|resolv/i.test(t), `${label}: ${t}`)
+    // With an open alert or an unclassified closure no surface says every alert or worked to a disposition.
+    if (Open || ClosedUnclassified) {
+      const page = renderHtml(q)
+      for (const text of [visible(m), page]) assert.ok(!/every alert|worked to a disposition/i.test(text), `${label}: ${text.match(/.{0,60}(every alert|worked to a disposition).{0,60}/i)?.[0]}`)
+      assert.ok(!/alerts? resolved|been resolved/i.test(page), `${label}: the disposition panel says closed, never resolved`)
+    }
   }
+  // Beside the period's figures the page labels the DR.10 window, on the pillar statement and the register row, and
+  // names the period's unclassified closures beside it.
+  const windowed = pack(); alerts(windowed); readings(windowed, true)
+  put(windowed, 'OUT.1', [{ Raised: 100, Closed: 100, Open: 0, TruePositive: 3, ClosedUnclassified: 5 }])
+  const windowedPage = renderHtml(windowed)
+  assert.ok(windowedPage.includes('<h4>100 of 100 alerts closed in the last 30 days carry a documented disposition</h4><p>The SOC triaged 100 alerts Nov 1, 2025 to Sep 30, 2026. By collection, 100 were closed.'), 'the pillar statement names the DR.10 window')
+  assert.match(windowedPage, /<h4>100 of 100 alerts closed in the last 30 days carry a documented disposition<\/h4><p>[^<]*5 closed alerts carry no recorded classification\./)
+  assert.match(windowedPage, /<h4>Alerts closed with a documented disposition<\/h4><p>Alerts closed in the last 30 days that carry a classification and a closing comment\.<\/p>/)
+  assert.ok(windowedPage.includes('5 closed alerts carry no recorded classification.</p>'), 'the disposition panel names the unclassified closures')
+  // OUT.1 reads each alert created in the period at its latest state at collection, so an alert open at the period's
+  // end and closed before collection counts as closed: every status reads at or by collection, never at the period's
+  // end or a reporting cutoff, and the panel never says an alert stayed open or closed inside the period.
+  const later = pack(); alerts(later); readings(later, true)
+  put(later, 'OUT.1', [{ Raised: 100, Closed: 100, Open: 0, TruePositive: 3, ClosedUnclassified: 1 }])
+  const laterModel = build(later), laterPage = renderHtml(later)
+  assert.ok(laterPage.includes('No alert created in the period was open at collection.'))
+  for (const text of [visible(laterModel), laterPage]) assert.ok(!/reporting cutoff|remained open|at the period'?s? end|closed (this quarter|in the period|from )/i.test(text), text.match(/.{0,60}(reporting cutoff|remained open|period'?s? end|closed (this quarter|in the period|from )).{0,60}/i)?.[0])
   // The page carries the same statement the model earned.
   drop(p, 'DR.10')
-  const nodes = {}
-  const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(p) : '', addEventListener() {} }) }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
-  assert.ok(nodes.report.innerHTML.includes(`<h4>${TRIAGED}</h4>`))
-  assert.ok(!nodes.report.innerHTML.includes('Every alert reaches a documented disposition'))
+  const page = renderHtml(p)
+  assert.ok(page.includes(`<h4>${TRIAGED}</h4>`))
+  assert.ok(!/Every alert/.test(page))
+})
+// OUT.1 holds the open count, never who holds each alert, so only a reviewed OpenAlertNote record bound to the period
+// and accounting for every open alert splits it between the client and Atmosera (Oct 16, 2026).
+test('open alerts split by owner only from a reviewed OpenAlertNote record', () => {
+  const record = { AwaitingClient: 12, InProgress: 8, Reviewed: '2026-10-10', Reference: 'ZD 9900200', WindowStart: '2025-11-01', WindowEnd: '2026-09-30' }
+  const withNote = note => { const p = pack(); alerts(p); p.parameters.TenantId = 't'; p.context = { ClientName: 'Example', TenantId: 't', OpenAlertNote: note }; return p }
+  const COMBINED = '20 were pending client action, confirmation or continued investigation at collection.'
+  const p = withNote(record), m = build(p), row = m.pillars.find(x => x.name === 'Detection and response')
+  assert.equal(m.alerts.openSentence, '12 were awaiting client action or confirmation and 8 were still in progress with Atmosera at collection.')
+  assert.ok(row.narrative.includes(`By collection, 80 were closed. ${m.alerts.openSentence}`), row.narrative)
+  assert.equal(row.source, 'OUT.1. Read Oct 8, 2026. Reviewed open alert status ZD 9900200, Oct 10, 2026, from the reviewed context file.')
+  assert.ok(m.presenter.some(n => n.title === 'Open alerts' && n.text.includes('ZD 9900200')))
+  const page = renderHtml(p)
+  assert.ok(page.includes('20 alerts were open at collection. Of these, 12 were awaiting client action or confirmation and 8 were still in progress with Atmosera.'))
+  assert.ok(page.includes('Reviewed open alert status ZD 9900200'))
+  const single = build(withNote({ ...record, AwaitingClient: 0, InProgress: 20 }))
+  assert.equal(single.alerts.openSentence, '20 were still in progress with Atmosera at collection.')
+  // A record that fails a check is omitted with a note naming why, and the surfaces keep the combined sentence.
+  for (const [why, bad, reason] of [['a count that does not add up', { ...record, InProgress: 7 }, /accounts for 19 open alerts and the pack holds 20/], ['another period', { ...record, WindowStart: '2025-08-01', WindowEnd: '2025-10-31' }, /covers Aug 1 to Oct 31, 2025/],
+    ['a review before the period ended', { ...record, Reviewed: '2026-09-01' }, /before the alert period ended/], ['no reference', { ...record, Reference: '' }, /lacks/], ['a negative count', { ...record, AwaitingClient: -1, InProgress: 21 }, /lacks/], ['free text', '12 with the client', /lacks/]]) {
+    const q = withNote(bad), n = build(q)
+    assert.equal(n.alerts.openSplit, undefined, why)
+    assert.equal(n.alerts.openSentence, COMBINED, why)
+    assert.ok(n.review.some(r => r.title === 'Open alert status needs review' && reason.test(r.text)), why)
+    assert.ok(!renderHtml(q).includes('still in progress with Atmosera'), why)
+  }
 })
 test('the controls page names the exceptions of a control at E beside its figure', () => {
   const html = data => {
@@ -1288,7 +1355,7 @@ test('the three threat measures stay apart, and only a reviewed context record p
   // boundary where the resolved share also earns a row.
   p.results['OUT.1'] = [{ Raised: 100, Closed: 90, Open: 10, TruePositive: 3, ClosedUnclassified: 5 }]
   m = build(p)
-  assert.deepEqual(m.tiers.outcomes.map(r => r.label), ['Alerts triaged', 'Confirmed threats', 'Confirmed data exposure or business impact', 'Alerts resolved and closed', 'True positives whose alerts carried an exfiltration or impact tactic'])
+  assert.deepEqual(m.tiers.outcomes.map(r => r.label), ['Alerts triaged', 'Confirmed threats', 'Confirmed data exposure or business impact', 'Alerts closed', 'True positives whose alerts carried an exfiltration or impact tactic'])
   p.results['OUT.1'] = [{ Raised: 100, Closed: 80, Open: 20, TruePositive: 3, ClosedUnclassified: 5 }]
   put(p, 'OUT.4', [threat('Log4j vulnerability exploit aka Log4Shell IP IOC', 'High', 'CommandAndControl', '2026-08-18'), threat('Password spray attack', 'Medium', 'CredentialAccess', '2026-08-22')])
   // A context file reused from an earlier period, or reviewed before the period ended, never carries a determination forward.
