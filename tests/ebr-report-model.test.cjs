@@ -854,7 +854,7 @@ test('the detection statement says every alert only from a complete DR.10 readin
   const p = pack(); alerts(p); settled(p); readings(p, true)
   // When DR.10 earns the statement, every alert or its own ratio, the source line cites it beside OUT.1.
   assert.deepEqual([detection(p).headline, detection(p).source], ['Every alert closed with a documented disposition', BOTH])
-  assert.equal(detection(p).narrative.split('. ').slice(0, 2).join('. '), 'The SOC triaged 100 alerts Nov 1, 2025 to Sep 30, 2026. 100 were closed')
+  assert.equal(detection(p).narrative.split('. ').slice(0, 2).join('. '), 'The SOC triaged 100 alerts Nov 1, 2025 to Sep 30, 2026. By collection, 100 were closed')
   const undocumented = pack(); alerts(undocumented); settled(undocumented); readings(undocumented, true)
   put(undocumented, 'DR.10', [{ Closed: 100, Documented: 97 }])
   assert.deepEqual([detection(undocumented).headline, detection(undocumented).source], ['97 of 100 alerts closed in the last 30 days carry a documented disposition', BOTH])
@@ -869,13 +869,13 @@ test('the detection statement says every alert only from a complete DR.10 readin
     unset(q)
     const m = build(q), row = m.pillars.find(x => x.name === 'Detection and response'), label = `DR.10 ${how}, ${Open} open, ${ClosedUnclassified} unclassified`
     const dr10 = whole.some(([w]) => w === how)
-    const expected = Open > 0 ? [`${100 - Open} of 100 alerts closed, ${Open} open at the reporting cutoff`, OUT1]
+    const expected = Open > 0 ? [`${100 - Open} of 100 alerts closed, ${Open} open at collection`, OUT1]
       : !dr10 ? [TRIAGED, OUT1]
       : how === 'complete' && !ClosedUnclassified ? ['Every alert closed with a documented disposition', BOTH]
       : [`${how === 'complete' ? 100 : 97} of 100 alerts closed in the last 30 days carry a documented disposition`, BOTH]
     assert.deepEqual([row.headline, row.source], expected, `${label}: the headline's figure is the one the source line cites`)
     // Triage, closure, open status and classification are kept apart in the narrative.
-    assert.ok(row.narrative.startsWith(`The SOC triaged 100 alerts Nov 1, 2025 to Sep 30, 2026. ${100 - Open} were closed.${Open ? ` ${Open} were pending client action, confirmation or continued investigation at the reporting cutoff.` : ''}`), `${label}: ${row.narrative}`)
+    assert.ok(row.narrative.startsWith(`The SOC triaged 100 alerts Nov 1, 2025 to Sep 30, 2026. By collection, ${100 - Open} were closed.${Open ? ` ${Open} were pending client action, confirmation or continued investigation at collection.` : ''}`), `${label}: ${row.narrative}`)
     assert.equal(row.narrative.includes(`${ClosedUnclassified} closed alerts carry no recorded classification.`), ClosedUnclassified > 0, label)
     for (const t of [row.headline, row.narrative].filter(t => t !== 'Every alert closed with a documented disposition')) assert.ok(!ABSOLUTE.test(t) && !/;|\bincidents?\b|contain|impact|resolv/i.test(t), `${label}: ${t}`)
     // With an open alert or an unclassified closure no surface says every alert or worked to a disposition.
@@ -890,10 +890,18 @@ test('the detection statement says every alert only from a complete DR.10 readin
   const windowed = pack(); alerts(windowed); readings(windowed, true)
   put(windowed, 'OUT.1', [{ Raised: 100, Closed: 100, Open: 0, TruePositive: 3, ClosedUnclassified: 5 }])
   const windowedPage = renderHtml(windowed)
-  assert.ok(windowedPage.includes('<h4>100 of 100 alerts closed in the last 30 days carry a documented disposition</h4><p>The SOC triaged 100 alerts Nov 1, 2025 to Sep 30, 2026. 100 were closed.'), 'the pillar statement names the DR.10 window')
+  assert.ok(windowedPage.includes('<h4>100 of 100 alerts closed in the last 30 days carry a documented disposition</h4><p>The SOC triaged 100 alerts Nov 1, 2025 to Sep 30, 2026. By collection, 100 were closed.'), 'the pillar statement names the DR.10 window')
   assert.match(windowedPage, /<h4>100 of 100 alerts closed in the last 30 days carry a documented disposition<\/h4><p>[^<]*5 closed alerts carry no recorded classification\./)
   assert.match(windowedPage, /<h4>Alerts closed with a documented disposition<\/h4><p>Alerts closed in the last 30 days that carry a classification and a closing comment\.<\/p>/)
   assert.ok(windowedPage.includes('5 closed alerts carry no recorded classification.</p>'), 'the disposition panel names the unclassified closures')
+  // OUT.1 reads each alert created in the period at its latest state at collection, so an alert open at the period's
+  // end and closed before collection counts as closed: every status reads at or by collection, never at the period's
+  // end or a reporting cutoff, and the panel never says an alert stayed open or closed inside the period.
+  const later = pack(); alerts(later); readings(later, true)
+  put(later, 'OUT.1', [{ Raised: 100, Closed: 100, Open: 0, TruePositive: 3, ClosedUnclassified: 1 }])
+  const laterModel = build(later), laterPage = renderHtml(later)
+  assert.ok(laterPage.includes('No alert created in the period was open at collection.'))
+  for (const text of [visible(laterModel), laterPage]) assert.ok(!/reporting cutoff|remained open|at the period'?s? end|closed (this quarter|in the period|from )/i.test(text), text.match(/.{0,60}(reporting cutoff|remained open|period'?s? end|closed (this quarter|in the period|from )).{0,60}/i)?.[0])
   // The page carries the same statement the model earned.
   drop(p, 'DR.10')
   const page = renderHtml(p)
@@ -905,17 +913,17 @@ test('the detection statement says every alert only from a complete DR.10 readin
 test('open alerts split by owner only from a reviewed OpenAlertNote record', () => {
   const record = { AwaitingClient: 12, InProgress: 8, Reviewed: '2026-10-10', Reference: 'ZD 9900200', WindowStart: '2025-11-01', WindowEnd: '2026-09-30' }
   const withNote = note => { const p = pack(); alerts(p); p.parameters.TenantId = 't'; p.context = { ClientName: 'Example', TenantId: 't', OpenAlertNote: note }; return p }
-  const COMBINED = '20 were pending client action, confirmation or continued investigation at the reporting cutoff.'
+  const COMBINED = '20 were pending client action, confirmation or continued investigation at collection.'
   const p = withNote(record), m = build(p), row = m.pillars.find(x => x.name === 'Detection and response')
-  assert.equal(m.alerts.openSentence, '12 were awaiting client action or confirmation and 8 were still in progress with Atmosera at the reporting cutoff.')
-  assert.ok(row.narrative.includes(`80 were closed. ${m.alerts.openSentence}`), row.narrative)
+  assert.equal(m.alerts.openSentence, '12 were awaiting client action or confirmation and 8 were still in progress with Atmosera at collection.')
+  assert.ok(row.narrative.includes(`By collection, 80 were closed. ${m.alerts.openSentence}`), row.narrative)
   assert.equal(row.source, 'OUT.1. Read Oct 8, 2026. Reviewed open alert status ZD 9900200, Oct 10, 2026, from the reviewed context file.')
   assert.ok(m.presenter.some(n => n.title === 'Open alerts' && n.text.includes('ZD 9900200')))
   const page = renderHtml(p)
-  assert.ok(page.includes('20 alerts were open at the reporting cutoff. Of these, 12 were awaiting client action or confirmation and 8 were still in progress with Atmosera.'))
+  assert.ok(page.includes('20 alerts were open at collection. Of these, 12 were awaiting client action or confirmation and 8 were still in progress with Atmosera.'))
   assert.ok(page.includes('Reviewed open alert status ZD 9900200'))
   const single = build(withNote({ ...record, AwaitingClient: 0, InProgress: 20 }))
-  assert.equal(single.alerts.openSentence, '20 were still in progress with Atmosera at the reporting cutoff.')
+  assert.equal(single.alerts.openSentence, '20 were still in progress with Atmosera at collection.')
   // A record that fails a check is omitted with a note naming why, and the surfaces keep the combined sentence.
   for (const [why, bad, reason] of [['a count that does not add up', { ...record, InProgress: 7 }, /accounts for 19 open alerts and the pack holds 20/], ['another period', { ...record, WindowStart: '2025-08-01', WindowEnd: '2025-10-31' }, /covers Aug 1 to Oct 31, 2025/],
     ['a review before the period ended', { ...record, Reviewed: '2026-09-01' }, /before the alert period ended/], ['no reference', { ...record, Reference: '' }, /lacks/], ['a negative count', { ...record, AwaitingClient: -1, InProgress: 21 }, /lacks/], ['free text', '12 with the client', /lacks/]]) {

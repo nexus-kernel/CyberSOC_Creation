@@ -226,7 +226,7 @@ async function main() {
         text(s, label, { x: lx + 0.2, y: ly, w: w - 0.15, h: 0.28, fontSize: 12, color: C.text1, objectName: `Legend ${l}` })
         lx += w + 0.2
       })
-      if (a.open > 0) text(s, a.openSplit ? `${fmt(a.open)} more ${a.open === 1 ? 'was' : 'were'} open at the reporting cutoff. Of these, ${a.openSplit.phrase}.` : `${fmt(a.open)} more ${a.open === 1 ? 'is' : 'are'} referred to your team for action or confirmation under the agreed notification process, or still in progress.`, { x: q.x, y: ly + 0.42, w: qw, h: 0.65, fontSize: 12, color: C.accent6, objectName: 'Referral note' })
+      if (a.open > 0) text(s, a.openSplit ? `${fmt(a.open)} more ${a.open === 1 ? 'was' : 'were'} open at collection. Of these, ${a.openSplit.phrase}.` : `${fmt(a.open)} more ${a.open === 1 ? 'is' : 'are'} referred to your team for action or confirmation under the agreed notification process, or still in progress.`, { x: q.x, y: ly + 0.42, w: qw, h: 0.65, fontSize: 12, color: C.accent6, objectName: 'Referral note' })
     } else text(s, 'The combined alert result is reconciled before dispositions are presented.', { x: q.x, y: q.y, w: qw, h: 0.6, fontSize: 13, color: C.accent6, objectName: 'Disposition pending' })
     // Detections by source.
     q = quad(3, m.detections ? `${fmt(m.detections.total)} detections, by source` : 'Detections by source')
@@ -243,7 +243,7 @@ async function main() {
     s.addNotes(notesOf([
       m.ticketed ? 'An alert is a Sentinel record that opened a ticket with the managed security service. Informational severity is excluded, and detections are the records correlated into those alerts.' : 'Detections from Sentinel, Defender for Cloud and the Defender services are correlated into alerts.',
       m.alerts ? `Closed alerts: ${fmt(m.alerts.benign)} benign positive, ${fmt(m.alerts.falsePositives)} false positive, ${fmt(m.alerts.truePositives)} true positive, ${fmt(m.alerts.unclassified)} unclassified.` : '',
-      m.alerts && m.alerts.open > 0 ? (m.alerts.openSplit ? `Of the alerts open at the reporting cutoff, ${m.alerts.openSplit.phrase}.` : 'The remaining alerts are referred to your team for action or confirmation under the agreed notification process, or are still under investigation.') : '',
+      m.alerts && m.alerts.open > 0 ? (m.alerts.openSplit ? `Of the alerts open at collection, ${m.alerts.openSplit.phrase}. Evidence ${m.alerts.openSplit.source}` : 'The remaining alerts are referred to your team for action or confirmation under the agreed notification process, or are still under investigation.') : '',
       'Response times run from alert creation to recorded close. Medians under 20 minutes are not presented, so the 90th percentile carries the speed story where the median is faster.'
     ]))
 

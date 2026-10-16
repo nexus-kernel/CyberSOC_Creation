@@ -178,7 +178,7 @@
       const were = n => n === 1 ? 'was' : 'were'
       const split = m.alerts.openSplit
       if (split) split.phrase = [split.awaiting > 0 ? `${fmt(split.awaiting)} ${were(split.awaiting)} awaiting client action or confirmation` : '', split.inProgress > 0 ? `${fmt(split.inProgress)} ${were(split.inProgress)} still in progress with Atmosera` : ''].filter(Boolean).join(' and ')
-      m.alerts.openSentence = inc.Open > 0 ? `${split ? split.phrase : `${fmt(inc.Open)} ${were(inc.Open)} pending client action, confirmation or continued investigation`} at the reporting cutoff.` : ''
+      m.alerts.openSentence = inc.Open > 0 ? `${split ? split.phrase : `${fmt(inc.Open)} ${were(inc.Open)} pending client action, confirmation or continued investigation`} at collection.` : ''
       if (inc.Open > 0) presenter('Open alerts', `${fmt(inc.Open)} of ${fmt(inc.Raised)} alerts created ${m.period.label} were still open at collection. ${split ? `The reviewed record ${split.reference} splits them: ${fmt(split.awaiting)} awaiting client action or confirmation and ${fmt(split.inProgress)} still in progress with Atmosera.` : 'The report describes them as pending client action, confirmation or continued investigation. Add a reviewed OpenAlertNote record to the context file to split them, and have the age and severity split ready if asked.'}`)
       if (count(inc.ClosedUnclassified) > 0) presenter('Closure classification', `${fmt(inc.ClosedUnclassified)} closed alerts carry no definitive classification. The report counts them as closed, never as resolved, and makes no claim about investigation quality.`)
       if (analystMode) presenter('Automation share', `${fmt(allRow.AutoClosed)} of ${fmt(allRow.Incidents)} closed alerts (${pctText(m.alerts.autoShare)}) were closed by automation rules. The headline counts exclude them and the automation volume is shown as a supporting line.`)
@@ -973,11 +973,12 @@
     {
       const parts = []
       // Triage, closure and open status are kept apart: OUT.1 records that an alert closed, not how it was resolved,
-      // and unclassified closures are named beside the closed count (Oct 16, 2026).
+      // and unclassified closures are named beside the closed count. OUT.1 reads each alert created in the period at
+      // its latest state at collection, never at the period's end, so every status reads at or by collection (Oct 16, 2026).
       if (m.alerts) {
         const a = m.alerts
         parts.push(`The SOC triaged ${plural(a.triaged, 'alert', 'alerts')}${m.ticketed ? ` associated with the managed security service` : ''} ${m.period.label}.`)
-        parts.push(`${fmt(a.closed)} ${a.closed === 1 ? 'was' : 'were'} closed.${a.openSentence ? ` ${a.openSentence}` : ''}`)
+        parts.push(`By collection, ${fmt(a.closed)} ${a.closed === 1 ? 'was' : 'were'} closed.${a.openSentence ? ` ${a.openSentence}` : ''}`)
         if (a.analystMode) parts.push(`Automation rules closed ${fmt(a.automation)} more.`)
         if (a.unclassified > 0) parts.push(`${plural(a.unclassified, 'closed alert carries', 'closed alerts carry')} no recorded classification.`)
       }
@@ -985,7 +986,7 @@
       if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
       if (ruleControl && ruleControl.pct !== null) parts.push(`${fmt(ruleControl.good)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
       // The disposition statement says every alert, so it needs a complete DR.10 reading of every workspace and an
-      // OUT.1 reading with no open alert and no unclassified closure. Open alerts at the reporting cutoff lead the
+      // OUT.1 reading with no open alert and no unclassified closure. Open alerts at collection lead the
       // statement with the closed and open counts from OUT.1. Otherwise a DR.10 reading of every workspace that
       // leaves closures undocumented, or that sits beside unclassified closures, gives its own ratio with its window.
       // Otherwise (DR.10 missing, unavailable, ungathered, without closures in the last 30 days, or partial because a
@@ -996,7 +997,7 @@
       const openLead = !!m.alerts && m.alerts.open > 0
       const dispositionLed = !!m.alerts && !openLead && wholeDispositions
       const disposition = !m.alerts ? null
-        : openLead ? `${fmt(m.alerts.closed)} of ${plural(m.alerts.triaged, 'alert', 'alerts')} closed, ${fmt(m.alerts.open)} open at the reporting cutoff`
+        : openLead ? `${fmt(m.alerts.closed)} of ${plural(m.alerts.triaged, 'alert', 'alerts')} closed, ${fmt(m.alerts.open)} open at collection`
         : dispositionLed && complete(dispositions) && m.alerts.unclassified === 0 ? 'Every alert closed with a documented disposition'
         : dispositionLed ? `${measureText(dispositions)} alerts closed in the last 30 days carry a documented disposition`
         : `${plural(m.alerts.triaged, 'alert', 'alerts')} triaged ${m.period.label}`

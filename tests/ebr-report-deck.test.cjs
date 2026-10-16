@@ -150,7 +150,7 @@ test('the DR.10 win names its window and the unclassified closures, and the oper
   const { slides, notes } = await read(deckOf(data))
   const wins = plain(slides.find(s => /^(Summary )?(Quarter wins|Wins this period)/.test(plain(s))) || slides.find(s => /Wins this period|Quarter wins/.test(s)) || '')
   assert.ok(wins.includes('40 of 40') && wins.includes('alerts closed in the last 30 days with a documented disposition'), wins)
-  assert.ok(wins.includes('Classification and closing comment. 5 alerts closed from Nov 1, 2025 to Sep 30, 2026 carry no classification.'), wins)
+  assert.ok(wins.includes('Classification and closing comment. 5 alerts created from Nov 1, 2025 to Sep 30, 2026 and closed by collection carry no classification.'), wins)
   const ops = plain(slides.find(s => /HOW CLOSED ALERTS WERE/i.test(s)) || '')
   assert.ok(/HOW CLOSED ALERTS WERE CLASSIFIED/i.test(ops) && !/resolved/i.test(ops), ops)
   assert.ok(![...slides, ...notes].some(t => /every alert|worked to a disposition/i.test(plain(t))), [...slides, ...notes].map(plain).join(' ').match(/.{0,80}(every alert|worked to a disposition).{0,80}/i)?.[0])
@@ -158,6 +158,20 @@ test('the DR.10 win names its window and the unclassified closures, and the oper
   data.results['OUT.1'] = [{ Raised: 100, Closed: 80, Open: 20, TruePositive: 3, ClosedUnclassified: 0 }]
   const clean = plain((await read(deckOf(data))).slides.find(s => /Wins this period|Quarter wins/.test(s)) || '')
   assert.ok(clean.includes('alerts closed in the last 30 days with a documented disposition Classification and closing comment.') && !clean.includes('carry no classification'), clean)
+})
+// A reviewed OpenAlertNote split is cited on the operations slide's own notes, not only on the pillar notes.
+test('the operations slide splits the open alerts from a reviewed record and cites it in its notes', async () => {
+  const plain = s => s.replace(/\u00A0/g, ' ')
+  const data = pack('balanced')
+  data.parameters.TenantId = 't'
+  data.context = { ClientName: 'Example', TenantId: 't', OpenAlertNote: { AwaitingClient: 12, InProgress: 8, Reviewed: '2026-10-10', Reference: 'ZD 9900200', WindowStart: '2025-11-01', WindowEnd: '2026-09-30' } }
+  const { slides, notes } = await read(deckOf(data))
+  const index = slides.findIndex(s => /HOW CLOSED ALERTS WERE CLASSIFIED/i.test(s))
+  assert.ok(index >= 0, 'the operations slide')
+  assert.ok(plain(slides[index]).includes('20 more were open at collection. Of these, 12 were awaiting client action or confirmation and 8 were still in progress with Atmosera.'), plain(slides[index]))
+  const opsNotes = plain(notes[index])
+  assert.ok(opsNotes.includes('Of the alerts open at collection, 12 were awaiting client action or confirmation and 8 were still in progress with Atmosera.') && opsNotes.includes('Reviewed open alert status ZD 9900200, Oct 10, 2026, from the reviewed context file.'), opsNotes)
+  assert.ok(![...slides, ...notes].some(t => /reporting cutoff/i.test(t)))
 })
 test('the grounding slides appear at balanced depth and carry the pillar narratives, the priority workstreams and the scope', async () => {
   const { data, out } = deck('balanced', examples)
@@ -170,7 +184,7 @@ test('the grounding slides appear at balanced depth and carry the pillar narrati
   for (const p of m.pillars) assert.ok(pillars.includes(p.name) && pillars.includes(p.headline), p.name)
   // The pack holds open and unclassified alerts, so the disposition statement leads with the closed and open counts
   // on the slide and in the notes, and no slide or note says every alert or worked to a disposition.
-  assert.equal(m.pillars.find(p => p.name === 'Detection and response').headline, '80 of 100 alerts closed, 20 open at the reporting cutoff')
+  assert.equal(m.pillars.find(p => p.name === 'Detection and response').headline, '80 of 100 alerts closed, 20 open at collection')
   assert.ok(![...slides, ...notes].some(t => /every alert|worked to a disposition/i.test(plain(t))), [...slides, ...notes].map(plain).join(' ').match(/.{0,60}(every alert|worked to a disposition).{0,60}/i)?.[0])
   const work = plain(slides.find(s => s.startsWith('Priority workstreams')) || '')
   assert.ok(work, 'the priority workstreams slide')

@@ -173,8 +173,9 @@
       winAt(/^Operating system findings/, 'endpoint', 'machines patched inside the agreed cadence', c => c.good === c.total ? 'No critical or security patch past the cadence at collection.' : `${plural(c.total - c.good, 'machine carries', 'machines carry')} a critical or security patch past the cadence at collection.`) || winAt(/^Azure virtual machines reporting/, 'endpoint', 'Azure virtual machines reporting to endpoint detection', 'Seen in the last 7 days.'),
       m.mailRemoved > 0 && find(/^Malicious mail removed/)?.mark === 'E' ? { area: 'data', eyebrow: 'Email protection', value: fmt(m.mailRemoved), label: 'malicious messages removed after delivery', sub: 'Zero-hour auto purge and automated remediation, last 30 days.', source: find(/^Malicious mail removed/).source } : winAt(/^Managed disks/, 'data', 'managed disks encrypted at rest', 'Platform or customer managed keys, at collection.'),
       // The DR.10 win reads the last 30 days beside quarterly figures, so its label names the window and its sub-line
-      // names the period's unclassified closures from OUT.1 when there are any (Oct 16, 2026).
-      winAt(/^Alerts closed with a documented/, 'detection', 'alerts closed in the last 30 days with a documented disposition', a && a.unclassified > 0 ? `Classification and closing comment. ${plural(a.unclassified, 'alert', 'alerts')} closed ${s.periodPhrase} ${a.unclassified === 1 ? 'carries' : 'carry'} no classification.` : 'Classification and closing comment.'),
+      // names the unclassified closures from OUT.1 when there are any: alerts created in the period and closed by collection,
+      // since OUT.1 reads the latest state at collection (Oct 16, 2026).
+      winAt(/^Alerts closed with a documented/, 'detection', 'alerts closed in the last 30 days with a documented disposition', a && a.unclassified > 0 ? `Classification and closing comment. ${plural(a.unclassified, 'alert', 'alerts')} created ${s.periodPhrase} and closed by collection ${a.unclassified === 1 ? 'carries' : 'carry'} no classification.` : 'Classification and closing comment.'),
       winAt(/^Encryption in transit/, 'network', 'published web apps enforcing HTTPS only', 'At collection.')
     ].filter(Boolean)
     const EYEBROW = { identity: 'Identity', endpoint: 'Endpoint', data: 'Data protection', detection: 'Detection', network: 'Network' }
