@@ -705,7 +705,7 @@ Confirm the grant control strings against one sign-in record on the first run.
 
 **IA.5 Registered methods** (Microsoft Graph)
 
-The collector reads `GET /v1.0/reports/authenticationMethods/userRegistrationDetails?$filter=userType eq 'member'` with the Azure CLI Graph token (needs AuditLog.Read.All) and writes one row: Members, MfaRegistered, MfaCapable, SsprRegistered, PasswordlessCapable, PhishingResistant, PhoneRegistered, AuthenticatorRegistered, PhoneOnly, Admins, AdminsMfaRegistered. PhoneOnly counts members whose only registered MFA method is a phone (email, security questions and app passwords do not count as another method). When the token lacks the permission the result is UNAVAILABLE and the worksheet row says so with the portal path. By hand, the Graph PowerShell below gives the same data.
+The collector reads `GET /v1.0/reports/authenticationMethods/userRegistrationDetails?$filter=userType eq 'member'` with the Azure CLI Graph token (needs AuditLog.Read.All) and writes one row: Members, MfaRegistered, MfaCapable, SsprRegistered, PasswordlessCapable, PhishingResistant, PhoneRegistered, AuthenticatorRegistered, PhoneOnly, Admins, AdminsMfaRegistered. PhoneOnly counts MFA-capable members (isMfaCapable, so the registered method is allowed by policy) whose only registered MFA method is a phone (email, security questions and app passwords do not count as another method). When the token lacks the permission the result is UNAVAILABLE and the worksheet row says so with the portal path. By hand, the Graph PowerShell below gives the same data.
 
 ```powershell
 Connect-MgGraph -Scopes "AuditLog.Read.All", "UserAuthenticationMethod.Read.All" -NoWelcome
@@ -717,6 +717,7 @@ $reg = Get-MgReportAuthenticationMethodUserRegistrationDetail -All |
             User    = $_.UserPrincipalName
             Mfa     = $_.IsMfaRegistered
             Methods = $_.MethodsRegistered -join ","
+            Capable = $_.IsMfaCapable
         }
     }
 
@@ -726,7 +727,7 @@ $reg = Get-MgReportAuthenticationMethodUserRegistrationDetail -All |
     PhishingResistant       = @($reg | Where-Object Methods -match "fido2|passKey|windowsHelloForBusiness").Count
     PhoneRegistered         = @($reg | Where-Object Methods -match "mobilePhone|officePhone|alternateMobilePhone").Count
     AuthenticatorRegistered = @($reg | Where-Object Methods -match "microsoftAuthenticator").Count
-    PhoneOnly               = @($reg | Where-Object { $m = @($_.Methods -split "," | Where-Object { $_ }); @($m | Where-Object { $_ -match "^(mobilePhone|officePhone|alternateMobilePhone)$" }).Count -gt 0 -and @($m | Where-Object { $_ -notmatch "^(mobilePhone|officePhone|alternateMobilePhone|email|securityQuestion|appPassword)$" }).Count -eq 0 }).Count
+    PhoneOnly               = @($reg | Where-Object { $m = @($_.Methods -split "," | Where-Object { $_ }); $_.Capable -and @($m | Where-Object { $_ -match "^(mobilePhone|officePhone|alternateMobilePhone)$" }).Count -gt 0 -and @($m | Where-Object { $_ -notmatch "^(mobilePhone|officePhone|alternateMobilePhone|email|securityQuestion|appPassword)$" }).Count -eq 0 }).Count
 }
 ```
 

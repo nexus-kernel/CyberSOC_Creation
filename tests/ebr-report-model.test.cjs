@@ -400,12 +400,14 @@ test('the MFA method update appears only when retiring methods are in use, and i
   assert.equal(update.title, 'MFA method update')
   // Passkeys are the recommended target, Authenticator push stays supported, and a telephony provider is only for a
   // documented need (Oct 16, 2026, from Microsoft's retirement page dated Sep 23, 2026).
-  assert.match(update.action, /register each one on a passkey in Microsoft Authenticator, Windows Hello for Business or a FIDO2 security key in guided waves/)
+  // Windows Hello for Business is its own phishing-resistant method, not a place to register a passkey.
+  assert.match(update.action, /register each one on a passkey \(in Microsoft Authenticator, a Microsoft Entra passkey on Windows or a FIDO2 security key\) or on Windows Hello for Business in guided waves/)
+  assert.ok(!/Windows Hello for Business or a FIDO2/.test(update.action + JSON.stringify(m.mfaMethods.steps)), 'Windows Hello for Business is never listed as a passkey')
   assert.match(update.action, /Microsoft Authenticator push is outside this retirement and stays supported\. A telephony provider from Microsoft Security Store is kept only for a documented regulatory or operational need\./)
   assert.equal(update.evidence, '7 users signed in with text message or voice in the last 30 days. Microsoft retires these methods on February 1, 2027 (July 1, 2027 for Global Administrators and external users). Whether these users hold another registered MFA method is not yet evaluated.')
   assert.equal(m.mfaMethods.phoneOnly, null)
   assert.match(m.mfaMethods.timeline, /^From September 1, 2026, Microsoft enables passkeys for users enabled for text message or voice and prompts them to register one when they complete MFA\. Microsoft retires its text message and voice delivery on February 1, 2027 for most users and on July 1, 2027 for Global Administrators and external users\. After the applicable date, a user whose only available MFA method is text message or voice must register a passkey before signing in again, and this blocking prompt has no opt-out\.$/)
-  assert.deepEqual(m.mfaMethods.steps.map(([head]) => head), ['Notify the affected users', 'Register a passkey', 'Remove the retiring methods', 'Confirm readiness early'])
+  assert.deepEqual(m.mfaMethods.steps.map(([head]) => head), ['Notify the affected users', 'Register a phishing-resistant method', 'Remove the retiring methods', 'Confirm readiness early'])
   assert.match(m.mfaMethods.steps[3][1], /before Feb 1, 2027 \(Jul 1, 2027 for Global Administrators and external users\)/)
   // The outcome is measurable, never a promise that the date arrives as a non-event (Oct 16, 2026).
   assert.equal(update.success, 'Every affected user registered on a replacement method before February 1, 2027 (July 1, 2027 for Global Administrators and external users), the fallback tested, and no rise in failed sign-ins after enforcement.')
@@ -1585,7 +1587,7 @@ test('the roadmap page words planned work as a recommendation and never promises
   assert.ok(html.includes('<h3>How this order is proposed</h3><p>Every item on this board comes from a reading in the collected evidence. The order is a recommendation for agreement at this review'))
   assert.ok(html.includes('<h3>7 of your users signed in with text message or voice over the last 30 days. Atmosera recommends moving each one to a passkey well ahead of February 1, 2027 (July 1, 2027 for Global Administrators and external users).</h3>'))
   assert.ok(html.includes('From September 1, 2026, Microsoft enables passkeys for users enabled for text message or voice') && html.includes('this blocking prompt has no opt-out. Whether these users hold another registered MFA method is not yet evaluated.'))
-  assert.ok(html.includes('<strong>Register a passkey</strong>A passkey in Microsoft Authenticator, Windows Hello for Business or a FIDO2 key, in guided waves. Authenticator push stays supported.'))
+  assert.ok(html.includes('<strong>Register a phishing-resistant method</strong>A passkey in Microsoft Authenticator, on Windows or on a FIDO2 key, or Windows Hello for Business, in guided waves. Authenticator push stays supported.'))
   assert.ok(html.includes('A telephony provider stays only for a documented regulatory or operational need.'))
   assert.ok(!/already sign in with Microsoft Authenticator|need to update their MFA method|Register a stronger method/.test(html))
   assert.ok(html.includes('<p class="success"><strong>Outcome</strong> Every affected user registered on a replacement method before February 1, 2027 (July 1, 2027 for Global Administrators and external users), the fallback tested, and no rise in failed sign-ins after enforcement.</p>'))
