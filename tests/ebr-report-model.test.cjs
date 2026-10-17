@@ -216,14 +216,16 @@ test('duplicate or unverified cross-workspace alerts withhold every alert figure
   }
 })
 // The client surfaces state the Defender XDR scope (issue #22). A complete reading of zero says Defender XDR alerts
-// are left out, a count above zero adds nothing, and a missing, partial, empty or unreadable reading says the
-// routing was not read. No reading claims Defender XDR alerts are included.
+// are left out. A count above zero proves only that some reach Sentinel, so the statement stays qualified. A missing,
+// partial, empty or unreadable reading says the routing was not read. No reading claims every Defender XDR alert is in.
 test('the Defender XDR scope sentence follows the P0.1-XDRDUP reading and never claims Defender XDR alerts are in', () => {
   const EXCLUDED = 'Alerts investigated only in other platforms, including Microsoft Defender XDR, are not included. No Defender XDR alert was found in Sentinel in the year before collection.'
   const UNKNOWN = 'Alerts investigated only in other platforms, including Microsoft Defender XDR, may not be included. Whether Defender XDR alerts reach Sentinel was not read in this collection.'
+  const REACHED = 'Alerts investigated only in other platforms, including the Microsoft Defender XDR portal, are not included. Defender XDR alerts are counted where Sentinel received them.'
   const scope = edit => { const p = pack(); alerts(p); edit(p); return build(p).xdrScope }
   assert.deepEqual(scope(p => put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 0, InMultipleWorkspaces: 0 }])), { state: 'excluded', sentence: EXCLUDED })
-  assert.deepEqual(scope(() => {}), { state: 'included', sentence: '' })
+  assert.deepEqual(scope(() => {}), { state: 'received', sentence: REACHED })
+  assert.deepEqual(scope(p => put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 20, InMultipleWorkspaces: 0 }], 'PARTIAL')), { state: 'received', sentence: REACHED }, 'a partial reading that found Defender XDR alerts in Sentinel')
   for (const [name, edit] of [
     ['missing', p => { p.manifest = p.manifest.filter(m => m.ResultId !== 'P0.1-XDRDUP'); delete p.results['P0.1-XDRDUP'] }],
     ['partial zero', p => put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 0, InMultipleWorkspaces: 0 }], 'PARTIAL')],
@@ -232,7 +234,7 @@ test('the Defender XDR scope sentence follows the P0.1-XDRDUP reading and never 
     ['unreadable count', p => put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 'n/a', InMultipleWorkspaces: 0 }])],
     ['two rows', p => put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 0 }, { XdrIncidents: 0 }])]
   ]) assert.deepEqual(scope(edit), { state: 'unknown', sentence: UNKNOWN }, name)
-  for (const s of [EXCLUDED, UNKNOWN]) assert.ok(!/;|\bincidents?\b|resolved/i.test(s), s)
+  for (const s of [EXCLUDED, UNKNOWN, REACHED]) assert.ok(!/;|\bincidents?\b|resolved/i.test(s), s)
 })
 test('the detection sources named on the client surfaces are the ones OUT.5 holds', () => {
   const p = pack(); alerts(p)
@@ -1882,10 +1884,10 @@ test('How to read this page states the Defender XDR scope and names the detectio
   let text = howTo(renderHtml(p))
   assert.ok(text.startsWith(`Detections from Sentinel and Defender for Cloud are correlated into alerts. ${EXCLUDED} The SOC triages each alert`), text)
   assert.ok(!/Defender services|Defender for Cloud and the Defender/.test(text), text)
-  // The count above zero adds no sentence, and a missing reading says it was not read.
+  // The count above zero keeps a qualified statement, and a missing reading says it was not read.
   put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 20, InMultipleWorkspaces: 0 }])
   text = howTo(renderHtml(p))
-  assert.ok(text.startsWith('Detections from Sentinel and Defender for Cloud are correlated into alerts. The SOC triages') && !text.includes('Defender XDR'), text)
+  assert.ok(text.startsWith(`Detections from Sentinel and Defender for Cloud are correlated into alerts. ${'Alerts investigated only in other platforms, including the Microsoft Defender XDR portal, are not included. Defender XDR alerts are counted where Sentinel received them.'} The SOC triages`), text)
   p.manifest = p.manifest.filter(m => m.ResultId !== 'P0.1-XDRDUP')
   p.parameters.Workspaces = p.parameters.Workspaces.slice(0, 1)
   text = howTo(renderHtml(p))

@@ -825,10 +825,11 @@ test('the scope appendix and the operations notes state the Defender XDR scope a
   assert.ok(s.scope.includes('Detections Records from Sentinel and Defender for Cloud correlated into those alerts.'), s.scope)
   assert.ok(s.notes.startsWith(`Detections from Sentinel and Defender for Cloud are correlated into alerts. ${EXCLUDED} Closed alerts:`), s.notes)
   assert.ok(!/Defender services/.test(s.all), 'no fixed source list remains')
-  // A count above zero adds no sentence. A missing reading says it was not read and never that Defender XDR alerts are in.
+  // A count above zero keeps a qualified statement. A missing reading says it was not read and never that Defender XDR alerts are in.
   data.results['P0.1-XDRDUP'] = [{ XdrIncidents: 20, InMultipleWorkspaces: 0 }]
   s = await surfaces(data)
-  assert.ok(!s.all.includes('Defender XDR'), s.all.match(/.{0,80}Defender XDR.{0,80}/)?.[0])
+  const REACHED = 'Alerts investigated only in other platforms, including the Microsoft Defender XDR portal, are not included. Defender XDR alerts are counted where Sentinel received them.'
+  assert.ok(s.scope.includes(`Sentinel records triaged by the managed security service. ${REACHED}`) && s.notes.includes(REACHED), s.scope)
   data.manifest = data.manifest.filter(r => r.ResultId !== 'P0.1-XDRDUP'); delete data.results['P0.1-XDRDUP']
   s = await surfaces(data)
   assert.ok(s.scope.includes(`Sentinel records triaged by the managed security service. ${UNKNOWN}`) && s.notes.includes(UNKNOWN), s.scope)
@@ -849,7 +850,7 @@ test('the scope appendix and the operations notes state the Defender XDR scope a
 // The scope facts step down in size so the longest Alerts fact, ticketed with the Defender XDR sentence, still ends
 // above the content bottom. At 11 pt it ran past the foot of the slide.
 test('the scope appendix facts end above the content bottom with the Defender XDR sentence on a ticketed pack', async () => {
-  for (const xdr of [[{ XdrIncidents: 0, InMultipleWorkspaces: 0 }], null]) {
+  for (const xdr of [[{ XdrIncidents: 0, InMultipleWorkspaces: 0 }], [{ XdrIncidents: 20, InMultipleWorkspaces: 0 }], null]) {
     const data = pack('balanced')
     data.parameters.TicketPattern = 'ZD\\d+'
     if (xdr) data.results['P0.1-XDRDUP'] = xdr
