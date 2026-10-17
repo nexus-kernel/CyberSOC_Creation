@@ -885,7 +885,7 @@ test('the alert volume chart carries the workspace coverage line when it varies,
   const lateData = withReach([full, { WorkspaceId: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2026-08-12', LatestRecord: '2026-10-07', Records: 30 }])
   const m = build(lateData)
   const line = `${m.trendCoverage.sentence} ${m.trendCoverage.caption}`
-  assert.equal(m.trendCoverage.caption, 'Workspaces whose alert records span the whole month: 1 of 2 in Aug 2026, 2 of 2 in Sep 2026.')
+  assert.equal(m.trendCoverage.caption, 'Workspaces whose retained alert records span the whole month: 1 of 2 in Aug 2026, 2 of 2 in Sep 2026.')
   const late = deckOf(lateData), { slides, notes } = await read(late)
   assert.ok(slides.some(s => plain(s).includes(line)), 'the operations slide shows the coverage line')
   assert.ok(notes.some(n => plain(n).includes(line)), 'the speaker notes carry it')
@@ -899,4 +899,19 @@ test('the alert volume chart carries the workspace coverage line when it varies,
   assert.equal(box(steadyXml, 'Monthly alerts coverage'), null)
   assert.ok(box(steadyXml, 'Monthly alerts chart').h > chart.h)
   assert.ok(!(await read(steady)).notes.some(n => n.includes('span the whole month')))
+  // The densest caption: twelve months shown and a workspace whose records start in each, so twelve separate runs.
+  const months = Array.from({ length: 12 }, (_, i) => new Date(Date.UTC(2025, 9 + i, 1)).toISOString().slice(0, 10))
+  const dense = withReach([])
+  dense.parameters.WindowStart = '2025-10-01'
+  dense.parameters.Workspaces = months.map((_, i) => ({ Name: `w${i}`, CustomerId: `w${i}`, RetentionDays: 365 }))
+  dense.results['P0.1-BY-WORKSPACE'] = months.map((Month, i) => ({ ...full, WorkspaceId: `w${i}`, EarliestRecord: Month }))
+  dense.manifest.find(r => r.ResultId === 'P0.1-BY-WORKSPACE').Rows = 12
+  dense.results['OUT.3'] = months.map((Month, i) => ({ Month, Total: 20 + i, High: 2, Medium: 8, Low: 10 + i, Informational: 0 }))
+  const dm = build(dense)
+  assert.equal(dm.trendCoverage.caption.split(' in ').length - 1, 12, dm.trendCoverage.caption)
+  const denseXml = await opsXml(deckOf(dense)), dcap = box(denseXml, 'Monthly alerts coverage'), dchart = box(denseXml, 'Monthly alerts chart')
+  const dline = `${dm.trendCoverage.sentence} ${dm.trendCoverage.caption}`.replace(/(\d) of (\d)/g, '$1\u00A0of\u00A0$2').replace(/([A-Z][a-z]{2}) (\d{4})/g, '$1\u00A0$2')
+  assert.ok(dchart.bottom <= dcap.y && dcap.bottom <= Math.round(4.3 * EMU), 'the dense line sits under the chart, inside the quadrant')
+  assert.ok(dcap.h >= Math.round(lines(dline, (require('../report/deck-common.cjs').CW - 0.5) / 2 - 0.1, 10) * 0.17 * EMU), 'the box holds every wrapped line')
+  assert.ok(dchart.h >= Math.round(0.9 * EMU), `the chart keeps ${(dchart.h / EMU).toFixed(2)} in`)
 })

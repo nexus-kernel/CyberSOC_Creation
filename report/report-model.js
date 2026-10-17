@@ -372,8 +372,11 @@
     m.trend = trend.map(r => ({ month: iso(r.Month), label: monthLabel(r.Month), Total: r.Total, High: r.High, Medium: r.Medium, Low: r.Low, Informational: r.Informational }))
     m.trendSource = source('OUT.3')
     // Workspace coverage of the months the chart shows (issue #23). P0.1-BY-WORKSPACE gives the first and last alert
-    // record each workspace still holds, never when collection began: a quiet workspace, or one whose retention is
-    // shorter than the window, also starts late. So the client copy states record dates, never collection or a trend.
+    // record each workspace still holds (TimeGenerated), never when collection began: a quiet workspace, or one whose
+    // retention is shorter than the window, also starts late. OUT.3 counts each alert in the month it was created, from
+    // its latest retained record, so a later update can place an alert in a month before the workspace's first retained
+    // record. The client copy therefore states retained record dates only, never which workspaces an alert came from,
+    // when collection began or a trend.
     // A workspace counts in a month only when its records span the whole month, so a first record after the 1st or a
     // last record before the month ends leaves that month out. Workspaces with no alert records stay in the
     // denominator. A partial reach reading, or a workspace whose record dates are unreadable, shows no coverage.
@@ -389,10 +392,12 @@
           const first = monthStart(shown[0].month), last = monthEnd(shown[shown.length - 1].month)
           const late = spans.filter(s => s.start > first).length, early = spans.filter(s => s.end < last).length
           const of = n => total === 1 ? 'the Sentinel workspace' : `${fmt(n)} of the ${fmt(total)} Sentinel workspaces`
-          const dates = late ? `start after ${date(first)} in ${of(late)}${early ? ` and end before ${date(last)} in ${fmt(early)}` : ''}` : `end before ${date(last)} in ${of(early)}`
-          // Runs of months with the same count, for example "3 of 6 in Jul 2026, 6 of 6 in Aug to Sep 2026".
+          const dates = late ? `retained in ${of(late)} start after ${date(first)}${early ? `, and in ${fmt(early)} they end before ${date(last)}` : ''}` : `retained in ${of(early)} end before ${date(last)}`
+          // Runs of consecutive months with the same count, for example "3 of 6 in Jul 2026, 6 of 6 in Aug to Sep 2026".
+          // OUT.3 has no row for a month without alerts, so a missing month ends a run rather than joining across it.
+          const index = month => Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7))
           const runs = []
-          shown.forEach(r => { const run = runs[runs.length - 1]; if (run && run.n === r.workspaces) run.last = r; else runs.push({ n: r.workspaces, first: r, last: r }) })
+          shown.forEach(r => { const run = runs[runs.length - 1]; if (run && run.n === r.workspaces && index(r.month) === index(run.last.month) + 1) run.last = r; else runs.push({ n: r.workspaces, first: r, last: r }) })
           const months = run => {
             if (run.first === run.last) return run.first.label
             const short = month => toDate(month).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
@@ -400,8 +405,8 @@
           }
           m.trendCoverage = {
             total, late, early,
-            sentence: `Alert records ${dates}. Each month counts alerts only from the workspaces whose records reach it.`,
-            caption: `Workspaces whose alert records span the whole month: ${runs.map(run => `${fmt(run.n)} of ${fmt(total)} in ${months(run)}`).join(', ')}.`
+            sentence: `The alert records ${dates}. Alerts are counted in the month they were created.`,
+            caption: `Workspaces whose retained alert records span the whole month: ${runs.map(run => `${fmt(run.n)} of ${fmt(total)} in ${months(run)}`).join(', ')}.`
           }
         }
       }
