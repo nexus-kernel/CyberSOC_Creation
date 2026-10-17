@@ -1445,6 +1445,11 @@ test('the MFA split reads for managed and federated tenants and is left out when
   assert.equal(mfa.split, '864 of 1,414 members evaluated')
   // The HTML register row names the population of the share.
   assert.ok(html(p).includes('<span>65.2% of members evaluated</span>'))
+  // A tenant with more than 9,999 members evaluated keeps the population in place of the generic sign-ins label.
+  put(p, 'IA.1', [{ ...federatedMember, UsersSignedIn: 20000, UsersChallenged: 14000, NoMfaOnlyUnevaluated: 5000, MfaSessionLinkedOnly: 0 }])
+  const large = html(p)
+  assert.ok(large.includes('<span>14,000 of 15,000 members evaluated</span>'), large.match(/14,000 of 15,000[^<]*/)?.[0])
+  assert.ok(!large.includes('14,000 of 15,000 sign-ins'))
   // A Conditional Access policy decides the status: the split replaces the plain sign-in sentence in the note,
   // and the scoped policy priority names its population and the federation review.
   put(p, 'IA.1', [federatedMember])

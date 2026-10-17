@@ -105,9 +105,10 @@
   const naRow = c => `<div class="control-row unmeasured not-applicable"><span class="mark mark-null" title="No evidence either way" aria-hidden="true"></span><div class="control-text"><h4>${esc(c.label)}</h4><p>${esc(c.note)}</p>${source(c.source)}</div><div class="control-measure"><strong>${esc(c.value)}</strong><span>No evidence either way</span></div></div>`
   // The measure column: the figure, a bar for every measured ratio (a Mostly enforced policy carries the sign-in
   // ratio behind it), then the share and what the control is missing, such as the resource types outside coverage.
-  // A share counted against part of a population names it, such as the members evaluated for MFA at sign-in.
+  // A share counted against part of a population names it, such as the members evaluated for MFA at sign-in, and a
+  // figure too large for the bar names that population in place of sign-ins.
   const per = c => c.per ? ` ${esc(c.per)}` : ''
-  const measureText = c => c.boolean ? (c.ratioText ? `${esc(c.ratioText)} · ${pctText(c.pct)}${per(c)}` : '') : c.total > 9999 ? `${esc(c.value)} sign-ins` : `${pctText(c.pct)}${c.estimate ? ' estimated' : ''}${per(c)}`
+  const measureText = c => c.boolean ? (c.ratioText ? `${esc(c.ratioText)} · ${pctText(c.pct)}${per(c)}` : '') : c.total > 9999 ? `${esc(c.value)} ${c.per ? esc(c.per.replace(/^of /, '')) : 'sign-ins'}` : `${pctText(c.pct)}${c.estimate ? ' estimated' : ''}${per(c)}`
   const gapText = c => c.gap ? `<span class="gap">${esc(c.gap)}</span>` : ''
   const exceptionsLine = c => exceptionText(c) ? `<span class="exceptions">${esc(exceptionText(c))}</span>` : ''
   const controlRow = c => c.na ? naRow(c) : c.measured === false ? nullRow(c) : `<div class="control-row">${markChip(c.mark, exceptionText(c))}<div class="control-text"><h4>${esc(c.label)}</h4><p>${esc(c.note)}</p>${source(c.source)}</div><div class="control-measure"><strong>${esc(c.boolean ? c.value : c.total > 9999 ? pctText(c.pct) : c.value)}</strong>${c.boolean && !c.ratioText ? '' : bar(c.pct, `${c.label}: ${c.ratioText || c.value}`, c.mark === 'E' ? 'green' : c.mark === 'N' ? 'amber' : '')}<span>${measureText(c)}</span>${exceptionsLine(c)}${gapText(c)}</div></div>`
