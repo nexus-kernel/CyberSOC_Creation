@@ -300,7 +300,9 @@
     // carries its exception count, so E with exceptions never reads as E with none (Oct 15, 2026).
     s.register = GROUPS.map(g => {
       const inG = m.controls.filter(c => c.group === g)
-      const rows = t => inG.filter(c => c.tier === t).map(c => ({ ...safe(c), chip: c.mark || (c.na ? 'N/A' : '–'), exceptionText: c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : '' }))
+      // A control whose grade covers part of its population (MFA at sign-in in a federated tenant, or with MFA
+      // inferred from the session) carries the split on its detail line.
+      const rows = t => inG.filter(c => c.tier === t).map(c => ({ ...safe(c), detail: [detailText(c), c.split].filter(Boolean).join(' · '), chip: c.mark || (c.na ? 'N/A' : '–'), exceptionText: c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : '' }))
       const counts = ['E', 'P', 'N'].map(k => [k, inG.filter(c => c.mark === k).length]).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`)
       const dash = inG.filter(ungathered).length, na = inG.filter(c => c.na).length
       return { group: g, foundational: rows('foundational'), defense: rows('defense'), summary: [...counts, ...(dash ? [`${dash} –`] : []), ...(na ? [`${na} N/A`] : [])].join(' · ') }

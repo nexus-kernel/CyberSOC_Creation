@@ -1391,10 +1391,74 @@ test('in a federated tenant IA.1 leaves members with only unevaluated sessions o
   const priority = m.priorities.find(x => x.id === 'IA.1')
   assert.match(priority.evidence, /^301 of 864 members whose sign-ins could be evaluated/)
   assert.match(priority.action, /report-only Conditional Access policy/)
+  // The federation review is an explicit step ahead of the Conditional Access change (issue #21).
+  assert.match(priority.action, /^Review the authentication policy of the federated identity provider \(Okta\) and the federatedIdpMfaBehavior setting of each federated domain before extending Conditional Access, since enforcement depends on how federation and existing sessions are handled\. Then deploy a report-only/)
+  assert.ok(!/confirm the identity provider sign-on rules/.test(priority.action))
+  // The client surfaces carry the three-way split, not the presenter notes alone (issue #21).
+  const split = 'Of 1,414 members who signed in over the last 30 days, 864 could be evaluated. 563 of them showed multifactor authentication, 532 on their own sign-ins and 31 inferred from an earlier MFA sign-in in the same session. 550 members signed in only through device sessions that no Conditional Access policy checked and are recorded as not evaluated, not as missing multifactor authentication.'
+  assert.ok(mfa.note.endsWith(split), mfa.note)
+  assert.equal((mfa.note.match(/recorded as not evaluated/g) || []).length, 1, 'the note states the not evaluated members once')
+  const identity = m.pillars.find(x => x.name === 'Identity and access')
+  const narrativeSplit = split.replace('are recorded as not evaluated, not as missing multifactor authentication.', 'are not evaluated.')
+  assert.ok(identity.narrative.includes(narrativeSplit), identity.narrative)
+  assert.equal(identity.keep, narrativeSplit, 'no deck row cuts the split')
+  assert.equal(identity.measure.label, 'Evaluated members on MFA at sign-in')
+  assert.deepEqual([mfa.per, mfa.split], ['of members evaluated', '864 of 1,414 members evaluated · 31 inferred from an earlier MFA sign-in in the same session'])
+  assert.ok(note.text.includes('550 of 1,414 members'), 'the presenter note keeps its explanation beside the client figures')
+  assert.deepEqual(m.tiers.hardening.find(r => r.id === 'IA.1'), { label: 'Evaluated members without MFA, last 30 days', value: '301 of 864', id: 'IA.1' }, 'the executive tier names the members evaluated')
   const text = visible(m) + JSON.stringify(m.presenter)
   assert.ok(!/[;→←⇒]/.test(text), 'no semicolons or arrows in client copy or presenter notes')
-  assert.ok(!visible(m).includes('550'), 'the not evaluated count stays in the presenter notes')
-  assert.ok(!/inference/.test(visible(m)), 'the inferred count stays in the presenter notes')
+  assert.ok(!/inference/.test(visible(m)), 'the presenter wording for the inferred count stays in the presenter notes')
+  assert.ok(!/\b0 (inferred|members signed in only)/.test(visible(m)))
+})
+test('the MFA split reads for managed and federated tenants and is left out when nothing is unevaluated or inferred', () => {
+  const html = data => {
+    const nodes = {}
+    const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(data) : '', addEventListener() {} }) }
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+    return nodes.report.innerHTML
+  }
+  const p = pack()
+  // Managed tenant with members covered only by the session inference: no evaluated population, the inferred count shows.
+  put(p, 'IA.1', [federatedMember])
+  put(p, 'IA.1-FEDERATION', [], 'EMPTY')
+  let m = build(p)
+  let mfa = m.controls.find(c => c.id === 'IA.1')
+  assert.ok(mfa.note.endsWith(' 563 of 1,414 members who signed in over the last 30 days showed multifactor authentication, 532 on their own sign-ins and 31 inferred from an earlier MFA sign-in in the same session.'), mfa.note)
+  assert.ok(!/could be evaluated|not evaluated/.test(mfa.note), 'a managed tenant has no evaluated population')
+  assert.deepEqual([mfa.per, mfa.split], [undefined, '31 inferred from an earlier MFA sign-in in the same session'])
+  assert.equal(m.pillars.find(x => x.name === 'Identity and access').measure.label, 'Users challenged for MFA at sign-in')
+  // Federated with no member unevaluated and none inferred: no split with zeros, and the grade reads as before.
+  put(p, 'IA.1', [{ ...federatedMember, NoMfaOnlyUnevaluated: 0, MfaSessionLinkedOnly: 0 }])
+  put(p, 'IA.1-FEDERATION', [{ FederatedDomains: 1, ConfigsRead: 1, Provider: 'Other', MfaBehavior: '' }])
+  m = build(p)
+  mfa = m.controls.find(c => c.id === 'IA.1')
+  assert.deepEqual([mfa.good, mfa.total, mfa.split], [563, 1414, undefined])
+  assert.ok(!/Of 1,414 members|inferred|members evaluated|\b0 members/.test(visible(m)), 'no zero split on any client surface')
+  assert.match(mfa.note, /recorded as not evaluated, not as missing multifactor authentication\.$/, 'the rule itself is still stated')
+  assert.ok(!m.pillars.find(x => x.name === 'Identity and access').keep)
+  assert.match(m.priorities.find(x => x.id === 'IA.1').action, /^Review the authentication policy of the federated identity provider and the federatedIdpMfaBehavior setting/, 'an unnamed provider is not named')
+  // Federated with members unevaluated and none inferred: the evaluated and not evaluated counts, no inferred clause.
+  put(p, 'IA.1', [{ ...federatedMember, MfaSessionLinkedOnly: 0 }])
+  mfa = build(p).controls.find(c => c.id === 'IA.1')
+  assert.ok(mfa.note.endsWith(' Of 1,414 members who signed in over the last 30 days, 864 could be evaluated. 563 of them showed multifactor authentication. 550 members signed in only through device sessions that no Conditional Access policy checked and are recorded as not evaluated, not as missing multifactor authentication.'), mfa.note)
+  assert.equal(mfa.split, '864 of 1,414 members evaluated')
+  // The HTML register row names the population of the share.
+  assert.ok(html(p).includes('<span>65.2% of members evaluated</span>'))
+  // A Conditional Access policy decides the status: the split replaces the plain sign-in sentence in the note,
+  // and the scoped policy priority names its population and the federation review.
+  put(p, 'IA.1', [federatedMember])
+  p.results['IA.8-CA'] = [{ Flow: 'MFA at sign-in', Control: 'IA.1', PolicyRead: true, PolicySource: 'Raw', PolicyState: 'Scoped', ScopeReason: 'Users', EnforcedPolicies: 0, ExcludedIdentities: 0, DetailRead: false }]
+  m = build(p)
+  mfa = m.controls.find(c => c.id === 'IA.1')
+  assert.deepEqual([mfa.value, mfa.ratioText, mfa.per], ['Mostly enforced', '563 of 864', 'of members evaluated'])
+  assert.match(mfa.note, / Of 1,414 members who signed in over the last 30 days, 864 could be evaluated\. 563 of them showed multifactor authentication, 532 on their own sign-ins and 31 inferred from an earlier MFA sign-in in the same session\. 550 members/)
+  assert.ok(!/satisfied it\./.test(mfa.note))
+  const priority = m.priorities.find(x => x.id === 'IA.1')
+  assert.match(priority.evidence, /301 of 864 members whose sign-ins could be evaluated showed no multifactor authentication/)
+  assert.match(priority.action, /^Review the authentication policy of the federated identity provider and the federatedIdpMfaBehavior setting of each federated domain before extending Conditional Access, since enforcement depends on how federation and existing sessions are handled\. Then extend the Conditional Access policy/)
+  assert.ok(html(p).includes('563 of 864 · 65.2% of members evaluated'))
+  assert.ok(!/[;→←⇒]/.test(visible(m)))
 })
 test('a managed tenant, a federated tenant without the Graph read and older packs keep their readings', () => {
   const p = pack()
