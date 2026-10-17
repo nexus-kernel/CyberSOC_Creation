@@ -888,7 +888,7 @@ test('the alert volume chart carries the workspace coverage line when it varies,
   assert.equal(m.trendCoverage.caption, 'Workspaces whose retained alert records span the whole month: 1 of 2 in Aug 2026, 2 of 2 in Sep 2026.')
   const late = deckOf(lateData), { slides, notes } = await read(late)
   assert.ok(slides.some(s => plain(s).includes(line)), 'the operations slide shows the coverage line')
-  assert.ok(notes.some(n => plain(n).includes(line)), 'the speaker notes carry it')
+  assert.ok(notes.some(n => plain(n).includes(`${line} Evidence P0.1-BY-WORKSPACE. Read Oct 8, 2026.`)), 'the speaker notes carry it with its reach source')
   const xml = await opsXml(late), cap = box(xml, 'Monthly alerts coverage'), chart = box(xml, 'Monthly alerts chart')
   assert.ok(chart.bottom <= cap.y, 'the chart ends above the coverage line')
   assert.ok(cap.bottom <= Math.round(4.3 * EMU), `the coverage line ends at ${(cap.bottom / EMU).toFixed(2)} in, inside the quadrant`)

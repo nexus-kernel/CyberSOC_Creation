@@ -251,7 +251,7 @@ async function main() {
     s.addNotes(notesOf([
       m.ticketed ? 'An alert is a Sentinel record that opened a ticket with the managed security service. Informational severity is excluded, and detections are the records correlated into those alerts.' : m.detections && m.detections.allSources ? `Detections from ${m.detections.allSources} are correlated into alerts.` : 'Detections are correlated into alerts.',
       m.xdrScope.sentence,
-      m.trendCoverage ? `${m.trendCoverage.sentence} ${m.trendCoverage.caption}` : '',
+      m.trendCoverage ? `${m.trendCoverage.sentence} ${m.trendCoverage.caption} Evidence ${m.trendCoverage.source}` : '',
       m.alerts ? `Closed alerts: ${fmt(m.alerts.benign)} benign positive, ${fmt(m.alerts.falsePositives)} false positive, ${fmt(m.alerts.truePositives)} true positive, ${fmt(m.alerts.unclassified)} unclassified.` : '',
       m.alerts && m.alerts.open > 0 ? (m.alerts.openSplit ? `Of the alerts open at collection, ${m.alerts.openSplit.phrase}. Evidence ${m.alerts.openSplit.source}` : 'The remaining alerts are referred to your team for action or confirmation under the agreed notification process, or are still under investigation.') : '',
       'Response times run from alert creation to recorded close, for every high severity alert created in the period and closed by collection. Every median and 90th percentile is shown, and one under 20 minutes or over one hour is covered in the review.',

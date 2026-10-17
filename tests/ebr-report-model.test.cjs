@@ -1927,8 +1927,10 @@ test('the monthly chart names the workspaces whose alert records span each month
   assert.ok(m.presenter.some(n => n.title === 'Workspace start dates'), 'the presenter note stays for the internal edition')
   const client = `${m.trendCoverage.sentence} ${m.trendCoverage.caption}`
   assert.ok(!/collecting|began|threat activity|not a change|Earlier months reflect|only from|records reach/i.test(client), client)
+  // The counts cite their reach result, after the chart's own OUT.3 source line.
+  assert.equal(m.trendCoverage.source, 'P0.1-BY-WORKSPACE. Read Oct 8, 2026.')
   const html = renderHtml(late)
-  assert.ok(html.includes(`<p class="small">${m.trendCoverage.sentence} ${m.trendCoverage.caption}</p>`))
+  assert.ok(html.includes(`<p class="source">OUT.3. Read Oct 8, 2026.</p><p class="small">${m.trendCoverage.sentence} ${m.trendCoverage.caption}</p><p class="source">P0.1-BY-WORKSPACE. Read Oct 8, 2026.</p>`), html.match(/.{0,200}span the whole month.{0,200}/)?.[0])
   // A first record on the 1st, at any hour, covers the month, and a last record on the month's last day covers it.
   m = build(coveragePack([FULL, { WorkspaceId: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2026-07-01T09:00:00Z', LatestRecord: '2026-08-31T23:00:00Z', Records: 50 }, EMPTY]))
   assert.deepEqual(m.trend.map(r => r.workspaces), [2, 2, 1])

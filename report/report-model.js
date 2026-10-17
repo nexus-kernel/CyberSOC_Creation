@@ -407,7 +407,7 @@
             return run.first.month.slice(0, 4) === run.last.month.slice(0, 4) ? `${short(run.first.month)} to ${run.last.label}` : `${run.first.label} to ${run.last.label}`
           }
           m.trendCoverage = {
-            total, late, early,
+            total, late, early, source: source('P0.1-BY-WORKSPACE'),
             sentence: `The alert records ${dates}. Alerts are counted in the month they were created.`,
             caption: `Workspaces whose retained alert records span the whole month: ${runs.map(run => `${fmt(run.n)} of ${fmt(total)} in ${months(run)}`).join(', ')}.`
           }
