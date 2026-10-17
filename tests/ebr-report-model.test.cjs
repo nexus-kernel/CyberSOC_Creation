@@ -1902,3 +1902,66 @@ test('How to read this page states the Defender XDR scope and names the detectio
   text = howTo(renderHtml(p))
   assert.ok(text.includes(`detections are the alerts correlated into those tickets. ${EXCLUDED} The SOC`), text)
 })
+
+// Monthly alert volume beside the workspaces whose alert records span each month (issue #23). A late first record shows
+// the first alert record a workspace still holds, never when collection began, so the client copy states record dates
+// and draws no trend conclusion. A workspace counts in a month only when its records span the whole month.
+const coveragePack = (reach, months = ['2026-07-01', '2026-08-01', '2026-09-01']) => {
+  const p = pack(); alerts(p)
+  p.parameters.Workspaces.push({ Name: 'w3', CustomerId: 'w3' })
+  put(p, 'OUT.3', months.map(Month => ({ Month, Total: 10, High: 2, Medium: 3, Low: 5, Informational: 0 })))
+  put(p, 'P0.1-BY-WORKSPACE', reach)
+  return p
+}
+const FULL = { WorkspaceId: 'W1', SourceTable: 'SecurityIncident', EarliestRecord: '2025-10-01T00:00:00Z', LatestRecord: '2026-10-07T00:00:00Z', Records: 400 }
+const EMPTY = { WorkspaceId: 'w3', SourceTable: 'SecurityIncident', EarliestRecord: '', LatestRecord: '', Records: 0 }
+const SPAN = 'Workspaces whose alert records span the whole month: '
+test('the monthly chart names the workspaces whose alert records span each month when the count varies', () => {
+  // A first record mid-month leaves that month out. Matched by name when the row has no ID, and the workspace with no
+  // alert record stays in the denominator.
+  const late = coveragePack([FULL, { Workspace: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2026-07-15T08:00:00Z', LatestRecord: '2026-10-07T00:00:00Z', Records: 50 }, EMPTY])
+  let m = build(late)
+  assert.deepEqual(m.trend.map(r => r.workspaces), [1, 2, 2])
+  assert.equal(m.trendCoverage.sentence, 'Alert records start after Jul 1, 2026 in 1 of the 3 Sentinel workspaces. Each month counts alerts only from the workspaces whose records reach it.')
+  assert.equal(m.trendCoverage.caption, `${SPAN}1 of 3 in Jul 2026, 2 of 3 in Aug to Sep 2026.`)
+  assert.ok(m.presenter.some(n => n.title === 'Workspace start dates'), 'the presenter note stays for the internal edition')
+  const client = `${m.trendCoverage.sentence} ${m.trendCoverage.caption}`
+  assert.ok(!/collecting|began|threat activity|not a change|Earlier months reflect/i.test(client), client)
+  const html = renderHtml(late)
+  assert.ok(html.includes(`<p class="small">${m.trendCoverage.sentence} ${m.trendCoverage.caption}</p>`))
+  // A first record on the 1st, at any hour, covers the month, and a last record on the month's last day covers it.
+  m = build(coveragePack([FULL, { WorkspaceId: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2026-07-01T09:00:00Z', LatestRecord: '2026-08-31T23:00:00Z', Records: 50 }, EMPTY]))
+  assert.deepEqual(m.trend.map(r => r.workspaces), [2, 2, 1])
+  assert.equal(m.trendCoverage.sentence, 'Alert records end before Sep 30, 2026 in 1 of the 3 Sentinel workspaces. Each month counts alerts only from the workspaces whose records reach it.')
+  assert.equal(m.trendCoverage.caption, `${SPAN}2 of 3 in Jul to Aug 2026, 1 of 3 in Sep 2026.`)
+  // A last record before the month ends leaves that month out, beside a late start.
+  m = build(coveragePack([FULL, { WorkspaceId: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2026-07-02', LatestRecord: '2026-08-30', Records: 50 }, EMPTY]))
+  assert.deepEqual(m.trend.map(r => r.workspaces), [1, 1, 1])
+  assert.equal(m.trendCoverage, null, 'the count never varies, so no coverage line')
+  m = build(coveragePack([FULL, { WorkspaceId: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2026-07-20', LatestRecord: '2026-08-31', Records: 50 }, { WorkspaceId: 'w3', SourceTable: 'SecurityIncident', EarliestRecord: '2025-12-01', LatestRecord: '2026-09-10', Records: 9 }]))
+  assert.deepEqual(m.trend.map(r => r.workspaces), [2, 3, 1])
+  assert.equal(m.trendCoverage.sentence, 'Alert records start after Jul 1, 2026 in 1 of the 3 Sentinel workspaces and end before Sep 30, 2026 in 2. Each month counts alerts only from the workspaces whose records reach it.')
+  assert.equal(m.trendCoverage.caption, `${SPAN}2 of 3 in Jul 2026, 3 of 3 in Aug 2026, 1 of 3 in Sep 2026.`)
+})
+test('the coverage line is left out when the count is constant over the months shown or the reach cannot be read', () => {
+  const steady = coveragePack([FULL, { ...FULL, WorkspaceId: 'w2' }, EMPTY])
+  const m = build(steady)
+  assert.deepEqual(m.trend.map(r => r.workspaces), [2, 2, 2])
+  assert.equal(m.trendCoverage, null)
+  assert.ok(!renderHtml(steady).includes(SPAN))
+  // The chart shows the last 12 months, so a change in the two months before them shows nothing.
+  const months = Array.from({ length: 14 }, (_, i) => new Date(Date.UTC(2025, 6 + i, 1)).toISOString().slice(0, 10))
+  const long = coveragePack([{ ...FULL, EarliestRecord: '2025-01-01' }, { WorkspaceId: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2025-07-10', LatestRecord: '2026-10-07', Records: 50 }, EMPTY], months)
+  long.parameters.WindowStart = '2025-07-01'
+  const lm = build(long)
+  assert.equal(lm.trend.length, 14)
+  assert.deepEqual(lm.trend.map(r => r.workspaces).slice(0, 3), [1, 2, 2])
+  assert.equal(lm.trendCoverage, null)
+  // A partial reach reading, or a workspace with alert records whose dates are unreadable, shows no coverage.
+  const late = [FULL, { WorkspaceId: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2026-08-15', LatestRecord: '2026-10-07', Records: 50 }, EMPTY]
+  assert.ok(build(coveragePack(late)).trendCoverage)
+  const partial = coveragePack(late); put(partial, 'P0.1-BY-WORKSPACE', late, 'PARTIAL')
+  assert.equal(build(partial).trendCoverage, null)
+  assert.equal(build(coveragePack([FULL, { ...late[1], LatestRecord: '' }, EMPTY])).trendCoverage, null)
+  assert.equal(build(coveragePack([FULL, { ...late[1], EarliestRecord: '2026-10-08', LatestRecord: '2026-10-07' }, EMPTY])).trendCoverage, null)
+})
