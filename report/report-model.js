@@ -438,13 +438,32 @@
     // not missing MFA, so the grade leaves them out. Without the Graph read, federated sign-ins in IA.1 decide.
     const federation = one('IA.1-FEDERATION')
     const fedDomains = count(federation?.FederatedDomains)
+    const fedProviders = String(federation?.Provider ?? '').split(', ').filter(p => p && !['Other', 'Unknown'].includes(p))
     const federated = fedDomains > 0 || (!has('IA.1-FEDERATION') && (count(member?.FederatedMfaAtLeastOnce) > 0 || count(member?.FederatedWithoutMfa) > 0))
     const unevaluated = federated ? count(member?.NoMfaOnlyUnevaluated) : null
     const evaluated = unevaluated !== null && count(member?.UsersSignedIn) !== null ? member.UsersSignedIn - unevaluated : null
+    // The client surfaces state who the grade covers (issue #21): of the members who signed in, how many could be
+    // evaluated, how many of those showed MFA on their own sign-ins and how many only by inference from an earlier
+    // MFA sign-in in the same session (MfaSessionLinkedOnly, collector 1.13.0, part of UsersChallenged), and how
+    // many were not evaluated. A tenant with nothing unevaluated and nothing inferred keeps its plain reading.
+    const signedIn = count(member?.UsersSignedIn), challenged = count(member?.UsersChallenged)
+    const sessionLinked = count(member?.MfaSessionLinkedOnly)
+    const base = evaluated ?? signedIn
+    const splitOk = signedIn !== null && challenged !== null && base > 0 && challenged <= base
+    const inferred = splitOk && sessionLinked > 0 && sessionLinked <= challenged ? sessionLinked : 0
+    const notEvaluated = splitOk && evaluated !== null && unevaluated > 0 ? unevaluated : 0
+    const ownSplit = inferred ? `, ${fmt(challenged - inferred)} on their own sign-ins and ${fmt(inferred)} inferred from an earlier MFA sign-in in the same session` : ''
+    // The note states why the unevaluated members are not missing MFA, and the pillar narrative says it in short.
+    const splitOf = why => !notEvaluated && !inferred ? ''
+      : notEvaluated ? `Of ${fmt(signedIn)} members who signed in over the last 30 days, ${fmt(evaluated)} could be evaluated. ${fmt(challenged)} of them showed multifactor authentication${ownSplit}. ${plural(notEvaluated, 'member', 'members')} signed in only through device sessions that no Conditional Access policy checked and ${notEvaluated === 1 ? 'is' : 'are'} ${why ? 'recorded as not evaluated, not as missing multifactor authentication' : 'not evaluated'}.`
+      : `${fmt(challenged)} of ${fmt(signedIn)} members who signed in over the last 30 days showed multifactor authentication${ownSplit}.`
+    const mfaSplit = splitOf(true), mfaSplitNarrative = splitOf(false)
+    // The same split in short, for the deck register detail line.
+    const mfaSplitShort = [notEvaluated ? `${fmt(evaluated)} of ${fmt(signedIn)} members evaluated` : '', inferred ? `${fmt(inferred)} inferred from an earlier MFA sign-in in the same session` : ''].filter(Boolean).join(' · ')
     const mfaLabel = 'Multifactor authentication required at sign-in'
     const mfaNote = unevaluated !== null
-      ? `Members with at least one successful sign-in in the last 30 days that carried multifactor authentication, out of the members whose sign-ins could be evaluated.${externalMfa > 0 ? ` ${plural(externalMfa, 'member', 'members')} satisfied it through the federated identity provider.` : ''} Windows logon is left out because a federated Windows logon cannot carry multifactor authentication. Members whose only sign-ins reused a device session that no Conditional Access policy checked are recorded as not evaluated, not as missing multifactor authentication.`
-      : `Members with at least one successful sign-in in the last 30 days that satisfied multifactor authentication.${externalMfa > 0 ? ` ${plural(externalMfa, 'user', 'users')} satisfied it through a federated identity provider claim.` : ''}${evidenceQuery ? ' Windows logon and device registration are left out.' : ''}`
+      ? `Members with at least one successful sign-in in the last 30 days that carried multifactor authentication, out of the members whose sign-ins could be evaluated.${externalMfa > 0 ? ` ${plural(externalMfa, 'member', 'members')} satisfied it through the federated identity provider.` : ''} Windows logon is left out because a federated Windows logon cannot carry multifactor authentication.${notEvaluated ? '' : ' Members whose only sign-ins reused a device session that no Conditional Access policy checked are recorded as not evaluated, not as missing multifactor authentication.'}${mfaSplit ? ` ${mfaSplit}` : ''}`
+      : `Members with at least one successful sign-in in the last 30 days that satisfied multifactor authentication.${externalMfa > 0 ? ` ${plural(externalMfa, 'user', 'users')} satisfied it through a federated identity provider claim.` : ''}${evidenceQuery ? ' Windows logon and device registration are left out.' : ''}${mfaSplit ? ` ${mfaSplit}` : ''}`
     // Conditional Access controls. IA.8-CA is evaluated by the report builder from the raw policies and
     // the per-account sign-in detail, and carries counts only. A successful sign-in by an account the
     // policy excludes is an approved exception, not a gap. Without a policy inventory and without any
@@ -485,14 +504,17 @@
     // inventory keep the sign-in ratio.
     const mfaFlow = caFlow('MFA at sign-in')
     const mfaPolicy = mfaFlow ? policyText(mfaFlow, 'multifactor authentication on every application', 'requires') : ''
-    const mfaSignIns = evaluated !== null && count(member?.UsersChallenged) !== null ? `${fmt(member.UsersChallenged)} of ${fmt(evaluated)} members whose sign-ins in the last 30 days could be evaluated satisfied it.`
-      : count(member?.UsersSignedIn) > 0 && count(member?.UsersChallenged) !== null ? `${fmt(member.UsersChallenged)} of ${fmt(member.UsersSignedIn)} members who signed in over the last 30 days satisfied it.` : ''
+    const mfaSignIns = mfaSplit || (evaluated !== null && count(member?.UsersChallenged) !== null ? `${fmt(member.UsersChallenged)} of ${fmt(evaluated)} members whose sign-ins in the last 30 days could be evaluated satisfied it.`
+      : count(member?.UsersSignedIn) > 0 && count(member?.UsersChallenged) !== null ? `${fmt(member.UsersChallenged)} of ${fmt(member.UsersSignedIn)} members who signed in over the last 30 days satisfied it.` : '')
     // The sign-in ratio behind the policy status, for the pillar page, the priorities and the Mostly enforced reading.
     const mfaRatio = count(member?.UsersChallenged) !== null && (evaluated ?? count(member?.UsersSignedIn)) > 0 ? { good: member.UsersChallenged, total: evaluated ?? member.UsersSignedIn, pct: pct(member.UsersChallenged, evaluated ?? member.UsersSignedIn) } : null
     const mfa = mfaFlow ? inForce('IA.1', mfaLabel, F.identity, flowCondition(mfaFlow), [mfaPolicy, mfaSignIns, exceptionText(mfaFlow)].filter(Boolean).join(' '), mfaRatio)
       : !member && has('IA.1') ? notApplicable('IA.1', mfaLabel, F.identity, 'No member sign-ins were recorded in the last 30 days, so there is no evidence either way.')
       : evaluated === 0 ? notApplicable('IA.1', mfaLabel, F.identity, 'Every member sign-in in the last 30 days reused a device session that no Conditional Access policy checked, so the logs hold no evidence either way.')
       : control('IA.1', mfaLabel, F.identity, member?.UsersChallenged, evaluated ?? member?.UsersSignedIn, mfaNote, unevaluated !== null ? { population: 'Members whose sign-ins in the last 30 days could be evaluated.' } : {})
+    // The register reads the share against the members evaluated, and the deck register carries the split.
+    if (mfa.mark && unevaluated !== null) mfa.per = 'of members evaluated'
+    if (mfa.mark && mfaSplitShort) mfa.split = mfaSplitShort
     const scopedHow = f => String(f?.ScopeReason) === 'UsersOrApplications' ? 'some enabled policies are limited to selected applications and others to selected users,'
       : `the enabled policy ${({ Conditions: 'applies under selected conditions only', Users: 'applies to selected users only', Applications: 'applies to selected applications only', UsersAndApplications: 'applies to selected users and selected applications only' })[String(f?.ScopeReason)] || 'applies to selected users, applications or conditions only'}`
     if (mfaFlow && mfaRatio && mfaRatio.pct < E_THRESHOLD) presenter('MFA at sign-in', `The control reads ${mfa.value.toLowerCase()} from the Conditional Access policy${mfa.value === MOSTLY_VALUE ? `, because ${scopedHow(mfaFlow)} and the sign-in ratio stands at or above 50 percent` : ''}. The sign-in logs show ${fmt(mfaRatio.good)} of ${fmt(mfaRatio.total)} members with multifactor authentication in the last 30 days${unevaluated !== null ? ', among members whose sign-ins could be evaluated' : ''}. Be ready to explain the difference, for example exclusions, service accounts or sign-ins made before the policy existed.`)
@@ -567,12 +589,11 @@
     else if (!has('IA.1-ADMINPORTAL')) ungathered('IA.1-ADMINPORTAL', portalLabel, F.identity, reason('IA.1-ADMINPORTAL'), 'Members who signed in to a Microsoft admin portal in the last 30 days and satisfied multifactor authentication.')
     else notApplicable('IA.1-ADMINPORTAL', portalLabel, F.identity, `${portalUsers > 0 ? 'Every member sign-in to a Microsoft admin portal in the last 30 days reused a session that no policy checked' : 'No member signed in to a Microsoft admin portal in the last 30 days'} and no Conditional Access policy inventory, so there is no evidence either way.`)
     // Collector 1.13.0 counts a sign-in as MFA when an earlier sign-in in the same session carried direct MFA.
-    // Members whose only MFA evidence is that inference are named in the presenter notes, never on the client page.
-    const sessionLinked = count(member?.MfaSessionLinkedOnly)
+    // The client surfaces carry the inferred count in the split above, and the presenter notes explain it.
     const sessionLinkedText = sessionLinked > 0 ? `${plural(sessionLinked, 'member counts', 'members count')} as covered only by inference from an earlier MFA sign-in in the same session, not from MFA recorded on their own sign-ins.` : ''
     if (sessionLinkedText && !federated) presenter('MFA inferred from the session', sessionLinkedText)
     if (federated) {
-      const provider = String(federation?.Provider ?? '').split(', ').filter(p => p && !['Other', 'Unknown'].includes(p))
+      const provider = fedProviders
       const behavior = String(federation?.MfaBehavior ?? '')
       presenter('Federated sign-in and MFA', [
         `The tenant is federated${provider.length ? ` with ${list(provider)}` : ''}${fedDomains > 0 ? ` (${plural(fedDomains, 'domain', 'domains')})` : ', as the federated sign-ins in IA.1 show. The federated domains themselves could not be read'}.`,
@@ -877,16 +898,20 @@
     // Counted against the same members as the Multifactor authentication required at sign-in control, so the
     // executive summary figure and the control figure share their denominator.
     const mfaPopulation = mfaRatio && !isInForce(mfa) ? mfaRatio : mfa.total !== null && !mfa.boolean ? { good: mfa.good, total: mfa.total } : null
-    harden('Members who signed in without MFA, last 30 days', mfaPopulation ? mfaPopulation.total - mfaPopulation.good : null, 'IA.1', 2, mfaPopulation ? mfaPopulation.total : null)
+    // In a federated tenant the count is among the members evaluated, not every member who signed in (issue #21).
+    harden(unevaluated !== null ? 'Evaluated members without MFA, last 30 days' : 'Members who signed in without MFA, last 30 days', mfaPopulation ? mfaPopulation.total - mfaPopulation.good : null, 'IA.1', 2, mfaPopulation ? mfaPopulation.total : null)
     harden('Open alerts referred for client action', m.alerts?.open ?? null, 'OUT.1', 99)
     m.hardening = hardening.sort((a, b) => a.rank - b.rank)
 
     // Priorities, ranked by a fixed sequence. Open alerts are never a priority.
     const priority = (rank, title, evidence, action, success, id) => m.priorities.push({ rank, title: clean(title), evidence: clean(evidence), action: clean(action), success: clean(success), id, source: source(id) })
     if (criticalCves > 0) priority(1, 'Critical vulnerability remediation', `${fmt(criticalCves)} critical exploitable findings are open across operating system and application software. The same finding can appear on several device groups.`, 'Validate the affected workloads and business impact, then schedule remediation or compensating controls with the owners inside the regular patch cadence.', 'Critical exploitable findings resolved or covered by an approved treatment plan.', 'BKL.1')
-    if (mfa.boolean && !isInForce(mfa)) priority(2, 'Multifactor authentication for every user', `${mfaPolicy}${mfaRatio ? ` ${fmt(mfaRatio.total - mfaRatio.good)} of ${fmt(mfaRatio.total)} members showed no multifactor authentication in the last 30 days.` : ''}`, 'Extend the Conditional Access policy to all users and every application, confirm exclusions and service accounts, pilot in report-only mode, then move to enforcement in waves.', 'An enabled Conditional Access policy requires multifactor authentication for all users on every application, with documented exceptions.', 'IA.1')
+    // In a federated tenant the identity provider's own sign-on rules and federatedIdpMfaBehavior decide what a Require
+    // MFA policy enforces, so they are reviewed first, as an explicit step (issue #21).
+    const fedReview = unevaluated !== null ? `Review the authentication policy of the federated identity provider${fedProviders.length ? ` (${list(fedProviders)})` : ''} and the federatedIdpMfaBehavior setting of each federated domain before extending Conditional Access, since enforcement depends on how federation and existing sessions are handled. ` : ''
+    if (mfa.boolean && !isInForce(mfa)) priority(2, 'Multifactor authentication for every user', `${mfaPolicy}${mfaRatio ? ` ${fmt(mfaRatio.total - mfaRatio.good)} of ${fmt(mfaRatio.total)} members${unevaluated !== null ? ' whose sign-ins could be evaluated' : ''} showed no multifactor authentication in the last 30 days.` : ''}`, `${fedReview}${fedReview ? 'Then extend' : 'Extend'} the Conditional Access policy to all users and every application, confirm exclusions and service accounts, pilot in report-only mode, then move to enforcement in waves.`, 'An enabled Conditional Access policy requires multifactor authentication for all users on every application, with documented exceptions.', 'IA.1')
     else if (!mfa.boolean && mfa.pct !== null && mfa.pct < E_THRESHOLD) {
-      if (unevaluated !== null) priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} members whose sign-ins could be evaluated showed no multifactor authentication in the last 30 days. Members whose only sign-ins reused a device session that no policy checked are not part of this figure.`, 'Deploy a report-only Conditional Access policy requiring multifactor authentication for all members to measure session coverage, confirm the identity provider sign-on rules, then move to enforcement in waves.', 'Every member sign-in evaluated by policy and covered by multifactor authentication, with documented exceptions.', 'IA.1')
+      if (unevaluated !== null) priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} members whose sign-ins could be evaluated showed no multifactor authentication in the last 30 days. Members whose only sign-ins reused a device session that no policy checked are not part of this figure.`, `${fedReview}Then deploy a report-only Conditional Access policy requiring multifactor authentication for all members to measure session coverage, and move to enforcement in waves.`, 'Every member sign-in evaluated by policy and covered by multifactor authentication, with documented exceptions.', 'IA.1')
       else priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} active members signed in without a recorded multifactor requirement in the last 30 days.`, 'Confirm exclusions and service accounts, pilot the Conditional Access change in report-only mode, then move to enforcement in waves.', 'Every intended user covered by validated policy, with documented exceptions.', 'IA.1')
     }
     // IA.2 counts methods used, not registered, so use alone never reads as sole reliance. PhoneOnly (IA.5,
@@ -1086,14 +1111,17 @@
       const parts = []
       if (mfa.boolean) parts.push(isInForce(mfa) ? `Conditional Access requires multifactor authentication for every user on every application.${mfaRatio ? ` ${pctText(mfaRatio.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied it.` : ''}` : `${mfaPolicy}${mfaRatio ? ` ${pctText(mfaRatio.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied multifactor authentication.` : ''}`)
       else if (mfa.pct !== null) parts.push(`${pctText(mfa.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied multifactor authentication${externalMfa > 0 ? ', including sign-ins where a federated identity provider supplied the multifactor claim' : ''}.${legacyMfaQuery && mfa.pct < 50 ? ' Multifactor authentication completed through a federated identity provider is confirmed in the review.' : ''}`)
+      // The split follows the share, and no deck row may cut it.
+      if (mfaSplit && mfa.pct !== null) parts.push(mfaSplitNarrative)
       if (isInForce(locControl)) parts.push('Conditional Access restricts sign-ins by location for every user.')
       const legacyBlockedInForce = isInForce(legacyControl)
       if (legacyBlockedInForce) parts.push('Legacy authentication is blocked.')
       if (advancedPhish) parts.push('An advanced anti-phishing policy protects every mailbox.')
       else if (basicPhish) parts.push('The Microsoft default anti-phishing policy covers every mailbox.')
-      const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', `Multifactor authentication covers ${measureText(mfa)} members at sign-in, ${remaining(mfa)}${legacyBlockedInForce ? ', and legacy protocols are blocked' : ''}`, 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')
-      const mfaMeasure = mfa.boolean ? (mfaRatio ? { ...mfa, good: mfaRatio.good, total: mfaRatio.total, pct: mfaRatio.pct, mark: mark(mfaRatio.pct), label: 'Users challenged for MFA at sign-in' } : null) : mfa.pct !== null ? { ...mfa, label: 'Users challenged for MFA at sign-in' } : null
-      pillar(G.identity, headline, parts.join(' ') || 'Sign-in telemetry was not available in this collection. Identity coverage is confirmed from the Entra admin center during the review.', mfaMeasure, m.mfaMethods && m.mfaMethods.resistant > 0 ? { value: fmt(m.mfaMethods.resistant), label: 'users already on phishing-resistant sign-in' } : null, mfa.pct !== null ? mfa.source : legacyBlockedInForce ? legacyControl.source : locControl.source)
+      const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', `Multifactor authentication covers ${measureText(mfa)} ${unevaluated !== null ? 'evaluated members' : 'members'} at sign-in, ${remaining(mfa)}${legacyBlockedInForce ? ', and legacy protocols are blocked' : ''}`, 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')
+      const mfaMeasureLabel = unevaluated !== null ? 'Evaluated members on MFA at sign-in' : 'Users challenged for MFA at sign-in'
+      const mfaMeasure = mfa.boolean ? (mfaRatio ? { ...mfa, good: mfaRatio.good, total: mfaRatio.total, pct: mfaRatio.pct, mark: mark(mfaRatio.pct), label: mfaMeasureLabel } : null) : mfa.pct !== null ? { ...mfa, label: mfaMeasureLabel } : null
+      pillar(G.identity, headline, parts.join(' ') || 'Sign-in telemetry was not available in this collection. Identity coverage is confirmed from the Entra admin center during the review.', mfaMeasure, m.mfaMethods && m.mfaMethods.resistant > 0 ? { value: fmt(m.mfaMethods.resistant), label: 'users already on phishing-resistant sign-in' } : null, mfa.pct !== null ? mfa.source : legacyBlockedInForce ? legacyControl.source : locControl.source, mfaSplit && mfa.pct !== null ? { keep: mfaSplitNarrative } : {})
     }
     {
       const parts = []

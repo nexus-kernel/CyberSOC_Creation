@@ -96,7 +96,7 @@ async function main() {
     [/^Median time to close, high severity alerts$/, 'Median close, high severity'], [/^Median time to close, all alerts$/, 'Median close, all alerts'],
     [/^90th percentile close/, 'Nine in ten closed within'], [/^Detections correlated into alerts$/, 'Detections correlated'],
     [/^Foundational controls enforced$/, 'Foundational controls'], [/^Defense in depth controls enforced$/, 'Defense in depth controls'],
-    [/^Critical exploitable findings open$/, 'Critical exploitable findings'], [/^Members who signed in without MFA, last 30 days$/, 'Members without MFA'], [/^Users on a retiring MFA method$/, 'Users on SMS or voice MFA'],
+    [/^Critical exploitable findings open$/, 'Critical exploitable findings'], [/^Members who signed in without MFA, last 30 days$/, 'Members without MFA'], [/^Evaluated members without MFA, last 30 days$/, 'Evaluated members without MFA'], [/^Users on a retiring MFA method$/, 'Users on SMS or voice MFA'],
     [/^Azure virtual machines pending endpoint onboarding$/, 'VMs not on endpoint detection'], [/^Storage accounts open to public networks$/, 'Public storage accounts'], [/^Key Vaults without purge protection$/, 'Vaults without purge protection'],
     [/^Virtual machines pending host encryption$/, 'VMs pending host encryption'], [/^Resources without diagnostic logging$/, 'Resources not logging'], [/^AI service resources without workload protection$/, 'AI resources without protection'],
     [/^Workload subnets without segmentation$/, 'Subnets without segmentation'], [/^Virtual machines without Azure Backup$/, 'VMs without Azure Backup'],

@@ -313,6 +313,53 @@ test('the control register counts the exceptions of a control at E on its label 
   const { notes } = await read(out)
   assert.ok(notes.some(n => n.includes('Azure virtual machines reporting to endpoint detection: 88 of 89, 1 exception.')), 'the speaker notes say the count')
 })
+test('in a federated tenant the register detail line and the pillar slide carry the MFA split, and every row still fits', async () => {
+  const p = pack('balanced')
+  const set = (id, rows) => { p.manifest = p.manifest.filter(r => r.ResultId !== id); p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-08T10:00:00Z' }); p.results[id] = rows }
+  // The densest register as above, with MFA at sign-in at E among the members evaluated.
+  set('IA.1', [{ UserType: 'Member', UsersSignedIn: 400, UsersChallenged: 180, UsersExternalMfa: 180, FederatedMfaAtLeastOnce: 180, FederatedWithoutMfa: 0, NoMfaOnlyUnevaluated: 206, MfaSessionLinkedOnly: 25 }])
+  set('IA.1-FEDERATION', [{ FederatedDomains: 2, ConfigsRead: 2, Provider: 'Okta', MfaBehavior: 'acceptIfMfaDoneByFederatedIdp' }])
+  set('EW.1', [{ Scope: 'Azure VM', OSPlatform: 'WindowsServer2022', Devices: 89, Onboarded: 88, CanBeOnboarded: 1, SensorActive: 81 }])
+  set('DR.5', [{ Scope: 'Azure VM', Onboarded: 88, Assessed: 85 }])
+  set('DP.4', [{ Resources: 40, WithEncryptionAtHost: 38 }])
+  set('EW.10', [{ Machines: 70, WithinCadence: 68 }])
+  set('NB.4', [{ Sites: 48, HttpsOnly: 47 }])
+  set('DR.10', [{ Closed: 100, Documented: 97 }])
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  fs.writeFileSync(dataFile, JSON.stringify(p))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  const xmls = await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))
+  const plain = x => (x.match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => t.slice(5, -6)).join(' ').replace(/\u00A0/g, ' ')
+  // The register: the split on the detail line under the label, and every row inside its column and its rule.
+  const reg = xmls.find(x => x.includes('Multifactor authentication required at sign-in register label'))
+  assert.ok(reg, 'the identity register slide')
+  assert.match(plain(reg), /Multifactor authentication required at sign-in\s+· 14 exceptions\s+194 of 400 members evaluated · 25 inferred from an earlier MFA sign-in in the same session\s+180 of 194/)
+  for (const xml of xmls.filter(x => x.includes('register rule'))) for (const r of xml.matchAll(/name="([^"]*) register rule"[\s\S]*?<a:off x="\d+" y="(\d+)"\/>/g)) assert.ok(Number(r[2]) <= 7.2 * EMU, `"${r[1]}" ends at ${(Number(r[2]) / EMU).toFixed(2)} in`)
+  const boxes = [...reg.matchAll(/name="([^"]*) register label"[\s\S]*?<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"\/>/g)].map(m => ({ label: m[1], y: Number(m[2]), h: Number(m[3]) }))
+  const rules = [...reg.matchAll(/name="([^"]*) register rule"[\s\S]*?<a:off x="\d+" y="(\d+)"\/>/g)].map(m => ({ label: m[1], y: Number(m[2]) }))
+  for (const b of boxes) { const r = rules.find(x => x.label === b.label); assert.ok(r && b.y + b.h <= r.y + 1, `${b.label} ends at its own rule`) }
+  // The pillar slide keeps the split, on the row or on the continuation slide, and no row runs into the next.
+  const m = build(p), identity = m.pillars.find(x => x.name === 'Identity and access')
+  const kept = identity.keep.split(/(?<=\.) (?=[A-Z0-9])/)
+  assert.deepEqual(kept, ['Of 400 members who signed in over the last 30 days, 194 could be evaluated.', '180 of them showed multifactor authentication, 155 on their own sign-ins and 25 inferred from an earlier MFA sign-in in the same session.', '206 members signed in only through device sessions that no Conditional Access policy checked and are not evaluated.'])
+  const pillarXml = xmls.find(x => x.includes('name="Identity and access outcome story"'))
+  const room = (7.0 - 1.75) / 5 - 0.14
+  for (const sh of pillarXml.split('<p:sp>').filter(x => / outcome story"/.test(x))) {
+    const name = sh.match(/name="([^"]*) outcome story"/)[1], width = Number(sh.match(/<a:ext cx="(\d+)"/)[1]) / EMU
+    const [head, body] = [...sh.matchAll(/<a:rPr[^>]*sz="(\d+)"[^>]*>[\s\S]*?<a:t>([^<]*)<\/a:t>/g)].map(r => ({ size: Number(r[1]) / 100, text: r[2].replace(/\u00A0/g, ' ') }))
+    const need = lines(head.text, width, head.size, true) * 0.18 + lines(body.text, width, body.size) * body.size * 0.0165 + 0.05
+    assert.ok(need <= room + 1e-9, `${name} needs ${need.toFixed(3)} in and runs into the next row`)
+  }
+  const story = plain(pillarXml.split('<p:sp>').find(x => x.includes('name="Identity and access outcome story"')))
+  const continued = xmls.find(x => x.includes('Measured outcomes by pillar, continued'))
+  for (const t of kept) assert.ok(story.includes(t) || (continued && plain(continued).includes(t)), `the deck keeps "${t}"`)
+  // The row gives the measure column to the kept split when it cannot hold both, as for the endpoint reconciliation.
+  // The split carries the measure's figures either way.
+  // The executive summary tier names the members evaluated.
+  assert.ok(xmls.some(x => plain(x).includes('Evaluated members without MFA')), 'the hardening tier label')
+  assert.ok(/Evaluated members on MFA at sign-in/.test(plain(pillarXml)) || story.includes('180 of them showed multifactor authentication'), story)
+})
 test('the scope appendix lists every ungraded control, continuing onto further slides when one column is not enough', async () => {
   // The fixture pack leaves most controls ungathered, far more than one column holds.
   const { data, out } = deck('balanced')
