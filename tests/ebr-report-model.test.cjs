@@ -215,6 +215,36 @@ test('duplicate or unverified cross-workspace alerts withhold every alert figure
     assert.ok(m.presenter.some(n => /reconciliation/i.test(n.title)))
   }
 })
+// The client surfaces state the Defender XDR scope (issue #22). A complete reading of zero says Defender XDR alerts
+// are left out, a count above zero adds nothing, and a missing, partial, empty or unreadable reading says the
+// routing was not read. No reading claims Defender XDR alerts are included.
+test('the Defender XDR scope sentence follows the P0.1-XDRDUP reading and never claims Defender XDR alerts are in', () => {
+  const EXCLUDED = 'Alerts investigated only in other platforms, including Microsoft Defender XDR, are not included. No Defender XDR alert was found in Sentinel in the year before collection.'
+  const UNKNOWN = 'Alerts investigated only in other platforms, including Microsoft Defender XDR, may not be included. Whether Defender XDR alerts reach Sentinel was not read in this collection.'
+  const scope = edit => { const p = pack(); alerts(p); edit(p); return build(p).xdrScope }
+  assert.deepEqual(scope(p => put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 0, InMultipleWorkspaces: 0 }])), { state: 'excluded', sentence: EXCLUDED })
+  assert.deepEqual(scope(() => {}), { state: 'included', sentence: '' })
+  for (const [name, edit] of [
+    ['missing', p => { p.manifest = p.manifest.filter(m => m.ResultId !== 'P0.1-XDRDUP'); delete p.results['P0.1-XDRDUP'] }],
+    ['partial zero', p => put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 0, InMultipleWorkspaces: 0 }], 'PARTIAL')],
+    ['failed', p => put(p, 'P0.1-XDRDUP', [], 'FAILED')],
+    ['empty', p => put(p, 'P0.1-XDRDUP', [], 'EMPTY')],
+    ['unreadable count', p => put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 'n/a', InMultipleWorkspaces: 0 }])],
+    ['two rows', p => put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 0 }, { XdrIncidents: 0 }])]
+  ]) assert.deepEqual(scope(edit), { state: 'unknown', sentence: UNKNOWN }, name)
+  for (const s of [EXCLUDED, UNKNOWN]) assert.ok(!/;|\bincidents?\b|resolved/i.test(s), s)
+})
+test('the detection sources named on the client surfaces are the ones OUT.5 holds', () => {
+  const p = pack(); alerts(p)
+  put(p, 'OUT.5', [{ ProductName: 'Azure Security Center', Alerts: 30 }, { ProductName: 'Azure Sentinel', Alerts: 40 }, { ProductName: 'Azure Sentinel', Alerts: 2 }, { ProductName: 'Microsoft Cloud App Security', Alerts: 0 }])
+  assert.equal(build(p).detections.allSources, 'Sentinel and Defender for Cloud')
+  put(p, 'OUT.5', [{ ProductName: 'Azure Sentinel', Alerts: 4 }])
+  assert.equal(build(p).detections.allSources, 'Sentinel')
+  put(p, 'OUT.5', [{ ProductName: 'Azure Sentinel', Alerts: 0 }])
+  assert.equal(build(p).detections.allSources, '', 'a source with no detections is not named')
+  put(p, 'OUT.5', [], 'EMPTY')
+  assert.equal(build(p).detections, null)
+})
 test('missing, failed, empty and invalid readings never become perfect coverage and are shown as (null)', () => {
   for (const status of ['MISSING', 'FAILED', 'UNAVAILABLE', 'EMPTY', 'SKIPPED', 'MANUAL']) {
     const p = pack()
@@ -1834,4 +1864,34 @@ test('the posture page states how a score control earns points, the healthy reso
   assert.ok(html.includes('Classic Defender for Cloud secure score across 2 subscriptions, calculated by Microsoft. Read Oct 8, 2026 from Azure Resource Graph.'))
   assert.ok(html.includes('Microsoft Secure Score for the Microsoft 365 tenant, calculated by Microsoft. Read Oct 10, 2026 from Microsoft Graph.'))
   assert.ok(!/;/.test(html.replace(/&[a-z#0-9]+;/gi, '').replace(/<style[\s\S]*?<\/style>|<script[\s\S]*?<\/script>|style="[^"]*"/g, '')), 'no semicolon in the visible copy')
+})
+// The operations page states the Defender XDR scope in How to read this page, and names only the detection sources
+// OUT.5 holds, on the not-ticketed branch as on the ticketed one (issue #22).
+test('How to read this page states the Defender XDR scope and names the detection sources OUT.5 holds', () => {
+  const howTo = html => html.match(/<h3>How to read this page<\/h3><p>([\s\S]*?)<\/p>/)[1]
+  const EXCLUDED = 'Alerts investigated only in other platforms, including Microsoft Defender XDR, are not included. No Defender XDR alert was found in Sentinel in the year before collection.'
+  const UNKNOWN = 'Alerts investigated only in other platforms, including Microsoft Defender XDR, may not be included. Whether Defender XDR alerts reach Sentinel was not read in this collection.'
+  const p = pack(); alerts(p)
+  put(p, 'OUT.5', [{ ProductName: 'Azure Sentinel', Alerts: 40 }, { ProductName: 'Azure Security Center', Alerts: 10 }])
+  put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 0, InMultipleWorkspaces: 0 }])
+  let text = howTo(renderHtml(p))
+  assert.ok(text.startsWith(`Detections from Sentinel and Defender for Cloud are correlated into alerts. ${EXCLUDED} The SOC triages each alert`), text)
+  assert.ok(!/Defender services|Defender for Cloud and the Defender/.test(text), text)
+  // The count above zero adds no sentence, and a missing reading says it was not read.
+  put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 20, InMultipleWorkspaces: 0 }])
+  text = howTo(renderHtml(p))
+  assert.ok(text.startsWith('Detections from Sentinel and Defender for Cloud are correlated into alerts. The SOC triages') && !text.includes('Defender XDR'), text)
+  p.manifest = p.manifest.filter(m => m.ResultId !== 'P0.1-XDRDUP')
+  p.parameters.Workspaces = p.parameters.Workspaces.slice(0, 1)
+  text = howTo(renderHtml(p))
+  assert.ok(text.includes(UNKNOWN), text)
+  // Without a detection reading no source is named.
+  p.manifest = p.manifest.filter(m => m.ResultId !== 'OUT.5')
+  text = howTo(renderHtml(p))
+  assert.ok(text.startsWith(`Detections are correlated into alerts. ${UNKNOWN}`), text)
+  // The ticketed branch carries the same scope sentence.
+  p.parameters.TicketPattern = 'ZD\\d+'
+  put(p, 'P0.1-XDRDUP', [{ XdrIncidents: 0, InMultipleWorkspaces: 0 }])
+  text = howTo(renderHtml(p))
+  assert.ok(text.includes(`detections are the alerts correlated into those tickets. ${EXCLUDED} The SOC`), text)
 })

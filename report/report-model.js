@@ -126,6 +126,15 @@
       presenter('Alert reconciliation required', duplicateCount > 0 ? `${fmt(duplicateCount)} Defender XDR alerts appear in more than one workspace. Alert totals and response timing are withheld until the combined result is reconciled.` : 'Cross-workspace duplication has not been verified. Alert totals and response timing are withheld until the combined result is reconciled.')
     }
     if (dup && count(dup.XdrIncidents) === 0) presenter('Defender XDR scope', 'No Defender XDR alerts reached Sentinel in the collection. Alert figures cover Defender for Cloud, Sentinel analytics and Identity Protection. Endpoint, Office 365 and Identity alerts handled in the Defender portal are not in these counts. Say so if asked, or add portal counts.')
+    // The client surfaces state the same scope (Oct 17, 2026). Only a complete reading of zero says Defender XDR alerts
+    // are left out. A missing, partial or unreadable P0.1-XDRDUP says the routing was not read, never that they are in.
+    const xdrCount = state('P0.1-XDRDUP') === 'OK' && dup ? count(dup.XdrIncidents) : null
+    const xdrScope = xdrCount === 0 ? 'excluded' : xdrCount > 0 ? 'included' : 'unknown'
+    m.xdrScope = {
+      state: xdrScope,
+      sentence: xdrScope === 'excluded' ? 'Alerts investigated only in other platforms, including Microsoft Defender XDR, are not included. No Defender XDR alert was found in Sentinel in the year before collection.'
+        : xdrScope === 'unknown' ? 'Alerts investigated only in other platforms, including Microsoft Defender XDR, may not be included. Whether Defender XDR alerts reach Sentinel was not read in this collection.' : ''
+    }
     if (!windowValid) presenter('Period dates', 'The alert period dates are invalid. Outcome figures are withheld until the pack is corrected.')
     const reach = rows('P0.1-BY-WORKSPACE')
     if (reach.length) {
@@ -144,7 +153,7 @@
     const detTotal = windowValid ? sum(det, 'Alerts') : null
     if (detTotal !== null) {
       const bySource = [...det.reduce((acc, r) => acc.set(product(r.ProductName), (acc.get(product(r.ProductName)) || 0) + Number(r.Alerts)), new Map())].map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total)
-      m.detections = { total: detTotal, bySource, sources: list(bySource.slice(0, 3).map(s => s.name)), source: source('OUT.5', m.ticketed ? 'Detections linked to ticketed alerts.' : '') }
+      m.detections = { total: detTotal, bySource, sources: list(bySource.slice(0, 3).map(s => s.name)), allSources: list(bySource.filter(s => s.name && s.total > 0).map(s => s.name)), source: source('OUT.5', m.ticketed ? 'Detections linked to ticketed alerts.' : '') }
     } else unmeasured('OUT.5', 'Detections received', state('OUT.5'))
 
     // Alerts (Sentinel incidents) and the automation adjustment.

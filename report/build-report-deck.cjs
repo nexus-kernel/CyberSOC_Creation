@@ -246,7 +246,8 @@ async function main() {
       text(s, 'Detections are correlated into alerts. One alert can carry several detections.', { x: q.x, y: BOTTOM - 0.3, w: qw, h: 0.3, fontSize: 10, color: C.accent6, objectName: 'Detections caption' })
     } else text(s, 'Detection sources are confirmed in the review.', { x: q.x, y: q.y, w: qw, h: 0.4, fontSize: 13, color: C.accent6, objectName: 'Detections empty' })
     s.addNotes(notesOf([
-      m.ticketed ? 'An alert is a Sentinel record that opened a ticket with the managed security service. Informational severity is excluded, and detections are the records correlated into those alerts.' : 'Detections from Sentinel, Defender for Cloud and the Defender services are correlated into alerts.',
+      m.ticketed ? 'An alert is a Sentinel record that opened a ticket with the managed security service. Informational severity is excluded, and detections are the records correlated into those alerts.' : m.detections && m.detections.allSources ? `Detections from ${m.detections.allSources} are correlated into alerts.` : 'Detections are correlated into alerts.',
+      m.xdrScope.sentence,
       m.alerts ? `Closed alerts: ${fmt(m.alerts.benign)} benign positive, ${fmt(m.alerts.falsePositives)} false positive, ${fmt(m.alerts.truePositives)} true positive, ${fmt(m.alerts.unclassified)} unclassified.` : '',
       m.alerts && m.alerts.open > 0 ? (m.alerts.openSplit ? `Of the alerts open at collection, ${m.alerts.openSplit.phrase}. Evidence ${m.alerts.openSplit.source}` : 'The remaining alerts are referred to your team for action or confirmation under the agreed notification process, or are still under investigation.') : '',
       'Response times run from alert creation to recorded close, for every high severity alert created in the period and closed by collection. Every median and 90th percentile is shown, and one under 20 minutes or over one hour is covered in the review.',
@@ -712,18 +713,23 @@ async function main() {
       ['Identity and endpoint lookbacks', 'Last 30 days. Endpoint sensors and onboarding, last 7 days.'],
       ['Subscriptions in scope', fmt(m.subscriptions)],
       ['Sentinel workspaces', `${fmt(m.workspaces.length)}${retention.length ? `, retention ${list(retention)} days` : ''}`],
-      ['Alerts', m.ticketed ? 'Sentinel records that opened a ticket with the managed security service. Informational severity is excluded.' : 'Sentinel records triaged by the managed security service.'],
-      ['Detections', 'Records from Sentinel, Defender for Cloud and the Defender services correlated into those alerts.'],
+      ['Alerts', `${m.ticketed ? 'Sentinel records that opened a ticket with the managed security service. Informational severity is excluded.' : 'Sentinel records triaged by the managed security service.'}${m.xdrScope.sentence ? ' ' + m.xdrScope.sentence : ''}`],
+      ['Detections', !m.detections ? 'Records correlated into those alerts. Detection sources are confirmed in the review.' : m.detections.allSources ? `Records from ${m.detections.allSources} correlated into those alerts.` : 'No detection records were correlated into those alerts.'],
       ['Device measures', 'Azure virtual machines. The Defender for Endpoint and Update Manager measures also count Azure Arc-enabled servers. Trusted Launch, encryption at host and backup read native virtual machines only. Workstations and network appliances stay out.'],
       ['Status marks', 'Read at collection. A control below E is a gap against the baseline, not a change since the last review.']
     ]
     eyebrow(s, 'What the readings cover', X0, TOP - 0.05, half, C.text2, 'Scope')
     rule(s, X0, TOP + 0.3, half, C.text2, 1, 'Scope rule')
+    // The facts step down from 11 pt to 9 pt until they end above the content bottom, so a longer scope statement,
+    // such as the Defender XDR sentence on the Alerts fact, never runs off the slide (Oct 17, 2026).
+    const factHeights = size => facts.map(([, v]) => Math.max(0.28, lines(v, half - 2.4, size) * 0.185 * size / 11 + 0.1))
+    const factSize = [11, 10].find(size => factHeights(size).reduce((y, h) => y + h + 0.05, TOP + 0.42) <= BOTTOM) || 9
+    const heights = factHeights(factSize)
     let fy = TOP + 0.42
     facts.forEach(([k, v], i) => {
-      const h = Math.max(0.28, lines(v, half - 2.4, 11) * 0.185 + 0.1)
-      text(s, k, { x: X0, y: fy, w: 2.3, h, fontSize: 11, bold: true, color: C.text2, objectName: `Scope ${i + 1} label` })
-      text(s, v, { x: X0 + 2.4, y: fy, w: half - 2.4, h, fontSize: 11, color: C.text1, objectName: `Scope ${i + 1} value` })
+      const h = heights[i]
+      text(s, k, { x: X0, y: fy, w: 2.3, h, fontSize: factSize, bold: true, color: C.text2, objectName: `Scope ${i + 1} label` })
+      text(s, v, { x: X0 + 2.4, y: fy, w: half - 2.4, h, fontSize: factSize, color: C.text1, objectName: `Scope ${i + 1} value` })
       rule(s, X0, fy + h, half, HEX.track, 0.5, `Scope ${i + 1} rule`)
       fy += h + 0.05
     })
