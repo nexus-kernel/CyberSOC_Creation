@@ -153,7 +153,7 @@
     const detTotal = windowValid ? sum(det, 'Alerts') : null
     if (detTotal !== null) {
       const bySource = [...det.reduce((acc, r) => acc.set(product(r.ProductName), (acc.get(product(r.ProductName)) || 0) + Number(r.Alerts)), new Map())].map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total)
-      m.detections = { total: detTotal, bySource, sources: list(bySource.slice(0, 3).map(s => s.name)), allSources: list(bySource.filter(s => s.name && s.total > 0).map(s => s.name)), source: source('OUT.5', m.ticketed ? 'Detections linked to ticketed alerts.' : '') }
+      m.detections = { total: detTotal, bySource, sources: list(bySource.slice(0, 3).map(s => s.name)), allSources: list([...bySource.filter(s => s.name && s.total > 0).map(s => s.name), ...bySource.some(s => !s.name && s.total > 0) ? ['sources not named in the collection'] : []]), source: source('OUT.5', m.ticketed ? 'Detections linked to ticketed alerts.' : '') }
     } else unmeasured('OUT.5', 'Detections received', state('OUT.5'))
 
     // Alerts (Sentinel incidents) and the automation adjustment.

@@ -242,6 +242,11 @@ test('the detection sources named on the client surfaces are the ones OUT.5 hold
   assert.equal(build(p).detections.allSources, 'Sentinel')
   put(p, 'OUT.5', [{ ProductName: 'Azure Sentinel', Alerts: 0 }])
   assert.equal(build(p).detections.allSources, '', 'a source with no detections is not named')
+  // Records with a blank or missing product name are counted, so they are named as unnamed sources, never dropped.
+  put(p, 'OUT.5', [{ ProductName: '', Alerts: 5 }, { Alerts: 2 }])
+  assert.deepEqual([build(p).detections.total, build(p).detections.allSources], [7, 'sources not named in the collection'])
+  put(p, 'OUT.5', [{ ProductName: 'Azure Sentinel', Alerts: 4 }, { ProductName: null, Alerts: 3 }])
+  assert.equal(build(p).detections.allSources, 'Sentinel and sources not named in the collection')
   put(p, 'OUT.5', [], 'EMPTY')
   assert.equal(build(p).detections, null)
 })

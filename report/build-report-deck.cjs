@@ -714,7 +714,7 @@ async function main() {
       ['Subscriptions in scope', fmt(m.subscriptions)],
       ['Sentinel workspaces', `${fmt(m.workspaces.length)}${retention.length ? `, retention ${list(retention)} days` : ''}`],
       ['Alerts', `${m.ticketed ? 'Sentinel records that opened a ticket with the managed security service. Informational severity is excluded.' : 'Sentinel records triaged by the managed security service.'}${m.xdrScope.sentence ? ' ' + m.xdrScope.sentence : ''}`],
-      ['Detections', !m.detections ? 'Records correlated into those alerts. Detection sources are confirmed in the review.' : m.detections.allSources ? `Records from ${m.detections.allSources} correlated into those alerts.` : 'No detection records were correlated into those alerts.'],
+      ['Detections', !m.detections ? 'Records correlated into those alerts. Detection sources are confirmed in the review.' : m.detections.allSources ? `Records from ${m.detections.allSources} correlated into those alerts.` : m.detections.total === 0 ? 'No detection records were correlated into those alerts.' : 'Records correlated into those alerts. Their sources were not recorded.'],
       ['Device measures', 'Azure virtual machines. The Defender for Endpoint and Update Manager measures also count Azure Arc-enabled servers. Trusted Launch, encryption at host and backup read native virtual machines only. Workstations and network appliances stay out.'],
       ['Status marks', 'Read at collection. A control below E is a gap against the baseline, not a change since the last review.']
     ]

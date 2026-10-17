@@ -832,6 +832,14 @@ test('the scope appendix and the operations notes state the Defender XDR scope a
   data.manifest = data.manifest.filter(r => r.ResultId !== 'P0.1-XDRDUP'); delete data.results['P0.1-XDRDUP']
   s = await surfaces(data)
   assert.ok(s.scope.includes(`Sentinel records triaged by the managed security service. ${UNKNOWN}`) && s.notes.includes(UNKNOWN), s.scope)
+  // Records without a product name are counted and never read as no records, and a zero total says there were none.
+  data.results['OUT.5'] = [{ ProductName: '', Alerts: 5 }]
+  s = await surfaces(data)
+  assert.ok(s.scope.includes('Detections Records from sources not named in the collection correlated into those alerts.') && !s.scope.includes('No detection records'), s.scope)
+  assert.ok(s.notes.startsWith('Detections from sources not named in the collection are correlated into alerts.'), s.notes)
+  data.results['OUT.5'] = [{ ProductName: 'Azure Sentinel', Alerts: 0 }]
+  s = await surfaces(data)
+  assert.ok(s.scope.includes('Detections No detection records were correlated into those alerts.'), s.scope)
   // Without a detection reading no source is named.
   data.manifest = data.manifest.filter(r => r.ResultId !== 'OUT.5'); delete data.results['OUT.5']
   s = await surfaces(data)
