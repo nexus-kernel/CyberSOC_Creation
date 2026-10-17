@@ -380,9 +380,12 @@
     // A workspace counts in a month only when its records span the whole month, so a first record after the 1st or a
     // last record before the month ends leaves that month out. Workspaces with no alert records stay in the
     // denominator. A partial reach reading, or a workspace whose record dates are unreadable, shows no coverage.
+    // A pack with one Sentinel workspace has no breakdown: the collector reads P0.1 from that workspace alone.
     m.trendCoverage = null
-    if (m.trend.length && m.workspaces.length && state('P0.1-BY-WORKSPACE') === 'OK') {
-      const spans = m.workspaces.map(alertReach).filter(Boolean).map(r => ({ start: iso(r.EarliestRecord), end: iso(r.LatestRecord) }))
+    const reachId = state('P0.1-BY-WORKSPACE') === 'OK' ? 'P0.1-BY-WORKSPACE' : m.workspaces.length === 1 && state('P0.1-BY-WORKSPACE') === 'MISSING' && state('P0.1') === 'OK' ? 'P0.1' : null
+    if (m.trend.length && m.workspaces.length && reachId) {
+      const held = reachId === 'P0.1' ? [rows('P0.1').find(r => /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0)] : m.workspaces.map(alertReach)
+      const spans = held.filter(Boolean).map(r => ({ start: iso(r.EarliestRecord), end: iso(r.LatestRecord) }))
       if (spans.every(s => validDate(s.start) && validDate(s.end) && s.start <= s.end)) {
         const monthStart = month => month.slice(0, 7) + '-01'
         const monthEnd = month => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10)
@@ -407,7 +410,7 @@
             return run.first.month.slice(0, 4) === run.last.month.slice(0, 4) ? `${short(run.first.month)} to ${run.last.label}` : `${run.first.label} to ${run.last.label}`
           }
           m.trendCoverage = {
-            total, late, early, source: source('P0.1-BY-WORKSPACE'),
+            total, late, early, source: source(reachId),
             sentence: `The alert records ${dates}. Alerts are counted in the month they were created.`,
             caption: `Workspaces whose retained alert records span the whole month: ${runs.map(run => `${fmt(run.n)} of ${fmt(total)} in ${months(run)}`).join(', ')}.`
           }

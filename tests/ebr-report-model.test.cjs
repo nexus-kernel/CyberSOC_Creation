@@ -1996,3 +1996,25 @@ test('the coverage line states retained record dates only, and never joins month
   const yearEnd = coveragePack([{ ...FULL, EarliestRecord: '2025-01-01' }, { WorkspaceId: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2026-02-01', LatestRecord: '2026-10-07', Records: 5 }, EMPTY], ['2025-11-01', '2025-12-01', '2026-01-01', '2026-02-01'])
   assert.equal(build(yearEnd).trendCoverage.caption, `${SPAN}1 of 3 in Nov 2025 to Jan 2026, 2 of 3 in Feb 2026.`)
 })
+// A pack with one Sentinel workspace has no P0.1-BY-WORKSPACE: the collector reads P0.1 from that workspace alone, so
+// the coverage line reads P0.1 there and cites it. A breakdown that is present but not OK still shows nothing.
+test('a single-workspace pack reads its coverage from P0.1', () => {
+  const p = pack(); alerts(p)
+  p.parameters.Workspaces = [{ Name: 'w1', CustomerId: 'w1' }]
+  p.manifest = p.manifest.filter(r => r.ResultId !== 'P0.1-BY-WORKSPACE'); delete p.results['P0.1-BY-WORKSPACE']
+  put(p, 'OUT.3', ['2026-07-01', '2026-08-01', '2026-09-01'].map(Month => ({ Month, Total: 10, High: 2, Medium: 3, Low: 5, Informational: 0 })))
+  put(p, 'P0.1', [{ SourceTable: 'SecurityAlert', EarliestRecord: '2025-01-01', LatestRecord: '2026-10-07', Records: 900 }, { SourceTable: 'SecurityIncident', EarliestRecord: '2026-08-12T04:00:00Z', LatestRecord: '2026-10-07', Records: 40, Workspace: 'w1' }])
+  const m = build(p)
+  assert.deepEqual(m.trend.map(r => r.workspaces), [0, 0, 1])
+  assert.equal(m.trendCoverage.sentence, 'The alert records retained in the Sentinel workspace start after Jul 1, 2026. Alerts are counted in the month they were created.')
+  assert.equal(m.trendCoverage.caption, `${SPAN}0 of 1 in Jul to Aug 2026, 1 of 1 in Sep 2026.`)
+  assert.equal(m.trendCoverage.source, 'P0.1. Read Oct 8, 2026.')
+  assert.ok(renderHtml(p).includes('<p class="source">P0.1. Read Oct 8, 2026.</p>'))
+  // Two workspaces never fall back to the combined P0.1, and a partial P0.1 or a non-OK breakdown shows nothing.
+  const two = structuredClone(p); two.parameters.Workspaces.push({ Name: 'w2', CustomerId: 'w2' })
+  assert.equal(build(two).trendCoverage, null)
+  const partial = structuredClone(p); put(partial, 'P0.1', p.results['P0.1'], 'PARTIAL')
+  assert.equal(build(partial).trendCoverage, null)
+  const failed = structuredClone(p); put(failed, 'P0.1-BY-WORKSPACE', [], 'FAILED')
+  assert.equal(build(failed).trendCoverage, null)
+})
