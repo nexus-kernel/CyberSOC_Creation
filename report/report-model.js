@@ -392,7 +392,10 @@
           const first = monthStart(shown[0].month), last = monthEnd(shown[shown.length - 1].month)
           const late = spans.filter(s => s.start > first).length, early = spans.filter(s => s.end < last).length
           const of = n => total === 1 ? 'the Sentinel workspace' : `${fmt(n)} of the ${fmt(total)} Sentinel workspaces`
-          const dates = late ? `retained in ${of(late)} start after ${date(first)}${early ? `, and in ${fmt(early)} they end before ${date(last)}` : ''}` : `retained in ${of(early)} end before ${date(last)}`
+          // One workspace takes one combined clause: "retained in the Sentinel workspace start after Jul 1, 2026 and end
+          // before Sep 30, 2026".
+          const both = total === 1 && late && early ? ` and end before ${date(last)}` : early ? `, and in ${fmt(early)} they end before ${date(last)}` : ''
+          const dates = late ? `retained in ${of(late)} start after ${date(first)}${both}` : `retained in ${of(early)} end before ${date(last)}`
           // Runs of consecutive months with the same count, for example "3 of 6 in Jul 2026, 6 of 6 in Aug to Sep 2026".
           // OUT.3 has no row for a month without alerts, so a missing month ends a run rather than joining across it.
           const index = month => Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7))

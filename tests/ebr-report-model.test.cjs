@@ -1983,6 +1983,13 @@ test('the coverage line states retained record dates only, and never joins month
   assert.deepEqual(m.trend.map(r => r.workspaces), [1, 1, 2])
   assert.equal(m.trendCoverage.caption, `${SPAN}1 of 3 in Jun 2026, 1 of 3 in Aug 2026, 2 of 3 in Sep 2026.`)
   assert.equal(m.trendCoverage.sentence, 'The alert records retained in 2 of the 3 Sentinel workspaces start after Jun 1, 2026, and in 1 they end before Sep 30, 2026. Alerts are counted in the month they were created.')
+  // One workspace takes a singular combined clause, and the single-workspace forms read the same way (Codex review).
+  const one = reach => { const q = coveragePack(reach); q.parameters.Workspaces = [{ Name: 'w1', CustomerId: 'w1' }]; return build(q).trendCoverage }
+  const ONLY_AUG = { WorkspaceId: 'w1', SourceTable: 'SecurityIncident', EarliestRecord: '2026-08-01', LatestRecord: '2026-08-31', Records: 5 }
+  assert.equal(one([ONLY_AUG]).sentence, 'The alert records retained in the Sentinel workspace start after Jul 1, 2026 and end before Sep 30, 2026. Alerts are counted in the month they were created.')
+  assert.equal(one([ONLY_AUG]).caption, `${SPAN}0 of 1 in Jul 2026, 1 of 1 in Aug 2026, 0 of 1 in Sep 2026.`)
+  assert.equal(one([{ ...ONLY_AUG, LatestRecord: '2026-10-07' }]).sentence, 'The alert records retained in the Sentinel workspace start after Jul 1, 2026. Alerts are counted in the month they were created.')
+  assert.equal(one([{ ...ONLY_AUG, EarliestRecord: '2025-10-01' }]).sentence, 'The alert records retained in the Sentinel workspace end before Sep 30, 2026. Alerts are counted in the month they were created.')
   // Consecutive months across a year end still join.
   const yearEnd = coveragePack([{ ...FULL, EarliestRecord: '2025-01-01' }, { WorkspaceId: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2026-02-01', LatestRecord: '2026-10-07', Records: 5 }, EMPTY], ['2025-11-01', '2025-12-01', '2026-01-01', '2026-02-01'])
   assert.equal(build(yearEnd).trendCoverage.caption, `${SPAN}1 of 3 in Nov 2025 to Jan 2026, 2 of 3 in Feb 2026.`)
