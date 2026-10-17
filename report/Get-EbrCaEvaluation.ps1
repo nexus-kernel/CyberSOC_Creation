@@ -177,14 +177,18 @@ function Get-EbrCaEvaluation {
         $excluded = @($covering | ForEach-Object { $_.ExcludeUsers + $_.ExcludeGroups + $_.ExcludeRoles } | Sort-Object -Unique)
         # Why a Scoped flow is scoped (Oct 14, 2026), from the enabled policies nothing narrows: Applications when
         # one applies to all users but selected applications, Users when one applies to all applications but selected
-        # users, UsersAndApplications when every such policy selects both, and Conditions when every enabled policy
-        # is narrowed by a platform, risk level, device filter or location. The report words the policy sentence from it.
+        # users, UsersOrApplications when both kinds are enabled side by side (Oct 16, 2026), UsersAndApplications when
+        # every such policy selects both, and Conditions when every enabled policy is narrowed by a platform, risk level,
+        # device filter or location. The report words the policy sentence from it.
         $narrowedOf = { param($f) if ($d.RawOnly) { [bool]$f.NarrowedOther } else { [bool]$f.Narrowed } }
         $plain = @($enabled | Where-Object { -not (& $narrowedOf $_) })
+        $byApps = @($plain | Where-Object { $_.AllUsers }).Count -gt 0
+        $byUsers = @($plain | Where-Object { -not $_.AllUsers -and ($_.AllApps -or $_.AdminPortals) }).Count -gt 0
         $scopeReason = if ($state -ne 'Scoped') { '' }
         elseif (-not $plain.Count) { 'Conditions' }
-        elseif (@($plain | Where-Object { $_.AllUsers }).Count) { 'Applications' }
-        elseif (@($plain | Where-Object { $_.AllApps -or $_.AdminPortals }).Count) { 'Users' }
+        elseif ($byApps -and $byUsers) { 'UsersOrApplications' }
+        elseif ($byApps) { 'Applications' }
+        elseif ($byUsers) { 'Users' }
         else { 'UsersAndApplications' }
         $rows = @()
         if ($d.SignIns -and $detailRead) {

@@ -357,3 +357,40 @@ Describe 'Client edition without Node.js' {
         "$warned" | Should -Match 'client edition of the report was not written'
     }
 }
+Describe 'Why a Scoped Conditional Access flow is scoped' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '../report/Get-EbrCaEvaluation.ps1')
+        # A raw policy as Graph returns it. Grants mfa or block, clients all or legacy only.
+        function New-CaPolicy {
+            param([string]$Id, [string[]]$Users, [string[]]$Apps, [string]$Grant = 'mfa', [string[]]$Clients = @('all'), [string[]]$Platforms = @())
+            $conditions = @{ users = @{ includeUsers = $Users }; applications = @{ includeApplications = $Apps }; clientAppTypes = $Clients }
+            if ($Platforms.Count) { $conditions.platforms = @{ includePlatforms = $Platforms } }
+            @{ id = $Id; displayName = "Secret $Id"; state = 'enabled'; conditions = $conditions; grantControls = @{ builtInControls = @($Grant) } } | ConvertTo-Json -Depth 6 | ConvertFrom-Json
+        }
+        function Get-ScopeReason {
+            param([object[]]$Policies, [string]$Flow = 'MFA at sign-in')
+            $row = (Get-EbrCaEvaluation -Policies $Policies -SecurityDefaults $false -SignIns $null).Flows | Where-Object Flow -eq $Flow
+            $row.PolicyState | Should -Be 'Scoped' -Because "$Flow is scoped"
+            $row.ScopeReason
+        }
+    }
+    It 'records both dimensions when one policy selects its applications and another its users' {
+        $byApps = New-CaPolicy 'P1' @('All') @('app-1')
+        $byUsers = New-CaPolicy 'P2' @('g-1') @('All')
+        Get-ScopeReason @($byApps, $byUsers) | Should -Be 'UsersOrApplications'
+        Get-ScopeReason @($byUsers, $byApps) | Should -Be 'UsersOrApplications' -Because 'the order of the policies does not decide the reason'
+        Get-ScopeReason @($byApps, $byUsers, (New-CaPolicy 'P3' @('g-2') @('app-2'))) | Should -Be 'UsersOrApplications'
+        Get-ScopeReason @($byApps, $byUsers, (New-CaPolicy 'P4' @('All') @('All') -Platforms @('iOS'))) | Should -Be 'UsersOrApplications' -Because 'a policy narrowed by a condition does not hide the two that are not'
+        $legacy = { param($id, $u, $a) New-CaPolicy $id $u $a -Grant 'block' -Clients @('exchangeActiveSync', 'other') }
+        Get-ScopeReason @((& $legacy 'L1' @('All') @('app-1')), (& $legacy 'L2' @('g-1') @('All'))) 'Legacy authentication' | Should -Be 'UsersOrApplications'
+    }
+    It 'keeps the single-dimension reasons unchanged' {
+        Get-ScopeReason @(New-CaPolicy 'P1' @('All') @('app-1')) | Should -Be 'Applications'
+        Get-ScopeReason @(New-CaPolicy 'P2' @('g-1') @('All')) | Should -Be 'Users'
+        Get-ScopeReason @(New-CaPolicy 'P3' @('g-1') @('MicrosoftAdminPortals')) | Should -Be 'Users'
+        Get-ScopeReason @(New-CaPolicy 'P4' @('g-1') @('app-1')) | Should -Be 'UsersAndApplications'
+        Get-ScopeReason @((New-CaPolicy 'P1' @('All') @('app-1')), (New-CaPolicy 'P4' @('g-1') @('app-1'))) | Should -Be 'Applications'
+        Get-ScopeReason @((New-CaPolicy 'P2' @('g-1') @('All')), (New-CaPolicy 'P4' @('g-2') @('app-1'))) | Should -Be 'Users'
+        Get-ScopeReason @(New-CaPolicy 'P5' @('All') @('All') -Platforms @('iOS')) | Should -Be 'Conditions'
+    }
+}
