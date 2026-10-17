@@ -89,6 +89,17 @@ test('the client edition carries the rendered pages and the toolbar script only,
   }
 })
 
+// The offline fixture reads no Defender XDR alert in Sentinel (P0.1-XDRDUP XdrIncidents 0), so the client edition
+// states the scope on the operations page, in words that are not the presenter note's (issue #22).
+test('the client edition states the Defender XDR scope on the operations page', () => {
+  const { internal, client } = editions
+  const m = build(internal.data)
+  assert.equal(m.xdrScope.state, 'excluded')
+  assert.ok(m.presenter.some(n => n.title === 'Defender XDR scope'), 'the presenter note is raised as well')
+  const howTo = client.report.match(/<h3>How to read this page<\/h3><p>([\s\S]*?)<\/p>/)[1]
+  assert.ok(howTo.includes('detections are the alerts correlated into those tickets. Alerts investigated only in other platforms, including Microsoft Defender XDR, are not included. No Defender XDR alert was found in Sentinel in the year before collection. The SOC triages each alert'), howTo)
+  assert.ok(!client.html.includes('Defender services'))
+})
 test('the client edition holds no GUID or workspace resource ID anywhere in the written file', () => {
   const { internal, client } = editions
   assert.ok(new Set(internal.json.match(GUID)).size >= 5, 'the fixture embeds subscription, workspace, tenant and reference GUIDs in the internal edition')

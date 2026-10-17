@@ -805,3 +805,61 @@ test('the posture appendix prints the model of each score, the score controls ca
   assert.ok(bar.includes('Remediate vulnerabilities (5.7 pts, 4 of 78 healthy)'), bar.match(/Remediate[^<]*/)?.[0])
   assert.ok(bar.includes('Apply system updates (4 pts)'), 'a control without resource counts carries none')
 })
+// The deck states the Defender XDR scope on the client surfaces: the A4 Alerts fact and the operations slide's
+// speaker notes, which carry only page copy. The A4 Detections fact names only the sources OUT.5 holds (issue #22).
+test('the scope appendix and the operations notes state the Defender XDR scope and name the detection sources OUT.5 holds', async () => {
+  const plain = s => s.replace(/\s+/g, ' ')
+  const EXCLUDED = 'Alerts investigated only in other platforms, including Microsoft Defender XDR, are not included. No Defender XDR alert was found in Sentinel in the year before collection.'
+  const UNKNOWN = 'Alerts investigated only in other platforms, including Microsoft Defender XDR, may not be included. Whether Defender XDR alerts reach Sentinel was not read in this collection.'
+  const surfaces = async data => {
+    const { slides, notes } = await read(deckOf(data))
+    const ops = slides.findIndex(s => /HOW CLOSED ALERTS WERE CLASSIFIED/i.test(s))
+    assert.ok(ops >= 0, 'the operations slide')
+    return { scope: plain(slides.find(s => s.startsWith('Scope and evidence')) || ''), notes: plain(notes[ops]), all: [...slides, ...notes].map(plain).join(' ') }
+  }
+  const data = pack('balanced')
+  data.results['P0.1-XDRDUP'] = [{ XdrIncidents: 0, InMultipleWorkspaces: 0 }]
+  data.results['OUT.5'] = [{ ProductName: 'Azure Sentinel', Alerts: 40 }, { ProductName: 'Azure Security Center', Alerts: 5 }]
+  let s = await surfaces(data)
+  assert.ok(s.scope.includes(`Alerts Sentinel records triaged by the managed security service. ${EXCLUDED}`), s.scope)
+  assert.ok(s.scope.includes('Detections Records from Sentinel and Defender for Cloud correlated into those alerts.'), s.scope)
+  assert.ok(s.notes.startsWith(`Detections from Sentinel and Defender for Cloud are correlated into alerts. ${EXCLUDED} Closed alerts:`), s.notes)
+  assert.ok(!/Defender services/.test(s.all), 'no fixed source list remains')
+  // A count above zero keeps a qualified statement. A missing reading says it was not read and never that Defender XDR alerts are in.
+  data.results['P0.1-XDRDUP'] = [{ XdrIncidents: 20, InMultipleWorkspaces: 0 }]
+  s = await surfaces(data)
+  const REACHED = 'Alerts investigated only in other platforms, including the Microsoft Defender XDR portal, are not included. Defender XDR alerts are counted where Sentinel received them.'
+  assert.ok(s.scope.includes(`Sentinel records triaged by the managed security service. ${REACHED}`) && s.notes.includes(REACHED), s.scope)
+  data.manifest = data.manifest.filter(r => r.ResultId !== 'P0.1-XDRDUP'); delete data.results['P0.1-XDRDUP']
+  s = await surfaces(data)
+  assert.ok(s.scope.includes(`Sentinel records triaged by the managed security service. ${UNKNOWN}`) && s.notes.includes(UNKNOWN), s.scope)
+  // Records without a product name are counted and never read as no records, and a zero total says there were none.
+  data.results['OUT.5'] = [{ ProductName: '', Alerts: 5 }]
+  s = await surfaces(data)
+  assert.ok(s.scope.includes('Detections Records from sources not named in the collection correlated into those alerts.') && !s.scope.includes('No detection records'), s.scope)
+  assert.ok(s.notes.startsWith('Detections from sources not named in the collection are correlated into alerts.'), s.notes)
+  data.results['OUT.5'] = [{ ProductName: 'Azure Sentinel', Alerts: 0 }]
+  s = await surfaces(data)
+  assert.ok(s.scope.includes('Detections No detection records were correlated into those alerts.'), s.scope)
+  // Without a detection reading no source is named.
+  data.manifest = data.manifest.filter(r => r.ResultId !== 'OUT.5'); delete data.results['OUT.5']
+  s = await surfaces(data)
+  assert.ok(s.scope.includes('Detections Records correlated into those alerts. Detection sources are confirmed in the review.'), s.scope)
+  assert.ok(s.notes.startsWith('Detections are correlated into alerts.'), s.notes)
+})
+// The scope facts step down in size so the longest Alerts fact, ticketed with the Defender XDR sentence, still ends
+// above the content bottom. At 11 pt it ran past the foot of the slide.
+test('the scope appendix facts end above the content bottom with the Defender XDR sentence on a ticketed pack', async () => {
+  for (const xdr of [[{ XdrIncidents: 0, InMultipleWorkspaces: 0 }], [{ XdrIncidents: 20, InMultipleWorkspaces: 0 }], null]) {
+    const data = pack('balanced')
+    data.parameters.TicketPattern = 'ZD\\d+'
+    if (xdr) data.results['P0.1-XDRDUP'] = xdr
+    else { data.manifest = data.manifest.filter(r => r.ResultId !== 'P0.1-XDRDUP'); delete data.results['P0.1-XDRDUP'] }
+    const zip = await JSZip.loadAsync(fs.readFileSync(deckOf(data)))
+    const xml = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).find(x => x.includes('name="Scope 1 value"'))
+    assert.ok(xml && xml.includes('Defender XDR'), 'the scope slide carries the Defender XDR sentence')
+    const facts = [...xml.matchAll(/<p:cNvPr id="\d+" name="(Scope \d+ (?:label|value|rule))"(?:(?!<p:cNvPr)[\s\S])*?<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"\/>/g)]
+    assert.equal(facts.length, 27, 'a label, value and rule for each of the nine facts')
+    for (const [, name, y, h] of facts) assert.ok(Number(y) + Number(h) <= BOTTOM_EMU + 1, `"${name}" ends at ${((Number(y) + Number(h)) / EMU).toFixed(3)} in, past the content bottom`)
+  }
+})
