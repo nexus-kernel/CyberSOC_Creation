@@ -969,3 +969,17 @@ test('the alert volume chart carries the workspace coverage line when it varies,
   assert.ok(dcap.h >= Math.round(lines(dline, (require('../report/deck-common.cjs').CW - 0.5) / 2 - 0.1, 10) * 0.17 * EMU), 'the box holds every wrapped line')
   assert.ok(dchart.h >= Math.round(0.9 * EMU), `the chart keeps ${(dchart.h / EMU).toFixed(2)} in`)
 })
+test('workload protection reads as a plan-level estimate and subnets as configured on every slide and note (issue #26)', async () => {
+  const p = pack('detailed')
+  p.manifest.push({ ResultId: 'DR.2', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-08T10:00:00Z' }, { ResultId: 'NB.1', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-08T10:00:00Z' })
+  Object.assign(p.results, { 'DR.2': [{ Plan: 'VirtualMachines', ResourceType: 'microsoft.compute/virtualmachines', Resources: 40, Covered: 35 }], 'NB.1': [{ WorkloadSubnets: 30, Segmented: 20 }] })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  fs.writeFileSync(dataFile, JSON.stringify(p))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  const { slides, notes } = await read(out)
+  const all = [...slides, ...notes]
+  assert.ok(slides.some(t => t.includes('Cloud workload protection plan coverage, a plan-level estimate')), 'the register row names the estimate')
+  assert.ok(notes.some(t => /Standard workload protection plans cover an estimated 87\.5% of eligible resources, a plan-level estimate/.test(t)), 'the pillar narrative names the estimate')
+  for (const t of all) for (const hit of t.match(/[^.]*[Ww]orkload protection (plans )?covers?[^.]*/g) || []) assert.match(hit, /estimate/, hit)
+  assert.ok(!all.some(t => /subnets segmented|Segmentation covers|Workload subnets protected|scanning on mail|across the resource estate/.test(t)), 'no outcome wording for configuration presence')
+})

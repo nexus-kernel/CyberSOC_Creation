@@ -65,9 +65,9 @@ Twenty-seven foundational controls follow the pillar slides, five per pillar exc
 
 | Foundational control | How the build delivers it | Measures |
 | --- | --- | --- |
-| Storage and managed disks encrypted with platform keys | Platform default, verified and reported as evidence | DP.3 |
+| Storage and managed disks encrypted with platform keys | Platform default, verified and reported as evidence. The report never presents it as a win, and encryption at host is graded separately | DP.3 |
 | Secret and key stores protected against deletion and purge | Soft delete is a platform default. Purge protection is enabled on every vault after client approval, since it cannot be turned off | DP.2 |
-| Mail and collaboration protected by threat protection | Safe Links on mail, Teams and Office, and Safe Attachments set to Block or Dynamic Delivery | IA.9-SAFELINKS, IA.9-SAFEATTACH |
+| Mail and collaboration protected by threat protection | Safe Links on mail, Teams and Office, and Safe Attachments set to Block or Dynamic Delivery. The report reads that a policy is configured, not the recipients it applies to or its exceptions | IA.9-SAFELINKS, IA.9-SAFEATTACH |
 | Malicious mail removed from mailboxes after delivery | Zero-hour auto purge left on for malware, phishing and high confidence phishing | DP.7 |
 | Data loss prevention enforced across mail and endpoint | Purview data loss prevention policies built to what the client's current licensing supports. Items that need more licensing are handed over as a follow-up once the license is acquired, and items the client declines are noted in the SOW and shown as not in scope | DP.8 |
 
@@ -76,7 +76,7 @@ Twenty-seven foundational controls follow the pillar slides, five per pillar exc
 | Foundational control | How the build delivers it | Measures |
 | --- | --- | --- |
 | Security telemetry centrally collected and retained | Sentinel workspace with its tenant connectors, plus the ATMO-MXDR-DIAG-TOSENT logging initiative | DR.6-INITIATIVE |
-| Cloud workload protection enabled across the resource estate | Every Defender for Cloud plan that has matching resources in the client environment, enabled on every subscription | DR.2 |
+| Cloud workload protection enabled across the resource estate | Every Defender for Cloud plan that has matching resources in the client environment, enabled on every subscription. The report reads coverage from the subscription plan configuration as a plan-level estimate | DR.2 |
 | Endpoint detection sensor reporting on Azure virtual machines | Sensor health review in the final build week on every onboarded Azure virtual machine, with inactive sensors fixed or explained. Workstations and network devices such as Palo Alto, Meraki, Fortinet and SonicWall firewalls are not part of this measure | EW.1 |
 | Every alert triaged to a documented disposition | SOC triage that closes every incident with a classification and a closing note | DR.10 |
 | Analytics rules enabled in every Sentinel workspace | The Atmosera standard analytics rule set, deployed and enabled in each Sentinel workspace at build | DR.9 |
@@ -174,7 +174,7 @@ Twenty-eight defense in depth controls (seven under identity since Oct 12, 2026,
 | Endpoint and workload | Credential protection enforced and legacy credential exposure removed | Needs device and application compatibility testing | EW.12 |
 | Endpoint and workload | Application allow-listing on corporate-owned devices | Needs an application inventory and a learning period | EW.13 |
 | Endpoint and workload | Remote Desktop hardened with TLS and file transfer blocked | Needs a review of how administrators and vendors move files | EW.14 |
-| Network and boundary | Network security groups applied across the estate | A network security group or a firewall route on every workload subnet, with platform subnets such as GatewaySubnet and AzureFirewallSubnet excepted. Needs a segmentation design and change windows for subnets that carry production traffic | NB.1 |
+| Network and boundary | Network security groups applied across the estate | A network security group or a firewall route on every workload subnet, with platform subnets such as GatewaySubnet and AzureFirewallSubnet excepted. Needs a segmentation design and change windows for subnets that carry production traffic. The report reads that a group or route is configured, not the rules or the traffic they permit | NB.1 |
 | Network and boundary | Perimeter rule sets reviewed with findings tracked | Needs the client's network owners in a recurring review | NB.9 |
 | Network and boundary | Platform services isolated behind private endpoints | Needs dependency testing and a private DNS design | DP.1 |
 | Network and boundary | Blob containers closed to anonymous access at the container level | Containers that serve public content, such as static assets, need a move to a CDN or signed URLs, and their owners confirm each one first. It keeps a container closed even if the account-level setting is later relaxed | DP.1-CONTAINERS |

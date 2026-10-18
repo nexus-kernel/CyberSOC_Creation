@@ -550,7 +550,7 @@ test('every control is placed in a pillar and a tier that follows the controls b
   assert.equal(tierOf('Application allow-listing policy assigned'), 'defense')
   assert.equal(tierOf('Encryption in transit enforced on published web apps'), 'foundational')
   assert.equal(tierOf('Blob containers closed to anonymous access'), 'defense')
-  assert.equal(tierOf('Workload subnets protected by segmentation'), 'defense')
+  assert.equal(tierOf('Workload subnets with a network security group or firewall route'), 'defense')
   assert.equal(tierOf('App Service minimum TLS 1.2'), 'foundational')
   assert.equal(tierOf('Storage accounts closed to public networks'), 'defense')
   assert.equal(tierOf('Anonymous blob access disabled'), 'foundational')
@@ -558,8 +558,8 @@ test('every control is placed in a pillar and a tier that follows the controls b
   assert.equal(tierOf('Key Vault purge protection'), 'foundational')
   assert.equal(tierOf('Key Vault access governed by role-based access control'), 'defense')
   assert.equal(tierOf('Azure Backup protecting virtual machines'), 'defense')
-  assert.equal(tierOf('Safe Links scanning on mail, Teams and Office'), 'foundational')
-  assert.equal(tierOf('Cloud workload protection across the resource estate'), 'foundational')
+  assert.equal(tierOf('Safe Links policy configured for mail, Teams and Office'), 'foundational')
+  assert.equal(tierOf('Cloud workload protection plan coverage, a plan-level estimate'), 'foundational')
   assert.equal(tierOf('Diagnostic logging enabled on platform resources'), undefined, 'DR.6 duplicated DR.13 and has no row')
   assert.equal(tierOf('Diagnostic logging enabled on all platform resources'), 'defense')
   // Oct 16, 2026: analytics rules and threat intelligence ingestion are switched on at build, so they are
@@ -1034,9 +1034,9 @@ test('a reading at E that leaves resources out never reads every, all or none, a
   const q = pack(); readings(q); drop(q, 'EW.1', 'EW.1-GAPS', 'NB.4', 'DP.1')
   assert.deepEqual(build(q).pillars.slice(1).map(x => x.headline), [
     'Encryption at host is enabled on 38 of 40 virtual machines, with 2 remaining',
-    'Segmentation covers 29 of 30 workload subnets, with 1 remaining',
+    'A network control is configured on 29 of 30 workload subnets, with 1 remaining',
     'Soft delete protects 19 of 20 Key Vaults, with 1 remaining',
-    'Workload protection covers 195 of 200 eligible resources, with 5 remaining'
+    'Workload protection plans cover an estimated 195 of 200 eligible resources, with 5 remaining'
   ])
   // With nothing left out the same readings earn every and all, and no control counts an exception.
   const full = pack(); alerts(full); settled(full); readings(full, true)

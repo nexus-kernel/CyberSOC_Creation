@@ -812,7 +812,7 @@
     // Network and boundary.
     const nb4 = one('NB.4'), nb1 = one('NB.1'), nb5 = one('NB.5'), nb6 = one('NB.6'), dp1 = one('DP.1')
     const https = control('NB.4', 'Encryption in transit enforced on published web apps', F.network, nb4?.HttpsOnly, nb4?.Sites, 'Web and function apps with the HTTPS-only setting.')
-    const segmentation = control('NB.1', 'Workload subnets protected by segmentation', D.network, nb1?.Segmented, nb1?.WorkloadSubnets, 'Workload subnets with a network security group or a route through the firewall.')
+    const segmentation = control('NB.1', 'Workload subnets with a network security group or firewall route', D.network, nb1?.Segmented, nb1?.WorkloadSubnets, 'Workload subnets with a network security group or a route through the firewall configured. The rules and the traffic they permit are not evaluated.')
     const sqlTls = control('NB.6', 'Transport encryption enforced on Azure SQL', F.network, nb6?.MinTls12, nb6?.Servers, 'Azure SQL servers requiring TLS 1.2 or newer.')
     const appTls = control('NB.5', 'App Service minimum TLS 1.2', F.network, nb5?.MinTls12, nb5?.Configs, 'App Service configurations requiring TLS 1.2 or newer.')
     const publicOff = control('DP.1', 'Storage accounts closed to public networks', D.network, dp1?.PublicNetworkOff, dp1?.Accounts, 'Storage accounts with public network access disabled.')
@@ -840,12 +840,12 @@
     const rbac = control('DP.2', 'Key Vault access governed by role-based access control', D.data, dp2?.RbacAuth, dp2?.Vaults, 'Vaults using the Azure RBAC permission model.')
     const disks = dp3.filter(r => count(r.Disks) !== null)
     const diskTotal = sum(disks, 'Disks'), diskEncrypted = disks.length ? disks.filter(r => /EncryptionAtRest|Encrypted|Customer|Platform/i.test(String(r.EncryptionType))).reduce((n, r) => n + Number(r.Disks), 0) : null
-    control('DP.3', 'Managed disks encrypted at rest', F.data, diskEncrypted, diskTotal, 'Managed disks encrypted with platform or customer managed keys.')
+    control('DP.3', 'Managed disks encrypted at rest', F.data, diskEncrypted, diskTotal, 'Managed disks encrypted with platform or customer managed keys. Platform-managed encryption is on by default in Azure, so this reads the default. Encryption at host is graded separately.')
     const vmTotal = sum(encRows, 'Resources'), noBackup = count(one('DP.5b')?.VmsWithoutBackup)
     const backup = control('DP.5b', 'Azure Backup protecting virtual machines', D.data, vmTotal !== null && noBackup !== null ? Math.max(0, vmTotal - noBackup) : null, vmTotal, `Virtual machines with a protected backup item. Pooled session hosts may be excluded by agreement.${applianceText}`)
     const safeLinks = rows('IA.9-SAFELINKS'), safeAttach = rows('IA.9-SAFEATTACH')
-    inForce('IA.9-SAFELINKS', 'Safe Links scanning on mail, Teams and Office', F.data, has('IA.9-SAFELINKS') ? safeLinks.some(r => [r.EnableSafeLinksForEmail, r.EnableSafeLinksForTeams, r.EnableSafeLinksForOffice].every(v => v === true || String(v).toLowerCase() === 'true')) : null, 'At least one Safe Links policy covers mail, Teams and Office.')
-    inForce('IA.9-SAFEATTACH', 'Safe Attachments blocking malicious files', F.data, has('IA.9-SAFEATTACH') ? safeAttach.some(r => (r.Enable === true || String(r.Enable).toLowerCase() === 'true') && /block|dynamic|replace/i.test(String(r.Action))) : null, 'At least one enabled Safe Attachments policy blocks or replaces malicious attachments.')
+    inForce('IA.9-SAFELINKS', 'Safe Links policy configured for mail, Teams and Office', F.data, has('IA.9-SAFELINKS') ? safeLinks.some(r => [r.EnableSafeLinksForEmail, r.EnableSafeLinksForTeams, r.EnableSafeLinksForOffice].every(v => v === true || String(v).toLowerCase() === 'true')) : null, 'At least one Safe Links policy has Safe Links on for mail, Teams and Office. The recipients it applies to, its exceptions and its rule state are not read.')
+    inForce('IA.9-SAFEATTACH', 'Safe Attachments policy set to block or replace malicious files', F.data, has('IA.9-SAFEATTACH') ? safeAttach.some(r => (r.Enable === true || String(r.Enable).toLowerCase() === 'true') && /block|dynamic|replace/i.test(String(r.Action))) : null, 'At least one enabled Safe Attachments policy is set to block or replace malicious attachments. The recipients it applies to and its exceptions are not read.')
     const zap = rows('DP.7').filter(r => /ZAP|Remediation/i.test(String(r.ActionType)))
     const mailRemoved = zap.length ? sum(zap, 'Succeeded') : null
     m.mailRemoved = mailRemoved
@@ -871,7 +871,7 @@
       .sort((a, b) => b[1] - a[1]).map(([planCode, n]) => ({ n, name: PLAN_NAMES[planCode] || clean(planCode).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() }))
     const planGapText = planGaps.length ? ` Not covered: ${list(planGaps.map(g => `${fmt(g.n)} ${g.name} ${g.n === 1 ? 'resource' : 'resources'}`))}.` : ''
     const planGapShort = planGaps.length ? `${list(planGaps.map(g => `${fmt(g.n)} ${g.name}`))} not covered` : ''
-    const plan = control('DR.2', 'Cloud workload protection across the resource estate', F.detection, sum(rows('DR.2'), 'Covered'), sum(rows('DR.2'), 'Resources'), `Eligible resources on a Standard Defender for Cloud plan, read from the subscription plan configuration.${planGapText}`, { estimate: true, ...(planGapShort ? { gap: planGapShort } : {}) })
+    const plan = control('DR.2', 'Cloud workload protection plan coverage, a plan-level estimate', F.detection, sum(rows('DR.2'), 'Covered'), sum(rows('DR.2'), 'Resources'), `Eligible resources on a Standard Defender for Cloud plan, a plan-level estimate read from the subscription plan configuration.${planGapText}`, { estimate: true, ...(planGapShort ? { gap: planGapShort } : {}) })
     const aiRow = rows('DR.2').find(r => r.Plan === 'AI')
     // DR.6 counts assessment entries and duplicated DR.13, so it no longer has a control row (Oct 12, 2026).
     // Diagnostic logging is graded per resource by DR.13 in defense in depth. DR.6 remains a fallback for the backlog.
@@ -1216,11 +1216,11 @@
     {
       const parts = []
       if (boundaryCount !== null && windowValid) parts.push(boundaryCount > 0 ? `${plural(boundaryCount, 'boundary and egress detection was', 'boundary and egress detections were')} raised and triaged ${m.period.label}.` : `No boundary or egress detections were raised ${m.period.label}.`)
-      if (segmentation.pct !== null) parts.push(`${pctText(segmentation.pct)} of workload subnets have platform, firewall or segmented controls in place${segmentation.pct < E_THRESHOLD ? `, and ${fmt(segmentation.total - segmentation.good)} would benefit from added segmentation` : ''}.`)
+      if (segmentation.pct !== null) parts.push(`${pctText(segmentation.pct)} of workload subnets have a network control configured, a network security group or a firewall route${segmentation.pct < E_THRESHOLD ? `, and ${fmt(segmentation.total - segmentation.good)} have neither` : ''}. The rules themselves are not evaluated.`)
       if (https.pct !== null) parts.push(`${complete(https) ? 'Every published web app enforces HTTPS' : `${fmt(https.good)} of ${fmt(https.total)} published web apps enforce HTTPS`}.`)
       const lead = https.pct !== null ? https : segmentation
-      const headline = band(https, 'Encryption in transit enforced on every published service', `Encryption in transit enforced on ${measureText(https)} published web apps, ${remaining(https)}`, 'Encryption in transit enforced on most published services', 'Transport hardening is sequenced on the roadmap') || band(segmentation, 'Segmentation enforced across workload subnets', `Segmentation covers ${measureText(segmentation)} workload subnets, ${remaining(segmentation)}`, 'Segmentation covers most workload subnets', 'Segmentation is the network priority on the roadmap') || 'Boundary detections investigated to a documented disposition'
-      pillar(G.network, headline, parts.join(' ') || 'Network readings are completed in the review.', segmentation.pct !== null ? { ...segmentation, label: 'Workload subnets segmented' } : https, boundaryCount !== null ? { value: fmt(boundaryCount), label: 'boundary detections triaged' } : https.pct !== null ? { value: measureText(https), label: 'web apps enforcing HTTPS' } : null, lead.source)
+      const headline = band(https, 'Encryption in transit enforced on every published service', `Encryption in transit enforced on ${measureText(https)} published web apps, ${remaining(https)}`, 'Encryption in transit enforced on most published services', 'Transport hardening is sequenced on the roadmap') || band(segmentation, 'Every workload subnet has a network control configured', `A network control is configured on ${measureText(segmentation)} workload subnets, ${remaining(segmentation)}`, 'Most workload subnets have a network control configured', 'Segmentation is the network priority on the roadmap') || 'Boundary detections investigated to a documented disposition'
+      pillar(G.network, headline, parts.join(' ') || 'Network readings are completed in the review.', segmentation.pct !== null ? { ...segmentation, label: 'Workload subnets with a network control configured' } : https, boundaryCount !== null ? { value: fmt(boundaryCount), label: 'boundary detections triaged' } : https.pct !== null ? { value: measureText(https), label: 'web apps enforcing HTTPS' } : null, lead.source)
     }
     {
       const parts = []
@@ -1248,7 +1248,7 @@
         if (a.unclassified > 0) parts.push(`${plural(a.unclassified, 'closed alert carries', 'closed alerts carry')} no recorded classification.`)
       }
       if (m.response) parts.push(`High severity alerts closed at a median of ${m.response.median.value}.${m.response.median.belowFloor ? ` ${m.response.notes[0]}` : ''}`)
-      if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
+      if (plan.pct !== null) parts.push(`Standard workload protection plans cover an estimated ${pctText(plan.pct)} of eligible resources, a plan-level estimate from the subscription plan configuration.`)
       if (ruleControl.mark && ruleEnabled > 0) parts.push(`${fmt(ruleEnabled)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
       // The disposition statement says every alert, so it needs a complete DR.10 reading of every workspace and an
       // OUT.1 reading with no open alert and no unclassified closure. Open alerts at collection lead the
@@ -1266,11 +1266,11 @@
         : dispositionLed && complete(dispositions) && m.alerts.unclassified === 0 ? 'Every alert closed with a documented disposition'
         : dispositionLed ? `${measureText(dispositions)} alerts closed in the last 30 days carry a documented disposition`
         : `${plural(m.alerts.triaged, 'alert', 'alerts')} triaged ${m.period.label}`
-      const headline = disposition || band(plan, 'Workload protection covers the resource estate', `Workload protection covers ${measureText(plan)} eligible resources, ${remaining(plan)}`, 'Workload protection covers most of the resource estate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
+      const headline = disposition || band(plan, 'Workload protection plans cover the resource estate, a plan-level estimate', `Workload protection plans cover an estimated ${measureText(plan)} eligible resources, ${remaining(plan)}`, 'Workload protection plans cover most of the resource estate, a plan-level estimate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
       // When DR.10 earns the statement the source line cites it beside OUT.1, so the statement traces to its evidence.
       // A reviewed open alert split in the narrative cites its record as well.
       const detectionSource = !m.alerts ? plan.source : [m.alerts.source, dispositionLed ? dispositions.source : '', m.alerts.openSplit ? m.alerts.openSplit.source : ''].filter(Boolean).join(' ')
-      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : null, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, detectionSource)
+      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection, plan-level estimate' } : null, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, detectionSource)
     }
 
     // Executive summary tiles and tiers.
