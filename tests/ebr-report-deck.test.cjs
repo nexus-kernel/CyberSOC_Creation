@@ -282,12 +282,20 @@ test('the pillar slide never cuts the endpoint reconciliation when EW.1-GAPS rep
 // Issue #24: a pack whose patch cadence reads 2 of 2 with 18 machines excluded by tag, and one without a small sample.
 // The register flags the row, and every tier total on the deck names the small sample beside it and still fits.
 test('the deck names a small sample beside every tier total and flags it on the register, and every box still fits', async () => {
-  const build = withSmall => {
+  const build = (withSmall, dense = false) => {
     const p = pack('balanced')
     const set = (id, rows) => { p.manifest = p.manifest.filter(r => r.ResultId !== id); p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-08T10:00:00Z' }); p.results[id] = rows }
     set('DP.2', [{ Vaults: 40, SoftDelete: 40, PurgeProtection: 0, RbacAuth: 30 }])
     set('EW.10', withSmall ? [{ Machines: 2, WithinCadence: 2 }] : [{ Machines: 70, WithinCadence: 68 }])
-    if (withSmall) set('EW.10-EXCLUDED', [{ Machines: 18 }])
+    if (withSmall) set('EW.10-EXCLUDED', [{ Machines: dense ? 1 : 18 }])
+    // A three-machine tenant: every endpoint ratio is on a small sample at once, the densest register the flag makes.
+    if (dense) {
+      const vm = (Devices, Compliant, extra = {}) => [{ Scope: 'Azure VM', OSPlatform: 'WindowsServer2022', Devices, Compliant, ...extra }]
+      set('EW.1', [{ Scope: 'Azure VM', OSPlatform: 'WindowsServer2022', Devices: 3, Onboarded: 3, CanBeOnboarded: 0, SensorActive: 3 }])
+      set('DR.5', [{ Scope: 'Azure VM', Onboarded: 3, Assessed: 3 }])
+      set('EW.3', vm(3, 3, { ConfigurationName: 'Turn on real-time protection' })); set('EW.15', vm(3, 3)); set('EW.16', vm(3, 2)); set('EW.12', vm(3, 2)); set('EW.14', vm(3, 3))
+      set('EW.7', [{ VMs: 3, TrustedLaunchOrCvm: 2 }]); set('DP.4', [{ Resources: 3, WithEncryptionAtHost: 3 }]); set('DP.5b', [{ VmsWithoutBackup: 1 }])
+    }
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
     fs.writeFileSync(dataFile, JSON.stringify(p))
     execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
@@ -298,9 +306,10 @@ test('the deck names a small sample beside every tier total and flags it on the 
   const slides = async out => { const zip = await JSZip.loadAsync(fs.readFileSync(out)); return Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string'))) }
   const xmls = await slides(build(true))
   const all = xmls.map(plain).join(' ')
-  // The register: the flag rides on the label line, the populations on the detail line, and the tier count names it.
+  // The register: the flag rides on the figure, the populations on the detail line, and the tier count names it.
   const reg = xmls.find(x => x.includes('Operating system findings remediated within the patch cadence register label'))
-  assert.match(plain(reg), /Operating system findings remediated within the patch cadence\s+· small sample\s+2 assessed · 18 excluded by tag\s+2 of 2/)
+  assert.match(plain(reg), /Operating system findings remediated within the patch cadence\s+2 assessed · 18 excluded by tag\s+2 of 2\s+· small sample/)
+  assert.equal(box(reg, 'Operating system findings remediated within the patch cadence register value').text.replace(/\s+/g, ' '), '2 of 2 · small sample')
   assert.equal(box(reg, 'Endpoint and workload foundational count').text, '1 of 1 (1 on a small sample)')
   for (const x of xmls.filter(x => x.includes('register rule'))) for (const r of x.matchAll(/name="([^"]*) register rule"[\s\S]*?<a:off x="\d+" y="(\d+)"\/>/g)) assert.ok(Number(r[2]) <= 7.2 * EMU, `"${r[1]}" ends at ${(Number(r[2]) / EMU).toFixed(2)} in`)
   // The posture matrix: the pillar count and the all pillars total carry a second line, above the meter.
@@ -317,6 +326,12 @@ test('the deck names a small sample beside every tier total and flags it on the 
   assert.match(all, /\d+ of \d+ foundational enforced, 1 on a small sample/)
   // Without a small sample nothing is annotated.
   assert.ok(!/small sample/.test((await slides(build(false))).map(plain).join(' ')))
+  // The dense tenant: ten flagged endpoint rows, and every register row still ends inside 7.2 in. Before the flag moved
+  // to the value column its label suffix wrapped the long endpoint labels and the A1 register ended near 7.35 in.
+  const dense = await slides(build(true, true))
+  const a1 = dense.find(x => x.includes('Operating system findings remediated within the patch cadence register label'))
+  assert.equal([...a1.matchAll(/register value"[\s\S]*?<\/p:sp>/g)].filter(v => plain(v[0]).includes('small sample')).length, 10)
+  for (const x of dense.filter(x => x.includes('register rule'))) for (const r of x.matchAll(/name="([^"]*) register rule"[\s\S]*?<a:off x="\d+" y="(\d+)"\/>/g)) assert.ok(Number(r[2]) <= 7.2 * EMU, `dense: "${r[1]}" ends at ${(Number(r[2]) / EMU).toFixed(2)} in`)
 })
 test('the control register counts the exceptions of a control at E on its label line and every column still fits', async () => {
   const p = pack('balanced')

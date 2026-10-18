@@ -644,11 +644,15 @@ async function main() {
     pres.addSection({ title: 'Appendix' })
     const legend = 'E enforced, 90% or more · P partial, 50 to 89%, or a scoped policy whatever its ratio · N not yet enforced · – not gathered'
     const VALUE_W = 1.55
-    // The exception count of a control at E, and the small sample flag (issue #24), ride on its label line, so they add
-    // a line only when they wrap there.
-    const suffix = c => [c.exceptionText, c.sampleText].filter(Boolean).map(t => ` · ${t}`).join('')
+    // The exception count of a control at E rides on its label line, so it adds a line only when it wraps there. The
+    // small sample flag (issue #24) rides on the figure in the value column, "3 of 3 · small sample", so it never
+    // lengthens the label. Where the two do not fit one line (Arial widths, bold figure), the flag goes under the figure
+    // and the row takes two lines.
+    const suffix = c => c.exceptionText ? ` · ${c.exceptionText}` : ''
+    const SAMPLE_SEP = ' · '
+    const sampleInline = (c, size) => c.valueText.length * size / 72 * 0.55 + (SAMPLE_SEP + c.sampleText).length * (size - 1) / 72 * 0.46 <= VALUE_W
     const lineH = size => ({ 12: 0.215, 11: 0.2 })[size] || 0.185
-    const rowLines = (c, labelW, size) => Math.min(suffix(c) ? 3 : 2, lines(c.label + suffix(c), labelW, size)) + (c.detail ? lines(c.detail, labelW, size - 1) : 0)
+    const rowLines = (c, labelW, size) => Math.max(c.sampleText && !sampleInline(c, size) ? 2 : 1, Math.min(suffix(c) ? 3 : 2, lines(c.label + suffix(c), labelW, size)) + (c.detail ? lines(c.detail, labelW, size - 1) : 0))
     // The largest size at which every column fits, down to 10 pt.
     const registerSize = (regs, w) => {
       const labelW = w - 0.55 - VALUE_W
@@ -680,7 +684,9 @@ async function main() {
           const runs = [{ text: c.label, options: { fontSize: size, color: C.text1 } }, ...(suffix(c) ? [{ text: suffix(c), options: { fontSize: size - 1, color: C.accent6 } }] : [])]
           if (c.detail) { runs[runs.length - 1].options.breakLine = true; runs.push({ text: c.detail, options: { fontSize: size - 1, color: C.accent6 } }) }
           text(sl, runs.length > 1 ? runs : c.label, { x: x + 0.48, y, w: labelW, h, fontSize: size, color: C.text1, valign: 'middle', objectName: `${c.label} register label` })
-          text(sl, c.valueText, { x: x + w - VALUE_W, y, w: VALUE_W, h, fontSize: size, bold: !!c.mark, color: c.mark ? C.text2 : C.accent6, align: 'right', valign: 'middle', objectName: `${c.label} register value` })
+          const inline = c.sampleText && sampleInline(c, size)
+          const value = c.sampleText ? [{ text: c.valueText, options: { fontSize: size, bold: true, color: C.text2, breakLine: !inline } }, { text: `${inline ? SAMPLE_SEP : ''}${c.sampleText}`, options: { fontSize: size - 1, color: C.accent6 } }] : c.valueText
+          text(sl, value, { x: x + w - VALUE_W, y, w: VALUE_W, h, fontSize: size, bold: !!c.mark && !c.sampleText, color: c.mark ? C.text2 : C.accent6, align: 'right', valign: 'middle', objectName: `${c.label} register value` })
           rule(sl, x, y + h + 0.005, w, HEX.track, 0.5, `${c.label} register rule`)
           y += h + 0.01
         })
