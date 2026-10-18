@@ -983,3 +983,24 @@ test('workload protection reads as a plan-level estimate and subnets as configur
   for (const t of all) for (const hit of t.match(/[^.]*[Ww]orkload protection (plans )?covers?[^.]*/g) || []) assert.match(hit, /estimate/, hit)
   assert.ok(!all.some(t => /subnets segmented|Segmentation covers|Workload subnets protected|scanning on mail|across the resource estate/.test(t)), 'no outcome wording for configuration presence')
 })
+test('the controls standard cards for the configuration-presence controls hold their label and note (issue #26)', async () => {
+  // The builder sizes every card on a page to the fullest one, capped by the space on the slide, so a note that
+  // outgrows the cap runs past its card. The same estimate the builder uses must fit the text box it was given.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-standard-')), out = path.join(dir, 'standard.pptx')
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-controls-deck.cjs'), out])
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  const xml = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).join('\n')
+  const m = build({ parameters: { ClientName: 'MXDR controls standard' }, manifest: [], results: {}, standard: true })
+  const EMU = 914400
+  const ids = ['NB.1', 'DR.2', 'DP.3', 'IA.9-SAFELINKS', 'IA.9-SAFEATTACH']
+  for (const id of ids) {
+    const c = m.controls.find(x => x.source.includes(id) && (id !== 'NB.1' || /^Workload subnets/.test(x.label)) && (id !== 'DR.2' || /^Cloud workload/.test(x.label)))
+    assert.ok(c, id)
+    const name = c.label.replace(/&/g, '&amp;')
+    const box = [...xml.matchAll(/name="[A-Z]\d+ ([^"]+)"[\s\S]*?<a:ext cx="(\d+)" cy="(\d+)"\/>/g)].find(x => x[1] === name)
+    assert.ok(box, `${c.label} has a card`)
+    const w = Number(box[2]) / EMU, h = Number(box[3]) / EMU
+    const textH = lines(c.label, w, 14, true) * 0.245 + 0.08 + lines(c.note, w, 12) * 0.2
+    assert.ok(textH + 0.1 <= h + 1e-6, `${c.label}: needs ${textH.toFixed(2)} in, card text box ${h.toFixed(2)} in`)
+  }
+})

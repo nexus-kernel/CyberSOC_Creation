@@ -558,7 +558,7 @@ test('every control is placed in a pillar and a tier that follows the controls b
   assert.equal(tierOf('Key Vault purge protection'), 'foundational')
   assert.equal(tierOf('Key Vault access governed by role-based access control'), 'defense')
   assert.equal(tierOf('Azure Backup protecting virtual machines'), 'defense')
-  assert.equal(tierOf('Safe Links policy configured for mail, Teams and Office'), 'foundational')
+  assert.equal(tierOf('Safe Links policy set for mail, Teams and Office'), 'foundational')
   assert.equal(tierOf('Cloud workload protection plan coverage, a plan-level estimate'), 'foundational')
   assert.equal(tierOf('Diagnostic logging enabled on platform resources'), undefined, 'DR.6 duplicated DR.13 and has no row')
   assert.equal(tierOf('Diagnostic logging enabled on all platform resources'), 'defense')

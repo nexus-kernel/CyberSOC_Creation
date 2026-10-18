@@ -556,7 +556,7 @@ test('the configuration-presence controls keep their short name, tier, roadmap i
     ['NB.1', 'Workload subnets with a network security group or firewall route', 'defense', 'subnet segmentation', 'segment'],
     ['DR.2', 'Cloud workload protection plan coverage, a plan-level estimate', 'foundational', 'workload protection', 'workload'],
     ['DP.3', 'Managed disks encrypted at rest', 'foundational', 'disk encryption at rest', null],
-    ['IA.9-SAFELINKS', 'Safe Links policy configured for mail, Teams and Office', 'foundational', 'Safe Links', null],
+    ['IA.9-SAFELINKS', 'Safe Links policy set for mail, Teams and Office', 'foundational', 'Safe Links', null],
     ['IA.9-SAFEATTACH', 'Safe Attachments policy set to block or replace malicious files', 'foundational', 'Safe Attachments', null]
   ]
   for (const [id, label, tier, name, item] of expected) {
@@ -570,9 +570,9 @@ test('the configuration-presence controls keep their short name, tier, roadmap i
   const note = id => m.controls.find(x => x.source.includes(id)).note
   assert.match(note('NB.1'), /The rules and the traffic they permit are not evaluated\./)
   assert.match(note('DR.2'), /a plan-level estimate read from the subscription plan configuration/)
-  assert.match(note('DP.3'), /Platform-managed encryption is on by default in Azure, so this reads the default\. Encryption at host is graded separately\./)
-  assert.match(note('IA.9-SAFELINKS'), /The recipients it applies to, its exceptions and its rule state are not read\./)
-  assert.match(note('IA.9-SAFEATTACH'), /The recipients it applies to and its exceptions are not read\./)
+  assert.match(note('DP.3'), /^Platform keys, the Azure default, or customer managed keys\. Encryption at host is graded separately\.$/)
+  assert.match(note('IA.9-SAFELINKS'), /Recipients, exceptions and rule state are not read\./)
+  assert.match(note('IA.9-SAFEATTACH'), /Scope and exceptions are not read\./)
   // Below E, NB.1 lands on the segmentation item in Later and DR.2 is foundational drift in Now.
   const segment = s.roadmap.flatMap(h => h.items).find(i => i.key === 'segment')
   assert.ok(segment.controls.some(c => c.label === expected[0][1]), 'NB.1 is on the segmentation item')
