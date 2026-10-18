@@ -26,7 +26,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { createDeck, writeDeck, lines, HEX, X0, CW } = require('./deck-common.cjs')
-const { build, fmt, clean, pctText, plural, RETIREMENT } = require('./report-model.js')
+const { build, fmt, clean, pctText, plural, RETIREMENT, smallSampleText } = require('./report-model.js')
 const { buildStory, shortName } = require('./report-story.js')
 
 const [dataFile, outFile] = process.argv.slice(2)
@@ -105,7 +105,8 @@ async function main() {
   const tierLabel = r => { const hit = TIER_SHORT.find(([re]) => re.test(r.label)); if (hit) return hit[1]; return /^TIER\./.test(r.id) ? r.label : sentence(shortName(r)) }
   const tierDefs = [['outcomes', 'Tier 1 · Outcomes', 'Did the program hold'], ['controls', 'Tier 2 · Control effectiveness', 'What is actually enforced'], ['hardening', 'Tier 3 · Hardening next', 'Proposed in priority order'], ['benchmark', 'Tier 4 · Vendor benchmark', 'Context, not the objective']]
   const tierPad = 0.25, tierGap = 0.3, tierW = (CW - 2 * tierPad - 3 * tierGap) / 4, tierValueW = 0.8, tierLabelW = tierW - tierValueW - 0.05
-  const tierRows = tierDefs.map(([key]) => m.tiers[key].slice(0, 3).map(r => ({ ...r, short: tierLabel(r) })))
+  // A tier count that holds a control on a small sample names it beside the label, as the HTML does (issue #24).
+  const tierRows = tierDefs.map(([key]) => m.tiers[key].slice(0, 3).map(r => ({ ...r, short: `${tierLabel(r)}${r.note ? ` (${r.note})` : ''}` })))
   const tierRowH = r => Math.min(2, lines(r.short, tierLabelW, 9)) * 0.16 + 0.09
   const tierBodyH = Math.max(0.27, ...tierRows.map(rows => rows.reduce((n, r) => n + tierRowH(r), 0)))
   const tierH = 0.42 + 0.48 + tierBodyH + 0.12
@@ -371,7 +372,11 @@ async function main() {
       text(s, r.group, { x: cx[0], y, w: cols[0] - 0.15, h: rh - 0.08, fontSize: 15, bold: true, color: C.text2, valign: 'middle', objectName: `${r.group} name` })
       ;[[r.foundational, 1, r.foundational.measured && r.foundational.enforced === r.foundational.measured ? C.accent3 : C.accent4], [r.defense, 2, C.accent2]].forEach(([t, col, fill]) => {
         const tier = col === 1 ? 'foundational' : 'defense'
-        text(s, t.measured ? `${t.enforced} of ${t.measured}` : 'Not measured', { x: cx[col], y: y + 0.1, w: cols[col] - 0.2, h: 0.32, fontSize: t.measured ? 15 : 12, bold: !!t.measured, color: t.measured ? C.text2 : C.accent6, objectName: `${r.group} ${tier} count` })
+        // A count holding a control on a small sample names it on a second line, above the meter (issue #24). The box
+        // takes the column to 0.12 in short of the next, still clear of the headline band, so the line never wraps.
+        const count = t.measured ? `${t.enforced} of ${t.measured}` : 'Not measured'
+        if (t.small) text(s, [{ text: count, options: { fontSize: 15, bold: true, color: C.text2, breakLine: true } }, { text: smallSampleText(t.small), options: { fontSize: 9, color: C.accent6 } }], { x: cx[col], y: y + 0.03, w: cols[col] - 0.12, h: 0.42, objectName: `${r.group} ${tier} count` })
+        else text(s, count, { x: cx[col], y: y + 0.1, w: cols[col] - 0.2, h: 0.32, fontSize: t.measured ? 15 : 12, bold: !!t.measured, color: t.measured ? C.text2 : C.accent6, objectName: `${r.group} ${tier} count` })
         if (t.measured) meter(s, cx[col], y + 0.47, cols[col] - 0.25, t.pct, fill, `${r.group} ${tier}`)
       })
       text(s, r.measure ? measureRuns(r.measure) : 'Readings completed in the review', { x: cx[3], y, w: cols[3] - 0.15, h: rh - 0.08, fontSize: 10.5, color: C.accent6, valign: 'middle', objectName: `${r.group} measure` })
@@ -380,8 +385,10 @@ async function main() {
     const ay = TOP + 0.6 + st.matrix.length * rh + 0.05
     card(s, X0, ay, mw, BOTTOM - ay, 'All pillars card')
     text(s, 'All pillars', { x: cx[0] + 0.15, y: ay, w: cols[0], h: BOTTOM - ay, fontSize: 15, bold: true, color: C.text2, valign: 'middle', objectName: 'All pillars name' })
-    text(s, st.foundational.measured ? `${st.foundational.enforced} of ${st.foundational.measured}` : '–', { x: cx[1], y: ay, w: cols[1], h: BOTTOM - ay, fontSize: 20, bold: true, color: C.accent2, valign: 'middle', objectName: 'All pillars foundational' })
-    text(s, st.defense.measured ? `${st.defense.enforced} of ${st.defense.measured}` : '–', { x: cx[2], y: ay, w: cols[2], h: BOTTOM - ay, fontSize: 20, bold: true, color: C.accent2, valign: 'middle', objectName: 'All pillars defense' })
+    // Bold rides on the figure run, so the small sample line under it reads as a note.
+    const allCount = t => [{ text: t.measured ? `${t.enforced} of ${t.measured}` : '–', options: { fontSize: 20, bold: true, color: C.accent2, breakLine: !!t.small } }, ...(t.small ? [{ text: smallSampleText(t.small), options: { fontSize: 9, color: C.accent6 } }] : [])]
+    text(s, allCount(st.foundational), { x: cx[1], y: ay, w: cols[1], h: BOTTOM - ay, fontSize: 20, color: C.accent2, valign: 'middle', objectName: 'All pillars foundational' })
+    text(s, allCount(st.defense), { x: cx[2], y: ay, w: cols[2], h: BOTTOM - ay, fontSize: 20, color: C.accent2, valign: 'middle', objectName: 'All pillars defense' })
     text(s, 'Foundational and defense in depth controls enforced, of those measured', { x: cx[3], y: ay, w: cols[3] - 0.1, h: BOTTOM - ay, fontSize: 11, color: C.accent6, valign: 'middle', objectName: 'All pillars note' })
     // Drift panel.
     const px = X0 + mw + 0.4, pw = CW - mw - 0.4
@@ -445,7 +452,7 @@ async function main() {
         const y = TOP + i * prow
         if (i) rule(s, X0, y - 0.04, CW, HEX.track, 0.75, `${p.name} outcome rule`)
         const reg = st.matrix.find(r => r.group === p.name)
-        text(s, [{ text: p.name, options: { fontSize: 14, bold: true, color: C.text2, breakLine: true } }, { text: reg && reg.foundational.measured ? `${reg.foundational.enforced} of ${reg.foundational.measured} foundational enforced` : 'Readings completed in the review', options: { fontSize: 10, color: C.accent6, paraSpaceBefore: 3 } }], { x: X0, y: y + 0.06, w: nameW, h: prow - 0.12, objectName: `${p.name} outcome name` })
+        text(s, [{ text: p.name, options: { fontSize: 14, bold: true, color: C.text2, breakLine: true } }, { text: reg && reg.foundational.measured ? `${reg.foundational.enforced} of ${reg.foundational.measured} foundational enforced${reg.foundational.small ? `, ${smallSampleText(reg.foundational.small)}` : ''}` : 'Readings completed in the review', options: { fontSize: 10, color: C.accent6, paraSpaceBefore: 3 } }], { x: X0, y: y + 0.06, w: nameW, h: prow - 0.12, objectName: `${p.name} outcome name` })
         const room = prow - 0.14, keep = new Set(sentences(p.keep)), wideW = CW - nameW - 0.2
         const needs = (head, w, size, body) => lines(head, w, 11, true) * 0.18 + lines(body, w, size) * size * 0.0165 + 0.05
         // Drops the last sentence that is neither the first nor kept until the row fits or nothing else can go.
@@ -637,8 +644,9 @@ async function main() {
     pres.addSection({ title: 'Appendix' })
     const legend = 'E enforced, 90% or more · P partial, 50 to 89%, or a scoped policy whatever its ratio · N not yet enforced · – not gathered'
     const VALUE_W = 1.55
-    // The exception count of a control at E rides on its label line, so it adds a line only when it wraps there.
-    const suffix = c => c.exceptionText ? ` · ${c.exceptionText}` : ''
+    // The exception count of a control at E, and the small sample flag (issue #24), ride on its label line, so they add
+    // a line only when they wrap there.
+    const suffix = c => [c.exceptionText, c.sampleText].filter(Boolean).map(t => ` · ${t}`).join('')
     const lineH = size => ({ 12: 0.215, 11: 0.2 })[size] || 0.185
     const rowLines = (c, labelW, size) => Math.min(suffix(c) ? 3 : 2, lines(c.label + suffix(c), labelW, size)) + (c.detail ? lines(c.detail, labelW, size - 1) : 0)
     // The largest size at which every column fits, down to 10 pt.
@@ -660,7 +668,8 @@ async function main() {
       tiers.forEach(([key, label, rows]) => {
         const measured = rows.filter(c => c.mark)
         text(sl, label.toUpperCase(), { x, y, w: w * 0.7, h: 0.3, fontSize: 11, bold: true, color: C.accent2, charSpacing: 1.5, objectName: `${reg.group} ${key} label` })
-        text(sl, measured.length ? `${measured.filter(c => c.mark === 'E').length} of ${measured.length}` : '', { x: x + w * 0.6, y, w: w * 0.4, h: 0.3, fontSize: 11, bold: true, color: C.accent2, align: 'right', objectName: `${reg.group} ${key} count` })
+        const smallRows = measured.filter(c => c.smallSample).length
+        text(sl, measured.length ? `${measured.filter(c => c.mark === 'E').length} of ${measured.length}${smallRows ? ` (${smallSampleText(smallRows)})` : ''}` : '', { x: x + w * 0.45, y, w: w * 0.55, h: 0.3, fontSize: 11, bold: true, color: C.accent2, align: 'right', objectName: `${reg.group} ${key} count` })
         rule(sl, x, y + 0.33, w, C.text2, 1, `${reg.group} ${key} rule`)
         y += 0.42
         rows.forEach(c => {
@@ -678,7 +687,7 @@ async function main() {
         y += 0.1
       })
     }
-    const regNotes = regs => notesOf(['Reference.', regs.map(r => [...r.foundational, ...r.defense].map(c => `${c.label}: ${c.valueText}${c.exceptionText ? `, ${c.exceptionText}` : ''}. ${c.note}`))])
+    const regNotes = regs => notesOf(['Reference.', regs.map(r => [...r.foundational, ...r.defense].map(c => `${c.label}: ${c.valueText}${c.exceptionText ? `, ${c.exceptionText}` : ''}${c.sampleText ? `, ${c.sampleText}` : ''}. ${c.note}`))])
     const half = (CW - 0.4) / 2
     ;[[0, 1, 'A1', 'identity and endpoint'], [2, 3, 'A2', 'network and data']].forEach(([a, b, code, name]) => {
       s = content('Appendix', `Control register: ${name}`, `Appendix ${code} · ${legend}`)

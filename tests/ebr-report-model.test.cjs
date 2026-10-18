@@ -571,8 +571,8 @@ test('every control is placed in a pillar and a tier that follows the controls b
   assert.equal(tierOf('Defender for Identity sensors healthy on domain controllers'), 'defense')
   const sensors = m.controls.find(c => c.label === 'Endpoint sensors active on onboarded Azure virtual machines')
   assert.equal(sensors.tier, 'foundational'); assert.equal(sensors.group, 'Detection and response')
-  assert.deepEqual(m.tierSummary.foundational, { label: 'Foundational', enforced: 0, measured: 0, total: m.controls.filter(c => c.tier === 'foundational').length })
-  assert.deepEqual(m.tierSummary.defense, { label: 'Defense in depth', enforced: 0, measured: 0, total: m.controls.filter(c => c.tier === 'defense').length })
+  assert.deepEqual(m.tierSummary.foundational, { label: 'Foundational', enforced: 0, measured: 0, small: 0, total: m.controls.filter(c => c.tier === 'foundational').length })
+  assert.deepEqual(m.tierSummary.defense, { label: 'Defense in depth', enforced: 0, measured: 0, small: 0, total: m.controls.filter(c => c.tier === 'defense').length })
   assert.deepEqual(m.tiers.controls, [], 'no tier totals when nothing was measured')
 })
 test('the Detection and response pillar swaps two controls each way, so its tier counts and the totals hold', () => {
@@ -635,9 +635,10 @@ test('tier totals lead the executive control tier and foundational drift gets a 
   put(p, 'DP.2', [{ Vaults: 6, SoftDelete: 6, PurgeProtection: 0, RbacAuth: 3 }])
   put(p, 'IA.9', [{ Enabled: true, EnableTargetedUserProtection: true, EnableOrganizationDomainsProtection: true, EnableMailboxIntelligenceProtection: true, EnableSpoofIntelligence: true }])
   const m = build(p)
-  assert.deepEqual(m.tierSummary.foundational, { label: 'Foundational', enforced: 2, measured: 3, total: m.tierSummary.foundational.total })
-  assert.deepEqual(m.tierSummary.defense, { label: 'Defense in depth', enforced: 1, measured: 2, total: m.tierSummary.defense.total })
-  assert.deepEqual(m.tiers.controls.slice(0, 2).map(r => [r.label, r.value, r.id]), [['Foundational controls enforced', '2 of 3', 'TIER.FOUNDATIONAL'], ['Defense in depth controls enforced', '1 of 2', 'TIER.DEFENSE']])
+  // Six vaults is a small sample: the Key Vault rows keep their marks and their place in the counts, which name them.
+  assert.deepEqual(m.tierSummary.foundational, { label: 'Foundational', enforced: 2, measured: 3, small: 2, total: m.tierSummary.foundational.total })
+  assert.deepEqual(m.tierSummary.defense, { label: 'Defense in depth', enforced: 1, measured: 2, small: 1, total: m.tierSummary.defense.total })
+  assert.deepEqual(m.tiers.controls.slice(0, 2).map(r => [r.label, r.value, r.id, r.note]), [['Foundational controls enforced', '2 of 3', 'TIER.FOUNDATIONAL', '2 on a small sample'], ['Defense in depth controls enforced', '1 of 2', 'TIER.DEFENSE', '1 on a small sample']])
   assert.ok(m.tiers.controls.length <= 6)
   const drift = m.presenter.find(n => n.title === 'Foundational controls below E')
   assert.ok(drift, 'foundational gap note')
@@ -1400,6 +1401,45 @@ test('the patch cadence note states how many machines a tag left out', () => {
   assert.ok(m.review.some(n => n.title === 'Patch measures' && /EW\.10-EXCLUDED: 5 machines/.test(n.text)))
   put(p, 'EW.10-EXCLUDED', [], 'EMPTY')
   assert.ok(!/left out because a tag/.test(build(p).controls.find(c => c.id === 'EW.10').note))
+})
+// Issue #24: patch cadence 2 of 2 with 18 excluded by tag. The control keeps its E and its place in the tier counts,
+// carries the small sample flag and both populations, and every tier count that holds it names it beside the total.
+test('a small or heavily excluded ratio control is flagged, keeps its mark in the counts, and the counts and the HTML name it', () => {
+  const p = pack()
+  put(p, 'EW.10', [{ Machines: 2, WithinCadence: 2, OverduePatches: 0, AssessedWithin7d: 2 }])
+  put(p, 'EW.10-EXCLUDED', [{ Machines: 18 }])
+  put(p, 'IA.1', [{ UserType: 'Member', UsersSignedIn: 194, UsersChallenged: 180 }])
+  let m = build(p)
+  const patch = m.controls.find(c => c.id === 'EW.10')
+  assert.deepEqual([patch.value, patch.mark, patch.smallSample, patch.excluded, patch.populations], ['2 of 2', 'E', true, 18, '2 assessed · 18 excluded by tag'])
+  assert.match(patch.note, /18 machines are left out because a tag records patching as waived or client owned\. Atmosera reviews these tags with your team at each business review\.$/)
+  assert.ok(!/confirm/i.test(patch.note), 'the client note never says the tags were confirmed')
+  assert.equal(m.controls.find(c => c.id === 'IA.1').smallSample, false, '194 members is a full sample')
+  // Counted toward enforced and measured by its mark, and named beside the total.
+  assert.deepEqual([m.tierSummary.foundational.enforced, m.tierSummary.foundational.measured, m.tierSummary.foundational.small], [2, 2, 1])
+  assert.deepEqual(m.tiers.controls[0], { label: 'Foundational controls enforced', value: '2 of 2', id: 'TIER.FOUNDATIONAL', note: '1 on a small sample' })
+  const html = renderHtml(p)
+  assert.ok(html.includes('<span>Foundational controls enforced <em class="tier-note">(1 on a small sample)</em></span><strong>2 of 2</strong>'), 'the executive tier names it')
+  assert.ok(html.includes('<span class="tier-count">1 of 1 enforced (1 on a small sample)</span>'), 'the pillar tier count names it')
+  assert.ok(html.includes('title="Enforced, small sample">E</span>'), 'the mark carries the flag')
+  assert.ok(html.includes('<span class="populations">2 assessed · 18 excluded by tag</span><span class="small-sample">E, small sample</span>'), html.match(/.{0,300}excluded by tag.{0,300}/)?.[0])
+  assert.match(html, /marked small sample\. It keeps its mark and its place in the counts/, 'the legend explains the flag')
+  // The excluded rule applies only where the collector records an excluded count: 40 assessed with 50 excluded is
+  // a small sample, 40 assessed with 5 excluded is not, and a ratio of 40 with no excluded count never is.
+  put(p, 'EW.10', [{ Machines: 40, WithinCadence: 40, OverduePatches: 0, AssessedWithin7d: 40 }])
+  put(p, 'EW.10-EXCLUDED', [{ Machines: 50 }])
+  assert.equal(build(p).controls.find(c => c.id === 'EW.10').smallSample, true)
+  put(p, 'EW.10-EXCLUDED', [{ Machines: 5 }])
+  m = build(p)
+  assert.equal(m.controls.find(c => c.id === 'EW.10').smallSample, false)
+  assert.equal(m.tiers.controls[0].note, undefined, 'no annotation without a small sample')
+  assert.ok(!renderHtml(p).includes('class="small-sample"'))
+  put(p, 'EW.10-EXCLUDED', [], 'EMPTY')
+  m = build(p)
+  assert.deepEqual([m.controls.find(c => c.id === 'EW.10').smallSample, m.controls.find(c => c.id === 'EW.10').populations], [false, undefined])
+  // A verified configuration is never on a small sample.
+  put(p, 'IA.9', [{ Enabled: true, EnableTargetedUserProtection: true, EnableOrganizationDomainsProtection: true, EnableMailboxIntelligenceProtection: true, EnableSpoofIntelligence: true }])
+  assert.ok(build(p).controls.filter(c => c.boolean).every(c => !c.smallSample))
 })
 // Shook (shb-com), Oct 13, 2026: the member view of Q3 in docs/Federated MFA Evaluation.md.
 const federatedMember = { UserType: 'Member', UsersSignedIn: 1414, UsersChallenged: 563, UsersAlwaysMfa: 1, UsersExternalMfa: 563, UsersEntraMfa: 60, MfaAtLeastOnce: 563, MfaEveryAppSignIn: 1, CoveredEveryAppSignIn: 5, FederatedMfaAtLeastOnce: 563, FederatedWithoutMfa: 2, NoMfaOnlyUnevaluated: 550, MfaSessionLinkedOnly: 31 }

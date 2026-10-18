@@ -45,6 +45,12 @@
   // Deck thresholds: E at 90 percent or more, P from 50 to 89, N below 50 (set Oct 11, 2026).
   const E_THRESHOLD = 90
   const mark = value => value === null ? null : value >= E_THRESHOLD ? 'E' : value >= 50 ? 'P' : 'N'
+  // A ratio control with fewer resources than this, or with more machines left out by tag than assessed, is on a
+  // small sample: it keeps its mark and its place in the tier counts, which name it beside the total, and it never
+  // leads a pillar or stands as a win. "2 of 2" is accurate but carries no weight beside the figures around it
+  // (Oct 18, 2026, issue #24).
+  const MIN_SAMPLE = 10
+  const smallSampleText = n => `${fmt(n)} on a small sample`
   const bool = value => value === true || String(value ?? '').toLowerCase() === 'true'
   const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`
   // Microsoft retires its own text message and voice delivery in two populations: most users on Feb 1, 2027, and
@@ -442,8 +448,11 @@
       if (!ok) return { ...ungathered(id, label, where, reason(id), note), ...extra }
       // A reading at E can still leave resources out. The register counts them as exceptions, so meeting the
       // threshold and having no exceptions read differently (Oct 15, 2026).
+      // The excluded count is read only where the collector records one (EW.10-EXCLUDED), so the second rule never
+      // fires on a control without it. A verified configuration (inForce) is never on a small sample.
       const grade = mark(pct(good, total))
-      const item = { id, label: clean(label), ...where, good, total, pct: pct(good, total), mark: grade, value: `${fmt(good)} of ${fmt(total)}`, exceptions: grade === 'E' ? total - good : 0, note: clean(note), source: source(id), ...extra }
+      const smallSample = total < MIN_SAMPLE || (count(extra.excluded) ?? 0) > total
+      const item = { id, label: clean(label), ...where, good, total, pct: pct(good, total), mark: grade, value: `${fmt(good)} of ${fmt(total)}`, exceptions: grade === 'E' ? total - good : 0, smallSample, note: clean(note), source: source(id), ...extra }
       m.controls.push(item)
       return item
     }
@@ -789,7 +798,11 @@
     // Machines whose tags record patching as waived or client owned leave the measure (collector 1.14.0).
     const patchExcluded = count(one('EW.10-EXCLUDED')?.Machines)
     const patchExcludedText = patchExcluded > 0 ? ` ${plural(patchExcluded, 'machine is', 'machines are')} left out because a tag records patching as waived or client owned.` : ''
-    const patch = ew10 && count(ew10.Machines) !== null ? control('EW.10', 'Operating system findings remediated within the patch cadence', F.endpoint, ew10.WithinCadence, ew10.Machines, `Machines assessed by Update Manager with no critical or security patch older than the agreed cadence${cadenceText}.${patchExcludedText}`) : (has('EW.10') ? null : control('EW.10', 'Operating system findings remediated within the patch cadence', F.endpoint, null, null, 'Machines assessed by Update Manager with no critical or security patch older than the agreed cadence.'))
+    // The row names both populations, assessed and excluded by tag. Machines Update Manager never assessed are not
+    // counted by EW.10, so no third figure is printed. The tags are reviewed with the client, which the note says
+    // without claiming any tag was confirmed.
+    const patchReviewText = patchExcluded > 0 ? ' Atmosera reviews these tags with your team at each business review.' : ''
+    const patch = ew10 && count(ew10.Machines) !== null ? control('EW.10', 'Operating system findings remediated within the patch cadence', F.endpoint, ew10.WithinCadence, ew10.Machines, `Machines assessed by Update Manager with no critical or security patch older than the agreed cadence${cadenceText}.${patchExcludedText}${patchReviewText}`, patchExcluded > 0 ? { excluded: patchExcluded, populations: `${fmt(ew10.Machines)} assessed · ${fmt(patchExcluded)} excluded by tag` } : {}) : (has('EW.10') ? null : control('EW.10', 'Operating system findings remediated within the patch cadence', F.endpoint, null, null, 'Machines assessed by Update Manager with no critical or security patch older than the agreed cadence.'))
     if (patchExcluded > 0) note('Patch measures', `EW.10-EXCLUDED: ${plural(patchExcluded, 'machine is', 'machines are')} left out of EW.6 and EW.10 because a tag records patching as waived or client owned. The SecOps worklist names them. Confirm that each tag is still intended.`)
     const appControl = one('EW.13')
     if (has('EW.13')) inForce('EW.13', 'Application allow-listing policy assigned', D.endpoint, appControl ? count(appControl.Assigned) > 0 : false, appControl && count(appControl.Policies) > 0 ? `${plural(appControl.Policies, 'App Control for Business policy', 'App Control for Business policies')}, ${fmt(appControl.Assigned)} assigned.` : 'No App Control for Business policy is defined in Intune.')
@@ -1300,12 +1313,14 @@
     const measuredIn = tier => m.controls.filter(c => c.tier === tier && c.measured !== false && c.pct !== null)
     m.tierSummary = Object.fromEntries([['foundational', TIERS.foundational], ['defense', TIERS.defense]].map(([tier, label]) => {
       const items = measuredIn(tier)
-      return [tier, { label, enforced: items.filter(c => c.mark === 'E').length, measured: items.length, total: m.controls.filter(c => c.tier === tier).length }]
+      return [tier, { label, enforced: items.filter(c => c.mark === 'E').length, measured: items.length, small: items.filter(c => c.smallSample).length, total: m.controls.filter(c => c.tier === tier).length }]
     }))
     const drift = measuredIn('foundational').filter(c => c.mark !== 'E')
     if (drift.length) presenter('Foundational controls below E', `${plural(drift.length, 'foundational control reads', 'foundational controls read')} below E: ${list(drift.map(c => `${c.label} (${c.id}, ${c.boolean ? c.value.toLowerCase() + (c.ratioText ? ', ' + c.ratioText : '') : pctText(c.pct)})`))}. The controls baseline expects every foundational control at E at each review, so have a fix date ready for each rather than carrying them on the roadmap. The evidence shows the current reading only, not whether a control was ever enforced before, so say below the baseline, never regressed.`)
-    if (m.tierSummary.foundational.measured) row('controls', 'Foundational controls enforced', `${fmt(m.tierSummary.foundational.enforced)} of ${fmt(m.tierSummary.foundational.measured)}`, 'TIER.FOUNDATIONAL')
-    if (m.tierSummary.defense.measured) row('controls', 'Defense in depth controls enforced', `${fmt(m.tierSummary.defense.enforced)} of ${fmt(m.tierSummary.defense.measured)}`, 'TIER.DEFENSE')
+    // A tier count that holds a control on a small sample names it beside the total (issue #24).
+    const tierRow = (tier, label, id) => { const t = m.tierSummary[tier]; if (!t.measured) return; row('controls', label, `${fmt(t.enforced)} of ${fmt(t.measured)}`, id); if (t.small) m.tiers.controls[m.tiers.controls.length - 1].note = smallSampleText(t.small) }
+    tierRow('foundational', 'Foundational controls enforced', 'TIER.FOUNDATIONAL')
+    tierRow('defense', 'Defense in depth controls enforced', 'TIER.DEFENSE')
     const tierOrder = { E: 0, P: 1, N: 2 }
     for (const c of [mfa, edr, plan, antimalware, vaControl, transfer, softDelete, https, ruleControl, sensors, backup, segmentation].filter(c => c && c.pct !== null).sort((a, b) => tierOrder[a.mark] - tierOrder[b.mark])) {
       if (m.tiers.controls.length >= 6) break
@@ -1337,7 +1352,7 @@
     }
     return m
   }
-  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced' }
+  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, MIN_SAMPLE, smallSampleText, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced' }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.EbrReport = api
 })(typeof globalThis !== 'undefined' ? globalThis : this)
