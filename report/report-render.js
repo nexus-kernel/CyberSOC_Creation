@@ -1,6 +1,6 @@
 (function () {
   'use strict'
-  const { build, fmt, clean, pctText, plural } = EbrReport
+  const { build, fmt, clean, pctText, plural, smallSampleText, MIN_SAMPLE } = EbrReport
   const data = JSON.parse(document.getElementById('report-data').textContent)
   const m = build(data)
   const esc = value => clean(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
@@ -24,7 +24,10 @@
   // A control at E that leaves resources out names its exceptions, so meeting the threshold reads differently from
   // having none left out (Oct 15, 2026).
   const exceptionText = c => c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : ''
-  const markChip = (mark, exceptions = '') => mark ? `<span class="mark mark-${mark.toLowerCase()}" title="${mark === 'E' ? 'Enforced' : mark === 'P' ? 'Partial' : 'Not enforced'}${exceptions ? `, ${esc(exceptions)}` : ''}">${mark}</span>` : ''
+  // A ratio control on a small sample keeps its mark and carries the flag beside it (issue #24).
+  const sampleText = c => c.mark && c.smallSample ? 'small sample' : ''
+  const markChip = (mark, ...flags) => mark ? `<span class="mark mark-${mark.toLowerCase()}" title="${mark === 'E' ? 'Enforced' : mark === 'P' ? 'Partial' : 'Not enforced'}${flags.filter(Boolean).map(f => `, ${esc(f)}`).join('')}">${mark}</span>` : ''
+  const smallNote = n => n ? ` (${smallSampleText(n)})` : ''
   const footer = (number, topic) => `<footer class="page-footer"><span class="wordmark">atmosera<span>.</span></span><span>${esc(m.client)} · ${esc(topic)}</span><span>${number}</span></footer>`
   const heading = (n, title, subtitle) => `<header class="section-heading"><p class="eyebrow">Security business review · ${n}</p><h2>${esc(title)}</h2><p>${esc(subtitle)}</p></header>`
   const scopeLine = `${esc(m.period.label)} · Posture read ${esc(m.readDate)} · ${m.subscriptions} ${m.subscriptions === 1 ? 'subscription' : 'subscriptions'} · ${m.workspaces.length} Sentinel ${m.workspaces.length === 1 ? 'workspace' : 'workspaces'}`
@@ -37,7 +40,7 @@
     ['hardening', 'Tier 3 · What we are hardening next', 'Proposed in priority order'],
     ['benchmark', 'Tier 4 · Vendor benchmark', 'Context, not the objective']
   ]
-  const tiers = tierDefs.map(([key, eyebrow, title]) => `<div class="tier tier-${key}"><p class="eyebrow">${esc(eyebrow)}</p><h3>${esc(title)}</h3>${m.tiers[key].length ? m.tiers[key].map(r => `<div class="tier-row"><span>${esc(r.label)}</span><strong>${esc(r.value)}</strong></div>`).join('') : `<p class="tier-empty">${key === 'hardening' ? 'No open hardening items from this collection.' : 'Readings are completed in the review.'}</p>`}</div>`).join('')
+  const tiers = tierDefs.map(([key, eyebrow, title]) => `<div class="tier tier-${key}"><p class="eyebrow">${esc(eyebrow)}</p><h3>${esc(title)}</h3>${m.tiers[key].length ? m.tiers[key].map(r => `<div class="tier-row"><span>${esc(r.label)}${r.note ? ` <em class="tier-note">(${esc(r.note)})</em>` : ''}</span><strong>${esc(r.value)}</strong></div>`).join('') : `<p class="tier-empty">${key === 'hardening' ? 'No open hardening items from this collection.' : 'Readings are completed in the review.'}</p>`}</div>`).join('')
   const summary = `<section class="page summary-page" id="summary">
     <header class="hero"><p class="eyebrow">Managed security services · Executive business review</p><h1>Security: Executive Summary</h1><div class="hero-rule"></div><p class="hero-client">${esc(m.client)}</p><p class="hero-caption">Managed security, measured in alerts triaged, controls enforced and posture advanced.</p><p class="hero-meta">${scopeLine}</p></header>
     <div class="page-body">
@@ -111,13 +114,15 @@
   const measureText = c => c.boolean ? (c.ratioText ? `${esc(c.ratioText)} · ${pctText(c.pct)}${per(c)}` : '') : c.total > 9999 ? `${esc(c.value)} ${c.per ? esc(c.per.replace(/^of /, '')) : 'sign-ins'}` : `${pctText(c.pct)}${c.estimate ? ' estimated' : ''}${per(c)}`
   const gapText = c => c.gap ? `<span class="gap">${esc(c.gap)}</span>` : ''
   const exceptionsLine = c => exceptionText(c) ? `<span class="exceptions">${esc(exceptionText(c))}</span>` : ''
-  const controlRow = c => c.na ? naRow(c) : c.measured === false ? nullRow(c) : `<div class="control-row">${markChip(c.mark, exceptionText(c))}<div class="control-text"><h4>${esc(c.label)}</h4><p>${esc(c.note)}</p>${source(c.source)}</div><div class="control-measure"><strong>${esc(c.boolean ? c.value : c.total > 9999 ? pctText(c.pct) : c.value)}</strong>${c.boolean && !c.ratioText ? '' : bar(c.pct, `${c.label}: ${c.ratioText || c.value}`, c.mark === 'E' ? 'green' : c.mark === 'N' ? 'amber' : '')}<span>${measureText(c)}</span>${exceptionsLine(c)}${gapText(c)}</div></div>`
+  const sampleLine = c => sampleText(c) ? `<span class="small-sample">${esc(c.mark)}, ${esc(sampleText(c))}</span>` : ''
+  const populationsLine = c => c.populations ? `<span class="populations">${esc(c.populations)}</span>` : ''
+  const controlRow = c => c.na ? naRow(c) : c.measured === false ? nullRow(c) : `<div class="control-row">${markChip(c.mark, exceptionText(c), sampleText(c))}<div class="control-text"><h4>${esc(c.label)}</h4><p>${esc(c.note)}</p>${source(c.source)}</div><div class="control-measure"><strong>${esc(c.boolean ? c.value : c.total > 9999 ? pctText(c.pct) : c.value)}</strong>${c.boolean && !c.ratioText ? '' : bar(c.pct, `${c.label}: ${c.ratioText || c.value}`, c.mark === 'E' ? 'green' : c.mark === 'N' ? 'amber' : '')}<span>${measureText(c)}</span>${populationsLine(c)}${exceptionsLine(c)}${sampleLine(c)}${gapText(c)}</div></div>`
   // Each pillar shows its foundational controls on the left and its defense in depth controls on the right.
   const tierCols = [['foundational', 'Foundational'], ['defense', 'Defense in depth']]
   const tierCol = (items, tier, label) => {
     const rows = items.filter(c => c.tier === tier)
     const measured = rows.filter(c => c.measured !== false && c.pct !== null)
-    const count = measured.length ? `${measured.filter(c => c.mark === 'E').length} of ${measured.length} enforced` : rows.length && rows.every(c => c.na) ? 'Not applicable' : rows.length ? 'Not gathered' : ''
+    const count = measured.length ? `${measured.filter(c => c.mark === 'E').length} of ${measured.length} enforced${smallNote(measured.filter(c => c.smallSample).length)}` : rows.length && rows.every(c => c.na) ? 'Not applicable' : rows.length ? 'Not gathered' : ''
     return `<div class="control-col ${tier}"><p class="tier-label"><span class="tier-name">${esc(label)}</span><span class="tier-count">${esc(count)}</span></p>${rows.map(controlRow).join('') || '<p class="tier-empty">Nothing to show for this pillar in this collection.</p>'}</div>`
   }
   const matrix = groups.map((group, i) => {
@@ -128,7 +133,7 @@
   const controls = `<section class="page balanced-only" id="controls">${heading('04', 'The controls that matter', 'The standards we hold this environment to, and the status of each')}
     <div class="page-body"><p class="section-scope">Posture read ${esc(m.readDate)}. Activity lookbacks are stated with each measure.</p>
     <div class="legend-box"><h3>Two tiers of controls</h3><p><strong>Foundational</strong> controls are the baseline the managed security service holds every environment to, and each is expected to read enforced at every review. One that reads below E is a gap against that baseline and carries a fix date. <strong>Defense in depth</strong> controls are the additional safeguards layered on top. Each waits on something your team approves, schedules or licenses, and they are sequenced on the roadmap.</p>
-    <h3>What the status marks mean</h3><p><span class="mark mark-e">E</span> Enforced on 90 percent or more of in-scope resources. <span class="mark mark-p">P</span> Partial, enforced on 50 to 89 percent. <span class="mark mark-n">N</span> Not yet enforced, under 50 percent. A ratio control at E that still leaves resources out shows how many as exceptions beside its figure, so meeting the threshold reads differently from complete coverage. A policy control reads In force when the policy covers every user on every application in every condition, Mostly enforced when an enabled policy stops short of that, by selecting its users or applications or by a platform, risk level, device filter or location condition, and at least half of the measured sign-ins still satisfied it, and Not in force otherwise. The percentage bands apply to ratio controls. A policy that stops short of every user on every application in every condition reads P however high the sign-in ratio behind it, because the policy itself is not in force everywhere. A control reading (null) could not be gathered in this collection and is confirmed from the portal during the review. A control reading N/A had no activity or configuration in this collection to judge it by, so it carries no status. Every reading describes the state at collection, not a change since the last review.</p></div>
+    <h3>What the status marks mean</h3><p><span class="mark mark-e">E</span> Enforced on 90 percent or more of in-scope resources. <span class="mark mark-p">P</span> Partial, enforced on 50 to 89 percent. <span class="mark mark-n">N</span> Not yet enforced, under 50 percent. A ratio control at E that still leaves resources out shows how many as exceptions beside its figure, so meeting the threshold reads differently from complete coverage. A ratio control measured on fewer than ${fmt(MIN_SAMPLE)} resources, or with more machines left out by tag than assessed, is marked small sample. It keeps its mark and its place in the counts, and each count that holds one says so. A policy control reads In force when the policy covers every user on every application in every condition, Mostly enforced when an enabled policy stops short of that, by selecting its users or applications or by a platform, risk level, device filter or location condition, and at least half of the measured sign-ins still satisfied it, and Not in force otherwise. The percentage bands apply to ratio controls. A policy that stops short of every user on every application in every condition reads P however high the sign-in ratio behind it, because the policy itself is not in force everywhere. A control reading (null) could not be gathered in this collection and is confirmed from the portal during the review. A control reading N/A had no activity or configuration in this collection to judge it by, so it carries no status. Every reading describes the state at collection, not a change since the last review.</p></div>
     <div class="control-matrix">${matrix}</div></div>${footer('04', 'The controls that matter')}</section>`
 
   // 05 Delivered and sequenced

@@ -11,7 +11,7 @@
 (function (root) {
   'use strict'
   const R = typeof module !== 'undefined' && module.exports ? require('./report-model.js') : root.EbrReport
-  const { fmt, clean, pctText, plural, E_THRESHOLD, RETIREMENT } = R
+  const { fmt, clean, pctText, plural, E_THRESHOLD, RETIREMENT, MIN_SAMPLE, smallSampleText } = R
   const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
   const word = n => n >= 0 && n < WORDS.length ? WORDS[n] : fmt(n)
   const GROUPS = ['Identity and access', 'Endpoint and workload', 'Network and boundary', 'Data protection', 'Detection and response']
@@ -20,9 +20,11 @@
   const shortDate = v => /^\d{4}-\d{2}-\d{2}$/.test(isoDay(v)) ? new Date(isoDay(v) + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : ''
   const list = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
   const sentence = text => { const t = clean(text); return t ? t.charAt(0).toUpperCase() + t.slice(1) : '' }
-  // A ratio control with fewer resources than this never leads a pillar or stands as a win: "2 of 2" is
-  // accurate but carries no weight beside the figures around it (Oct 14, 2026).
-  const MIN_SAMPLE = 10
+  // A ratio control on a small sample (the model's smallSample, fewer than MIN_SAMPLE resources or more machines
+  // excluded by tag than assessed) never leads a pillar or stands as a win: "2 of 2" is accurate but carries no
+  // weight beside the figures around it (Oct 14, 2026). It keeps its mark in the tier counts, and every count that
+  // holds one names it beside the total (Oct 18, 2026, issue #24).
+  const small = n => n ? ` (${smallSampleText(n)})` : ''
 
   // Short names for the controls, used in grouped roadmap items, the drift panel and the asks.
   const SHORT = [
@@ -85,7 +87,7 @@
     const below = c => !!c.mark && c.mark !== 'E'
     const ungathered = c => c.measured === false && !c.na
     const ratio = c => c.mark && !c.boolean && c.good !== null && c.total !== null
-    const weighty = c => ratio(c) && c.total >= MIN_SAMPLE
+    const weighty = c => ratio(c) && !c.smallSample
     const find = re => m.controls.find(c => re.test(c.label))
     const ofText = c => `${fmt(c.good)} of ${fmt(c.total)}`
     const valueText = c => c.na ? 'N/A' : ungathered(c) ? 'Not gathered' : c.boolean ? c.value : c.total > 9999 ? pctText(c.pct) : c.value
@@ -138,8 +140,9 @@
     }
     s.drift = s.driftControls.filter(c => c !== portalGap || !mfaGap)
     s.ungathered = m.controls.filter(ungathered).map(safe)
-    s.foundational = { enforced: enforced('foundational').length, measured: measured('foundational').length }
-    s.defense = { enforced: enforced('defense').length, measured: measured('defense').length }
+    const tierTotal = tier => ({ enforced: enforced(tier).length, measured: measured(tier).length, small: measured(tier).filter(c => c.smallSample).length })
+    s.foundational = tierTotal('foundational')
+    s.defense = tierTotal('defense')
 
     // Outcome KPIs: alerts, impact, speed, score. Scope figures such as resources assessed are inputs, not outcomes.
     // The alert KPI carries the period, or the automation line, as the HTML tile does. The detection count stays
@@ -159,12 +162,12 @@
     else if (a && a.truePositives !== null) kpis.push({ value: fmt(a.truePositives), label: 'Confirmed threats', sub: 'Alerts the SOC classified as true positives', area: 'threat' })
     if (s.speed) kpis.push({ value: s.speed.value, label: sentence(s.speed.label), sub: s.speed.kpiSub, area: 'response' })
     if (score) kpis.push({ value: pctText(score.value), label: scoreName, sub: gain ? `Up ${fmt(gain.points)} points since ${gain.since}, from ${pctText(gain.from)}` : `Read ${s.readShort}`, area: 'posture' })
-    if (kpis.length < 4 && s.foundational.measured) kpis.push({ value: `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)}`, label: 'Foundational controls enforced', sub: 'Across five pillars', area: 'controls' })
+    if (kpis.length < 4 && s.foundational.measured) kpis.push({ value: `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)}`, label: 'Foundational controls enforced', sub: `Across five pillars${s.foundational.small ? `, ${smallSampleText(s.foundational.small)}` : ''}`, area: 'controls' })
     s.kpis = kpis.slice(0, 4)
 
     // Wins, at most one per area, up to six. A verified configuration reads In force with its own label. A sub-line
     // may depend on the reading, so a win at E that leaves resources out never says none or every (Oct 15, 2026).
-    const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null && (c.boolean || c.total >= MIN_SAMPLE) ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || (typeof sub === 'function' ? sub(c) : sub)), source: c.source } : null }
+    const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null && (c.boolean || !c.smallSample) ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || (typeof sub === 'function' ? sub(c) : sub)), source: c.source } : null }
     const candidates = [
       a && a.flaggedKnown && a.truePositives > 0 && a.flagged === 0 && !impactConfirmed ? { area: 'threat', eyebrow: 'Confirmed threats', value: `0 of ${fmt(a.truePositives)}`, label: `${tpWord(a.truePositives)} carried ${a.tacticPhrase}`, sub: `${classified(a.truePositives)} ${s.periodPhrase}.`, source: a.source } : null,
       s.speed ? { area: 'response', eyebrow: 'Response speed', value: s.speed.value, label: s.speed.label, sub: s.speed.sub, source: s.speed.row.source } : null,
@@ -257,7 +260,7 @@
     // Executive summary columns. Wins and watch items avoid numbers already in the KPI strip.
     const kpiAreas = new Set(s.kpis.map(k => k.area))
     s.summaryWins = [
-      s.foundational.measured && !kpiAreas.has('controls') ? { value: `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)}`, label: 'foundational controls enforced across five pillars' } : null,
+      s.foundational.measured && !kpiAreas.has('controls') ? { value: `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)}`, label: `foundational controls enforced across five pillars${small(s.foundational.small)}` } : null,
       ...s.wins.filter(w => !kpiAreas.has(w.area)).map(w => ({ value: w.value, label: w.label + (/last 30 days/.test(w.sub) ? ', last 30 days' : '') }))
     ].filter(Boolean).slice(0, 3)
     const watch = []
@@ -279,7 +282,7 @@
       'real-time anti-malware': 'VMs with real-time anti-malware', 'vulnerability assessment': 'VMs under vulnerability assessment', 'tamper protection': 'VMs with tamper protection', 'host firewall': 'VMs with host firewall', 'endpoint sensors': 'sensors active', 'Azure SQL TLS': 'SQL servers on TLS 1.2', 'App Service TLS 1.2': 'App Service configs on TLS 1.2', 'storage TLS 1.2': 'storage accounts on TLS 1.2', 'Key Vault soft delete': 'vaults with soft delete', 'Key Vault purge protection': 'vaults with purge protection', 'workload protection': 'resources with workload protection', 'diagnostic logging': 'resources with diagnostic logging', 'public blob containers': 'containers private', 'anonymous blob access': 'accounts with anonymous access off' }
     s.matrix = GROUPS.map(g => {
       const inG = m.controls.filter(c => c.group === g)
-      const tierCount = t => { const ms = inG.filter(c => c.tier === t && c.mark); return { enforced: ms.filter(c => c.mark === 'E').length, measured: ms.length, pct: ms.length ? 100 * ms.filter(c => c.mark === 'E').length / ms.length : null } }
+      const tierCount = t => { const ms = inG.filter(c => c.tier === t && c.mark); return { enforced: ms.filter(c => c.mark === 'E').length, measured: ms.length, small: ms.filter(c => c.smallSample).length, pct: ms.length ? 100 * ms.filter(c => c.mark === 'E').length / ms.length : null } }
       const leads = (LEADS[g] || []).map(re => inG.find(c => re.test(c.label))).filter(c => c && weighty(c))
       const fallback = inG.filter(c => weighty(c) && !leads.includes(c)).slice(0, 2 - leads.length)
       let measure = [...leads, ...fallback].slice(0, 2).map(c => `${ofText(c)} ${UNIT[short(c)] || short(c)}`).join(' · ')
@@ -297,12 +300,13 @@
     })
 
     // The register: every control, with a value that is never null. A control at E that leaves resources out
-    // carries its exception count, so E with exceptions never reads as E with none (Oct 15, 2026).
+    // carries its exception count, so E with exceptions never reads as E with none (Oct 15, 2026). A control on a
+    // small sample carries the flag, and the patch cadence row names its assessed and excluded populations (issue #24).
     s.register = GROUPS.map(g => {
       const inG = m.controls.filter(c => c.group === g)
       // A control whose grade covers part of its population (MFA at sign-in in a federated tenant, or with MFA
       // inferred from the session) carries the split on its detail line.
-      const rows = t => inG.filter(c => c.tier === t).map(c => ({ ...safe(c), detail: [detailText(c), c.split].filter(Boolean).join(' · '), chip: c.mark || (c.na ? 'N/A' : '–'), exceptionText: c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : '' }))
+      const rows = t => inG.filter(c => c.tier === t).map(c => ({ ...safe(c), detail: [detailText(c), c.split, c.populations].filter(Boolean).join(' · '), chip: c.mark || (c.na ? 'N/A' : '–'), exceptionText: c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : '', sampleText: c.mark && c.smallSample ? 'small sample' : '' }))
       const counts = ['E', 'P', 'N'].map(k => [k, inG.filter(c => c.mark === k).length]).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`)
       const dash = inG.filter(ungathered).length, na = inG.filter(c => c.na).length
       return { group: g, foundational: rows('foundational'), defense: rows('defense'), summary: [...counts, ...(dash ? [`${dash} –`] : []), ...(na ? [`${na} N/A`] : [])].join(' · ') }
@@ -322,7 +326,7 @@
       // The threats slide is built whenever the pack has true positives, with or without an examples table, so
       // the takeaway needs no examples either.
       threats: (a && a.truePositives > 0) || m.threats ? `${a && a.truePositives ? `The SOC classified ${plural(a.truePositives, 'alert', 'alerts')} as ${a.truePositives === 1 ? 'a true positive' : 'true positives'} ${s.periodPhrase}.` : 'Alerts were classified as true positives by the SOC.'}${threatLine ? ` ${sentence(threatLine)}.` : ''}${impactLine ? ` ${sentence(impactLine)}.` : ''}` : '',
-      posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced.${belowCount ? ` ${sentence(word(belowCount))} ${belowCount === 1 ? 'reads' : 'read'} below the baseline and ${belowCount === 1 ? 'is' : 'are'} first on the roadmap.` : ' None reads below the baseline.'}` : 'Control readings are completed in the review.',
+      posture: s.foundational.measured ? `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)} foundational controls are enforced${small(s.foundational.small)}.${belowCount ? ` ${sentence(word(belowCount))} ${belowCount === 1 ? 'reads' : 'read'} below the baseline and ${belowCount === 1 ? 'is' : 'are'} first on the roadmap.` : ' None reads below the baseline.'}` : 'Control readings are completed in the review.',
       roadmap: 'Every control below enforced is proposed in one of three horizons, by risk and by what each needs from your team.',
       methods: pw ? `Microsoft retires text message and voice sign-in on ${RETIREMENT.text}. ${plural(pw.retiring, 'user', 'users')} signed in with it in the last 30 days.` : '',
       decisions: s.asks.length ? `${sentence(word(s.asks.length))} ${s.asks.length === 1 ? 'item needs' : 'items need'} approval or access from your team to move the roadmap forward.` : 'No approvals or access are needed before the next review.',

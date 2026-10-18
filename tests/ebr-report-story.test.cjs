@@ -82,7 +82,7 @@ test('the story carries the wins, asks and takeaways the review asked for, worde
   assert.deepEqual([s.wins[0].value, s.wins[0].label, s.wins[0].sub], ['0 of 2', 'confirmed threats carried an exfiltration or impact tactic', 'Both classified as true positives by the SOC this quarter.'])
   assert.equal(new Set(s.wins.map(w => w.area)).size, s.wins.length, 'at most one win per area')
   assert.equal(s.takeaways.summary, 'Neither confirmed threat carried an exfiltration or impact tactic, and secure score rose 6.1 points.')
-  assert.match(s.takeaways.posture, /foundational controls are enforced\. (Two|Three|Four) read below the baseline and are first on the roadmap\./)
+  assert.match(s.takeaways.posture, /foundational controls are enforced( \(\d+ on a small sample\))?\. (Two|Three|Four) read below the baseline and are first on the roadmap\./)
   assert.ok(!/\breached\b|no impact|did not reach|investigated/i.test(JSON.stringify(s)), 'an outcome verb or an unrecorded impact determination reached the story')
   const spoken = JSON.stringify([s.takeaways, s.roadmap.map(h => h.items.map(i => [i.title, i.evidence])), s.watch, s.wins, s.asks, s.summaryWins, s.matrix])
   assert.ok(!/\bdrift|at build|regress/i.test(spoken), 'the story never claims a regression or a build-time configuration')
@@ -128,6 +128,47 @@ test('a tiny population never stands as a win or leads a pillar, and a policy-on
   q.results['IA.2'] = [{ Bucket: 'Retiring: SMS or voice', DistinctUsers: 40 }, { Bucket: 'Phishing-resistant', DistinctUsers: 3 }]
   assert.equal(story(q).s.matrix.find(x => x.group === 'Identity and access').measure, '3 users already on phishing-resistant sign-in', 'a tiny sign-in population drops out and the callout stands alone')
 })
+// Issue #24, as the owner decided on Oct 18, 2026: patch cadence 2 of 2 with 18 machines excluded by tag stays in the
+// tier totals by its mark, the count names it beside the total, and the register flags it. Never a lead or a win.
+test('a 2 of 2 control with exclusions is no lead and no win, is flagged in the register, and the tier counts name it', () => {
+  const p = quarterPack()
+  p.results['EW.10'] = [{ Machines: 2, WithinCadence: 2, OverduePatches: 0, AssessedWithin7d: 2 }]
+  p.manifest.push({ ResultId: 'EW.10-EXCLUDED', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' })
+  p.results['EW.10-EXCLUDED'] = [{ Machines: 18 }]
+  // Full samples elsewhere, so the only small sample is the patch cadence row.
+  p.results['DP.1'] = [{ Accounts: 42, SecureTransfer: 42, MinTls12: 42, AnonymousBlobOff: 42, PublicNetworkOff: 42 }]
+  p.results['DP.2'] = [{ Vaults: 40, SoftDelete: 40, PurgeProtection: 40, RbacAuth: 40 }]
+  const { m, s } = story(p)
+  const patch = m.controls.find(c => c.id === 'EW.10')
+  assert.deepEqual([patch.value, patch.mark, patch.smallSample], ['2 of 2', 'E', true])
+  assert.deepEqual(m.controls.filter(c => c.smallSample).map(c => c.id), ['EW.10'])
+  // Not a win and not a pillar lead.
+  assert.ok(!s.wins.some(w => w.source === patch.source || /patched/.test(w.label)), JSON.stringify(s.wins.map(w => w.label)))
+  assert.ok(!/patched in cadence|2 of 2/.test(s.matrix.find(r => r.group === 'Endpoint and workload').measure))
+  // Flagged in the register, with both populations on the detail line.
+  const row = s.register.find(r => r.group === 'Endpoint and workload').foundational.find(c => c.id === 'EW.10')
+  assert.deepEqual([row.chip, row.sampleText, row.detail], ['E', 'small sample', '2 assessed · 18 excluded by tag'])
+  // Counted toward enforced and measured by its mark, and named beside every tier total.
+  const found = m.controls.filter(c => c.tier === 'foundational' && c.mark)
+  assert.deepEqual(s.foundational, { enforced: found.filter(c => c.mark === 'E').length, measured: found.length, small: 1 })
+  const total = `${s.foundational.enforced} of ${s.foundational.measured}`
+  assert.equal(s.takeaways.posture.split('.')[0], `${total} foundational controls are enforced (1 on a small sample)`)
+  // The KPI strip is full (alerts, threats, speed, score), so the total leads the summary wins.
+  assert.ok(!s.kpis.some(k => k.area === 'controls'))
+  assert.deepEqual(s.summaryWins[0], { value: total, label: 'foundational controls enforced across five pillars (1 on a small sample)' })
+  const endpoint = s.matrix.find(r => r.group === 'Endpoint and workload')
+  assert.equal(endpoint.foundational.small, 1)
+  assert.ok(s.matrix.filter(r => r !== endpoint).every(r => r.foundational.small === 0 && r.defense.small === 0))
+  // With no score reading the total takes the fourth KPI, and its sub-line names the small sample.
+  for (const id of ['POS.1', 'POS.7']) { delete p.results[id]; p.manifest = p.manifest.filter(r => r.ResultId !== id) }
+  assert.deepEqual(story(p).s.kpis.find(k => k.area === 'controls'), { value: total, label: 'Foundational controls enforced', sub: 'Across five pillars, 1 on a small sample', area: 'controls' })
+  // Without the small sample nothing is annotated.
+  const plain = quarterPack()
+  plain.results['DP.1'] = p.results['DP.1']; plain.results['DP.2'] = p.results['DP.2']
+  const u = story(plain).s
+  assert.equal(u.foundational.small, 0)
+  assert.ok(!/small sample/.test(JSON.stringify(u)), JSON.stringify(u).match(/.{0,80}small sample.{0,40}/)?.[0])
+})
 test('Defender for Identity and domain controller telemetry gaps sit in Later with the licensing ask, never in the foundational gaps', () => {
   // Defense in depth since Oct 16, 2026: both need Defender for Identity licensing and a sensor on each domain controller.
   const p = quarterPack()
@@ -172,7 +213,7 @@ test('Defender for Identity and domain controller telemetry gaps sit in Later wi
   for (const c of m2.controls) if (c.tier === 'foundational' && c.mark) Object.assign(c, { mark: 'E', pct: 100 })
   const only = buildStory(m2, p)
   assert.equal(only.drift.length, 0)
-  assert.match(only.takeaways.posture, /^\d+ of \d+ foundational controls are enforced\. None reads below the baseline\.$/)
+  assert.match(only.takeaways.posture, /^\d+ of \d+ foundational controls are enforced( \(\d+ on a small sample\))?\. None reads below the baseline\.$/)
   assert.ok(!only.watch.some(w => /foundational controls? reads? below enforced/.test(w.label)))
   assert.ok(only.roadmap.find(h => h.key === 'later').items.some(i => i.key === 'mdi'))
 })
