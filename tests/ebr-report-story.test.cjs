@@ -520,6 +520,10 @@ test('backup coverage under half of a weighty estate adds a no-cost validation i
     assert.deepEqual(itemsOf(r, 'backup').map(i => [i.horizon, i.title]), [['later', 'Azure Backup extension']], why)
   }
   assert.ok(backupPack(3, 3).m.controls.find(c => c.id === 'DP.5b').smallSample)
+  // Under half is read from the counts: 500 of 1,001 rounds to 50.0 percent but is still under half.
+  const near = backupPack(1001, 501)
+  assert.equal(near.m.controls.find(c => c.id === 'DP.5b').pct, 50)
+  assert.match(itemsOf(near.s, 'backupcheck')[0].evidence, /^500 of 1,001 virtual machines carry a protected Azure Backup item\. /)
   // At E, no backup item at all.
   assert.deepEqual([...itemsOf(backupPack(19, 0).s, 'backup'), ...itemsOf(backupPack(19, 0).s, 'backupcheck')], [])
   // An existing backup record keeps its status on the extension and never carries it to the validation. A backupcheck

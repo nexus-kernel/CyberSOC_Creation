@@ -210,10 +210,11 @@
     if (pw) items[s.deadlineDays !== null && s.deadlineDays <= 180 ? 'now' : 'next'].push({ key: 'methods', title: 'MFA method update', evidence: `${plural(pw.retiring, 'user', 'users')} on text message or voice, ahead of ${RETIREMENT.shortText}`, controls: [], priority: prio('IA.2') })
     // Backup coverage validation: when fewer than half of a weighty virtual machine estate carries a protected Azure
     // Backup item, confirming which machines persist is no-cost shared work, so it starts in Now. The extension stays in
-    // Later under the backup key with its ask, and from 50 to 89 percent, or on a small sample, it is the only item. The
-    // validation keeps to what DP.5b measures and reads as a recommendation (Oct 18, 2026, issue #25).
+    // Later under the backup key with its ask, and from half to 89 percent, or on a small sample, it is the only item. The
+    // raw counts decide, since pct is rounded (500 of 1,001 reads 50.0). The validation keeps to what DP.5b measures and
+    // reads as a recommendation (Oct 18, 2026, issue #25).
     const backup = m.controls.find(c => c.id === 'DP.5b' && ratio(c))
-    if (backup && backup.pct < 50 && !backup.smallSample) items.now.push({ key: 'backupcheck', title: 'Backup coverage validation', evidence: `${ofText(backup)} virtual machines ${backup.good === 1 ? 'carries' : 'carry'} a protected Azure Backup item.${actionOf('backupcheck') ? '' : ' Atmosera recommends confirming with your team which machines without one persist, to separate confirmed gaps from agreed exclusions.'}`, controls: [], owner: 'Atmosera and client', priority: prio('DP.5b') })
+    if (backup && backup.good * 2 < backup.total && !backup.smallSample) items.now.push({ key: 'backupcheck', title: 'Backup coverage validation', evidence: `${ofText(backup)} virtual machines ${backup.good === 1 ? 'carries' : 'carry'} a protected Azure Backup item.${actionOf('backupcheck') ? '' : ' Atmosera recommends confirming with your team which machines without one persist, to separate confirmed gaps from agreed exclusions.'}`, controls: [], owner: 'Atmosera and client', priority: prio('DP.5b') })
     const mapped = new Set(s.driftControls.map(c => c.label))
     const other = []
     for (const c of m.controls.filter(c => below(c) && !mapped.has(c.label))) {
