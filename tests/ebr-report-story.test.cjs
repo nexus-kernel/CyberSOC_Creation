@@ -571,8 +571,8 @@ test('the configuration-presence controls keep their short name, tier, roadmap i
   assert.match(note('NB.1'), /The rules and the traffic they permit are not evaluated\./)
   assert.match(note('DR.2'), /a plan-level estimate read from the subscription plan configuration/)
   assert.match(note('DP.3'), /^Platform keys, the Azure default, or customer managed keys\. Encryption at host is graded separately\.$/)
-  assert.match(note('IA.9-SAFELINKS'), /Recipients, exceptions and rule state are not read\./)
-  assert.match(note('IA.9-SAFEATTACH'), /Scope and exceptions are not read\./)
+  assert.match(note('IA.9-SAFELINKS'), /^Reads In force when one policy has all three on\. Recipients, exceptions and rule state are not read\.$/)
+  assert.match(note('IA.9-SAFEATTACH'), /^Read from any one enabled policy\. Scope and exceptions are not read\.$/)
   // Below E, NB.1 lands on the segmentation item in Later and DR.2 is foundational drift in Now.
   const segment = s.roadmap.flatMap(h => h.items).find(i => i.key === 'segment')
   assert.ok(segment.controls.some(c => c.label === expected[0][1]), 'NB.1 is on the segmentation item')

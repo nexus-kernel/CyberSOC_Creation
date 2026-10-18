@@ -844,8 +844,8 @@
     const vmTotal = sum(encRows, 'Resources'), noBackup = count(one('DP.5b')?.VmsWithoutBackup)
     const backup = control('DP.5b', 'Azure Backup protecting virtual machines', D.data, vmTotal !== null && noBackup !== null ? Math.max(0, vmTotal - noBackup) : null, vmTotal, `Virtual machines with a protected backup item. Pooled session hosts may be excluded by agreement.${applianceText}`)
     const safeLinks = rows('IA.9-SAFELINKS'), safeAttach = rows('IA.9-SAFEATTACH')
-    inForce('IA.9-SAFELINKS', 'Safe Links policy set for mail, Teams and Office', F.data, has('IA.9-SAFELINKS') ? safeLinks.some(r => [r.EnableSafeLinksForEmail, r.EnableSafeLinksForTeams, r.EnableSafeLinksForOffice].every(v => v === true || String(v).toLowerCase() === 'true')) : null, 'One policy with all three on is enough. Recipients, exceptions and rule state are not read.')
-    inForce('IA.9-SAFEATTACH', 'Safe Attachments policy set to block or replace malicious files', F.data, has('IA.9-SAFEATTACH') ? safeAttach.some(r => (r.Enable === true || String(r.Enable).toLowerCase() === 'true') && /block|dynamic|replace/i.test(String(r.Action))) : null, 'One enabled policy is enough. Scope and exceptions are not read.')
+    inForce('IA.9-SAFELINKS', 'Safe Links policy set for mail, Teams and Office', F.data, has('IA.9-SAFELINKS') ? safeLinks.some(r => [r.EnableSafeLinksForEmail, r.EnableSafeLinksForTeams, r.EnableSafeLinksForOffice].every(v => v === true || String(v).toLowerCase() === 'true')) : null, 'Reads In force when one policy has all three on. Recipients, exceptions and rule state are not read.')
+    inForce('IA.9-SAFEATTACH', 'Safe Attachments policy set to block or replace malicious files', F.data, has('IA.9-SAFEATTACH') ? safeAttach.some(r => (r.Enable === true || String(r.Enable).toLowerCase() === 'true') && /block|dynamic|replace/i.test(String(r.Action))) : null, 'Read from any one enabled policy. Scope and exceptions are not read.')
     const zap = rows('DP.7').filter(r => /ZAP|Remediation/i.test(String(r.ActionType)))
     const mailRemoved = zap.length ? sum(zap, 'Succeeded') : null
     m.mailRemoved = mailRemoved
