@@ -184,7 +184,7 @@ Twenty-eight defense in depth controls (seven under identity since Oct 12, 2026,
 | Data protection | Endpoint disk encryption enforced on managed devices | Needs recovery key escrow confirmed and device compatibility checked | DP.10 |
 | Data protection | Key vault access governed by role-based access control | Needs access policies mapped to role assignments and application testing | DP.2 |
 | Data protection | Encryption at host on virtual machines and scale sets | Needs feature registration and a deallocation inside a maintenance window | DP.4 |
-| Data protection | Azure Backup enabled on all persistent virtual machines | Adds recurring cost and needs agreement on which machines persist | DP.5b |
+| Data protection | Azure Backup enabled on all persistent virtual machines | Two steps. Confirming which machines persist and which are excluded by agreement has no cost, so it starts in Now when fewer than half of the machines carry a protected backup item. Extending Azure Backup adds recurring cost and waits for that agreement | DP.5b |
 | Detection and response | Automated attack disruption active on identity threats | Needs Defender XDR prerequisites and agreement on automatic containment actions | DR.12 |
 | Detection and response | Defender for Identity sensors healthy on domain controllers | Needs Defender for Identity licensing and a sensor on each domain controller from the client. Not in scope for cloud-only tenants | DR.11 |
 | Detection and response | Domain controller telemetry collected continuously | Needs the same Defender for Identity licensing and sensors, which supply the domain controller events. Not in scope for cloud-only tenants | DR.4 |

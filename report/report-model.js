@@ -66,11 +66,12 @@
   // the item by its key, the same key the story gives the roadmap item and the ask (report/report-story.js, kept in
   // step by tests/ebr-report-story.test.cjs), so later surfaces can read owner, target date and status by key. No
   // surface says scheduled, approved or in progress without a record, and verified needs a Delivered record with the
-  // same reference as well (Oct 16, 2026).
+  // same reference as well (Oct 16, 2026). backupcheck is the backup coverage validation in Now, split from the backup
+  // item on Oct 18, 2026 (issue #25). backup keeps the Azure Backup extension and its ask.
   // The MFA method update is measured by what the next collection and the change record can show, never promised
   // as a non-event (Oct 16, 2026).
   const MFA_OUTCOME = `Every affected user registered on a replacement method before ${RETIREMENT.text}, the fallback tested, and no rise in failed sign-ins after enforcement.`
-  const ACTION_KEYS = ['drift', 'critical', 'methods', 'access', 'idp', 'phish', 'consent', 'workload', 'logging', 'kvrbac', 'diskenc', 'containers', 'vulnassess', 'segment', 'windows', 'backup', 'vmplatform', 'pim', 'allowlist', 'sharing', 'mdi']
+  const ACTION_KEYS = ['drift', 'critical', 'methods', 'access', 'backupcheck', 'idp', 'phish', 'consent', 'workload', 'logging', 'kvrbac', 'diskenc', 'containers', 'vulnassess', 'segment', 'windows', 'backup', 'vmplatform', 'pim', 'allowlist', 'sharing', 'mdi']
   const ACTION_STATUS = { Proposed: 'Proposed', PendingValidation: 'Pending validation', AwaitingApproval: 'Awaiting approval', Approved: 'Approved', Scheduled: 'Scheduled', InProgress: 'In progress', Verified: 'Verified' }
   // A median under the floor and a 90th percentile over one hour are presented with a note, never hidden.
   const MEDIAN_FLOOR = 20
