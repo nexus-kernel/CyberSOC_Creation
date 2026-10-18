@@ -863,3 +863,55 @@ test('the scope appendix facts end above the content bottom with the Defender XD
     for (const [, name, y, h] of facts) assert.ok(Number(y) + Number(h) <= BOTTOM_EMU + 1, `"${name}" ends at ${((Number(y) + Number(h)) / EMU).toFixed(3)} in, past the content bottom`)
   }
 })
+
+// The alert volume quadrant carries the workspace coverage line under the chart when the count varies across the
+// months shown (issue #23), inside the quadrant and above the second row, and says it in the speaker notes.
+test('the alert volume chart carries the workspace coverage line when it varies, and fits its quadrant', async () => {
+  const withReach = reach => {
+    const data = pack('balanced')
+    data.parameters.Workspaces.push({ Name: 'w2', CustomerId: 'w2', RetentionDays: 365 })
+    data.manifest.push({ ResultId: 'P0.1-BY-WORKSPACE', Status: 'OK', Rows: reach.length, ReadTimeUtc: '2026-10-08T10:00:00Z' })
+    data.results['P0.1-BY-WORKSPACE'] = reach
+    return data
+  }
+  const full = { WorkspaceId: 'w1', SourceTable: 'SecurityIncident', EarliestRecord: '2025-10-01', LatestRecord: '2026-10-07', Records: 400 }
+  const plain = s => s.replace(/\u00A0/g, ' ')
+  const opsXml = async out => {
+    const zip = await JSZip.loadAsync(fs.readFileSync(out))
+    const xmls = await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))
+    return xmls.find(x => x.includes('name="Monthly alerts chart"'))
+  }
+  const box = (xml, name) => { const r = xml.match(new RegExp(`name="${name}"[\\s\\S]*?<a:off x="(\\d+)" y="(\\d+)"/><a:ext cx="(\\d+)" cy="(\\d+)"/>`)); return r && { y: Number(r[2]), h: Number(r[4]), bottom: Number(r[2]) + Number(r[4]) } }
+  const lateData = withReach([full, { WorkspaceId: 'w2', SourceTable: 'SecurityIncident', EarliestRecord: '2026-08-12', LatestRecord: '2026-10-07', Records: 30 }])
+  const m = build(lateData)
+  const line = `${m.trendCoverage.sentence} ${m.trendCoverage.caption}`
+  assert.equal(m.trendCoverage.caption, 'Workspaces whose retained alert records span the whole month: 1 of 2 in Aug 2026, 2 of 2 in Sep 2026.')
+  const late = deckOf(lateData), { slides, notes } = await read(late)
+  assert.ok(slides.some(s => plain(s).includes(line)), 'the operations slide shows the coverage line')
+  assert.ok(notes.some(n => plain(n).includes(`${line} Evidence P0.1-BY-WORKSPACE. Read Oct 8, 2026.`)), 'the speaker notes carry it with its reach source')
+  const xml = await opsXml(late), cap = box(xml, 'Monthly alerts coverage'), chart = box(xml, 'Monthly alerts chart')
+  assert.ok(chart.bottom <= cap.y, 'the chart ends above the coverage line')
+  assert.ok(cap.bottom <= Math.round(4.3 * EMU), `the coverage line ends at ${(cap.bottom / EMU).toFixed(2)} in, inside the quadrant`)
+  assert.ok(cap.h >= Math.round((lines(line.replace(/(\d) of (\d)/g, '$1\u00A0of\u00A0$2').replace(/(Jul|Aug|Sep) (\d{4})/g, '$1\u00A0$2'), (require('../report/deck-common.cjs').CW - 0.5) / 2 - 0.1, 10) * 0.17) * EMU), 'the box holds every wrapped line')
+  // With the count steady, no line and the chart keeps the full quadrant.
+  const steady = deckOf(withReach([full, { ...full, WorkspaceId: 'w2' }]))
+  const steadyXml = await opsXml(steady)
+  assert.equal(box(steadyXml, 'Monthly alerts coverage'), null)
+  assert.ok(box(steadyXml, 'Monthly alerts chart').h > chart.h)
+  assert.ok(!(await read(steady)).notes.some(n => n.includes('span the whole month')))
+  // The densest caption: twelve months shown and a workspace whose records start in each, so twelve separate runs.
+  const months = Array.from({ length: 12 }, (_, i) => new Date(Date.UTC(2025, 9 + i, 1)).toISOString().slice(0, 10))
+  const dense = withReach([])
+  dense.parameters.WindowStart = '2025-10-01'
+  dense.parameters.Workspaces = months.map((_, i) => ({ Name: `w${i}`, CustomerId: `w${i}`, RetentionDays: 365 }))
+  dense.results['P0.1-BY-WORKSPACE'] = months.map((Month, i) => ({ ...full, WorkspaceId: `w${i}`, EarliestRecord: Month }))
+  dense.manifest.find(r => r.ResultId === 'P0.1-BY-WORKSPACE').Rows = 12
+  dense.results['OUT.3'] = months.map((Month, i) => ({ Month, Total: 20 + i, High: 2, Medium: 8, Low: 10 + i, Informational: 0 }))
+  const dm = build(dense)
+  assert.equal(dm.trendCoverage.caption.split(' in ').length - 1, 12, dm.trendCoverage.caption)
+  const denseXml = await opsXml(deckOf(dense)), dcap = box(denseXml, 'Monthly alerts coverage'), dchart = box(denseXml, 'Monthly alerts chart')
+  const dline = `${dm.trendCoverage.sentence} ${dm.trendCoverage.caption}`.replace(/(\d) of (\d)/g, '$1\u00A0of\u00A0$2').replace(/([A-Z][a-z]{2}) (\d{4})/g, '$1\u00A0$2')
+  assert.ok(dchart.bottom <= dcap.y && dcap.bottom <= Math.round(4.3 * EMU), 'the dense line sits under the chart, inside the quadrant')
+  assert.ok(dcap.h >= Math.round(lines(dline, (require('../report/deck-common.cjs').CW - 0.5) / 2 - 0.1, 10) * 0.17 * EMU), 'the box holds every wrapped line')
+  assert.ok(dchart.h >= Math.round(0.9 * EMU), `the chart keeps ${(dchart.h / EMU).toFixed(2)} in`)
+})

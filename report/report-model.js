@@ -140,8 +140,10 @@
     }
     if (!windowValid) presenter('Period dates', 'The alert period dates are invalid. Outcome figures are withheld until the pack is corrected.')
     const reach = rows('P0.1-BY-WORKSPACE')
+    // The SecurityIncident reach row of a workspace that holds alert records, matched on its ID, else its name.
+    const alertReach = w => reach.find(r => (r.WorkspaceId ? String(r.WorkspaceId).toLowerCase() === String(w.CustomerId).toLowerCase() : r.Workspace === w.Name) && /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0)
     if (reach.length) {
-      const absent = m.workspaces.filter(w => !reach.some(r => (r.WorkspaceId ? String(r.WorkspaceId).toLowerCase() === String(w.CustomerId).toLowerCase() : r.Workspace === w.Name) && /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0)).length
+      const absent = m.workspaces.filter(w => !alertReach(w)).length
       const late = reach.filter(r => /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0 && windowValid && validDate(iso(r.EarliestRecord)) && iso(r.EarliestRecord) > p.WindowStart).length
       if (absent) presenter('Workspace coverage', `${plural(absent, 'workspace holds', 'workspaces hold')} no alert records. Figures describe the workspaces that hold data.`)
       if (late) presenter('Workspace start dates', `${plural(late, 'workspace starts', 'workspaces start')} after ${date(p.WindowStart)}. Earlier months reflect the workspaces that were already collecting.`)
@@ -369,6 +371,52 @@
     const trend = alertsAllowed ? rows('OUT.3').filter(r => validDate(iso(r.Month)) && iso(r.Month) >= p.WindowStart && iso(r.Month) <= p.WindowEnd && ['Total','High','Medium','Low','Informational'].every(k => count(r[k]) !== null)).sort((a, b) => iso(a.Month).localeCompare(iso(b.Month))) : []
     m.trend = trend.map(r => ({ month: iso(r.Month), label: monthLabel(r.Month), Total: r.Total, High: r.High, Medium: r.Medium, Low: r.Low, Informational: r.Informational }))
     m.trendSource = source('OUT.3')
+    // Workspace coverage of the months the chart shows (issue #23). P0.1-BY-WORKSPACE gives the first and last alert
+    // record each workspace still holds (TimeGenerated), never when collection began: a quiet workspace, or one whose
+    // retention is shorter than the window, also starts late. OUT.3 counts each alert in the month it was created, from
+    // its latest retained record, so a later update can place an alert in a month before the workspace's first retained
+    // record. The client copy therefore states retained record dates only, never which workspaces an alert came from,
+    // when collection began or a trend.
+    // A workspace counts in a month only when its records span the whole month, so a first record after the 1st or a
+    // last record before the month ends leaves that month out. Workspaces with no alert records stay in the
+    // denominator. A partial reach reading, or a workspace whose record dates are unreadable, shows no coverage.
+    // A pack with one Sentinel workspace has no breakdown: the collector reads P0.1 from that workspace alone.
+    m.trendCoverage = null
+    const reachId = state('P0.1-BY-WORKSPACE') === 'OK' ? 'P0.1-BY-WORKSPACE' : m.workspaces.length === 1 && state('P0.1-BY-WORKSPACE') === 'MISSING' && state('P0.1') === 'OK' ? 'P0.1' : null
+    if (m.trend.length && m.workspaces.length && reachId) {
+      const held = reachId === 'P0.1' ? [rows('P0.1').find(r => /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0)] : m.workspaces.map(alertReach)
+      const spans = held.filter(Boolean).map(r => ({ start: iso(r.EarliestRecord), end: iso(r.LatestRecord) }))
+      if (spans.every(s => validDate(s.start) && validDate(s.end) && s.start <= s.end)) {
+        const monthStart = month => month.slice(0, 7) + '-01'
+        const monthEnd = month => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10)
+        m.trend.forEach(r => { r.workspaces = spans.filter(s => s.start <= monthStart(r.month) && s.end >= monthEnd(r.month)).length })
+        const shown = m.trend.slice(-12), total = m.workspaces.length
+        if (new Set(shown.map(r => r.workspaces)).size > 1) {
+          const first = monthStart(shown[0].month), last = monthEnd(shown[shown.length - 1].month)
+          const late = spans.filter(s => s.start > first).length, early = spans.filter(s => s.end < last).length
+          const of = n => total === 1 ? 'the Sentinel workspace' : `${fmt(n)} of the ${fmt(total)} Sentinel workspaces`
+          // One workspace takes one combined clause: "retained in the Sentinel workspace start after Jul 1, 2026 and end
+          // before Sep 30, 2026".
+          const both = total === 1 && late && early ? ` and end before ${date(last)}` : early ? `, and in ${fmt(early)} they end before ${date(last)}` : ''
+          const dates = late ? `retained in ${of(late)} start after ${date(first)}${both}` : `retained in ${of(early)} end before ${date(last)}`
+          // Runs of consecutive months with the same count, for example "3 of 6 in Jul 2026, 6 of 6 in Aug to Sep 2026".
+          // OUT.3 has no row for a month without alerts, so a missing month ends a run rather than joining across it.
+          const index = month => Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7))
+          const runs = []
+          shown.forEach(r => { const run = runs[runs.length - 1]; if (run && run.n === r.workspaces && index(r.month) === index(run.last.month) + 1) run.last = r; else runs.push({ n: r.workspaces, first: r, last: r }) })
+          const months = run => {
+            if (run.first === run.last) return run.first.label
+            const short = month => toDate(month).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
+            return run.first.month.slice(0, 4) === run.last.month.slice(0, 4) ? `${short(run.first.month)} to ${run.last.label}` : `${run.first.label} to ${run.last.label}`
+          }
+          m.trendCoverage = {
+            total, late, early, source: source(reachId),
+            sentence: `The alert records ${dates}. Alerts are counted in the month they were created.`,
+            caption: `Workspaces whose retained alert records span the whole month: ${runs.map(run => `${fmt(run.n)} of ${fmt(total)} in ${months(run)}`).join(', ')}.`
+          }
+        }
+      }
+    }
     if (trend.length >= 2) {
       const first = trend[0], last = trend[trend.length - 1]
       if (last.High > first.High) presenter('High severity trend', `High severity alerts rose from ${fmt(first.High)} in ${monthLabel(first.Month)} to ${fmt(last.High)} in ${monthLabel(last.Month)}. The report presents monthly volume as work absorbed by the SOC and draws no trend conclusion. Be ready to explain the drivers, for example new detections, tuning or a campaign.`)

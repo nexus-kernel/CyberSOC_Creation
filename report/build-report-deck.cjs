@@ -188,8 +188,11 @@ async function main() {
     if (trendRows.length) {
       const sev = ['High', 'Medium', 'Low', 'Informational'].filter(k => k !== 'Informational' || m.trend.some(r => r.Informational > 0))
       const colors = { High: HEX.sevHigh, Medium: HEX.sevMedium, Low: HEX.sevLow, Informational: HEX.sevInfo }
+      // Workspace coverage, when it varies across the months shown, sits under the chart, which gives up the height.
+      const cov = m.trendCoverage ? `${m.trendCoverage.sentence} ${m.trendCoverage.caption}` : '', covH = cov ? lines(glue(cov), qw - 0.1, 10) * 0.17 + 0.05 : 0
+      if (cov) text(s, cov, { x: q.x, y: q.y + q.h - covH, w: qw, h: covH, fontSize: 10, color: C.accent6, objectName: 'Monthly alerts coverage' })
       s.addChart(pres.charts.BAR, sev.map(k => ({ name: k, labels: trendRows.map(r => r.label), values: trendRows.map(r => r[k]) })), {
-        x: q.x - 0.1, y: q.y - 0.05, w: qw + 0.1, h: q.h, barDir: 'col', barGrouping: 'stacked', barGapWidthPct: trendRows.length > 6 ? 45 : 90,
+        x: q.x - 0.1, y: q.y - 0.05, w: qw + 0.1, h: q.h - (cov ? covH + 0.05 : 0), barDir: 'col', barGrouping: 'stacked', barGapWidthPct: trendRows.length > 6 ? 45 : 90,
         chartColors: sev.map(k => colors[k]), catAxisLabelColor: HEX.dk1, catAxisLabelFontSize: 11, catAxisLabelFontFace: '+mn-lt', valAxisLabelColor: HEX.accent6, valAxisLabelFontSize: 10, valAxisLabelFontFace: '+mn-lt',
         valGridLine: { color: HEX.track, size: 0.5 }, catGridLine: { style: 'none' }, showLegend: true, legendPos: 'r', legendFontSize: 11, legendFontFace: '+mn-lt', legendColor: HEX.dk1, objectName: 'Monthly alerts chart'
       })
@@ -248,6 +251,7 @@ async function main() {
     s.addNotes(notesOf([
       m.ticketed ? 'An alert is a Sentinel record that opened a ticket with the managed security service. Informational severity is excluded, and detections are the records correlated into those alerts.' : m.detections && m.detections.allSources ? `Detections from ${m.detections.allSources} are correlated into alerts.` : 'Detections are correlated into alerts.',
       m.xdrScope.sentence,
+      m.trendCoverage ? `${m.trendCoverage.sentence} ${m.trendCoverage.caption} Evidence ${m.trendCoverage.source}` : '',
       m.alerts ? `Closed alerts: ${fmt(m.alerts.benign)} benign positive, ${fmt(m.alerts.falsePositives)} false positive, ${fmt(m.alerts.truePositives)} true positive, ${fmt(m.alerts.unclassified)} unclassified.` : '',
       m.alerts && m.alerts.open > 0 ? (m.alerts.openSplit ? `Of the alerts open at collection, ${m.alerts.openSplit.phrase}. Evidence ${m.alerts.openSplit.source}` : 'The remaining alerts are referred to your team for action or confirmation under the agreed notification process, or are still under investigation.') : '',
       'Response times run from alert creation to recorded close, for every high severity alert created in the period and closed by collection. Every median and 90th percentile is shown, and one under 20 minutes or over one hour is covered in the review.',
