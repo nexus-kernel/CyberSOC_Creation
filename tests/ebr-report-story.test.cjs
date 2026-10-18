@@ -473,7 +473,7 @@ test('an ask whose reviewed record settles the decision leaves the asks before t
 })
 test('every roadmap item and ask key the story builds is a key the Actions record accepts', () => {
   const { ACTION_KEYS } = require('../report/report-model.js')
-  const keys = new Set(['drift', 'critical', 'methods', 'access', ...CATALOG.map(e => e.key)])
+  const keys = new Set(['drift', 'critical', 'methods', 'access', 'backupcheck', ...CATALOG.map(e => e.key)])
   assert.deepEqual([...keys].sort(), [...ACTION_KEYS].sort())
 })
 test('a reviewed status on the read access ask never removes it, since no status shows the permission was provisioned', () => {
@@ -489,4 +489,49 @@ test('a reviewed status on the read access ask never removes it, since no status
     assert.equal(s.takeaways.decisions, `${['', 'One', 'Two', 'Three', 'Four'][before.length]} ${before.length === 1 ? 'item needs' : 'items need'} approval or access from your team to move the roadmap forward.`)
     assert.deepEqual(s.settledAsks, [])
   }
+})
+test('backup coverage under half of a weighty estate adds a no-cost validation item in Now beside the Azure Backup extension in Later', () => {
+  const backupPack = (vms, without, context = null) => {
+    const p = quarterPack(); p.context = context
+    for (const [id, rows] of [['DP.4', [{ Resources: vms, WithEncryptionAtHost: vms }]], ['DP.5b', [{ VmsWithoutBackup: without }]]]) { p.manifest.push({ ResultId: id, Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' }); p.results[id] = rows }
+    return story(p)
+  }
+  const itemsOf = (s, key) => s.roadmap.flatMap(h => h.items.filter(i => i.key === key).map(i => ({ ...i, horizon: h.key })))
+  // None of 19 machines protected: the validation leads in Now, the extension and its control stay in Later.
+  const { m, s } = backupPack(19, 19)
+  assert.deepEqual([m.controls.find(c => c.id === 'DP.5b').value, m.controls.find(c => c.id === 'DP.5b').smallSample], ['0 of 19', false])
+  const [check] = itemsOf(s, 'backupcheck'), [ext] = itemsOf(s, 'backup')
+  assert.equal(check.horizon, 'now')
+  assert.equal(check.title, 'Backup coverage validation')
+  assert.equal(check.evidence, '0 of 19 virtual machines carry a protected Azure Backup item. Atmosera recommends confirming with your team which machines without one persist, to separate confirmed gaps from agreed exclusions.')
+  assert.deepEqual(check.controls, [], 'the control is counted once, on the extension')
+  assert.ok(!/backup product|session host|recovery requirement|;/i.test(check.evidence), 'the evidence keeps to what DP.5b measures')
+  assert.equal(ext.horizon, 'later')
+  assert.equal(ext.title, 'Azure Backup extension')
+  assert.deepEqual(ext.controls.map(c => c.id), ['DP.5b'])
+  assert.ok(!s.asks.some(a => a.key === 'backupcheck'), 'the validation needs no decision, so it adds no ask')
+  assert.equal(itemsOf(s, 'backup').length + itemsOf(s, 'backupcheck').length, 2)
+  // 1 of 19 is still under half, and the verb agrees.
+  assert.match(itemsOf(backupPack(19, 18).s, 'backupcheck')[0].evidence, /^1 of 19 virtual machines carries a protected Azure Backup item\. /)
+  // From 50 to 89 percent the extension alone, in Later. On a small sample the extension alone too, even at none of 3.
+  for (const [vms, without, why] of [[19, 9, '10 of 19 is over half'], [20, 10, '10 of 20 is half'], [3, 3, '0 of 3 is a small sample']]) {
+    const r = backupPack(vms, without).s
+    assert.deepEqual(itemsOf(r, 'backupcheck'), [], why)
+    assert.deepEqual(itemsOf(r, 'backup').map(i => [i.horizon, i.title]), [['later', 'Azure Backup extension']], why)
+  }
+  assert.ok(backupPack(3, 3).m.controls.find(c => c.id === 'DP.5b').smallSample)
+  // At E, no backup item at all.
+  assert.deepEqual([...itemsOf(backupPack(19, 0).s, 'backup'), ...itemsOf(backupPack(19, 0).s, 'backupcheck')], [])
+  // An existing backup record keeps its status on the extension and never carries it to the validation. A backupcheck
+  // record carries its own status on the validation only.
+  const record = (Key, Status) => ({ Key, Status, TargetDate: '2026-12-15', Reference: `CHG-${Key}`, Reviewed: '2026-10-14', WindowStart: '2026-07-01', WindowEnd: '2026-09-30' })
+  const old = backupPack(19, 19, { Actions: [record('backup', 'Scheduled')] }).s
+  assert.equal(itemsOf(old, 'backup')[0].evidence.endsWith('Scheduled, target Dec 15, 2026 (CHG-backup, reviewed Oct 14, 2026).'), true, itemsOf(old, 'backup')[0].evidence)
+  assert.equal(itemsOf(old, 'backupcheck')[0].evidence, check.evidence, 'the validation still reads as a recommendation')
+  assert.equal(itemsOf(old, 'backupcheck')[0].action, null)
+  const checked = backupPack(19, 19, { Actions: [record('backupcheck', 'InProgress')] })
+  assert.deepEqual(checked.m.actions.map(a => a.key), ['backupcheck'], 'the model accepts the backupcheck key')
+  assert.equal(itemsOf(checked.s, 'backupcheck')[0].evidence, '0 of 19 virtual machines carry a protected Azure Backup item. In progress, target Dec 15, 2026 (CHG-backupcheck, reviewed Oct 14, 2026).')
+  assert.equal(itemsOf(checked.s, 'backup')[0].action, null)
+  assert.ok(!/\b(scheduled|approved|in progress|verified)\b/i.test(itemsOf(checked.s, 'backup')[0].evidence))
 })
