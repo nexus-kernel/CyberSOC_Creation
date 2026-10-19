@@ -184,19 +184,20 @@
     }
 
     // Threat intelligence. TI.0 says which tables Sentinel holds in the window, so an uncollected table never reads as
-    // a zero. Without TI.0 every table-dependent measure is not gathered.
+    // a zero. Without TI.0 every table-dependent measure is not gathered, except the indicators: TI.1 looks back past
+    // the window start, so its own rows show the table is held, and without rows it is not gathered.
     const reach = measured('TI.0') ? rows('TI.0') : null
     const held = table => !!reach && reach.some(r => new RegExp(`(?:^|\\.)${table}$`).test(String(r.SourceTable)) && (num(r.Records) ?? 0) > 0)
     const ti = cs.threat = { unmeasured: [] }
     const tiMissing = (id, label, reason) => { ti.unmeasured.push({ id, label: clean(label), reason: clean(reason) }); unmeasured(id, label, reason) }
     // Indicators monitored, by type and feed.
-    if (measured('TI.1') && (held('ThreatIntelIndicators') || held('ThreatIntelligenceIndicator'))) {
+    if (measured('TI.1') && rows('TI.1').length > 0) {
       const r = rows('TI.1')
       const byKind = INDICATOR_KINDS.map(kind => { const k = r.filter(x => (INDICATOR_KINDS.includes(x.Kind) ? x.Kind : 'Other') === kind); return { kind, total: sumOf(k, 'Indicators'), active: sumOf(k, 'Active') } }).filter(k => k.total > 0)
       const feeds = [...r.reduce((acc, x) => acc.set(clean(x.Source) || 'Not recorded', (acc.get(clean(x.Source) || 'Not recorded') || 0) + (num(x.Indicators) ?? 0)), new Map())].map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total)
       const latest = r.map(x => iso(x.LastIngested)).filter(validDate).sort().pop() || null
       ti.indicators = { total: sumOf(r, 'Indicators'), active: sumOf(r, 'Active'), byKind, feeds: feeds.slice(0, 5), feedCount: feeds.length, latest: latest ? date(latest) : null, source: source('TI.1') }
-    } else tiMissing('TI.1', 'Threat intelligence indicators', !measured('TI.0') ? `the table reach was not read (TI.0 ${state('TI.0')})` : !measured('TI.1') ? state('TI.1') : 'Sentinel holds no threat intelligence indicator table in the window')
+    } else tiMissing('TI.1', 'Threat intelligence indicators', !measured('TI.1') ? state('TI.1') : 'Sentinel holds no threat intelligence indicator in the year to the window end')
     // Indicator matches: detections from the threat intelligence analytics rules.
     if (measured('TI.2') && held('SecurityAlert')) {
       const r = rows('TI.2')

@@ -45,7 +45,7 @@ How the report reads them:
 | ID | What it reads | Report rule |
 |---|---|---|
 | TI.0 | Which threat intelligence and threat telemetry tables Sentinel holds in the window, per workspace | A table missing here is not collected, so the measure that reads it has no figure, never a zero. TI.0-BY-WORKSPACE picks the workspace TI.6 reads |
-| TI.1 | Threat intelligence indicators by feed and type, from the STIX `ThreatIntelIndicators` and the legacy `ThreatIntelligenceIndicator` table | Active means not expired, revoked or deleted at the end of the window |
+| TI.1 | Threat intelligence indicators by feed and type, from the STIX `ThreatIntelIndicators` and the legacy `ThreatIntelligenceIndicator` table | Each indicator at its latest record up to the window end, over the 365 days before it. Active means not expired, revoked or deleted at the end of the window |
 | TI.2 | Detections from the threat intelligence analytics rules (TI map rules, Microsoft Threat Intelligence Analytics) by month and indicator type, and how many sit in ticketed alerts | A match confirms an indicator was observed in telemetry, not that exploitation or compromise occurred |
 | TI.3 | MITRE ATT&CK tactics on the detections in ticketed alerts, by month | A tactic is a detection-time label, not an investigation finding. Shown in attack chain order |
 | TI.4 | MITRE ATT&CK techniques on the same detections, top 25 | Named from the ATT&CK Enterprise matrix, an unknown ID reads as the ID |
@@ -186,11 +186,11 @@ union withsource = SourceTable isfuzzy = true
 
 ### TI.1 Threat intelligence indicators by source and type
 
-Engine LA, combined only. CyberSOC. Each indicator at its latest record in the window, keyed by table and indicator ID, so an indicator held in several workspaces counts once when the IDs match. Active means not expired, revoked or deleted at the end of the window. Both the STIX ThreatIntelIndicators table and the legacy ThreatIntelligenceIndicator table are read.
+Engine LA, combined only. CyberSOC. Each indicator at its latest record up to the end of the window, over the 365 days before it, so an indicator ingested before the window and still valid at its end is counted. Keyed by table and indicator ID, so an indicator held in several workspaces counts once when the IDs match. Active means not expired, revoked or deleted at the end of the window. Both the STIX ThreatIntelIndicators table and the legacy ThreatIntelligenceIndicator table are read.
 
 ```kql
 union withsource = SourceTable isfuzzy = true ThreatIntelIndicators, ThreatIntelligenceIndicator
-| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where TimeGenerated between (endofday({{WINDOW_END}}) - 365d .. endofday({{WINDOW_END}}))
 | extend IndicatorKey = coalesce(tostring(column_ifexists("Id", "")), tostring(column_ifexists("IndicatorId", ""))),
          Stix         = SourceTable endswith "ThreatIntelIndicators"
 | where isnotempty(IndicatorKey)

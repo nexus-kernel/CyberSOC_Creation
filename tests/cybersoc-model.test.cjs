@@ -108,11 +108,16 @@ test('threat intelligence never reads a zero from a table Sentinel does not hold
   // Without TI.0 every table-dependent measure is not gathered, even when its own result is EMPTY.
   const p = full(); p.manifest = p.manifest.filter(r => r.ResultId !== 'TI.0'); put(p, 'TI.2', [], 'EMPTY')
   const none = both(p).cs
-  for (const k of ['indicators', 'matches', 'identity', 'risk']) assert.equal(none.threat[k], undefined, k)
+  for (const k of ['matches', 'identity', 'risk']) assert.equal(none.threat[k], undefined, k)
+  assert.equal(none.threat.indicators.total, 150, 'the indicator rows of TI.1 show the table is held')
   assert.ok(!none.headline.some(t => /Threat intelligence matches/.test(t.label)))
-  // A TI.0 without the indicator tables leaves the indicators unmeasured.
+  // Indicators ingested before the window and still valid count, though TI.0 sees no indicator record in the window.
   const q = pack(); threats(q, { tables: ['SecurityAlert'] })
+  assert.equal(both(q).cs.threat.indicators.active, 130)
+  // No indicator in the year to the window end, or no indicator table, is not gathered, never zero indicators.
+  put(q, 'TI.1', [], 'EMPTY')
   assert.equal(both(q).cs.threat.indicators, undefined)
+  assert.ok(both(q).cs.threat.unmeasured.some(u => u.id === 'TI.1'))
   // EMPTY matches with the alert table present is a real zero.
   const z = full(); put(z, 'TI.2', [], 'EMPTY')
   assert.equal(both(z).cs.threat.matches.total, 0)

@@ -48,7 +48,9 @@ Describe 'Query catalog' {
         ($catalog | Where-Object Id -eq 'TI.2').Query | Should -Match 'join kind=leftouter \(Ticketed \| distinct AlertId'
         ($catalog | Where-Object Id -eq 'TI.0').AlwaysBreakdown | Should -BeTrue -Because 'the EmailEvents workspace is chosen from TI.0-BY-WORKSPACE'
         ($catalog | Where-Object Id -eq 'TI.1').Query | Should -Match 'ThreatIntelIndicators, ThreatIntelligenceIndicator'
-        foreach ($id in 'TI.0', 'TI.1', 'POS.8') {
+        ($catalog | Where-Object Id -eq 'TI.1').Query | Should -Match 'TimeGenerated between \(endofday\(\{\{WINDOW_END\}\}\) - 365d \.\. endofday\(\{\{WINDOW_END\}\}\)\)' -Because 'an indicator ingested before the window and still valid at its end is monitored'
+        ($catalog | Where-Object Id -eq 'TI.1').Query | Should -Not -Match 'now\(\)'
+        foreach ($id in 'TI.0', 'POS.8') {
             $q = ($catalog | Where-Object Id -eq $id).Query
             $q | Should -Match 'TimeGenerated between \(\{\{WINDOW_START\}\} \.\. endofday\(\{\{WINDOW_END\}\}\)\)' -Because "$id reads the report window, not the days after it up to collection"
             $q | Should -Not -Match 'now\(\)' -Because $id

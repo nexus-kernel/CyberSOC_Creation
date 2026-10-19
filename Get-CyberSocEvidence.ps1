@@ -2584,9 +2584,9 @@ union withsource = SourceTable isfuzzy = true
 | order by SourceTable asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'TI.1' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Threat intelligence indicators by source and type' -Notes 'CyberSOC. Each indicator at its latest record in the window, keyed by table and indicator ID, so an indicator held in several workspaces counts once when the IDs match. Active means not expired, revoked or deleted at the end of the window. Both the STIX ThreatIntelIndicators table and the legacy ThreatIntelligenceIndicator table are read.' -Query @'
+    $q.Add((New-EbrQuery -Id 'TI.1' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Threat intelligence indicators by source and type' -Notes 'CyberSOC. Each indicator at its latest record up to the end of the window, over the 365 days before it, so an indicator ingested before the window and still valid at its end is counted. Keyed by table and indicator ID, so an indicator held in several workspaces counts once when the IDs match. Active means not expired, revoked or deleted at the end of the window. Both the STIX ThreatIntelIndicators table and the legacy ThreatIntelligenceIndicator table are read.' -Query @'
 union withsource = SourceTable isfuzzy = true ThreatIntelIndicators, ThreatIntelligenceIndicator
-| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where TimeGenerated between (endofday({{WINDOW_END}}) - 365d .. endofday({{WINDOW_END}}))
 | extend IndicatorKey = coalesce(tostring(column_ifexists("Id", "")), tostring(column_ifexists("IndicatorId", ""))),
          Stix         = SourceTable endswith "ThreatIntelIndicators"
 | where isnotempty(IndicatorKey)
