@@ -120,7 +120,8 @@ Describe 'Query catalog' {
         $eah.Query | Should -Match 'where not\(coalesce\(tobool\(properties\.securityProfile\.encryptionAtHost\), false\)\)'
         $eah.Query | Should -Match 'isnotnull\(properties\.encryptionSettingsCollection\)' -Because 'a disk that ever carried Azure Disk Encryption keeps its settings'
         $eah.Query | Should -Match '"AzureDiskEncryption", "AzureDiskEncryptionForLinux"'
-        $eah.Query | Should -Match 'project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed'
+        $eah.Query | Should -Match 'project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed, OldSectorDisk'
+        $eah.Query | Should -Match 'where todatetime\(properties\.timeCreated\) < datetime\(2023-05-13\)' -Because 'a 512e Ultra or Premium SSD v2 disk created before then rules out encryption at host'
     }
 
     It 'scopes the SecOps worklist incident lists like OUT.1 and DR.10 and extracts the ticket with the raw pattern' {
@@ -509,11 +510,14 @@ Describe 'Network devices and blob containers (1.11.0)' {
         $by.denied.Reason | Should -Match '^size support not read: .*403'
         $by.denied.SizeRead | Should -Match '^Not read: .*403'
         $by.ok.SizeRead | Should -Be 'OK'
+        $oldDisk = [pscustomobject]@{ Name = 'ultra'; ResourceId = '/x/ultra'; resourceGroup = 'rg'; subscriptionId = 's1'; Location = 'eastus'; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; AdeUsed = $false; OldSectorDisk = 'True' }
+        $old = @(Get-EbrEncryptionAtHostRows -Vms @($oldDisk) -Tenant 't')[0]
+        @($old.Eligible, $old.Reason) | Should -Be @($false, '512e Ultra or Premium SSD v2 disk created before May 13, 2023')
         $deniedAde = @(Get-EbrEncryptionAtHostRows -Vms @((& $vm 'both' 's2' 'Standard_D4s_v5' 'true' 'westus')) -Tenant 't')[0]
         $deniedAde.Reason | Should -Be 'Azure Disk Encryption used'
         $deniedAde.SizeRead | Should -Match '^Not read' -Because 'a failed SKU read still counts when Azure Disk Encryption already rules the machine out'
         $by.ok.ResourceId | Should -Be '/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/ok'
-        Should -Invoke Invoke-EbrRest -Times 4 -Exactly -Because 'each region is read once, eastus through s2 then s1, westus through s2, and westus again for the second call'
+        Should -Invoke Invoke-EbrRest -Times 5 -Exactly -Because 'each region is read once per call: eastus through s2 then s1 and westus through s2, then eastus and westus for the two single-machine calls'
     }
 }
 

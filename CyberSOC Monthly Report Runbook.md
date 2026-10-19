@@ -571,7 +571,7 @@ resources
 
 ### DP.4-ELIGIBILITY Virtual machines that can take encryption at host
 
-Engine ARG, then the Compute resource SKUs API. The virtual machines without encryption at host, network virtual appliances and scale sets left out, with whether each can take it. A machine that ever used Azure Disk Encryption cannot: its disks keep an encryptionSettingsCollection, enabled or not, or it carries an ADE extension. Size support is not in Resource Graph, so for each region the collector reads `GET https://management.azure.com/subscriptions/<id>/providers/Microsoft.Compute/skus?api-version=2021-07-01&$filter=location eq '<region>'` (Reader is enough) through one of the subscriptions there, trying the next one if a read fails, and takes the EncryptionAtHostSupported capability of each size. A size the list cannot answer for, or a region whose list could not be read, reads Unknown. The result reads PARTIAL when some lists could not be read or Resource Graph truncated the machine list, and FAILED when no list could be read. CR-09 lists only the eligible machines and names the others in the index, so no machine is deallocated for a change Azure would reject.
+Engine ARG, then the Compute resource SKUs API. The virtual machines without encryption at host, network virtual appliances and scale sets left out, with whether each can take it. A machine that ever used Azure Disk Encryption cannot: its disks keep an encryptionSettingsCollection, enabled or not, or it carries an ADE extension. Nor can a machine with an attached Ultra Disk or Premium SSD v2 that uses 512e sectors and was created before May 13, 2023. Size support is not in Resource Graph, so for each region the collector reads `GET https://management.azure.com/subscriptions/<id>/providers/Microsoft.Compute/skus?api-version=2021-07-01&$filter=location eq '<region>'` (Reader is enough) through one of the subscriptions there, trying the next one if a read fails, and takes the EncryptionAtHostSupported capability of each size. A size the list cannot answer for, or a region whose list could not be read, reads Unknown. The result reads PARTIAL when some lists could not be read or Resource Graph truncated the machine list, and FAILED when no list could be read. CR-09 lists only the eligible machines and names the others in the index, so no machine is deallocated for a change Azure would reject.
 
 ```kql
 resources
@@ -594,8 +594,17 @@ resources
     | where tostring(properties.type) in~ ("AzureDiskEncryption", "AzureDiskEncryptionForLinux")
     | summarize AdeExtensions = count() by VmKey = tolower(tostring(split(id, "/extensions/")[0]))
   ) on VmKey
-| extend AdeUsed = coalesce(AdeDisks, 0) > 0 or coalesce(AdeExtensions, 0) > 0
-| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.compute/disks"
+    | where tostring(sku.name) in~ ("UltraSSD_LRS", "PremiumV2_LRS")
+    | where toint(properties.creationData.logicalSectorSize) == 512
+    | where todatetime(properties.timeCreated) < datetime(2023-05-13)
+    | summarize OldSectorDisks = count() by VmKey = tolower(tostring(managedBy))
+  ) on VmKey
+| extend AdeUsed       = coalesce(AdeDisks, 0) > 0 or coalesce(AdeExtensions, 0) > 0,
+         OldSectorDisk = coalesce(OldSectorDisks, 0) > 0
+| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed, OldSectorDisk
 | order by subscriptionId asc, resourceGroup asc, Name asc
 ```
 

@@ -54,8 +54,9 @@ Resources a change leaves out are named in the index notes:
   since a subscription without the initiative cannot be told from one that was not read.
 - CR-02 leaves out storage accounts that may serve NFS (NFS 3.0 on blob, or the FileStorage kind), because NFS
   mounts are refused once secure transfer is required. Add one only after confirming it hosts no NFS share.
-- CR-09 leaves out every virtual machine that is not proven eligible: one that ever used Azure Disk Encryption, one on
-  a size without encryption at host support in its region, and one whose size support could not be read. The steps
+- CR-09 leaves out every virtual machine that is not proven eligible: one that ever used Azure Disk Encryption, one
+  with an Ultra Disk or Premium SSD v2 that uses 512e sectors and was created before May 13, 2023, one on a size without
+  encryption at host support in its region, and one whose size support could not be read. The steps
   deallocate each machine before Azure checks the setting, so an ineligible machine would go down for nothing.
 - CR-09 leaves out scale sets. They take encryption at host through their model and an instance update, and AKS
   node pools through the node pool, so they need their own change.

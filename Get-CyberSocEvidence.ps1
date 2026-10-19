@@ -2175,7 +2175,7 @@ resources
 | order by resourceGroup asc, Name asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'DP.4-ELIGIBILITY' -Phase 'P2 Data protection' -Engine 'COMPUTE-SKUS' -Title 'Virtual machines that can take encryption at host' -Notes 'Added in CyberSOC 1.1.0. The virtual machines DP.4-DETAIL lists, scale sets left out, with whether each can take encryption at host. Azure Disk Encryption is read from the disks (any encryptionSettingsCollection, enabled or not) and the ADE extensions, because a machine that ever used it cannot take encryption at host. Size support is read per subscription and region from the Compute resource SKUs API (the EncryptionAtHostSupported capability, a GET that Reader can make), because Resource Graph does not index it. The change requests leave out every machine that is not proven eligible. Internal: names machines, the report embeds counts only.' -Query @'
+    $q.Add((New-EbrQuery -Id 'DP.4-ELIGIBILITY' -Phase 'P2 Data protection' -Engine 'COMPUTE-SKUS' -Title 'Virtual machines that can take encryption at host' -Notes 'Added in CyberSOC 1.1.0. The virtual machines DP.4-DETAIL lists, scale sets left out, with whether each can take encryption at host. Azure Disk Encryption is read from the disks (any encryptionSettingsCollection, enabled or not) and the ADE extensions, because a machine that ever used it cannot take encryption at host. An attached Ultra Disk or Premium SSD v2 with 512e sectors created before May 13, 2023 rules a machine out too. Size support is read per subscription and region from the Compute resource SKUs API (the EncryptionAtHostSupported capability, a GET that Reader can make), because Resource Graph does not index it. The change requests leave out every machine that is not proven eligible. Internal: names machines, the report embeds counts only.' -Query @'
 resources
 | where type =~ "microsoft.compute/virtualmachines"
 | where id !contains "{{MRG}}"
@@ -2196,8 +2196,17 @@ resources
     | where tostring(properties.type) in~ ("AzureDiskEncryption", "AzureDiskEncryptionForLinux")
     | summarize AdeExtensions = count() by VmKey = tolower(tostring(split(id, "/extensions/")[0]))
   ) on VmKey
-| extend AdeUsed = coalesce(AdeDisks, 0) > 0 or coalesce(AdeExtensions, 0) > 0
-| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.compute/disks"
+    | where tostring(sku.name) in~ ("UltraSSD_LRS", "PremiumV2_LRS")
+    | where toint(properties.creationData.logicalSectorSize) == 512
+    | where todatetime(properties.timeCreated) < datetime(2023-05-13)
+    | summarize OldSectorDisks = count() by VmKey = tolower(tostring(managedBy))
+  ) on VmKey
+| extend AdeUsed       = coalesce(AdeDisks, 0) > 0 or coalesce(AdeExtensions, 0) > 0,
+         OldSectorDisk = coalesce(OldSectorDisks, 0) > 0
+| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed, OldSectorDisk
 | order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
@@ -3907,7 +3916,9 @@ function Get-EbrEncryptionAtHostRows {
         $size = ([string]$vm.Size).ToLowerInvariant()
         $supported = if ($null -eq $list.Sizes -or -not $list.Sizes.ContainsKey($size)) { 'Unknown' } elseif ($list.Sizes[$size]) { 'Yes' } else { 'No' }
         $ade = Test-EbrTrue $vm.AdeUsed
+        $oldSector = Test-EbrTrue $vm.OldSectorDisk
         $reason = if ($ade) { 'Azure Disk Encryption used' }
+        elseif ($oldSector) { '512e Ultra or Premium SSD v2 disk created before May 13, 2023' }
         elseif ($supported -eq 'No') { 'size not supported' }
         elseif ($list.Error) { 'size support not read: ' + $list.Error }
         elseif ($supported -eq 'Unknown') { 'size not listed for the region' }
@@ -3915,8 +3926,8 @@ function Get-EbrEncryptionAtHostRows {
         [pscustomobject][ordered]@{
             subscriptionId = [string]$vm.subscriptionId; resourceGroup = [string]$vm.resourceGroup; Name = [string]$vm.Name
             Location = [string]$vm.Location; Size = [string]$vm.Size; PowerState = [string]$vm.PowerState
-            AdeUsed = $ade; SizeSupported = $supported; SizeRead = $(if ($list.Error) { 'Not read: ' + $list.Error } else { 'OK' })
-            Eligible = (-not $ade -and $supported -eq 'Yes'); Reason = $reason; ResourceId = [string]$vm.ResourceId
+            AdeUsed = $ade; OldSectorDisk = $oldSector; SizeSupported = $supported; SizeRead = $(if ($list.Error) { 'Not read: ' + $list.Error } else { 'OK' })
+            Eligible = (-not $ade -and -not $oldSector -and $supported -eq 'Yes'); Reason = $reason; ResourceId = [string]$vm.ResourceId
         }
     }
 }
@@ -5204,7 +5215,7 @@ function Invoke-EbrCatalogItem {
         }
         'COMPUTE-SKUS' {
             Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the Microsoft.Compute/skus path of each subscription and region, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
-            $columns = @('subscriptionId', 'resourceGroup', 'Name', 'Location', 'Size', 'PowerState', 'AdeUsed', 'SizeSupported', 'SizeRead', 'Eligible', 'Reason', 'ResourceId')
+            $columns = @('subscriptionId', 'resourceGroup', 'Name', 'Location', 'Size', 'PowerState', 'AdeUsed', 'OldSectorDisk', 'SizeSupported', 'SizeRead', 'Eligible', 'Reason', 'ResourceId')
             try { $arg = Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant }
             catch { return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed) }
             $vms = @($arg.Rows)
