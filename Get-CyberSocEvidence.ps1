@@ -204,7 +204,7 @@
 
 .PARAMETER PurgeProtectionApproved
     Passed to New-CyberSocChangeRequests.ps1: the client approved purge protection at build kickoff, so
-    its email is a notice of planned change instead of an approval request.
+    its approval request refers to that approval and asks the client to confirm it still stands.
 
 .PARAMETER LoadFunctionsOnly
     Load the functions and stop. Used by the Pester tests.

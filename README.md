@@ -62,23 +62,25 @@ missing evidence never becomes a favorable zero.
    `05-change-requests/` holds one change request for each low-impact hardening item that still has resources to
    fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service, Azure SQL, Redis, Service Bus,
    Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
-   machines and on scale sets), and a ready-to-send client email for every change request. The changes that need the
-   client first ask for an approval, a confirmation or a maintenance window: purge protection, which cannot be undone
-   and needs the client's written approval, anonymous blob access, HTTPS only, encryption at host on virtual machines
-   and on scale sets, and minimum TLS 1.2 on Event Hubs. Every other change gets a notice of planned change with the
-   planned date, two weeks after the build by default, and a date a week before it to raise any concern by. To
-   plan an agreed date, run the generator again with it, since the collection run does not take `-ChangeDate`:
+   machines and on scale sets), and a ready-to-send client email for every change request. Every email asks for the
+   client's approval and follows one structure: what is to change, why, what it means for the client, the resources
+   by subscription, how it can be reversed, and the request. It asks the client to approve the proposed date, two
+   weeks after the build by default, or, for encryption at host, which restarts each machine, to suggest a
+   maintenance window, and to reply a week before the proposed date. No change is scheduled without the client's
+   approval. To propose another date, run the generator again with it, since the collection run does not take
+   `-ChangeDate`:
 
    ```powershell
    pwsh ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000 -ClientContact 'Dana' -SenderName 'Scott' -ChangeDate 2026-11-16
    ```
 
    The
-   diagnostic logging notices say that the resource logs add Log Analytics ingestion to the Sentinel workspace.
+   diagnostic logging emails say that the resource logs add Log Analytics ingestion to the Sentinel workspace.
    Anonymous blob access is turned off only on the storage accounts whose containers were all listed and are private,
    so its email walks the client through why nothing breaks, and the index names the accounts left out. Add
-   `-PurgeProtectionApproved` when the client approved purge protection at build kickoff: its email is then a notice
-   that refers to that approval, and the index records it. AKS node pools without encryption at host get no change
+   `-PurgeProtectionApproved` when the client approved purge protection at build kickoff: its email then refers to
+   that approval and asks the client to confirm it still stands and to approve the proposed date, and the index
+   records it. AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
    pool replacement with the client.
 
