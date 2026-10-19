@@ -170,6 +170,7 @@ Describe 'Query catalog' {
                 'where tostring\(Rule\.properties\.access\) =~ "Allow"\s+and tostring\(Rule\.properties\.direction\) =~ "Inbound"',
                 [regex]::Escape(@'
 | where SourceText contains '"*"' or SourceText contains '"Internet"' or SourceText contains '"0.0.0.0/0"'
+     or SourceText contains '"::/0"'
 '@.Trim()),
                 [regex]::Escape(@'
 | where PortText contains '"*"' or PortText contains '"22"' or PortText contains '"3389"'

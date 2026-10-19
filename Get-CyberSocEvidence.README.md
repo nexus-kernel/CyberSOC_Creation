@@ -291,7 +291,7 @@ in the pack (`results/<ID>.csv`).
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
 - CyberSOC collector 1.6.0 (October 19, 2026): `NB.2-DETAIL` lists the rules `NB.2` counts, read the same way (allow
-  inbound from any address, `Internet` or `0.0.0.0/0` on 22, 3389, 5985, 5986, `*` or a range), one row each with
+  inbound from any address, `Internet`, `0.0.0.0/0` or `::/0` on 22, 3389, 5985, 5986, `*` or a range), one row each with
   what change request CR-16 needs to change the rule and to recreate it on rollback: the subscription, the network
   security group and rule resource IDs, priority, protocol, source and destination prefixes and ports, the
   description, the destination application security groups, the association, the subnets and network interfaces the
@@ -300,7 +300,8 @@ in the pack (`results/<ID>.csv`).
   through the group on its subnet is found too. A missing property reads as an empty list, and the managed
   resource group is excluded. CR-16 closes the rules on workload subnets and network interfaces and leaves appliance
   untrust interfaces, groups attached to nothing and `*` or range rules to the index notes. On an earlier pack it reads
-  "Needs recollection with CyberSOC collector 1.6.0 or later". The query is in section 6 of the CyberSOC Monthly
+  "Needs recollection with CyberSOC collector 1.6.0 or later". `NB.2` also reads the IPv6 any-address prefix `::/0`
+  as the internet now, so a management port open over IPv6 is counted. The query is in section 6 of the CyberSOC Monthly
   Report Runbook.
 - CyberSOC collector 1.5.0 (October 19, 2026): each collection ends by running `New-CyberSocChangeRequests.ps1`
   on the pack, after the SecOps worklist, so the pack holds `05-change-requests` with a client email for every

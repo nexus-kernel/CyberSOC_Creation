@@ -64,7 +64,8 @@ missing evidence never becomes a favorable zero.
    Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
    machines and on scale sets, and closing internet-facing RDP, SSH and WinRM rules), and a ready-to-send client email
    for every change request. Every email asks for the
-   client's approval and follows one structure: what is to change, why, what it means for the client, the resources
+   client's approval and reads as a letter, with no titles and each paragraph opening in its own words, in one order:
+   what is to change, why, what it means for the client, the resources
    by subscription, how it can be reversed, and the request. It asks the client to approve the proposed date, two
    weeks after the build by default, or, for encryption at host, which restarts each machine, to suggest a
    maintenance window, and to reply a week before the proposed date. No change is scheduled without the client's

@@ -1321,6 +1321,7 @@ resources
          PortText   = tostring(array_concat(pack_array(tostring(Rule.properties.destinationPortRange)),
                                             coalesce(Rule.properties.destinationPortRanges, dynamic([]))))
 | where SourceText contains '"*"' or SourceText contains '"Internet"' or SourceText contains '"0.0.0.0/0"'
+     or SourceText contains '"::/0"'
 | where PortText contains '"*"' or PortText contains '"22"' or PortText contains '"3389"'
      or PortText contains '"5985"' or PortText contains '"5986"' or PortText contains "-"
 | extend Association = case(0 < Subnets, "Subnet", 0 < Nics, "NIC", "Unassociated"),

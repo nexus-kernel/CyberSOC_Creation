@@ -128,27 +128,44 @@ BeforeAll {
         }
         @($out | Where-Object { $_ -ne '' })
     }
-    # The parts every client email has, in order (New-ApprovalEmail).
-    $emailHeadings = 'What I am asking to change', 'Why I recommend it', 'What it means for you', 'The resources', 'How it can be reversed'
+    # The titles a client email no longer carries (#33). An email reads as a letter: each part is a plain paragraph
+    # that opens in its own words.
+    $oldEmailTitles = 'What I am asking to change', 'Why I recommend it', 'What it means for you', 'The resources', 'How it can be reversed', 'Your approval', 'Your approval and a maintenance window'
     $dayPattern = '(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}'
     # Checks one client email against the shared structure and the copy rules. Every generated email goes through it.
+    # The parts are found by what each paragraph says: the ask, why, what it means for the client, the resources by
+    # subscription, how the change can be reversed, and the request.
     function Assert-ApprovalEmail([string]$Text, [string]$Name) {
         $Text | Should -Match '^Subject: Approval requested: \S' -Because "$Name asks for approval in its subject"
-        $Text | Should -Match '\r?\n\r?\nHello( [^\r\n]+)?,\r?\n\r?\nWhat I am asking to change\r?\nI would like to ' -Because "$Name opens with the greeting, then what is to change"
-        $lines = $Text -split "`r?`n"
-        $at = @($emailHeadings | ForEach-Object { [array]::IndexOf($lines, $_) })
-        $at | Should -Not -Contain -1 -Because "$Name has every part of the shared structure"
-        ($at -join ',') | Should -Be (@($at | Sort-Object) -join ',') -Because "$Name keeps the parts in order"
-        $why = $lines[$at[1] + 1]
-        $why | Should -Not -BeNullOrEmpty -Because "$Name explains why the change is recommended"
-        $request = @($lines | Where-Object { $_ -in 'Your approval', 'Your approval and a maintenance window' })
-        $request.Count | Should -Be 1 -Because "$Name ends with the request"
-        [array]::IndexOf($lines, $request[0]) | Should -BeGreaterThan $at[-1] -Because "$Name puts the request last"
-        $ask = $lines[[array]::IndexOf($lines, $request[0]) + 1]
+        $lines = @($Text -split "`r?`n")
+        $lines[1] | Should -Be '' -Because $Name
+        $lines[2] | Should -Match '^Hello( [^\r\n]+)?,$' -Because "$Name opens with the greeting"
+        $end = [array]::LastIndexOf($lines, 'Thank you,')
+        $end | Should -BeGreaterThan 3 -Because "$Name signs off"
+        $body = @($lines[3..($end - 1)] | Where-Object { $_ -ne '' })
+        foreach ($t in $oldEmailTitles) { $body | Should -Not -Contain $t -Because "$Name has no titles" }
+        $prose = @($body | Where-Object { $_ -notmatch '^- ' })
+        foreach ($p in $prose) { $p | Should -Match '[.?:]$' -Because "$Name has no short line standing alone as a heading" }
+        $paragraphs = @($prose | Where-Object { $_ -notmatch '^Subscription .+:$' })
+        $paragraphs[0] | Should -Match '^I would like your approval to ' -Because "$Name opens with what it asks to change"
+        $paragraphs[1] | Should -Match '^I recommend \S.*\bbecause\b' -Because "$Name says why in a because sentence"
+        # The resources open with the paragraph just before the first subscription, and only the reversal and the
+        # request follow them.
+        $firstSubscription = @(for ($i = 0; $i -lt $body.Count; $i++) { if ($body[$i] -match '^Subscription .+:$') { $i } })[0]
+        $firstSubscription | Should -Not -BeNullOrEmpty -Because "$Name lists the resources by subscription"
+        $listed = [array]::IndexOf($paragraphs, $body[$firstSubscription - 1])
+        $listed | Should -BeGreaterThan 2 -Because "$Name says what the change means for the client before the resources"
+        $body[$firstSubscription - 1] | Should -Match ':$' -Because "$Name introduces the resources"
+        ($paragraphs.Count - $listed) | Should -Be 3 -Because "$Name follows the resources with the reversal and the request only"
+        $lastBullet = @(for ($i = 0; $i -lt $body.Count; $i++) { if ($body[$i] -match '^- ') { $i } })[-1]
+        [array]::IndexOf($body, $paragraphs[-2]) | Should -BeGreaterThan $lastBullet -Because "$Name says how the change can be reversed after the resources"
+        $openings = @($paragraphs | ForEach-Object { (@($_ -split '\s+' | Select-Object -First 3) -join ' ').ToLowerInvariant() })
+        @($openings | Group-Object | Where-Object Count -gt 1).Count | Should -Be 0 -Because "no two paragraphs of $Name open with the same words ($($openings -join ' | '))"
+        $ask = $paragraphs[-1]
         $ask | Should -Match '\bapprov' -Because "$Name asks for approval"
         $ask | Should -Match ('Please reply by {0}\.' -f $dayPattern) -Because "$Name gives a reply-by date"
         $ask | Should -Match 'I will not schedule this change until I have your approval\.$' -Because "$Name promises not to schedule the change without approval"
-        if ($request[0] -eq 'Your approval') { $ask | Should -Match ('approve [^?]*{0}\?' -f $dayPattern) -Because "$Name asks for approval of the proposed date" }
+        if ($ask -notmatch 'maintenance window') { $ask | Should -Match ('approve [^?]*{0}\?' -f $dayPattern) -Because "$Name asks for approval of the proposed date" }
         else { $ask | Should -Match 'suggest a maintenance window' -Because "$Name asks for a maintenance window" }
         $Text | Should -Match 'Thank you,\r?\n([^\r\n]+\r?\n)?$' -Because "$Name signs off"
         $Text | Should -Not -Match '(?i)notice of planned change|planned change:|I plan to|I am planning|raise any concern|on or after|let me know by|go ahead and schedule|hold the change until your concern' -Because "$Name asks and never presents the change as decided"
@@ -337,16 +354,16 @@ Describe 'Change request generation' {
     It 'asks for approval to turn off anonymous access, with the no-risk walk-through and the fallback' {
         $email = & $read 'CR-07-storage-anonymous-access.email.txt'
         $email | Should -Match '^Subject: Approval requested: turning off anonymous access to Azure Blob Storage\r?\n\r?\nHello Dana,'
-        $email | Should -Match 'I would like to turn off anonymous access to Azure Blob Storage at the account level on one of your storage accounts\. Anonymous access lets anyone read a container over the internet without signing in\.'
-        $email | Should -Match 'Why I recommend it\r?\nToday the account setting still allows a container to be made public\. Turning it off means no container in it can be opened to anonymous access later, by mistake or by a misconfigured deployment\.'
+        $email | Should -Match 'I would like your approval to turn off anonymous access to Azure Blob Storage at the account level on one of your storage accounts\. Anonymous access lets anyone read a container over the internet without signing in\.'
+        $email | Should -Match 'I recommend turning anonymous access off because the account setting still allows a container to be made public today\. Turning it off means no container in it can be opened to anonymous access later, by mistake or by a misconfigured deployment\.'
         $email | Should -Match "The account is listed below:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- stdata \(resource group rg-data\)\r?\n"
         $email | Should -Match 'I do not expect this change to affect anything that uses the account today, for these reasons:'
         $email | Should -Match '- Every container in the account is private today, so no one reads its blob data without signing in\.'
         $email | Should -Match '- A static website hosted in a storage account keeps serving as it does now, since the setting does not apply to it\.' -Because 'the static website container stays public whatever the account setting'
         $email | Should -Match '- Applications and people that sign in, or that use a shared access signature or an account key, keep working as they do now\.'
         $email | Should -Match '- Just before the change, I will check the containers of the account again, and leave it unchanged if a container has been made public since my review\.'
-        $email | Should -Match 'How it can be reversed\r?\nIf anything unexpected comes up, I can turn the setting back on straight away\. It takes up to 30 seconds to apply, and the containers stay as they are\.'
-        $email | Should -Match 'Your approval\r?\nCould you approve this change for \w+day, '
+        $email | Should -Match '\r?\n\r?\nIf anything unexpected comes up, I can turn the setting back on straight away\. It takes up to 30 seconds to apply, and the containers stay as they are\.'
+        $email | Should -Match '\r?\n\r?\nCould you approve this change for \w+day, '
         $email | Should -Not -Match '(?i)lose access|loses access|stweb|images|downloads' -Because 'the email lists only the accounts in the change'
         $email | Should -Match 'Thank you,\r?\nScott Example\r?\n$'
     }
@@ -354,9 +371,9 @@ Describe 'Change request generation' {
     It 'asks for written approval of purge protection, with the vaults by subscription and their retention' {
         $email = & $read 'CR-06-key-vault-purge-protection.email.txt'
         $email | Should -Match '^Subject: Approval requested: purge protection for Azure key vaults\r?\n\r?\nHello Dana,'
-        $email | Should -Match '\bI would like to turn on purge protection for 2 of your Azure key vaults\.' -Because 'the email is written in the first person singular'
+        $email | Should -Match '\bI would like your approval to turn on purge protection for 2 of your Azure key vaults\.' -Because 'the email is written in the first person singular'
         $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- kv-app \(resource group rg-app, soft delete retention 90 days\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- kv-dev \(resource group rg-dev, soft delete retention 7 days\)"
-        $email | Should -Match 'How it can be reversed\r?\nThis change cannot be undone\. Purge protection cannot be turned off once it is enabled, by anyone including Microsoft'
+        $email | Should -Match '\r?\n\r?\nThis change cannot be undone\. Purge protection cannot be turned off once it is enabled, by anyone including Microsoft'
         $email | Should -Match 'a deleted vault, key, secret or certificate is kept for the retention period of its vault and cannot be purged early\.'
         $email | Should -Match 'A deleted vault keeps its name until then, so the name cannot be reused'
         $email | Should -Match 'I need your written approval before I schedule it\. Could you approve purge protection on these vaults for \w+day, '
@@ -368,9 +385,9 @@ Describe 'Change request generation' {
     It 'drafts the HTTPS Only email with the host names and asks about HTTP callers before the approval' {
         $email = & $read 'CR-08-app-service-https-only.email.txt'
         $email | Should -Match '^Subject: Approval requested: HTTPS only for Azure App Service applications\r?\n'
-        $email | Should -Match 'I would like to turn on the HTTPS Only setting for 2 of your App Service and Function applications\.'
+        $email | Should -Match 'I would like your approval to turn on the HTTPS Only setting for 2 of your App Service and Function applications\.'
         $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- app-portal \(resource group rg-web, app-portal\.azurewebsites\.net\)\r?\n- func-jobs \(resource group rg-web, func-jobs\.azurewebsites\.net\)"
-        $email | Should -Match 'Your approval\r?\nCould you let me know whether any of your systems or partners still call these applications over HTTP\? If none do, could you approve this change for \w+day, [^?]+\? Please reply by [^.]+\d{4}\. If one does, I will hold the change until it uses HTTPS\.'
+        $email | Should -Match '\r?\n\r?\nCould you let me know whether any of your systems or partners still call these applications over HTTP\? If none do, could you approve this change for \w+day, [^?]+\? Please reply by [^.]+\d{4}\. If one does, I will hold the change until it uses HTTPS\.'
     }
 
     It 'enables encryption at host on virtual machines only, with the feature registered per subscription' {
@@ -404,8 +421,8 @@ Describe 'Change request generation' {
         $email | Should -Match '- vm-paused \(resource group rg-app, stopped at my last review\)' -Because 'a machine stopped but still allocated is not running either'
         $email | Should -Match 'a server that is already stopped will be left stopped'
         $email | Should -Match '^Subject: Approval requested: encryption at host for Azure virtual machines\r?\n'
-        $email | Should -Match 'Your approval and a maintenance window\r?\nCould you approve this change and suggest a maintenance window that works for these servers\? Please reply by '
-        $email | Should -Match 'How it can be reversed\r?\nEncryption at host can be turned off again, which needs the same stop and start of each virtual machine inside a maintenance window\.'
+        $email | Should -Match '\r?\n\r?\nCould you approve this change and suggest a maintenance window that works for these servers\? Please reply by '
+        $email | Should -Match '\r?\n\r?\nEncryption at host can be turned off again, which needs the same stop and start of each virtual machine inside a maintenance window\.'
         $email | Should -Not -Match 'VM ID|1a2b3c4d-000' -Because 'the IDs are for the operator, and the client email keeps to the servers'
     }
 
@@ -460,7 +477,7 @@ Describe 'Change request generation' {
     It 'asks for a maintenance window for the scale sets, one instance at a time, and warns about automatic upgrades' {
         $email = & $read 'CR-15-scale-set-encryption-at-host.email.txt'
         $email | Should -Match '^Subject: Approval requested: encryption at host for Azure virtual machine scale sets\r?\n\r?\nHello Dana,'
-        $email | Should -Match 'I would like to enable encryption at host on 3 of your virtual machine scale sets\.'
+        $email | Should -Match 'I would like your approval to enable encryption at host on 3 of your virtual machine scale sets\.'
         $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- vmss-flex \(resource group rg-app, 2 instances\)\r?\n- vmss-web \(resource group rg-web, 4 instances\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- vmss-batch \(resource group rg-batch, 1 instance\)"
         $email | Should -Match 'which I will do one instance at a time'
         $email | Should -Match 'an instance that is already stopped will be left stopped'
@@ -572,7 +589,7 @@ Describe 'Change request generation' {
             $rollback[0] | Should -Match ('^1\. No rollback is available or needed, because ' + $c.Rollback + '$') -Because $c.File
             $rollback[1] | Should -Match 'so every client that connected before the change can still connect\.$' -Because $c.File
             @(Get-Section $text 'A) REFERENCES')[0] | Should -Match $c.Reference -Because $c.File
-            (& $read "$($c.File).email.txt") | Should -Match 'How it can be reversed\r?\n[^\r\n]+, so this change cannot be reversed\. I do not expect a reversal to be needed, because ' -Because "$($c.File) says plainly that the change has no rollback, and why none is needed"
+            (& $read "$($c.File).email.txt") | Should -Match '\r?\n\r?\n[^\r\n]+, so this change cannot be reversed\. I do not expect a reversal to be needed, because ' -Because "$($c.File) says plainly that the change has no rollback, and why none is needed"
         }
         @(Get-Section (& $read 'CR-11-redis-minimum-tls.txt') 'B) PURPOSE')[0] | Should -Match '^Azure Cache for Redis has refused TLS 1\.0 and 1\.1 on every cache since April 1, 2025, but this cache still records an older minimum in its configuration\.'
         @(Get-Section (& $read 'CR-14-cosmos-db-minimum-tls.txt') 'B) PURPOSE')[0] | Should -Match '^Azure Cosmos DB retired TLS 1\.0 and 1\.1 on August 31, 2025, but this account does not record a minimum of 1\.2'
@@ -593,9 +610,9 @@ Describe 'Change request generation' {
         $index | Should -Match '\| 13 \| Minimum TLS 1\.2 on Event Hubs namespaces \| 2 \| Change request and client email \| CR-13-event-hubs-minimum-tls\.txt, CR-13-event-hubs-minimum-tls\.email\.txt \|'
         $email = & $read 'CR-13-event-hubs-minimum-tls.email.txt'
         $email | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure Event Hubs namespaces\r?\n\r?\nHello Dana,'
-        $email | Should -Match 'I would like to set the minimum TLS version to 1\.2 on 2 of your Event Hubs namespaces\. TLS is the protocol that encrypts connections to a service'
+        $email | Should -Match 'I would like your approval to set the minimum TLS version to 1\.2 on 2 of your Event Hubs namespaces\. TLS is the protocol that encrypts connections to a service'
         $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- evh-telemetry \(resource group rg-msg, minimum TLS 1\.0\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- evh-audit \(resource group rg-logs, minimum TLS 1\.1\)"
-        $email | Should -Match 'Your approval\r?\nCould you let me know whether anything that connects to these namespaces may still use TLS 1\.0 or 1\.1\? If nothing does, could you approve this change for \w+day, [^?]+\? Please reply by [^.]+\d{4}\. If something does, I will hold the change until it uses TLS 1\.2\.'
+        $email | Should -Match '\r?\n\r?\nCould you let me know whether anything that connects to these namespaces may still use TLS 1\.0 or 1\.1\? If nothing does, could you approve this change for \w+day, [^?]+\? Please reply by [^.]+\d{4}\. If something does, I will hold the change until it uses TLS 1\.2\.'
         $email | Should -Match 'Thank you,\r?\nScott Example\r?\n$'
     }
 
@@ -609,17 +626,17 @@ Describe 'Change request generation' {
             Assert-ApprovalEmail $email $f.Name
             $email | Should -Match "\r?\n\r?\nHello Dana,\r?\n" -Because $f.Name
             $email | Should -Match "Please reply by $reply\. " -Because "$($f.Name) asks for a reply a week before the proposed date"
-            $email | Should -Match "The resources\r?\n[^\r\n]+:\r?\n\r?\nSubscription Example[^\r\n]*\((5f1c2a9e|a0b1c2d3)[^\r\n]*\):\r?\n\r?\n- " -Because "$($f.Name) lists the resources by subscription"
+            $email | Should -Match "\r?\n\r?\n[^\r\n]+:\r?\n\r?\nSubscription Example[^\r\n]*\((5f1c2a9e|a0b1c2d3)[^\r\n]*\):\r?\n\r?\n- " -Because "$($f.Name) lists the resources by subscription"
         }
         $dated = 'CR-01-diagnostic-logging', 'CR-02-storage-secure-transfer', 'CR-03-storage-minimum-tls', 'CR-04-app-service-minimum-tls', 'CR-06-key-vault-purge-protection', 'CR-07-storage-anonymous-access', 'CR-08-app-service-https-only', 'CR-11-redis-minimum-tls', 'CR-12-service-bus-minimum-tls', 'CR-13-event-hubs-minimum-tls', 'CR-14-cosmos-db-minimum-tls', 'CR-16-management-ports'
         foreach ($k in $dated) {
             $email = & $read "$k.email.txt"
-            $email | Should -Match "Your approval\r?\n[^\r\n]*approve [^?]*$proposed\? Please reply by $reply\. [^\r\n]*I will not schedule this change until I have your approval\.\r?\n\r?\nThank you,\r?\nScott Example\r?\n$" -Because "$k asks for approval of the proposed date"
+            $email | Should -Match "\r?\n\r?\n[^\r\n]*approve [^?]*$proposed\? Please reply by $reply\. [^\r\n]*I will not schedule this change until I have your approval\.\r?\n\r?\nThank you,\r?\nScott Example\r?\n$" -Because "$k asks for approval of the proposed date"
             $email | Should -Not -Match 'maintenance window' -Because "$k needs no restart"
         }
         foreach ($k in 'CR-09-encryption-at-host', 'CR-15-scale-set-encryption-at-host') {
             $email = & $read "$k.email.txt"
-            $email | Should -Match "Your approval and a maintenance window\r?\nCould you approve this change and suggest a maintenance window that works for these (servers|scale sets)\? Please reply by $reply\. " -Because "$k restarts machines, so it asks for a maintenance window"
+            $email | Should -Match "\r?\n\r?\nCould you approve this change and suggest a maintenance window that works for these (servers|scale sets)\? Please reply by $reply\. " -Because "$k restarts machines, so it asks for a maintenance window"
             $email | Should -Not -Match $proposed -Because "$k leaves the date to the maintenance window"
         }
         $index | Should -Match ('- CR-01, CR-02, CR-03, CR-04, CR-06, CR-07, CR-08, CR-11, CR-12, CR-13, CR-14, CR-16 ask the client to approve the proposed date, {0}, and CR-09, CR-15 ask the client to approve the change and suggest a maintenance window\. Every email asks for a reply by {1}\. Run again with -ChangeDate to propose another day' -f $proposed, $reply)
@@ -627,13 +644,34 @@ Describe 'Change request generation' {
         $index | Should -Not -Match '(?i)notice|concern'
     }
 
+    It 'writes every email as a letter, with no titles and each paragraph opening in its own words, and the check refuses anything else' {
+        $email = & $read 'CR-03-storage-minimum-tls.email.txt'
+        Assert-ApprovalEmail $email 'CR-03'
+        foreach ($f in $emailFiles) {
+            $lines = @((Get-Content $f.FullName -Raw) -split "`r?`n")
+            foreach ($t in $oldEmailTitles) { $lines | Should -Not -Contain $t -Because "$($f.Name) has no titles" }
+        }
+        $nl = if ($email -match "`r`n") { "`r`n" } else { "`n" }
+        $titled = $email -replace '(Hello Dana,\r?\n\r?\n)', ('$1What I am asking to change' + $nl)
+        { Assert-ApprovalEmail $titled 'titled' } | Should -Throw -Because 'an old title line is refused'
+        $heading = $email -replace '(\r?\n\r?\nI recommend )', ($nl + $nl + 'A short heading' + $nl + 'I recommend ')
+        { Assert-ApprovalEmail $heading 'heading' } | Should -Throw -Because 'a short line standing alone as a heading is refused'
+        $noBecause = $email -replace 'I recommend setting this minimum because ', 'I recommend setting this minimum. '
+        { Assert-ApprovalEmail $noBecause 'no because' } | Should -Throw -Because 'why is a because sentence'
+        $repeated = $email -replace 'I do not expect any visible effect', 'I recommend setting this minimum because there is no visible effect'
+        { Assert-ApprovalEmail $repeated 'repeated' } | Should -Throw -Because 'no two paragraphs open with the same words'
+        $outOfOrder = $email -replace '(\r?\n\r?\n)(I do not expect any visible effect[^\r\n]*)(\r?\n\r?\n)(The accounts are listed below[^\r\n]*:)', '$1$4$3$2'
+        $outOfOrder | Should -Not -Be $email
+        { Assert-ApprovalEmail $outOfOrder 'out of order' } | Should -Throw -Because 'what it means for the client comes before the resources'
+    }
+
     It 'says in each email what changes, why, what it means for the client and how it can be reversed' {
         $email = & $read 'CR-02-storage-secure-transfer.email.txt'
-        $email | Should -Match 'I would like to turn on Secure transfer required on 2 of your storage accounts, so they accept encrypted connections only\.'
-        $email | Should -Match 'Why I recommend it\r?\nRequests over plain HTTP and SMB connections without encryption expose data and credentials in transit'
+        $email | Should -Match 'I would like your approval to turn on Secure transfer required on 2 of your storage accounts, so they accept encrypted connections only\.'
+        $email | Should -Match 'I recommend requiring secure transfer because requests over plain HTTP and SMB connections without encryption expose data and credentials in transit'
         $email | Should -Match "The accounts are listed below by subscription:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- stdata \(resource group rg-data\)\r?\n- stweb \(resource group rg-web\)\r?\n"
         $email | Should -Match 'Azure Storage rejects any request made over HTTP and any SMB connection without encryption, such as SMB 2\.1, so a system that still connects to these accounts that way would stop working'
-        $email | Should -Match 'How it can be reversed\r?\nSecure transfer required can be turned off again on any account'
+        $email | Should -Match '\r?\n\r?\nSecure transfer required can be turned off again on any account'
         $email | Should -Not -Match 'stnfsblob|stpremfiles' -Because 'the accounts left out of the change are not in its email'
         $email = & $read 'CR-03-storage-minimum-tls.email.txt'
         $email | Should -Match 'Azure Storage stopped accepting them on February 3, 2026, but these accounts still allow an older version in their configuration'
@@ -641,8 +679,8 @@ Describe 'Change request generation' {
         $email | Should -Match 'I do not expect any visible effect, because Azure Storage already refuses TLS 1\.0 and 1\.1, so every connection that works today keeps working\.'
         $email | Should -Match 'TLS is the protocol that encrypts connections to a service' -Because 'the technical term is explained once in plain language'
         $email = & $read 'CR-04-app-service-minimum-tls.email.txt'
-        $email | Should -Match 'I would like to set the minimum inbound TLS version to 1\.2 on one of your App Service and Function applications\.'
-        $email | Should -Match 'Why I recommend it\r?\nTLS 1\.0 and 1\.1 have known weaknesses, and App Service stops accepting them on May 31, 2027'
+        $email | Should -Match 'I would like your approval to set the minimum inbound TLS version to 1\.2 on one of your App Service and Function applications\.'
+        $email | Should -Match 'I recommend setting this minimum now because TLS 1\.0 and 1\.1 have known weaknesses, and App Service stops accepting them on May 31, 2027'
         $email | Should -Match 'The application is listed below with its minimum TLS version today:'
         $email | Should -Match 'A client that can only use TLS 1\.0 or 1\.1, for example one on an old operating system or runtime, will no longer be able to connect to the application once the change is applied\.'
         $email | Should -Match 'The minimum TLS version can be set back to the version the application has today'
@@ -655,8 +693,8 @@ Describe 'Change request generation' {
     It 'tells the client that diagnostic logging adds Log Analytics ingestion to their Sentinel workspace' {
         $email = & $read 'CR-01-diagnostic-logging.email.txt'
         $email | Should -Match '^Subject: Approval requested: diagnostic logging for Azure resources\r?\n'
-        $email | Should -Match 'I would like to turn on diagnostic logging for your Azure resources by assigning the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative on each subscription below\. An Azure Policy initiative is a set of rules that Azure keeps applied, and this one adds diagnostic settings that send the audit logs of the supported resources to your Sentinel workspace law-example-sentinel, including resources created later\.'
-        $email | Should -Match 'Why I recommend it\r?\nWithout these audit logs, the SOC cannot detect or investigate activity on these resources'
+        $email | Should -Match 'I would like your approval to turn on diagnostic logging for your Azure resources by assigning the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative on each subscription below\. An Azure Policy initiative is a set of rules that Azure keeps applied, and this one adds diagnostic settings that send the audit logs of the supported resources to your Sentinel workspace law-example-sentinel, including resources created later\.'
+        $email | Should -Match 'I recommend turning on this logging because, without these audit logs, the SOC cannot detect or investigate activity on these resources'
         $email | Should -Match "Each subscription is listed below with the resources the initiative covers and how many each holds today:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- Key vaults: 4\r?\n- Subscription Activity Log\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- Key vaults: 2\r?\n- Subscription Activity Log\r?\n" -Because 'each subscription is counted on its own'
         $email | Should -Match 'I do not expect any visible effect on these resources or the people who use them\. A diagnostic setting only sends the logs a resource already produces to the workspace, and does not change how the resource runs\.'
         $email | Should -Match 'This change adds Log Analytics ingestion to your Sentinel workspace law-example-sentinel\. The resource logs are billed as data ingested into the workspace, and their volume depends on how busy each resource is\. The Azure Activity log of each subscription is ingested at no charge\.'
@@ -678,7 +716,7 @@ Describe 'Change request generation' {
         $impl | Should -Contain '7. If the client named such addresses and the rule also allows other ports, select + Add and add an allow rule with the protocol and destination of the rule, Destination port ranges set to the management ports it lists, Source set to IP Addresses with those addresses, and a free priority number, then select Add. Then select the original rule, remove 22, 3389, 5985 and 5986 from Destination port ranges and select Save, so its other ports keep the source they have.' -Because 'narrowing the whole rule would narrow 443 too'
         $impl | Should -Contain '8. If the client named no addresses, select the rule. If it allows only ports 22, 3389, 5985 or 5986, select Delete and then Yes. If it also allows other ports, remove 22, 3389, 5985 and 5986 from Destination port ranges and select Save.'
         $impl[-1] | Should -Be '9. Repeat steps 4 to 8 for each remaining rule listed.'
-        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'no other rule allows those ports from Any, Internet or 0\.0\.0\.0/0'
+        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'no other rule allows those ports over TCP from Any, Internet, 0\.0\.0\.0/0 or ::/0'
         $rollback = @(Get-Section $text 'C) ROLLBACK PLAN')
         $rollback[1] | Should -Match 'For a rule that was deleted, select \+ Add, enter the name, priority, source, source port ranges, destination, destination port ranges, protocol, action Allow and description recorded for it in the RESOURCES section and in change-requests\.csv'
         $rollback | Should -Contain '4. Delete any rule this change added for the named addresses, and the rule added for the AzureBastionSubnet address range if Azure Bastion is no longer wanted.'
@@ -699,15 +737,15 @@ Describe 'Change request generation' {
         $email = & $read 'CR-16-management-ports.email.txt'
         Assert-ApprovalEmail $email 'CR-16'
         $email | Should -Match '^Subject: Approval requested: closing remote management ports to the internet\r?\n'
-        $email | Should -Match 'I would like to close the 2 network security group rules that let anyone on the internet reach RDP, SSH or WinRM, the remote management ports, on your Azure virtual machines\. In their place, administrators would connect through just-in-time VM access or Azure Bastion\.'
+        $email | Should -Match 'I would like your approval to close the 2 network security group rules that let anyone on the internet reach RDP, SSH or WinRM, the remote management ports, on your Azure virtual machines\. In their place, administrators would connect through just-in-time VM access or Azure Bastion\.'
         $email | Should -Match 'A connection that is already open stays up, because a rule change applies only to new connections\.'
         $email | Should -Match 'Where a rule also allows other ports, only 22, 3389, 5985 and 5986 are removed from it, and its other ports stay as they are\.' -Because 'nsg-jump also allows 443'
         $email | Should -Match "- Just-in-time VM access keeps the ports closed .* It is part of Microsoft Defender for Servers Plan 2\. Plan 2 is on in subscription Example Production \($s1\), and not on in subscription Example, Dev Test \($s2\), where this path would add the cost of Plan 2 for the servers\.\r?\n- Azure Bastion lets administrators connect from the Azure portal over an encrypted connection on port 443"
         $email | Should -Match 'It is billed by the hour from the moment it is deployed in a virtual network, and its free Developer tier is meant for development and test only\.'
         $email | Should -Match 'I suggest just-in-time VM access where Plan 2 is on and Azure Bastion elsewhere'
         $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- Allow-RDP in network security group nsg-web \(resource group rg-web, priority 300, TCP port 3389 from Internet, on subnet snet-web of virtual network vnet-app\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- Allow-SSH-HTTPS in network security group nsg-jump \(resource group rg-ops, priority 310, TCP ports 22 and 443 from any address, on network interface nic-jump01 of virtual machine vm-jump01\)"
-        $email | Should -Match 'How it can be reversed\r?\nEvery setting of each rule is recorded, so any of them can be recreated exactly as it is today'
-        $email | Should -Match 'Your approval\r?\nCould you tell me who still needs RDP, SSH or WinRM to these machines from the internet, and from which addresses, and which replacement you would like, just-in-time VM access or Azure Bastion\? With that agreed, could you approve this change for \w+day, [^?]+\? Please reply by '
+        $email | Should -Match '\r?\n\r?\nIf anything unexpected comes up, I can recreate any of the rules exactly as they are today, since every setting of each rule is recorded\.'
+        $email | Should -Match '\r?\n\r?\nCould you tell me who still needs RDP, SSH or WinRM to these machines from the internet, and from which addresses, and which replacement you would like, just-in-time VM access or Azure Bastion\? With that agreed, could you approve this change for \w+day, [^?]+\? Please reply by '
         $email | Should -Match 'Where someone still needs direct access, I can keep the management ports open to their named addresses only, and any other port a rule allows keeps the access it has today\.'
         foreach ($left in 'nsg-fw-untrust', 'nsg-hub-untrust', 'nsg-old', 'Allow-HighPorts', 'Allow-Any') { $email | Should -Not -Match $left -Because "$left is not in the change" }
     }
@@ -741,12 +779,12 @@ Describe 'Change request variants' {
         $email = Get-Content (Join-Path $out 'CR-06-key-vault-purge-protection.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-06 with -PurgeProtectionApproved'
         $email | Should -Match '^Subject: Approval requested: purge protection for Azure key vaults\r?\n\r?\nHello Dana,' -Because 'the approval given at kickoff is confirmed, not assumed'
-        $email | Should -Match 'I would like to turn on purge protection for 2 of your Azure key vaults\.'
+        $email | Should -Match 'I would like your approval to turn on purge protection for 2 of your Azure key vaults\.'
         $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- kv-app \(resource group rg-app, soft delete retention 90 days\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- kv-dev \(resource group rg-dev, soft delete retention 7 days\)"
         $email | Should -Match 'Nothing changes for the applications and people that read or write these vaults today\.'
         $email | Should -Match 'This change cannot be undone\. Purge protection cannot be turned off once it is enabled, by anyone including Microsoft'
         $email | Should -Match 'A deleted vault keeps its name until then, so the name cannot be reused'
-        $email | Should -Match 'Your approval\r?\nYou approved purge protection at the build kickoff\. Because this change cannot be undone, could you confirm that your approval still stands for these vaults, and approve the change for \w+day, [^?]+\? Please reply by '
+        $email | Should -Match '\r?\n\r?\nYou approved purge protection at the build kickoff\. Because this change cannot be undone, could you confirm that your approval still stands for these vaults, and approve the change for \w+day, [^?]+\? Please reply by '
         $email | Should -Not -Match 'I need your written approval' -Because 'the written approval was given at kickoff'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request and client email \| CR-06-key-vault-purge-protection\.txt, CR-06-key-vault-purge-protection\.email\.txt \|'
@@ -801,7 +839,7 @@ Describe 'Change request variants' {
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
         $sql | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- sql-orders \(resource group rg-data, minimum TLS not set\)"
-        $sql | Should -Match 'How it can be reversed\r?\nOnce a minimum is set, Azure SQL does not allow a return to the unset default or a minimum below 1\.2, so this change cannot be reversed\.'
+        $sql | Should -Match '\r?\n\r?\nOnce a minimum is set, Azure SQL does not allow a return to the unset default or a minimum below 1\.2, so this change cannot be reversed\.'
     }
 
     It 'proposes the day -ChangeDate names, asks for a reply a week before it, and refuses a day that leaves the client less than a week' {
@@ -1123,8 +1161,8 @@ Describe 'Change request variants' {
         $email = Get-Content (Join-Path $pack '05-change-requests/CR-10-diagnostic-remediation.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-10'
         $email | Should -Match '^Subject: Approval requested: diagnostic logging remediation for Azure resources'
-        $email | Should -Match 'I would like to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on 3 of your Azure resources\. A remediation task adds the diagnostic settings the initiative expects, so the resources send their audit logs to your Sentinel workspace law-chosen\.'
-        $email | Should -Match 'Why I recommend it\r?\nThe resources below do not send their audit logs to your Sentinel workspace law-chosen today, so the SOC cannot detect or investigate activity on them\.'
+        $email | Should -Match 'I would like your approval to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on 3 of your Azure resources\. A remediation task adds the diagnostic settings the initiative expects, so the resources send their audit logs to your Sentinel workspace law-chosen\.'
+        $email | Should -Match 'I recommend running the remediation because the resources below do not send their audit logs to your Sentinel workspace law-chosen today, so the SOC cannot detect or investigate activity on them\.'
         $email | Should -Match "The resources are listed below by subscription, each with its type:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- kv-app \(resource group rg-app, Key vault\)\r?\n- aa-ops \(resource group rg-ops, Automation account\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- Subscription Activity Log\r?\n"
         $email | Should -Not -Match 'ATMO-MXDR-KV-TOSENT|ATMO-MXDR-AA-TOSENT' -Because 'the client email names the resource type, not the policy'
         $email | Should -Match 'This change adds Log Analytics ingestion to your Sentinel workspace law-chosen\. The resource logs are billed as data ingested into the workspace, and their volume depends on how busy each resource is\. The Azure Activity log of each subscription is ingested at no charge\.'
@@ -1201,14 +1239,32 @@ Describe 'Change request variants' {
         $text | Should -Not -Match 'Repeat steps'
         $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-16 for one rule'
-        $email | Should -Match 'I would like to close the network security group rule that let anyone'
-        $email | Should -Match 'The rule is listed below with its network security group, priority, ports, source and where it applies:'
+        $email | Should -Match 'I would like your approval to close the network security group rule that let anyone'
+        $email | Should -Match 'The change covers the rule below, shown with its network security group, priority, ports, source and where it applies:'
         $email | Should -Match 'TCP port 22 from Internet and 0\.0\.0\.0/0, on subnet snet-web'
-        $email | Should -Match 'Every setting of the rule is recorded, so it can be recreated exactly as it is today'
+        $email | Should -Match 'If anything unexpected comes up, I can recreate the rule exactly as it is today, since every setting of it is recorded\.'
         $email | Should -Not -Match 'other ports' -Because 'the rule names only a management port'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         $index | Should -Match '- 1 rule left out of CR-16 for review because its network security group reaches a network virtual appliance through a subnet it sits in, or through its network interface as well as other resources, so changing the rule would change the appliance too: Allow-RDP in nsg-shared \(resource group rg-fw\)\.'
         $index | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \| 1 \| Change request and client email \|'
+    }
+
+    It 'reads ::/0 as the internet, and leaves a rule for a protocol other than TCP for review' {
+        $pack = Join-Path $TestDrive 'mgmt-protocols'
+        New-ChangeFixture $pack
+        $id = "/subscriptions/$s1/resourceGroups/rg-web/providers/Microsoft.Network/networkSecurityGroups/nsg-v6"
+        $subnet = @{ id = "/subscriptions/$s1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-v6" }
+        $row = { param($name, $protocol, $source, $port) @{ subscriptionId = $s1; resourceGroup = 'rg-web'; NSG = 'nsg-v6'; NsgId = $id; RuleName = $name; RuleId = "$id/securityRules/$name"; Priority = 150; Protocol = $protocol
+                SourcePrefixes = @($source); SourcePorts = @('*'); DestinationPrefixes = @('*'); DestinationAsgs = @(); DestinationPorts = @($port); Association = 'Subnet'; Subnets = @($subnet); Nics = @(); NicVms = @(); ApplianceNicIds = @(); ApplianceSubnetIds = @() } }
+        Set-PackResult $pack 'NB.2-DETAIL' @((& $row 'Allow-SSH-v6' 'Tcp' '::/0' '22'), (& $row 'Allow-App-UDP' 'Udp' '*' '22'), (& $row 'Allow-RDP-Any' '*' 'Internet' '3389'))
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $text = Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw
+        $text | Should -Match '- nsg-v6/Allow-SSH-v6, resource group rg-web, priority 150, allow inbound, protocol TCP, source ::/0,' -Because 'the IPv6 any-address prefix is the internet too'
+        $text | Should -Match '- nsg-v6/Allow-RDP-Any, resource group rg-web, priority 150, allow inbound, protocol Any, source Internet,' -Because 'a rule for any protocol carries TCP'
+        $text | Should -Not -Match 'Allow-App-UDP'
+        Assert-ApprovalEmail (Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw) 'CR-16 with ::/0'
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '- 1 rule left out of CR-16 for review because it allows only a protocol other than TCP, so it may carry an application rather than RDP, SSH or WinRM: Allow-App-UDP in nsg-v6 \(resource group rg-web\), UDP ports 22\. Review each with the client, since RDP can also use UDP 3389\.'
     }
 
     It 'writes no management port change when only rules for cleanup or review remain, and no gaps when NB.2-DETAIL is empty' {
@@ -1265,14 +1321,14 @@ Describe 'Change request variants' {
         $kv | Should -Not -Match 'Repeat steps'
         $kvEmail = Get-Content (Join-Path $folder 'CR-06-key-vault-purge-protection.email.txt') -Raw
         Assert-ApprovalEmail $kvEmail 'CR-06 for one vault'
-        $kvEmail | Should -Match 'I would like to turn on purge protection for one of your Azure key vaults\.'
+        $kvEmail | Should -Match 'I would like your approval to turn on purge protection for one of your Azure key vaults\.'
         $kvEmail | Should -Match 'The vault is listed below with its soft delete retention period'
         $kvEmail | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- kv-only \(resource group rg-app, soft delete retention 90 days\)" -Because 'a missing retention reads as the 90 day default in the email too'
         $kvEmail | Should -Match 'Could you approve purge protection on this vault for \w+day, '
         $email = Get-Content (Join-Path $folder 'CR-08-app-service-https-only.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-08 for one application'
-        $email | Should -Match 'I would like to turn on the HTTPS Only setting for one of your App Service and Function applications\. With it on, requests made over plain HTTP are redirected to HTTPS, the encrypted form of HTTP\.'
-        $email | Should -Match 'HTTPS Only makes sure every request to the application is encrypted in transit\.'
+        $email | Should -Match 'I would like your approval to turn on the HTTPS Only setting for one of your App Service and Function applications\. With it on, requests made over plain HTTP are redirected to HTTPS, the encrypted form of HTTP\.'
+        $email | Should -Match 'The setting makes sure every request to the application is encrypted in transit\.'
         $email | Should -Match 'still call the application over HTTP\?'
         $email | Should -Match '^Subject: .*\r?\n\r?\nHello,\r?\n' -Because 'without a contact the email opens with Hello'
         $email | Should -Match 'Thank you,\r?\n$'
