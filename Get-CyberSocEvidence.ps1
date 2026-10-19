@@ -473,7 +473,9 @@ function Get-EbrDefaultReportingWindow {
     # three in all, about 90 days (the EBR collector reads the maximum reach instead). The report
     # month defaults to the last full month and can never be a month that has not ended. A client
     # whose SecurityIncident data, or workspace retention, starts later gets a shorter window that
-    # starts at its first full month of data, so OUT.3 only compares full months.
+    # starts at its first full month of data, so OUT.3 only compares full months. Data that starts
+    # inside the report month starts the window on its first day, a partial month, and a report
+    # month that ends before the data starts is refused rather than reported as zeros.
     param(
         [Nullable[datetime]]$EarliestIncident,
         [Nullable[int]]$RetentionDays,
@@ -518,10 +520,13 @@ function Get-EbrDefaultReportingWindow {
             $basis += ', shortened to the first full month of data because {0}' -f $why
         }
         if ($start -gt $end) {
-            # Data begins after the report month started, so the only option is a partial month
-            $start = [datetime]::new($source.Year, $source.Month, 1)
-            if ($start -gt $end -or $start -lt $reportStart) { $start = $reportStart }
-            $basis += ', partial first month because the data starts after the report month began'
+            # Data begins after the report month started. The days before it were not observed, so the
+            # window starts on the first day of data and the report reads the month as partial.
+            if ($source.Date -gt $end) {
+                throw ("Report month {0} ends before the data starts: {1}. The first month that can be reported is {2}." -f $reportStart.ToString('yyyy-MM', $inv), $why, $source.ToString('yyyy-MM', $inv))
+            }
+            $start = $source.Date
+            $basis += ', a partial report month from {0} because the data starts after the month began' -f $start.ToString('yyyy-MM-dd', $inv)
         }
     }
 

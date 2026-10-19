@@ -13,7 +13,7 @@ The report is for one month, the **report month**, with the **90-day trend** bes
 |---|---|
 | Report month | `-ReportMonth yyyy-MM`, the last full month by default. A month that has not ended is refused |
 | Window | The first day of the month two months before the report month to the last day of the report month. The September 2026 report reads Jul 1 to Sep 30, 2026 |
-| Late data | A client whose SecurityIncident data (P0.1), or workspace retention, starts inside the trend gets a shorter window from its first full month of data, so monthly figures compare full months. Data that starts inside the report month gives a partial first month, and the basis says so |
+| Late data | A client whose SecurityIncident data (P0.1), or workspace retention, starts inside the trend gets a shorter window from its first full month of data, so monthly figures compare full months. Data that starts inside the report month starts the window on its first day, a partial report month, and the basis says so. A report month that ends before the data starts is refused, never reported as zeros |
 | Overrides | `-WindowStart` and `-WindowEnd` as before. The report month is then the month of `WindowEnd`. `-ReportMonth` and `-WindowEnd` together are refused |
 | Recorded | `00-parameters.json` carries `ReportType` (CyberSOC monthly), `ReportMonth`, `TrendMonths` (3), `WindowStart`, `WindowEnd` and `WindowBasis` |
 

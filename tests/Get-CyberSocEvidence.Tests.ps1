@@ -609,10 +609,17 @@ Describe 'Get-EbrDefaultReportingWindow' {
         $w.End | Should -Be ([datetime]'2026-09-30')
     }
 
-    It 'uses the partial month when data only starts in the report month' {
-        $w = Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-09-15T00:00:00') -Now $now
-        $w.Start | Should -Be ([datetime]'2026-09-01')
-        $w.Basis | Should -Match 'partial'
+    It 'starts a partial report month on the first day of data, never on the 1st' {
+        $w = Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-09-15T08:30:00') -Now $now
+        $w.Start | Should -Be ([datetime]'2026-09-15')
+        $w.End | Should -Be ([datetime]'2026-09-30')
+        $w.Basis | Should -Match 'a partial report month from 2026-09-15'
+        (Get-EbrDefaultReportingWindow -RetentionDays 30 -Now $now).Start | Should -Be ([datetime]'2026-09-07') -Because 'without incident data the retention start is the first day of data'
+    }
+
+    It 'refuses a report month that ends before the data starts, rather than reporting zeros' {
+        { Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-09-15T00:00:00') -ReportMonth ([datetime]'2026-08-01') -Now $now } | Should -Throw '*2026-08 ends before the data starts*SecurityIncident data starts 2026-09-15*first month that can be reported is 2026-09*'
+        { Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-10-02T00:00:00') -Now $now } | Should -Throw '*2026-09 ends before the data starts*'
     }
 
     It 'reads a report month as yyyy-MM only' {

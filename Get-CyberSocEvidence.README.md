@@ -268,7 +268,8 @@ in the pack (`results/<ID>.csv`).
 | Run on Oct 19, 2026, no parameter | Jul 1 to Sep 30, 2026, report month September 2026 |
 | `-ReportMonth 2026-01` | Nov 1, 2025 to Jan 31, 2026 |
 | SecurityIncident data starts Aug 14, 2026 | Sep 1 to Sep 30, 2026, shortened to the first full month of data |
-| SecurityIncident data starts Sep 15, 2026 | Sep 1 to Sep 30, 2026, a partial first month, and the basis says so |
+| SecurityIncident data starts Sep 15, 2026 | Sep 15 to Sep 30, 2026, a partial report month, and the basis says so |
+| SecurityIncident data starts Sep 15, 2026, `-ReportMonth 2026-08` | Refused: the month ends before the data starts, and the message names the first month that can be reported |
 | `-ReportMonth 2026-10` on Oct 19, 2026 | Refused: the month has not ended |
 
 The basis is written to `WindowBasis` in `00-parameters.json` and to the notes. Workspace retention shorter than
