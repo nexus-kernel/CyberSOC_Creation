@@ -122,12 +122,7 @@
   // 03 Threat intelligence: what the threat intelligence and the detections show about this environment.
   const ti = cs.threat
   const notGathered = items => items.length ? `<p class="small not-gathered">Completed in the review: ${esc(list(items.map(u => u.label.toLowerCase())))}.</p>` : ''
-  const tiTiles = [
-    ti.matches ? { value: fmt(ti.matches.month), label: `Threat intelligence matches in ${cs.month.label}`, sub: `${fmt(ti.matches.total)} over ${periodWord}, ${fmt(ti.matches.ticketed)} in alerts that opened a ticket.`, source: ti.matches.source } : null,
-    ti.indicators ? { value: fmt(ti.indicators.active), label: 'Active threat indicators monitored', sub: `From ${plural(ti.indicators.feedCount, 'feed', 'feeds')}${ti.indicators.latest ? `, last ingested ${ti.indicators.latest}` : ''}.`, source: ti.indicators.source } : null,
-    ti.stages ? { value: fmt(ti.stages.observed), label: 'MITRE ATT&CK tactics on the alerts', sub: `Over ${periodWord}.`, source: ti.stages.source } : null,
-    ti.malware ? { value: fmt(ti.malware.total), label: 'Malware detections on Azure virtual machines', sub: `Last 30 days, ${fmt(ti.malware.remediated)} reported remediated by Defender.`, source: ti.malware.source } : ti.risk ? { value: fmt(ti.risk.month), label: `Identity risk detections in ${cs.month.label}`, sub: `${fmt(ti.risk.total)} over ${periodWord}.`, source: ti.risk.source } : null
-  ].filter(Boolean)
+  const tiTiles = ti.tiles
   const stageMax = ti.stages ? Math.max(1, ...ti.stages.rows.map(t => t.alerts)) : 1
   const stages = ti.stages ? `<div class="stages-observed"><h3>Attack stages on the alerts</h3><p class="small">The MITRE ATT&CK tactics Sentinel recorded on the detections in the alerts over ${periodWord}, in attack chain order. One alert can carry several tactics. A tactic is a label recorded at detection, not an investigation finding.</p>${ti.stages.rows.length ? ti.stages.rows.map(t => `<div class="stage-row"><span>${esc(t.label)}</span>${bar(t.alerts / stageMax * 100, `${t.label}: ${fmt(t.alerts)} alerts`)}<strong>${fmt(t.alerts)}</strong><span class="small">${fmt(t.month)} in ${esc(cs.month.short)}${t.tp ? `, ${fmt(t.tp)} confirmed` : ''}</span></div>`).join('') : '<p class="small">No tactic was recorded on the alerts in the period.</p>'}${source(ti.stages.source)}</div>` : ''
   const techniques = ti.techniques && ti.techniques.rows.length ? `<div><h3>Attack techniques observed</h3>${table('MITRE ATT&CK techniques on the same detections', ['Technique', 'Alerts', 'Confirmed threats'], ti.techniques.rows.map(t => [esc(t.label), fmt(t.alerts), fmt(t.tp)]), [1, 2])}${source(ti.techniques.source)}</div>` : ''
@@ -151,15 +146,9 @@
   const ownerText = v => v.owners.map(o => `${o.owner} ${fmt(o.n)}`)
   const exploitText = t => t.kev ? 'CISA KEV listed' : t.exploit ? 'Public exploit code' : 'None reported'
   let vulnBody = ''
-  let vulnTiles = []
+  const vulnTiles = vk.tiles
   if (vk.mode === 'runs' && vk.latest) {
     const L = vk.latest, c = vk.change
-    vulnTiles = [
-      { value: fmt(L.open), label: 'Open vulnerability findings', sub: `On ${plural(L.vms, 'virtual machine', 'virtual machines')}, assessment of ${L.label}.`, source: vk.source },
-      { value: fmt(L.critical + L.high), label: 'Critical and high findings', sub: `${fmt(L.critical)} critical, ${fmt(L.high)} high.`, source: vk.source },
-      L.kev !== null ? { value: fmt(L.kev), label: 'Findings with a CISA KEV-listed CVE', sub: L.kevThisMonth ? `${fmt(L.kevThisMonth)} on a CVE CISA added in ${cs.month.label}.` : `On ${plural(L.kevVms, 'virtual machine', 'virtual machines')}.`, source: vk.source } : null,
-      c && c.compared ? { value: fmt(c.openGone), label: `No longer open since ${date(c.from)}`, sub: `Pending validation. ${plural(c.openNew, 'new open finding', 'new open findings')} in the same time.`, source: vk.changeSource } : null
-    ].filter(Boolean)
     const runsTable = table('Open findings at each assessment in the window', ['Assessment', 'Critical', 'High', 'Medium', 'Low', 'Open', 'CISA KEV', 'Public exploit', 'Virtual machines'], vk.runs.map(r => [`${esc(r.label)}${r.complete ? '' : ' (partial)'}`, fmt(r.critical), fmt(r.high), fmt(r.medium), fmt(r.low), fmt(r.open), r.kev === null ? 'Not checked' : fmt(r.kev), r.exploit === null ? 'Not checked' : fmt(r.exploit), fmt(r.vms)]), [1, 2, 3, 4, 5, 6, 7, 8])
     const changeRows = vk.changes.filter(x => x.compared)
     const changes = vk.changes.length ? `<div><h3>Change between assessments</h3>${changeRows.length ? table('Open findings, a finding being one virtual machine and one vulnerable software', ['Between', 'New', 'No longer open', 'Open after'], changeRows.map(x => [esc(x.label), fmt(x.openNew), fmt(x.openGone), fmt(x.openNow)]), [1, 2, 3]) : ''}<p class="small">A finding no longer open is pending validation, never counted as remediated. Assessments are compared only when both covered every subscription with complete data and the same severity filter${vk.changes.length > changeRows.length ? `, so ${plural(vk.changes.length - changeRows.length, 'pair is', 'pairs are')} not compared` : ''}.</p>${source(vk.changeSource)}</div>` : ''
@@ -170,11 +159,6 @@
     vulnBody = `<h3>Open findings over the window</h3>${runsTable}${source(vk.source)}<div class="two-col">${changes}${statuses}</div>${top}${cross}`
   } else if (vk.mode === 'defender') {
     const D = vk.defender
-    vulnTiles = [
-      { value: fmt(D.bySeverity[0].cves + D.bySeverity[1].cves), label: 'Critical and high CVEs open', sub: 'On Azure virtual machines, current state.', source: D.source },
-      { value: fmt(D.exploitable), label: 'CVEs with public exploit code', sub: 'Per Defender, not a CISA KEV listing.', source: D.source },
-      D.publishedKnown && reportIndex >= 0 ? { value: fmt(D.published[reportIndex].cves), label: `CVEs published in ${cs.month.label} and open now`, sub: `${fmt(D.published[reportIndex].critical)} critical, ${fmt(D.published[reportIndex].high)} high.`, source: D.publishedSource } : null
-    ].filter(Boolean)
     vulnBody = `${table('Open CVEs on Azure virtual machines by severity, current state', ['Severity', 'CVEs', 'Machines', 'Exposures', 'With public exploit'], D.bySeverity.map(x => [esc(x.level), fmt(x.cves), fmt(x.devices), fmt(x.exposures), fmt(x.exploitable)]), [1, 2, 3, 4])}${source(D.source)}${D.software.length ? `<h3>Most exposed software</h3>${table('', ['Software', 'Machines', 'CVEs', 'Critical', 'High', 'With public exploit'], D.software.map(x => [esc(x.name), fmt(x.devices), fmt(x.cves), fmt(x.critical), fmt(x.high), fmt(x.exploitable)]), [1, 2, 3, 4, 5])}${source(D.softwareSource)}` : ''}${D.publishedKnown ? `<h3>New exposure each month</h3>${table('CVEs published in each month of the window that are open at collection', ['Month', 'CVEs', 'Critical', 'High', 'With public exploit'], D.published.map(x => [esc(x.label), fmt(x.cves), fmt(x.critical), fmt(x.high), fmt(x.exploitable)]), [1, 2, 3, 4])}${source(D.publishedSource)}` : ''}<p class="small">The monthly vulnerability assessment adds the CISA KEV listing, the remediation status and owner of each finding, and the change between months.</p>`
   } else vulnBody = '<div class="empty-state">The vulnerability position is completed in the review.</div>'
   const vulnPage = `<section class="page" id="vulnerability">${heading('04', 'Vulnerability management', 'The vulnerabilities open on your Azure virtual machines, what changed, and who remediates them')}

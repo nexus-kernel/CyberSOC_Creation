@@ -216,3 +216,58 @@ test('the HTML carries the monthly summary, the threat intelligence and vulnerab
   const text = html.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ')
   assert.ok(!/;/.test(text), text.match(/.{0,60};.{0,60}/)?.[0])
 })
+
+// The CyberSOC slides of the deck, built from the same synthetic pack at every depth.
+const os = require('node:os')
+const { execFileSync } = require('node:child_process')
+const { JSZip } = require('../report/deck-common.cjs')
+async function slidesOf(depth, p = full()) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cybersoc-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  fs.writeFileSync(dataFile, JSON.stringify({ ...p, depth }))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  const num = n => Number(n.match(/(\d+)\.xml$/)[1])
+  const names = re => Object.keys(zip.files).filter(n => re.test(n)).sort((a, b) => num(a) - num(b))
+  const slides = await Promise.all(names(/^ppt\/slides\/slide\d+\.xml$/).map(n => zip.file(n).async('string')))
+  const notes = await Promise.all(names(/^ppt\/notesSlides\/notesSlide\d+\.xml$/).map(n => zip.file(n).async('string')))
+  const decode = t => t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+  const textOf = xml => (xml.match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => decode(t.slice(5, -6))).join(' ')
+  return slides.map((xml, i) => ({ xml, text: textOf(xml), notes: textOf(notes[i] || '') }))
+}
+const EMU = 914400
+const titleOf = s => (s.text.match(/^[^|]*/) || [''])[0]
+
+test('the deck carries the month at a glance and the threat and vulnerability slides at every depth, and the 90-day trend from Balanced', async () => {
+  for (const depth of ['brief', 'balanced', 'detailed']) {
+    const deck = await slidesOf(depth)
+    const has = title => deck.some(s => s.text.includes(title))
+    for (const title of ['CyberSOC monthly security report', 'September 2026 at a glance', 'Threat intelligence', 'Vulnerability management']) assert.ok(has(title), `${depth}: ${title}`)
+    assert.equal(has('The 90-day trend'), depth !== 'brief', depth)
+    assert.ok(!deck.some(s => /Quarter wins|this quarter/.test(s.text)), `${depth}: a monthly report never reads as a quarter`)
+  }
+})
+
+test('every shape on the CyberSOC slides ends above the content bottom, and their notes keep to client-visible text', async () => {
+  const deck = await slidesOf('balanced')
+  const cyber = deck.filter(s => /at a glance|The 90-day trend|Threat intelligence|Vulnerability management/.test(s.text.slice(0, 200)))
+  assert.equal(cyber.length, 4)
+  for (const s of cyber) {
+    for (const [, y, cy] of s.xml.matchAll(/<a:off x="\d+" y="(\d+)"\/><a:ext cx="\d+" cy="(\d+)"\/>/g)) {
+      if (Number(y) >= 1.4 * EMU) assert.ok(Number(y) + Number(cy) <= 7.0 * EMU + 1, `${s.text.slice(0, 40)}: a shape ends at ${((Number(y) + Number(cy)) / EMU).toFixed(2)} in`)
+    }
+    assert.ok(!/;/.test(s.text + s.notes), s.text.slice(0, 60))
+    assert.ok(!/Have the|Presenter notes|presenter|ready if asked/i.test(s.notes), s.notes)
+  }
+  const ti = cyber.find(s => s.text.includes('MITRE ATT&CK TACTICS ON THE ALERTS'))
+  assert.ok(!cyber.some(s => /Attack stage/.test(s.text)), 'the examples table column name stays the confirmed threats slide own')
+  assert.match(ti.text, /KNOWN EXPLOITED VULNERABILITIES PRESENT/)
+  assert.match(ti.notes, /not investigation findings/)
+})
+
+test('without assessment runs or Defender readings the vulnerability slide says the review completes it', async () => {
+  const p = full()
+  for (const id of ['VA.RUNS', 'VA.CHANGE', 'VA.TOP', 'VA.KEV']) { p.manifest = p.manifest.filter(r => r.ResultId !== id); delete p.results[id] }
+  const deck = await slidesOf('brief', p)
+  const v = deck.find(s => s.text.startsWith('Vulnerability management'))
+  assert.match(v.text, /The vulnerability position is completed in the review/)
+})

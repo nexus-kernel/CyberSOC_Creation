@@ -1,5 +1,7 @@
-/* PowerPoint edition of the EBR security report (03-security-report.pptx), written by
-   New-CyberSocReport.ps1 beside the HTML. It reads the same embedded data and runs the same report
+/* PowerPoint edition of the CyberSOC monthly security report (03-security-report.pptx), written by
+   New-CyberSocReport.ps1 beside the HTML. The CyberSOC slides (the month at a glance, the 90-day trend, threat
+   intelligence and vulnerability management) come from report/cybersoc-model.js, the rest from the EBR deck it was
+   copied from. It reads the same embedded data and runs the same report
    model, then the story layer (report-story.js) for the wins, decisions, drift and roadmap.
 
    Structure (docs/plans/2026-10-12-ebr-deck-restructure-design.md, grounding slides added Oct 14, 2026):
@@ -26,14 +28,16 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const { createDeck, writeDeck, lines, HEX, X0, CW } = require('./deck-common.cjs')
-const { build, fmt, clean, pctText, plural, RETIREMENT, smallSampleText } = require('./report-model.js')
+const { build, fmt, clean, pctText, plural, RETIREMENT, smallSampleText, duration, date } = require('./report-model.js')
 const { buildStory, shortName } = require('./report-story.js')
+const CyberSoc = require('./cybersoc-model.js')
 
 const [dataFile, outFile] = process.argv.slice(2)
 if (!dataFile || !outFile) { console.error('usage: node build-report-deck.cjs <data.json> <output.pptx>'); process.exit(2) }
 const data = JSON.parse(fs.readFileSync(dataFile, 'utf8').replace(/^﻿/, ''))
 const m = build(data)
 const st = buildStory(m, data)
+const cs = CyberSoc.build(data, m)
 
 const TOP = 1.75, BOTTOM = 7.0
 const balanced = m.depth !== 'brief', detailed = m.depth === 'detailed'
@@ -43,7 +47,7 @@ const list = items => items.length <= 1 ? items.join('') : `${items.slice(0, -1)
 const scopeMeta = `Posture read ${m.readDate} · ${plural(m.subscriptions, 'subscription', 'subscriptions')} · ${plural(m.workspaces.length, 'Sentinel workspace', 'Sentinel workspaces')}`
 
 async function main() {
-  const { pres, C, card, chip, text, meter, markFill, rule, glue } = createDeck({ title: `${m.client} | Security business review` })
+  const { pres, C, card, chip, text, meter, markFill, rule, glue } = createDeck({ title: `${m.client} | CyberSOC monthly security report, ${cs.month.label}` })
   const content = (section, title, subtitle) => {
     const s = pres.addSlide({ masterName: 'Atmosera Content', sectionTitle: section })
     s.addText(title, { placeholder: 'title' })
@@ -60,16 +64,54 @@ async function main() {
   }
   // Table cells draw only a bottom rule.
   const border = pt => [{ type: 'none' }, { type: 'none' }, { pt, color: HEX.track }, { type: 'none' }]
+  // The CyberSOC slides share a KPI row like the executive summary's and a plain table in the deck's style.
+  const kpiRow = (sl, tiles, y, name) => {
+    if (!tiles.length) return y
+    const n = tiles.length, w = CW / n, kw = w - 0.45
+    const kpiH = Math.max(1.1, ...tiles.map(k => 0.5 + lines(k.label, kw, 12, true) * 0.2 + lines(k.sub, kw, 10.5) * 0.175 + 0.14))
+    rule(sl, X0, y - 0.05, CW, C.text2, 1, `${name} top rule`)
+    tiles.forEach((k, i) => {
+      const x = X0 + i * w
+      if (i) sl.addShape(pres.shapes.LINE, { x, y: y + 0.05, w: 0, h: kpiH - 0.15, line: { color: HEX.track, width: 0.75 }, objectName: `${name} divider ${i}` })
+      text(sl, [{ text: k.value, options: { fontSize: 28, bold: true, color: C.accent2, breakLine: true } }, { text: k.label, options: { fontSize: 12, bold: true, color: C.text2, breakLine: true, paraSpaceBefore: 2 } }, { text: k.sub, options: { fontSize: 10.5, color: C.accent6, paraSpaceBefore: 2 } }], { x: x + (i ? 0.3 : 0), y: y + 0.05, w: kw, h: kpiH - 0.1, objectName: `${name} ${i + 1}` })
+    })
+    rule(sl, X0, y + kpiH, CW, HEX.track, 0.75, `${name} bottom rule`)
+    return y + kpiH + 0.2
+  }
+  const HEAD_ROW = 0.36
+  const deckTable = (sl, head, body, { x, y, w, colW, name, size = 11, rowH = 0.27, numeric = [] }) => {
+    const cell = (t, i, o = {}) => ({ text: glue(String(t)), options: { fontSize: size, color: HEX.dk1, align: numeric.includes(i) ? 'right' : 'left', valign: 'middle', border: border(0.5), ...o } })
+    const rows = [head.map((t, i) => cell(t, i, { fontSize: size - 1, color: HEX.accent6, valign: 'bottom', border: border(0.75) })), ...body.map(r => r.map((t, i) => cell(t, i, i ? {} : { bold: true, color: HEX.dk2 })))]
+    sl.addTable(rows, { x, y, w, colW, rowH: [HEAD_ROW, ...body.map(() => rowH)], margin: [0.03, 0.08, 0.03, 0.08], objectName: name })
+    return y + HEAD_ROW + rowH * body.length
+  }
+  const caption = (sl, value, x, y, w, name, size = 10) => { const t = glue(clean(value)); const h = lines(t, w - 0.1, size) * 0.17 + 0.05; text(sl, t, { x, y, w, h, fontSize: size, color: C.accent6, objectName: name }); return y + h }
+  const periodWord = cs.months.length === 3 ? 'the 90 days' : 'the period'
+  const reportIndex = cs.months.findIndex(x => x.report)
+  const prevMonth = reportIndex > 0 ? cs.months[reportIndex - 1] : null
 
   // 1. Cover
   pres.addSection({ title: 'Summary' })
   let s = pres.addSlide({ masterName: 'Atmosera Title', sectionTitle: 'Summary' })
-  s.addText('MANAGED SECURITY SERVICES · EXECUTIVE BUSINESS REVIEW', { placeholder: 'eyebrow' })
-  s.addText('Security business review', { placeholder: 'title' })
+  s.addText('MANAGED SECURITY SERVICES · CYBERSOC MONTHLY REPORT', { placeholder: 'eyebrow' })
+  s.addText('CyberSOC monthly security report', { placeholder: 'title' })
   s.addText(m.client, { placeholder: 'subtitle' })
-  s.addText(st.quarter ? `${st.quarter} · ${m.period.label}` : m.period.label, { placeholder: 'caption' })
+  s.addText(glue(`${cs.month.label} · 90-day trend ${m.period.label}`), { placeholder: 'caption' })
   s.addText(scopeMeta, { placeholder: 'meta' })
-  s.addNotes(notesOf([`Security business review for ${m.client}.`, `Alert activity covers ${m.period.label}. Identity and endpoint readings use the source lookback, generally the last 30 days. Configuration and score readings are from ${m.readDate}.`]))
+  s.addNotes(notesOf([`CyberSOC monthly security report for ${m.client}, ${cs.month.label}.`, `Alert activity covers ${m.period.label}, the report month with the 90-day trend. Identity and endpoint readings use the source lookback, generally the last 30 days. Configuration and score readings are from ${m.readDate}.`]))
+
+  // 1b. The month at a glance: the CyberSOC tiles, then the report month beside the months before it with a neutral
+  // change, as the HTML executive summary shows them.
+  const nowOps = reportIndex >= 0 ? cs.ops.monthly[reportIndex] : null
+  s = content('Summary', `${cs.month.label} at a glance`, nowOps ? `${plural(nowOps.total, 'alert', 'alerts')} created in ${cs.month.label}${prevMonth && cs.ops.monthly[reportIndex - 1] ? `, against ${fmt(cs.ops.monthly[reportIndex - 1].total)} in ${prevMonth.name}` : ''}` : `The report month with the 90-day trend`)
+  let gy = kpiRow(s, cs.headline, TOP, 'Month KPI')
+  if (cs.glance.rows.length) {
+    const fits = Math.max(1, Math.floor((BOTTOM - gy - 0.45 - HEAD_ROW) / 0.27)), rowsShown = cs.glance.rows.slice(0, fits)
+    const monthW = 1.45, changeW = prevMonth ? 2.6 : 0, labelW = CW - monthW * cs.months.length - changeW
+    gy = deckTable(s, ['Measure', ...cs.glance.months, ...(prevMonth ? [`Change from ${prevMonth.label}`] : [])], rowsShown.map(r => [r.label, ...r.values, ...(prevMonth ? [r.change] : [])]), { x: X0, y: gy, w: CW, colW: [labelW, ...cs.months.map(() => monthW), ...(prevMonth ? [changeW] : [])], name: 'Month at a glance table', numeric: cs.months.map((_, i) => i + 1) })
+    caption(s, `Evidence ${[...new Set(rowsShown.map(r => r.source))].join(', ')}. The change column compares with the previous month and makes no judgment.`, X0, gy + 0.08, CW, 'Month at a glance caption')
+  } else emptyCard(s, 'The monthly readings are completed in the review.', 'Month at a glance', gy)
+  s.addNotes(notesOf([cs.summary, cs.highlights.map(h => `${h.title}. ${h.summary}`), 'The month at a glance puts the report month beside the months before it. The change column makes no judgment: more alerts can mean more coverage as well as more activity.']))
 
   // 2. Executive summary, in line with the HTML executive summary page: the outcome KPIs, the four tier
   // "How we report posture" block, then the wins, the watch list and the items that need action from the
@@ -147,6 +189,84 @@ async function main() {
     text(s, runs, { x, y: sy + 0.5, w: colW, h: colRoom, objectName: `Summary ${label} items` })
   })
   s.addNotes(notesOf(['Lead with outcomes.', st.takeaways.summary, st.kpis.map(k => `${k.label}: ${k.value}. ${k.sub}.`), 'Posture is reported for the whole tenant, never as a single vendor percentage, in four tiers: outcomes, control effectiveness, what we are hardening next, and the vendor benchmark as context.', 'Then the wins, the watch list, and the items that need action from your team before the next review.']))
+
+  // The threat intelligence and vulnerability management slides, at every depth: after the operations slides in
+  // Balanced and Detailed, before the roadmap in Brief.
+  function cyberSocSlides(section) {
+    const ti = cs.threat, vk = cs.vuln
+    s = content(section, 'Threat intelligence', ti.matches ? `${plural(ti.matches.month, 'threat intelligence match', 'threat intelligence matches')} in ${cs.month.label}, ${fmt(ti.matches.total)} over ${periodWord}` : `The threats observed in your environment over ${periodWord}`)
+    let y = kpiRow(s, ti.tiles, TOP, 'Threat KPI')
+    const lw = CW * 0.5, rx = X0 + lw + 0.4, rw = CW - lw - 0.4
+    eyebrow(s, 'MITRE ATT&CK tactics on the alerts', X0, y, lw, C.text2, 'Alert tactics')
+    if (ti.stages && ti.stages.rows.length) {
+      const rowsShown = ti.stages.rows.slice(0, 9)
+      s.addChart(pres.charts.BAR, [{ name: 'Alerts', labels: rowsShown.map(t => t.label), values: rowsShown.map(t => t.alerts) }], {
+        x: X0 - 0.1, y: y + 0.3, w: lw + 0.1, h: BOTTOM - y - 0.85, barDir: 'bar', chartColors: [HEX.accent2], barGapWidthPct: 40,
+        showValue: true, dataLabelPosition: 'outEnd', dataLabelColor: HEX.dk2, dataLabelFontSize: 11, dataLabelFontBold: true, dataLabelFontFace: '+mn-lt', dataLabelFormatCode: '#,##0',
+        catAxisOrientation: 'maxMin', catAxisLabelColor: HEX.dk1, catAxisLabelFontSize: 11, catAxisLabelFontFace: '+mn-lt', valAxisHidden: true,
+        valGridLine: { style: 'none' }, catGridLine: { style: 'none' }, showLegend: false, objectName: 'Alert tactics chart'
+      })
+      caption(s, 'MITRE ATT&CK tactics recorded on the detections in the alerts, in attack chain order. A tactic is a label recorded at detection, not an investigation finding.', X0, BOTTOM - 0.5, lw, 'Alert tactics caption')
+    } else text(s, 'The tactics on the alerts are confirmed in the review.', { x: X0, y: y + 0.4, w: lw, h: 0.4, fontSize: 13, color: C.accent6, objectName: 'Alert tactics empty' })
+    let ry = y
+    if (ti.matches) {
+      eyebrow(s, 'Threat intelligence matches', rx, ry, rw, C.text2, 'Threat matches')
+      ry = deckTable(s, ['Month', 'Matches', 'In ticketed alerts'], ti.matches.byMonth.map(x => [x.label, fmt(x.total), fmt(x.ticketed)]), { x: rx, y: ry + 0.35, w: rw, colW: [rw * 0.4, rw * 0.25, rw * 0.35], name: 'Threat matches table', numeric: [1, 2] })
+      ry = caption(s, 'A match is a known indicator observed in your telemetry, not a confirmed compromise.', rx, ry + 0.05, rw, 'Threat matches caption') + 0.1
+    }
+    if (vk.mode === 'runs' && vk.kevKnown && ry < BOTTOM - 1.2) {
+      eyebrow(s, 'Known exploited vulnerabilities present', rx, ry, rw, C.text2, 'KEV')
+      const room = Math.max(1, Math.floor((BOTTOM - ry - 0.8 - HEAD_ROW) / 0.27))
+      if (vk.kev.length) ry = deckTable(s, ['Product', 'VMs', 'Added to CISA KEV'], vk.kev.slice(0, Math.min(4, room)).map(k => [k.product, fmt(k.vms), `${k.added}${k.thisMonth ? ' (this month)' : ''}`]), { x: rx, y: ry + 0.35, w: rw, colW: [rw * 0.42, rw * 0.13, rw * 0.45], name: 'KEV table', numeric: [1] })
+      else ry = caption(s, 'No open finding carries a CVE CISA lists as known exploited.', rx, ry + 0.4, rw, 'KEV empty', 12)
+      caption(s, 'A CISA KEV listing means exploitation in the wild, not in your environment.', rx, ry + 0.05, rw, 'KEV caption')
+    } else if (ti.identity && ry < BOTTOM - 1.4) {
+      eyebrow(s, 'Identity threat activity', rx, ry, rw, C.text2, 'Identity')
+      deckTable(s, ['Measure', ...ti.identity.byMonth.map(x => x.label)], [['Failed password sign-ins', 'failedPassword'], ['Password spraying sources', 'sprayIps'], ['Blocked by Conditional Access', 'blocked']].map(([label, f]) => [label, ...ti.identity.byMonth.map(x => fmt(x[f]))]), { x: rx, y: ry + 0.35, w: rw, colW: [rw * 0.46, ...ti.identity.byMonth.map(() => rw * 0.54 / ti.identity.byMonth.length)], name: 'Identity table', numeric: ti.identity.byMonth.map((_, i) => i + 1) })
+    }
+    s.addNotes(notesOf([
+      ti.tiles.map(t => `${t.label}: ${t.value}. ${t.sub}`),
+      ti.stages ? `Tactics on the alerts over ${periodWord}: ${ti.stages.rows.map(t => `${t.label} ${fmt(t.alerts)}`).join(', ')}.` : '',
+      ti.techniques && ti.techniques.rows.length ? `Most frequent techniques: ${ti.techniques.rows.slice(0, 5).map(t => t.label).join(', ')}.` : '',
+      ti.identity && reportIndex >= 0 ? `Identity threat activity in ${cs.month.label}: ${fmt(ti.identity.byMonth[reportIndex].failedPassword)} failed password sign-ins and ${fmt(ti.identity.byMonth[reportIndex].sprayIps)} password spraying sources. A password spraying source is a signal, not a confirmed attack.` : '',
+      ti.unmeasured.length ? `Completed in the review: ${ti.unmeasured.map(u => u.label.toLowerCase()).join(', ')}.` : '',
+      'Threat intelligence matches and the tactics on the alerts describe what the detections recorded, not investigation findings. A CISA KEV listing means CISA has reported exploitation in the wild, not exploitation in your environment.'
+    ]))
+
+    s = content(section, 'Vulnerability management', vk.mode === 'runs' && vk.latest ? `${plural(vk.latest.open, 'open finding', 'open findings')} at the assessment of ${vk.latest.label}${vk.latest.kev !== null ? `, ${fmt(vk.latest.kev)} with a CISA KEV-listed CVE` : ''}` : vk.mode === 'defender' ? 'The vulnerabilities Defender reports open on Azure virtual machines' : 'The vulnerability position is completed in the review')
+    y = kpiRow(s, vk.tiles, TOP, 'Vulnerability KPI')
+    if (vk.mode === 'runs' && vk.latest) {
+      eyebrow(s, 'Open findings at each assessment', X0, y, lw, C.text2, 'Assessments')
+      const sev = [['Critical', 'critical', HEX.accent4], ['High', 'high', HEX.sevHigh], ['Medium', 'medium', HEX.sevMedium], ['Low', 'low', HEX.sevLow]]
+      s.addChart(pres.charts.BAR, sev.map(([name, f]) => ({ name, labels: vk.runs.map(r => r.label), values: vk.runs.map(r => r[f]) })), {
+        x: X0 - 0.1, y: y + 0.3, w: lw + 0.1, h: BOTTOM - y - 0.85, barDir: 'col', barGrouping: 'stacked', barGapWidthPct: 70, chartColors: sev.map(x => x[2]),
+        catAxisLabelColor: HEX.dk1, catAxisLabelFontSize: 10, catAxisLabelFontFace: '+mn-lt', valAxisLabelColor: HEX.accent6, valAxisLabelFontSize: 10, valAxisLabelFontFace: '+mn-lt',
+        valGridLine: { color: HEX.track, size: 0.5 }, catGridLine: { style: 'none' }, showLegend: true, legendPos: 'b', legendFontSize: 10, legendFontFace: '+mn-lt', legendColor: HEX.dk1, objectName: 'Assessments chart'
+      })
+      caption(s, vk.change && vk.change.compared ? `Since ${date(vk.change.from)}: ${fmt(vk.change.openNew)} new, ${fmt(vk.change.openGone)} no longer open, pending validation.` : 'Assessments are compared only when both are complete.', X0, BOTTOM - 0.5, lw, 'Assessments caption')
+      eyebrow(s, 'Top products to patch', rx, y, rw, C.text2, 'Top products')
+      const room = Math.max(1, Math.floor((BOTTOM - y - 0.85 - HEAD_ROW) / 0.3))
+      const top = vk.top.slice(0, Math.min(6, room))
+      const end = top.length ? deckTable(s, ['Product', 'VMs', 'Exploit intelligence', 'Owner'], top.map(t => [t.product, fmt(t.vms), t.kev ? 'CISA KEV listed' : t.exploit ? 'Public exploit code' : 'None reported', t.owner]), { x: rx, y: y + 0.35, w: rw, colW: [rw * 0.36, rw * 0.1, rw * 0.28, rw * 0.26], name: 'Top products table', size: 10.5, rowH: 0.3, numeric: [1] }) : y + 0.4
+      caption(s, `Remediation status: ${vk.statuses.map(x => `${x.label.toLowerCase()} ${fmt(x.n)}`).join(', ') || 'not recorded'}.`, rx, end + 0.08, rw, 'Remediation status caption')
+    } else if (vk.mode === 'defender') {
+      const D = vk.defender
+      eyebrow(s, 'Open CVEs by severity, current state', X0, y, lw, C.text2, 'Defender severity')
+      s.addChart(pres.charts.BAR, [{ name: 'CVEs', labels: D.bySeverity.map(x => x.level), values: D.bySeverity.map(x => x.cves) }], {
+        x: X0 - 0.1, y: y + 0.3, w: lw + 0.1, h: BOTTOM - y - 0.85, barDir: 'bar', chartColors: [HEX.accent2], barGapWidthPct: 40, showValue: true, dataLabelPosition: 'outEnd', dataLabelColor: HEX.dk2, dataLabelFontSize: 11, dataLabelFontBold: true, dataLabelFormatCode: '#,##0',
+        catAxisOrientation: 'maxMin', catAxisLabelColor: HEX.dk1, catAxisLabelFontSize: 11, valAxisHidden: true, valGridLine: { style: 'none' }, catGridLine: { style: 'none' }, showLegend: false, objectName: 'Defender severity chart'
+      })
+      if (D.software.length) {
+        eyebrow(s, 'Most exposed software', rx, y, rw, C.text2, 'Software')
+        deckTable(s, ['Software', 'Machines', 'CVEs', 'Public exploit'], D.software.slice(0, 6).map(x => [x.name, fmt(x.devices), fmt(x.cves), fmt(x.exploitable)]), { x: rx, y: y + 0.35, w: rw, colW: [rw * 0.46, rw * 0.18, rw * 0.14, rw * 0.22], name: 'Software table', size: 10.5, numeric: [1, 2, 3] })
+      }
+    } else emptyCard(s, 'The vulnerability position is completed in the review.', 'Vulnerability', y)
+    s.addNotes(notesOf([
+      vk.tiles.map(t => `${t.label}: ${t.value}. ${t.sub}`),
+      vk.mode === 'runs' ? vk.top.slice(0, 5).map(t => `${t.product}, ${t.severity.toLowerCase()}, on ${plural(t.vms, 'virtual machine', 'virtual machines')}. ${t.kev ? 'CISA KEV listed.' : t.exploit ? 'Public exploit code is available.' : ''} Owner ${t.owner.toLowerCase()}.`) : '',
+      'A finding is one vulnerable software package on one virtual machine. A finding no longer reported is pending validation until the next assessment confirms it. Public exploit code and a CISA KEV listing do not mean the vulnerability was exploited in your environment.'
+    ]))
+  }
 
   // 3. Wins
   s = content('Summary', st.quarter ? 'Quarter wins' : 'Wins this period', st.takeaways.wins)
@@ -260,6 +380,35 @@ async function main() {
       m.response && m.response.target ? m.response.target.sentence : ''
     ]))
 
+    // 4a. The 90-day trend: alerts by week, response timing by month and the most common alert types.
+    if (cs.ops.weekly.length || cs.ops.timing.length) {
+      s = content('Operations and posture', 'The 90-day trend', `Alerts by week, response timing by month and the alert types behind them, ${m.period.label}`)
+      const lw = CW * 0.52, rx = X0 + lw + 0.4, rw = CW - lw - 0.4
+      eyebrow(s, 'Alerts created each week', X0, TOP, lw, C.text2, 'Weekly alerts')
+      if (cs.ops.weekly.length) {
+        const sev = ['High', 'Medium', 'Low'], colors = { High: HEX.sevHigh, Medium: HEX.sevMedium, Low: HEX.sevLow }
+        s.addChart(pres.charts.BAR, sev.map(k => ({ name: k, labels: cs.ops.weekly.map(w => w.label), values: cs.ops.weekly.map(w => w[k.toLowerCase()]) })), {
+          x: X0 - 0.1, y: TOP + 0.35, w: lw + 0.1, h: BOTTOM - TOP - 0.95, barDir: 'col', barGrouping: 'stacked', barGapWidthPct: 45,
+          chartColors: sev.map(k => colors[k]), catAxisLabelColor: HEX.dk1, catAxisLabelFontSize: 9, catAxisLabelFontFace: '+mn-lt', catAxisLabelRotate: 315, valAxisLabelColor: HEX.accent6, valAxisLabelFontSize: 10, valAxisLabelFontFace: '+mn-lt',
+          valGridLine: { color: HEX.track, size: 0.5 }, catGridLine: { style: 'none' }, showLegend: true, legendPos: 'b', legendFontSize: 10, legendFontFace: '+mn-lt', legendColor: HEX.dk1, objectName: 'Weekly alerts chart'
+        })
+        caption(s, cs.ops.weeklyNote || 'Weeks run 7 days from the window start.', X0, BOTTOM - 0.5, lw, 'Weekly alerts caption')
+      } else text(s, 'Weekly volume is confirmed in the review.', { x: X0, y: TOP + 0.45, w: lw, h: 0.4, fontSize: 13, color: C.accent6, objectName: 'Weekly alerts empty' })
+      eyebrow(s, 'Response timing by month, high severity', rx, TOP, rw, C.text2, 'Monthly timing')
+      let ty = TOP + 0.4
+      if (cs.ops.timing.length) {
+        const cellT = (t, f) => t.withheld ? 'Not reported' : t[f] === null || t[f] === undefined ? 'Not available' : duration(t[f])
+        ty = deckTable(s, ['Month', 'Closed', 'Median to acknowledge', 'Median to close', '90% closed within'], cs.ops.timing.map(t => [t.label, fmt(t.high.n), cellT(t.high, 'ack'), cellT(t.high, 'median'), cellT(t.high, 'p90')]), { x: rx, y: ty, w: rw, colW: [rw * 0.2, rw * 0.13, rw * 0.25, rw * 0.2, rw * 0.22], name: 'Monthly timing table', size: 11, numeric: [1, 2, 3, 4] })
+        ty = caption(s, 'A month with fewer than 5 closed alerts reports no timing. A median under 20 minutes or a 90th percentile over one hour is covered in the review.', rx, ty + 0.05, rw, 'Monthly timing caption')
+      }
+      if (cs.ops.types.length) {
+        eyebrow(s, 'Most common alert types', rx, ty + 0.15, rw, C.text2, 'Alert types')
+        const room = Math.max(1, Math.floor((BOTTOM - ty - 0.6 - HEAD_ROW) / 0.27))
+        deckTable(s, ['Alert type', 'Period', cs.month.short], cs.ops.types.slice(0, Math.min(5, room)).map(t => [t.title.length > 60 ? `${t.title.slice(0, 57).trim()}...` : t.title, fmt(t.total), fmt(t.month)]), { x: rx, y: ty + 0.5, w: rw, colW: [rw * 0.64, rw * 0.16, rw * 0.2], name: 'Alert types table', size: 10, numeric: [1, 2] })
+      }
+      s.addNotes(notesOf([`Alerts created each week over ${periodWord}, by severity.`, cs.ops.weeklyNote || '', cs.ops.timing.filter(t => !t.high.withheld).map(t => `${t.label}: high severity median time to close ${duration(t.high.median)} on ${plural(t.high.n, 'closed alert', 'closed alerts')}.`), cs.ops.types.slice(0, 5).map(t => `${t.title}: ${fmt(t.total)} over the period, ${fmt(t.month)} in ${cs.month.label}.`), cs.ops.typesWithheld ? `${plural(cs.ops.typesWithheld, 'alert whose title names an account, address, host or ticket is', 'alerts whose titles name an account, address, host or ticket are')} counted without the title.` : '']))
+    }
+
     // 4b. Confirmed threats: up to five examples, highest severity first, when the pack has any. A pack with true
     // positives but no screened example (every title withheld, or rows without titles or tactics) still gets the
     // slide without the table, so the outcome cards and the impact statement never disappear with the examples.
@@ -349,6 +498,8 @@ async function main() {
         strip ? 'Every confirmed threat follows the same path: detections are correlated into one alert, the SOC triages it and confirms its severity, and the SOC records a true-positive classification. Data exposure or business impact is confirmed only from reviewed investigation records, never from the classification or the tactics on the alert.' : ''
       ]))
     }
+
+    cyberSocSlides('Operations and posture')
 
     // 5. Control posture: pillar matrix and the foundational gaps panel. The headline measure column sits on a
     // light band with its figures in bold, one measure per line, so the lead reading of each pillar stands out.
@@ -504,6 +655,11 @@ async function main() {
         s.addNotes(notesOf(['The previous slide could not hold the full reading for this pillar, so it is set out here in full.', continued.map(p => `${p.name}. ${p.headline}. ${p.narrative}`)]))
       }
     }
+  }
+
+  if (!balanced) {
+    pres.addSection({ title: 'Threats and vulnerabilities' })
+    cyberSocSlides('Threats and vulnerabilities')
   }
 
   // 6. Hardening roadmap: Now, Next and Later.

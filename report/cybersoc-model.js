@@ -369,6 +369,31 @@
     }
     cs.highlights = cs.highlights.slice(0, 4)
 
+    // The tiles of the threat intelligence and vulnerability pages and slides, so both surfaces read the same.
+    const periodWord = cs.months.length === 3 ? 'the 90 days' : 'the period'
+    ti.tiles = [
+      ti.matches ? { value: fmt(ti.matches.month), label: `Threat intelligence matches in ${cs.month.label}`, sub: `${fmt(ti.matches.total)} over ${periodWord}, ${fmt(ti.matches.ticketed)} in alerts that opened a ticket.`, source: ti.matches.source } : null,
+      ti.indicators ? { value: fmt(ti.indicators.active), label: 'Active threat indicators monitored', sub: `From ${plural(ti.indicators.feedCount, 'feed', 'feeds')}${ti.indicators.latest ? `, last ingested ${ti.indicators.latest}` : ''}.`, source: ti.indicators.source } : null,
+      ti.stages ? { value: fmt(ti.stages.observed), label: 'MITRE ATT&CK tactics on the alerts', sub: `Over ${periodWord}.`, source: ti.stages.source } : null,
+      ti.malware ? { value: fmt(ti.malware.total), label: 'Malware detections on Azure virtual machines', sub: `Last 30 days, ${fmt(ti.malware.remediated)} reported remediated by Defender.`, source: ti.malware.source } : ti.risk ? { value: fmt(ti.risk.month), label: `Identity risk detections in ${cs.month.label}`, sub: `${fmt(ti.risk.total)} over ${periodWord}.`, source: ti.risk.source } : null
+    ].filter(Boolean)
+    if (vuln.mode === 'runs' && vuln.latest) {
+      const L = vuln.latest, c = vuln.change
+      vuln.tiles = [
+        { value: fmt(L.open), label: 'Open vulnerability findings', sub: `On ${plural(L.vms, 'virtual machine', 'virtual machines')}, assessment of ${L.label}.`, source: vuln.source },
+        { value: fmt(L.critical + L.high), label: 'Critical and high findings', sub: `${fmt(L.critical)} critical, ${fmt(L.high)} high.`, source: vuln.source },
+        L.kev !== null ? { value: fmt(L.kev), label: 'Findings with a CISA KEV-listed CVE', sub: L.kevThisMonth ? `${fmt(L.kevThisMonth)} on a CVE CISA added in ${cs.month.label}.` : `On ${plural(L.kevVms, 'virtual machine', 'virtual machines')}.`, source: vuln.source } : null,
+        c && c.compared ? { value: fmt(c.openGone), label: `No longer open since ${date(c.from)}`, sub: `Pending validation. ${plural(c.openNew, 'new open finding', 'new open findings')} in the same time.`, source: vuln.changeSource } : null
+      ].filter(Boolean)
+    } else if (vuln.mode === 'defender') {
+      const D = vuln.defender, now = reportIndex >= 0 ? D.published[reportIndex] : null
+      vuln.tiles = [
+        { value: fmt(D.bySeverity[0].cves + D.bySeverity[1].cves), label: 'Critical and high CVEs open', sub: 'On Azure virtual machines, current state.', source: D.source },
+        { value: fmt(D.exploitable), label: 'CVEs with public exploit code', sub: 'Per Defender, not a CISA KEV listing.', source: D.source },
+        D.publishedKnown && now ? { value: fmt(now.cves), label: `CVEs published in ${cs.month.label} and open now`, sub: `${fmt(now.critical)} critical, ${fmt(now.high)} high.`, source: D.publishedSource } : null
+      ].filter(Boolean)
+    } else vuln.tiles = []
+
     // Executive tiles for the month. Each names its month or period, and none claims an outcome the evidence lacks.
     const tile = (label, value, sub, src, tone = '') => cs.headline.push({ label: clean(label), value: clean(value), sub: clean(sub), source: clean(src), tone })
     const nowOps = reportIndex >= 0 ? ops.monthly[reportIndex] : null

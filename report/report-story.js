@@ -103,8 +103,11 @@
     const start = isoDay(m.period.start), end = isoDay(m.period.end)
     const qStart = /^\d{4}-(01|04|07|10)-01$/.test(start), q = qStart ? (Number(start.slice(5, 7)) + 2) / 3 : null
     const qEnd = q ? `${start.slice(0, 4)}-${String(q * 3).padStart(2, '0')}` : null
-    s.quarter = q && m.period.months === 3 && end.startsWith(qEnd) ? `Q${q} ${start.slice(0, 4)}` : null
-    s.periodPhrase = s.quarter ? 'this quarter' : m.period.valid ? `from ${m.period.label}` : 'in the period'
+    // A CyberSOC monthly pack always spans the report month and the two before it, which is a calendar quarter every
+    // third month, so it never takes the quarter label: its period is the 90-day trend of a monthly report.
+    const monthly = /CyberSOC/i.test(String(p.ReportType || ''))
+    s.quarter = !monthly && q && m.period.months === 3 && end.startsWith(qEnd) ? `Q${q} ${start.slice(0, 4)}` : null
+    s.periodPhrase = s.quarter ? 'this quarter' : monthly && m.period.months === 3 ? 'over the 90 days' : m.period.valid ? `from ${m.period.label}` : 'in the period'
     s.readShort = shortDate(p.PostureReadDate) || m.readDate
 
     // Response speed from the model's fixed cohort, every high severity alert created in the period and closed by
