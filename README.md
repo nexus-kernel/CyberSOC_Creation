@@ -49,6 +49,15 @@ missing evidence never becomes a favorable zero.
 4. **Send** `03-security-report.client.html` and `03-security-report.pptx`. `03-security-report.html` is the
    internal edition, with the presenter notes and the evidence review, and the SecOps worklist names client
    resources. Neither goes to the client.
+5. **Raise the hardening change requests** when the client is ready for them:
+
+   ```powershell
+   pwsh ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000
+   ```
+
+   `05-change-requests/` holds one change request for each low-impact hardening item that still has resources to
+   fix (diagnostic logging, secure transfer, minimum TLS 1.2, purge protection), and a ready-to-send client email for
+   the changes that need the client first (anonymous blob access, HTTPS only, encryption at host).
 
 A pack collected without the vulnerability runs takes them later:
 
@@ -83,6 +92,7 @@ intelligence and vulnerability management slides at every depth.
 | [EBR Security Evidence Collection Runbook.md](EBR%20Security%20Evidence%20Collection%20Runbook.md) | Every EBR query the collector still runs |
 | [New-CyberSocReport.README.md](New-CyberSocReport.README.md) | The report editions, the figure rules and the reviewed context file |
 | [New-CyberSocSecOpsWorklist.README.md](New-CyberSocSecOpsWorklist.README.md) | The internal SecOps worklist |
+| [New-CyberSocChangeRequests.README.md](New-CyberSocChangeRequests.README.md) | The hardening change requests and client emails |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Development environment and validation |
 
 ## Lineage and porting EBR fixes
