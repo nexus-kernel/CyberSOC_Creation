@@ -314,7 +314,7 @@
     const pos6 = rows('POS.6-TREND').filter(r => validDate(iso(r.Date)))
     posture.tenant = cs.months.map(mo => { const r = pos6.filter(x => monthOf(x.Date) === mo.key).sort((a, b) => iso(b.Date).localeCompare(iso(a.Date)))[0]; return { key: mo.key, label: mo.label, pct: r ? num(r.Percent) : null, max: r ? num(r.Max) : null, date: r ? date(r.Date) : null } })
     posture.tenantSource = source('POS.6-TREND')
-    posture.health = rows('POS.8').filter(r => validDate(iso(r.Week)) && iso(r.Week) >= addDays(p.WindowStart, -6)).map(r => ({ week: iso(r.Week), label: shortDate(r.Week), pct: num(r.PctHealthy) })).filter(r => r.pct !== null).sort((a, b) => a.week.localeCompare(b.week))
+    posture.health = rows('POS.8').filter(r => validDate(iso(r.Week)) && iso(r.Week) >= addDays(p.WindowStart, -6) && iso(r.Week) <= iso(p.WindowEnd)).map(r => ({ week: iso(r.Week), label: shortDate(r.Week), pct: num(r.PctHealthy) })).filter(r => r.pct !== null).sort((a, b) => a.week.localeCompare(b.week))
     posture.healthSource = source('POS.8')
     // A score move compares readings against the same maximum only, as the EBR report rules require.
     const sameMax = (a, b) => a && b && a.pct !== null && b.pct !== null && a.max !== null && a.max === b.max

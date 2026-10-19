@@ -2040,7 +2040,7 @@ Exported rows keep the model in force when they were written, while the portal s
 
 ```kusto
 SecurityRecommendation
-| where TimeGenerated between (datetime(2026-01-01) .. now())
+| where TimeGenerated between (datetime(2026-01-01) .. endofday(datetime(2026-07-31)))
 | where tobool(IsSnapshot)
 | where AssessedResourceId !contains "aznativesol0"
 | summarize arg_max(TimeGenerated, RecommendationState)

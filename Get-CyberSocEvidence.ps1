@@ -2506,9 +2506,9 @@ SecureScores
 | order by Month asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'POS.8' -Phase 'P3 Posture' -Engine 'LA' -Title 'Recommendation health trend from weekly snapshots' -Notes 'Needs continuous export with snapshots enabled.' -Query @'
+    $q.Add((New-EbrQuery -Id 'POS.8' -Phase 'P3 Posture' -Engine 'LA' -Title 'Recommendation health trend from weekly snapshots' -Notes 'Needs continuous export with snapshots enabled. Snapshots inside the window only, so the last week is the posture at the end of the window, not at collection.' -Query @'
 SecurityRecommendation
-| where TimeGenerated between ({{WINDOW_START}} .. now())
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
 | where tobool(IsSnapshot)
 | where AssessedResourceId !contains "{{MRG}}"
 | summarize arg_max(TimeGenerated, RecommendationState)
@@ -2568,10 +2568,10 @@ let Ticketed = SecurityIncident
 | project AlertId, IncidentKey, Classification, Month;
 '@
 
-    $q.Add((New-EbrQuery -Id 'TI.0' -Phase 'P5 Threat intelligence' -Engine 'LA' -AlwaysBreakdown -Title 'Threat intelligence and threat telemetry reach' -Notes 'CyberSOC. A table missing from the output is not collected in Sentinel, so the measures that read it have no figure, not a zero. TI.0-BY-WORKSPACE picks the workspace EmailEvents is read from.' -Query @'
+    $q.Add((New-EbrQuery -Id 'TI.0' -Phase 'P5 Threat intelligence' -Engine 'LA' -AlwaysBreakdown -Title 'Threat intelligence and threat telemetry reach' -Notes 'CyberSOC. Records inside the window only, the same window the measures that read the tables use. A table missing from the output has no records in the window, so the measures that read it have no figure, not a zero. TI.0-BY-WORKSPACE picks the workspace EmailEvents is read from.' -Query @'
 union withsource = SourceTable isfuzzy = true
     ThreatIntelIndicators, ThreatIntelligenceIndicator, SecurityAlert, SigninLogs, AADUserRiskEvents, EmailEvents
-| where TimeGenerated between ({{WINDOW_START}} .. now())
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
 | summarize EarliestRecord = min(TimeGenerated),
             LatestRecord   = max(TimeGenerated),
             Records        = count()
@@ -2579,9 +2579,9 @@ union withsource = SourceTable isfuzzy = true
 | order by SourceTable asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'TI.1' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Threat intelligence indicators by source and type' -Notes 'CyberSOC. Each indicator at its latest record in the window, keyed by table and indicator ID, so an indicator held in several workspaces counts once when the IDs match. Active means not expired, revoked or deleted at collection. Both the STIX ThreatIntelIndicators table and the legacy ThreatIntelligenceIndicator table are read.' -Query @'
+    $q.Add((New-EbrQuery -Id 'TI.1' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Threat intelligence indicators by source and type' -Notes 'CyberSOC. Each indicator at its latest record in the window, keyed by table and indicator ID, so an indicator held in several workspaces counts once when the IDs match. Active means not expired, revoked or deleted at the end of the window. Both the STIX ThreatIntelIndicators table and the legacy ThreatIntelligenceIndicator table are read.' -Query @'
 union withsource = SourceTable isfuzzy = true ThreatIntelIndicators, ThreatIntelligenceIndicator
-| where TimeGenerated between ({{WINDOW_START}} .. now())
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
 | extend IndicatorKey = coalesce(tostring(column_ifexists("Id", "")), tostring(column_ifexists("IndicatorId", ""))),
          Stix         = SourceTable endswith "ThreatIntelIndicators"
 | where isnotempty(IndicatorKey)
@@ -2598,7 +2598,7 @@ union withsource = SourceTable isfuzzy = true ThreatIntelIndicators, ThreatIntel
 | extend IsActive = iff(Stix,
     coalesce(tobool(column_ifexists("IsActive", bool(null))), true) and not(coalesce(tobool(column_ifexists("IsDeleted", bool(null))), false)),
     coalesce(tobool(column_ifexists("Active", bool(null))), false))
-    and (isnull(Until) or Until > now())
+    and (isnull(Until) or Until > endofday({{WINDOW_END}}))
 | summarize arg_max(TimeGenerated, Kind, Source, IsActive) by Stix, IndicatorKey
 | summarize Indicators = count(), Active = countif(IsActive), LastIngested = max(TimeGenerated) by Source, Kind
 | order by Indicators desc

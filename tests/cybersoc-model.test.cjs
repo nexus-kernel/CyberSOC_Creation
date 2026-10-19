@@ -178,6 +178,12 @@ test('a score change is compared only against the same maximum', () => {
   assert.equal(row.change, 'Not compared, the maximum changed')
 })
 
+test('recommendation health keeps the weeks of the window, never a week after it', () => {
+  const p = full()
+  put(p, 'POS.8', ['2026-06-21', '2026-06-28', '2026-09-27', '2026-10-04'].map((Week, i) => ({ Week, Healthy: 10, Unhealthy: 10, PctHealthy: [40, 45, 50, 55][i] })))
+  assert.deepEqual(both(p).cs.posture.health.map(r => r.week), ['2026-06-28', '2026-09-27'])
+})
+
 test('analyst highlights come only from a reviewed record for this report month', () => {
   const p = full()
   p.context = { MonthHighlights: [

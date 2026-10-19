@@ -48,6 +48,11 @@ Describe 'Query catalog' {
         ($catalog | Where-Object Id -eq 'TI.2').Query | Should -Match 'join kind=leftouter \(Ticketed \| distinct AlertId'
         ($catalog | Where-Object Id -eq 'TI.0').AlwaysBreakdown | Should -BeTrue -Because 'the EmailEvents workspace is chosen from TI.0-BY-WORKSPACE'
         ($catalog | Where-Object Id -eq 'TI.1').Query | Should -Match 'ThreatIntelIndicators, ThreatIntelligenceIndicator'
+        foreach ($id in 'TI.0', 'TI.1', 'POS.8') {
+            $q = ($catalog | Where-Object Id -eq $id).Query
+            $q | Should -Match 'TimeGenerated between \(\{\{WINDOW_START\}\} \.\. endofday\(\{\{WINDOW_END\}\}\)\)' -Because "$id reads the report window, not the days after it up to collection"
+            $q | Should -Not -Match 'now\(\)' -Because $id
+        }
         ($catalog | Where-Object Id -eq 'TI.5').Query | Should -Match 'Targets >= 10'
         ($catalog | Where-Object Id -eq 'TI.5').Query | Should -Not -Match 'project .*UserPrincipalName' -Because 'only counts leave the query'
         ($catalog | Where-Object Id -eq 'TI.7').Query | Should -Match 'Timestamp between \(ago\(30d\) \.\. now\(\)\)'
