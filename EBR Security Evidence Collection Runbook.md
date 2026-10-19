@@ -651,7 +651,7 @@ SigninLogs
 | order by Succeeded desc
 ```
 
-The block policy decides the status. The control is In force when an enabled Conditional Access policy blocks legacy authentication for all users, or security defaults are on (IA.8), and Not in force when the policy is scoped, report-only or missing. Successful sign-ins show whether any account got past it, and IA.8-SIGNINS splits them into approved exceptions the policy excludes and accounts it did not evaluate. Without a policy inventory the control is In force only when `BlockedByCa` is above zero and `Succeeded` is zero on every row, Not in force when any sign-in succeeded, and N/A otherwise. Only error 53003 (`BlockedByCa`) counts as a Conditional Access block. Attempts that failed without one, such as a wrong password or a locked account, are never presented as blocked.
+The block policy decides the status. The control is In force when an enabled Conditional Access policy blocks legacy authentication for all users, or security defaults are on (IA.8), and Not in force when the policy is scoped, report-only or missing. Successful sign-ins show whether any account got past it, and IA.8-SIGNINS splits them into accounts the policy excludes, which Atmosera reviews with the client, and accounts it did not evaluate. Without a policy inventory the control is In force only when `BlockedByCa` is above zero and `Succeeded` is zero on every row, Not in force when any sign-in succeeded, and N/A otherwise. Only error 53003 (`BlockedByCa`) counts as a Conditional Access block. Attempts that failed without one, such as a wrong password or a locked account, are never presented as blocked.
 
 **IA.3-DEVICECODE Device code flow sign-ins** (Log Analytics)
 

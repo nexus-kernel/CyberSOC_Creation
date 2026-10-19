@@ -51,6 +51,11 @@
   // (Oct 18, 2026, issue #24).
   const MIN_SAMPLE = 10
   const smallSampleText = n => `${fmt(n)} on a small sample`
+  // What a control at E leaves out, for the register. A ratio control names its exceptions, and a Conditional Access
+  // block in force names the accounts whose sign-ins fell under its exclusions (issue #27), so neither reads as covering
+  // everyone. The evaluator counts a sign-in as excluded when a policy for all users did not apply to it, which can be a
+  // user, group, role or application exclusion, so the text never says the account itself is excluded.
+  const exceptionsText = c => c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : c.excludedAccounts > 0 ? plural(c.excludedAccounts, 'account with excluded sign-ins', 'accounts with excluded sign-ins') : ''
   const bool = value => value === true || String(value ?? '').toLowerCase() === 'true'
   const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`
   // Microsoft retires its own text message and voice delivery in two populations: most users on Feb 1, 2027, and
@@ -536,8 +541,10 @@
       : `Members with at least one successful sign-in in the last 30 days that satisfied multifactor authentication.${externalMfa > 0 ? ` ${plural(externalMfa, 'user', 'users')} satisfied it through a federated identity provider claim.` : ''}${evidenceQuery ? ' Windows logon and device registration are left out.' : ''}${mfaSplit ? ` ${mfaSplit}` : ''}`
     // Conditional Access controls. IA.8-CA is evaluated by the report builder from the raw policies and
     // the per-account sign-in detail, and carries counts only. A successful sign-in by an account the
-    // policy excludes is an approved exception, not a gap. Without a policy inventory and without any
-    // sign-in of the kind, there is no evidence either way and the control reads N/A.
+    // policy excludes is an exception, not a gap. Nothing in the evidence records that an exclusion was
+    // approved, so the note says the accounts are excluded and that Atmosera reviews the exclusions with the
+    // client (issue #27). Without a policy inventory and without any sign-in of the kind, there is no
+    // evidence either way and the control reads N/A.
     const caFlows = array(results['IA.8-CA'])
     const caFlow = name => caFlows.find(r => r.Flow === name && bool(r.PolicyRead) && String(r.PolicyState) !== 'Unknown') || null
     const enforcedState = f => ['Enforced', 'Security defaults'].includes(String(f.PolicyState))
@@ -564,9 +571,23 @@
     const exceptionText = f => {
       if (!f || !bool(f.DetailRead)) return ''
       const parts = []
-      if (count(f.SucceededExcluded) > 0) parts.push(`${plural(f.SucceededExcluded, 'successful sign-in', 'successful sign-ins')} came from ${plural(f.AccountsExcluded, 'account', 'accounts')} the policy excludes as approved exceptions.`)
+      if (count(f.SucceededExcluded) > 0) parts.push(`${plural(f.SucceededExcluded, 'successful sign-in', 'successful sign-ins')} by ${plural(f.AccountsExcluded, 'account', 'accounts')} fell under exclusions in the policy, which can name users, groups, roles or applications. Atmosera reviews these exclusions with your team at each business review.`)
       if (count(f.SucceededUngoverned) > 0) parts.push(`${plural(f.SucceededUngoverned, 'successful sign-in', 'successful sign-ins')} from ${plural(f.AccountsUngoverned, 'account was', 'accounts were')} not covered by the policy.`)
       return parts.join(' ')
+    }
+    // A control in force whose exclusions let sign-ins through carries the count of accounts that made them, which the register shows beside
+    // In force so the policy never reads as covering everyone. Every such exclusion is also listed, pending validation
+    // with the client, for the proposed exceptions section (issue #27, section in issue #30). Only the flows with
+    // per-account sign-in detail (device code and legacy authentication, IA.8-SIGNINS) can carry one. The count is the
+    // accounts seen signing in under an exclusion, not every identity the policy excludes.
+    m.caExclusions = []
+    const withExclusions = (item, f) => {
+      const signIns = f && bool(f.DetailRead) ? count(f.SucceededExcluded) : null
+      if (!(signIns > 0)) return item
+      const accounts = count(f.AccountsExcluded)
+      if (isInForce(item) && accounts > 0) item.excludedAccounts = accounts
+      m.caExclusions.push({ id: item.id, label: item.label, flow: clean(f.Flow), signIns, accounts, status: 'Pending validation' })
+      return item
     }
     // MFA at sign-in is a Conditional Access control (Oct 14, 2026). When the policy inventory was read, the
     // policy decides the status: an enabled policy requiring MFA on every application for all users, or
@@ -600,7 +621,7 @@
     const locControl = locFlow ? inForce('IA.4-LOCATION', locLabel, F.identity, enforcedState(locFlow), policyText(locFlow, 'sign-ins by location', 'restricts'))
       : ungathered('IA.4-LOCATION', locLabel, F.identity, caFlows.some(r => r.Flow === 'Location') ? 'the policy inventory in this pack predates collector 1.10.0 and does not record location conditions' : reason(locSource), 'An enabled Conditional Access policy blocks sign-ins or requires multifactor authentication by country or named network, for all users and all resources.')
     locControl.source = `IA.4-LOCATION from ${source(locSource)}`
-    if (locFlow && enforcedState(locFlow) && count(locFlow.ExcludedIdentities) > 0) presenter('Location policy exceptions', `${plural(locFlow.ExcludedIdentities, 'user, group or role is', 'users, groups or roles are')} excluded from the location policy. Confirm each is an approved exception, such as emergency access or a travel group, before presenting the control.`)
+    if (locFlow && enforcedState(locFlow) && count(locFlow.ExcludedIdentities) > 0) presenter('Location policy exceptions', `${plural(locFlow.ExcludedIdentities, 'user, group or role is', 'users, groups or roles are')} excluded from the location policy. Confirm with the client that each exclusion is intended, such as emergency access or a travel group, before presenting the control.`)
     const legacyLabel = 'Legacy authentication blocked'
     const legacyFlow = caFlow('Legacy authentication')
     // Unknown is not a legacy protocol. Packs before collector 1.10.0 still carry it as an IA.3 row.
@@ -623,9 +644,9 @@
     let legacyControl
     if (legacyFlow) {
       // The policy configuration decides the status. Sign-ins show whether any account got past it.
-      legacyControl = inForce('IA.3', legacyLabel, F.identity, enforcedState(legacyFlow), [policyText(legacyFlow, 'legacy authentication'), legacyActivity, exceptionText(legacyFlow), outsideScope(legacyFlow) ? outsideText(legacySucceeded) : ''].filter(Boolean).join(' '))
+      legacyControl = withExclusions(inForce('IA.3', legacyLabel, F.identity, enforcedState(legacyFlow), [policyText(legacyFlow, 'legacy authentication'), legacyActivity, exceptionText(legacyFlow), outsideScope(legacyFlow) ? outsideText(legacySucceeded) : ''].filter(Boolean).join(' ')), legacyFlow)
       if (enforcedState(legacyFlow) && bool(legacyFlow.DetailRead) && count(legacyFlow.SucceededUngoverned) > 0) presenter('Legacy sign-ins outside the block policy', `${plural(legacyFlow.SucceededUngoverned, 'successful legacy sign-in', 'successful legacy sign-ins')} in the last 30 days were not evaluated by the enabled block policy. They most likely predate the policy. Confirm before presenting the control. The SecOps worklist names the accounts.`)
-    } else if (!has('IA.3')) legacyControl = ungathered('IA.3', legacyLabel, F.identity, reason('IA.3'), 'An enabled Conditional Access policy or security defaults block legacy authentication for all users, with approved exceptions only.')
+    } else if (!has('IA.3')) legacyControl = ungathered('IA.3', legacyLabel, F.identity, reason('IA.3'), 'An enabled Conditional Access policy or security defaults block legacy authentication for all users, with documented exceptions only.')
     else if (legacyAttempts === 0) legacyControl = notApplicable('IA.3', legacyLabel, F.identity, 'No legacy protocol sign-in attempts in the last 30 days and no Conditional Access policy inventory, so there is no evidence either way.')
     else if (legacySucceeded > 0) {
       legacyControl = inForce('IA.3', legacyLabel, F.identity, false, legacyActivity)
@@ -691,7 +712,7 @@
     if (notItemized.length) presenter('Conditional Access exceptions not itemized', `${list(notItemized)} succeeded while an enabled policy blocks the flow for all users, so the accounts are outside the policy scope, either excluded or signing in before the policy existed. This pack has no per-account sign-in detail. Recollect with collector 1.10.0 or later to have the SecOps worklist name the accounts and confirm each exclusion before presenting the controls.`)
     if (deviceFlow) {
       // The policy configuration decides the status. Sign-ins show whether any account got past it.
-      inForce('IA.3-DEVICECODE', deviceLabel, F.identity, enforcedState(deviceFlow), [policyText(deviceFlow, 'device code flow'), deviceActivity, exceptionText(deviceFlow)].filter(Boolean).join(' '))
+      withExclusions(inForce('IA.3-DEVICECODE', deviceLabel, F.identity, enforcedState(deviceFlow), [policyText(deviceFlow, 'device code flow'), deviceActivity, exceptionText(deviceFlow)].filter(Boolean).join(' ')), deviceFlow)
       if (enforcedState(deviceFlow) && bool(deviceFlow.DetailRead) && count(deviceFlow.SucceededUngoverned) > 0) presenter('Device code sign-ins outside the block policy', `${plural(deviceFlow.SucceededUngoverned, 'successful device code sign-in', 'successful device code sign-ins')} in the last 30 days were not evaluated by the enabled block policy. They most likely predate the policy. Confirm before presenting the control. The SecOps worklist names the accounts.`)
     } else if (!has('IA.3-DEVICECODE')) ungathered('IA.3-DEVICECODE', deviceLabel, F.identity, reason('IA.3-DEVICECODE'), 'Device code flow sign-ins blocked by Conditional Access.')
     else if (deviceAttempts === 0) notApplicable('IA.3-DEVICECODE', deviceLabel, F.identity, 'No device code sign-ins in the last 30 days and no Conditional Access policy inventory, so there is no evidence either way.')
@@ -1189,7 +1210,8 @@
       if (mfaSplit && mfa.pct !== null) parts.push(mfaSplitNarrative)
       if (isInForce(locControl)) parts.push('Conditional Access restricts sign-ins by location for every user.')
       const legacyBlockedInForce = isInForce(legacyControl)
-      if (legacyBlockedInForce) parts.push('Legacy authentication is blocked.')
+      // The narrative names the accounts seen signing in under an exclusion, so the block never reads as covering every user.
+      if (legacyBlockedInForce) parts.push(`Legacy authentication is blocked${legacyControl.excludedAccounts > 0 ? `. ${plural(legacyControl.excludedAccounts, 'account', 'accounts')} signed in with a legacy protocol under exclusions in the policy in the last 30 days` : ''}.`)
       if (advancedPhish) parts.push('An advanced anti-phishing policy protects every mailbox.')
       else if (basicPhish) parts.push('The Microsoft default anti-phishing policy covers every mailbox.')
       const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', `Multifactor authentication covers ${measureText(mfa)} ${unevaluated !== null ? 'evaluated members' : 'members'} at sign-in, ${remaining(mfa)}${legacyBlockedInForce ? ', and legacy protocols are blocked' : ''}`, 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')
@@ -1353,7 +1375,7 @@
     }
     return m
   }
-  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, MIN_SAMPLE, smallSampleText, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced' }
+  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, MIN_SAMPLE, smallSampleText, exceptionsText, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced' }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.EbrReport = api
 })(typeof globalThis !== 'undefined' ? globalThis : this)

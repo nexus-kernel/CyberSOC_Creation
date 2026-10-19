@@ -11,7 +11,7 @@
 (function (root) {
   'use strict'
   const R = typeof module !== 'undefined' && module.exports ? require('./report-model.js') : root.EbrReport
-  const { fmt, clean, pctText, plural, E_THRESHOLD, RETIREMENT, MIN_SAMPLE, smallSampleText } = R
+  const { fmt, clean, pctText, plural, E_THRESHOLD, RETIREMENT, MIN_SAMPLE, smallSampleText, exceptionsText } = R
   const WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten']
   const word = n => n >= 0 && n < WORDS.length ? WORDS[n] : fmt(n)
   const GROUPS = ['Identity and access', 'Endpoint and workload', 'Network and boundary', 'Data protection', 'Detection and response']
@@ -310,13 +310,14 @@
     })
 
     // The register: every control, with a value that is never null. A control at E that leaves resources out
-    // carries its exception count, so E with exceptions never reads as E with none (Oct 15, 2026). A control on a
+    // carries its exception count, so E with exceptions never reads as E with none (Oct 15, 2026), and a device code
+    // or legacy authentication block in force carries the accounts whose sign-ins fell under its exclusions (issue #27). A control on a
     // small sample carries the flag, and the patch cadence row names its assessed and excluded populations (issue #24).
     s.register = GROUPS.map(g => {
       const inG = m.controls.filter(c => c.group === g)
       // A control whose grade covers part of its population (MFA at sign-in in a federated tenant, or with MFA
       // inferred from the session) carries the split on its detail line.
-      const rows = t => inG.filter(c => c.tier === t).map(c => ({ ...safe(c), detail: [detailText(c), c.split, c.populations].filter(Boolean).join(' · '), chip: c.mark || (c.na ? 'N/A' : '–'), exceptionText: c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : '', sampleText: c.mark && c.smallSample ? 'small sample' : '' }))
+      const rows = t => inG.filter(c => c.tier === t).map(c => ({ ...safe(c), detail: [detailText(c), c.split, c.populations].filter(Boolean).join(' · '), chip: c.mark || (c.na ? 'N/A' : '–'), exceptionText: exceptionsText(c), sampleText: c.mark && c.smallSample ? 'small sample' : '' }))
       const counts = ['E', 'P', 'N'].map(k => [k, inG.filter(c => c.mark === k).length]).filter(([, n]) => n).map(([k, n]) => `${n} ${k}`)
       const dash = inG.filter(ungathered).length, na = inG.filter(c => c.na).length
       return { group: g, foundational: rows('foundational'), defense: rows('defense'), summary: [...counts, ...(dash ? [`${dash} –`] : []), ...(na ? [`${na} N/A`] : [])].join(' · ') }

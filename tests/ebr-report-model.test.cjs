@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
 const vm = require('node:vm')
-const { build, clean, span, mark, MEDIAN_FLOOR, NULL_VALUE, NA_VALUE, TIERS } = require('../report/report-model.js')
+const { build, clean, span, mark, exceptionsText, MEDIAN_FLOOR, NULL_VALUE, NA_VALUE, TIERS } = require('../report/report-model.js')
 
 function pack() {
   return {
@@ -653,7 +653,9 @@ test('tier totals lead the executive control tier and foundational drift gets a 
 function caRow(flow, overrides = {}) {
   return { Flow: flow, PolicyRead: true, PolicyState: 'Enforced', EnforcedPolicies: 1, ExcludedIdentities: 12, DetailRead: true, SignIns: 0, SucceededExcluded: 0, AccountsExcluded: 0, SucceededUngoverned: 0, AccountsUngoverned: 0, ...overrides }
 }
-test('a device code block policy with excluded accounts reads in force, and the sign-ins are framed as approved exceptions', () => {
+// Issue #27: nothing in the evidence records that an exclusion was approved, so the note says the accounts are
+// excluded and reviewed with the client, and the register carries the count beside In force.
+test('a device code block policy with excluded sign-ins reads in force with the accounts counted, never as approved or as excluded accounts', () => {
   const p = pack()
   put(p, 'IA.3-DEVICECODE', [{ Attempts: 5, Succeeded: 5, BlockedByCa: 0, Users: 5, Apps: 4, InForce: false }])
   put(p, 'IA.8-CA', [caRow('Device code', { SignIns: 5, SucceededExcluded: 5, AccountsExcluded: 5 })])
@@ -661,7 +663,17 @@ test('a device code block policy with excluded accounts reads in force, and the 
   let c = m.controls.find(x => x.id === 'IA.3-DEVICECODE')
   assert.equal(c.value, 'In force'); assert.equal(c.mark, 'E')
   assert.match(c.note, /An enabled Conditional Access policy blocks device code flow for all users\./)
-  assert.match(c.note, /5 successful sign-ins came from 5 accounts the policy excludes as approved exceptions\./)
+  assert.match(c.note, /5 successful sign-ins by 5 accounts fell under exclusions in the policy, which can name users, groups, roles or applications\. Atmosera reviews these exclusions with your team at each business review\./)
+  assert.ok(!/approved|confirmed|accounts? excluded|excluded accounts?/i.test(c.note), 'a notApplied result can be an application exclusion, so the account is never called excluded')
+  assert.equal(c.excludedAccounts, 5)
+  assert.equal(exceptionsText(c), '5 accounts with excluded sign-ins', 'the register reads In force · 5 accounts with excluded sign-ins')
+  assert.deepEqual(m.caExclusions, [{ id: 'IA.3-DEVICECODE', label: 'Device code flow sign-ins blocked', flow: 'Device code', signIns: 5, accounts: 5, status: 'Pending validation' }], 'listed for the proposed exceptions section (issue #30)')
+  put(p, 'IA.8-CA', [caRow('Device code', { SignIns: 1, SucceededExcluded: 1, AccountsExcluded: 1 })])
+  assert.equal(exceptionsText(build(p).controls.find(x => x.id === 'IA.3-DEVICECODE')), '1 account with excluded sign-ins')
+  put(p, 'IA.8-CA', [caRow('Device code', { PolicyState: 'Report-only', SignIns: 5, SucceededExcluded: 5, AccountsExcluded: 5 })])
+  m = build(p); c = m.controls.find(x => x.id === 'IA.3-DEVICECODE')
+  assert.equal(c.value, 'Not in force'); assert.equal(exceptionsText(c), '', 'only a policy in force carries the count')
+  assert.equal(m.caExclusions.length, 1, 'the exclusion is still listed for validation')
   assert.ok(!m.presenter.some(n => /Device code/.test(n.title)))
   put(p, 'IA.8-CA', [caRow('Device code', { SignIns: 5, SucceededExcluded: 3, AccountsExcluded: 3, SucceededUngoverned: 2, AccountsUngoverned: 1 })])
   m = build(p)
@@ -670,6 +682,43 @@ test('a device code block policy with excluded accounts reads in force, and the 
   put(p, 'IA.8-CA', [caRow('Device code', { PolicyState: 'Report-only', SignIns: 5, SucceededUngoverned: 5, AccountsUngoverned: 5 })])
   c = build(p).controls.find(x => x.id === 'IA.3-DEVICECODE')
   assert.equal(c.value, 'Not in force'); assert.match(c.note, /runs in report-only mode/)
+})
+test('legacy authentication in force with excluded sign-ins never reads as covering every user', () => {
+  const p = pack()
+  put(p, 'IA.3', [{ ClientAppUsed: 'Exchange ActiveSync', Attempts: 40, Succeeded: 4, BlockedByCa: 30, Users: 2 }])
+  // The evaluator reads no per-account detail for MFA at sign-in (DetailRead false), as Get-EbrCaEvaluation.ps1 emits it.
+  put(p, 'IA.8-CA', [caRow('Legacy authentication', { SignIns: 4, SucceededExcluded: 4, AccountsExcluded: 2 }), caRow('MFA at sign-in', { DetailRead: false })])
+  const m = build(p)
+  const legacy = m.controls.find(x => x.id === 'IA.3'), mfa = m.controls.find(x => x.id === 'IA.1')
+  assert.deepEqual([legacy.value, exceptionsText(legacy), mfa.value, exceptionsText(mfa)], ['In force', '2 accounts with excluded sign-ins', 'In force', ''])
+  assert.ok(/fell under exclusions in the policy, which can name users, groups, roles or applications\. Atmosera reviews these exclusions with your team at each business review\./.test(legacy.note) && !/approved/i.test(legacy.note), legacy.note)
+  assert.deepEqual(m.caExclusions.map(x => [x.id, x.signIns, x.accounts, x.status]), [['IA.3', 4, 2, 'Pending validation']])
+  const identity = m.pillars.find(x => /identity/i.test(x.name)).narrative
+  assert.match(identity, /Conditional Access requires multifactor authentication for every user on every application\./)
+  // The count is the accounts seen signing in under an exclusion, never the configured exclusions (12 here).
+  assert.match(identity, /Legacy authentication is blocked\. 2 accounts signed in with a legacy protocol under exclusions in the policy in the last 30 days\./)
+  // The legacy failures keep the password spraying hint in the presenter notes.
+  assert.ok(m.presenter.some(n => n.title === 'Legacy sign-ins that failed without a Conditional Access block' && /6 legacy protocol attempts failed/.test(n.text) && /password spraying/.test(n.text)))
+  const clean = build((() => { const q = pack(); put(q, 'IA.3', [{ ClientAppUsed: 'Exchange ActiveSync', Attempts: 30, Succeeded: 0, BlockedByCa: 30, Users: 0 }]); put(q, 'IA.8-CA', [caRow('Legacy authentication')]); return q })())
+  assert.equal(exceptionsText(clean.controls.find(x => x.id === 'IA.3')), '', 'no excluded sign-in, no count')
+  assert.deepEqual(clean.caExclusions, [])
+  assert.match(clean.pillars.find(x => /identity/i.test(x.name)).narrative, /Legacy authentication is blocked\./)
+})
+test('the controls page shows the accounts with excluded sign-ins beside In force, in the mark and the legend, and no approved wording', () => {
+  const nodes = {}
+  const p = pack()
+  put(p, 'IA.3-DEVICECODE', [{ Attempts: 3, Succeeded: 3, BlockedByCa: 0, Users: 2, Apps: 1, InForce: false }])
+  put(p, 'IA.8-CA', [caRow('Device code', { SignIns: 3, SucceededExcluded: 3, AccountsExcluded: 2 }), caRow('Location', { ExcludedIdentities: 2 })])
+  const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(p) : '', addEventListener() {} }) }
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+  const html = nodes.report.innerHTML
+  assert.ok(html.includes('title="Enforced, 2 accounts with excluded sign-ins">E</span><div class="control-text"><h4>Device code flow sign-ins blocked</h4>'), 'the mark names the excluded accounts')
+  assert.match(html, /<h4>Device code flow sign-ins blocked<\/h4>[\s\S]*?<strong>In force<\/strong><span><\/span><span class="exceptions">2 accounts with excluded sign-ins<\/span>/)
+  assert.ok(html.includes('for example 2 accounts with excluded sign-ins'), 'the legend explains the count')
+  const row = html.slice(html.indexOf('<h4>Device code flow sign-ins blocked</h4>'))
+  assert.ok(!/approved/i.test(row.slice(0, row.indexOf('</div></div>'))), 'no approved wording on the row')
+  const loc = build(p).presenter.find(n => n.title === 'Location policy exceptions')
+  assert.ok(loc && !/approved/i.test(loc.text) && /Confirm with the client that each exclusion is intended/.test(loc.text), loc && loc.text)
 })
 test('without a policy inventory, no sign-ins means N/A and successful sign-ins mean not in force with a presenter note', () => {
   const p = pack()
@@ -726,7 +775,7 @@ test('legacy authentication is graded by the block policy, ignores Unknown clien
   c = build(p).controls.find(x => x.id === 'IA.3')
   assert.deepEqual([c.value, c.mark], ['In force', 'E'])
   assert.match(c.note, /An enabled Conditional Access policy blocks legacy authentication for all users\. 175 legacy protocol attempts in the last 30 days, 57 succeeded\./)
-  assert.match(c.note, /57 successful sign-ins came from 1 account the policy excludes/)
+  assert.match(c.note, /57 successful sign-ins by 1 account fell under exclusions in the policy, which can name users, groups, roles or applications\. Atmosera reviews these exclusions with your team at each business review\./)
   put(p, 'IA.3', [{ ClientAppUsed: 'Other clients', Attempts: 534, Succeeded: 16, BlockedByCa: 43, Users: 2 }])
   assert.match(build(p).controls.find(x => x.id === 'IA.3').note, /534 legacy protocol attempts in the last 30 days\. Conditional Access stopped 43 and 16 succeeded\./)
   put(p, 'IA.8-CA', [caRow('Legacy authentication', { PolicyState: 'Report-only', SignIns: 16, SucceededUngoverned: 16, AccountsUngoverned: 6 })])

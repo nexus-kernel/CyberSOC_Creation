@@ -644,7 +644,8 @@ async function main() {
     pres.addSection({ title: 'Appendix' })
     const legend = 'E enforced, 90% or more · P partial, 50 to 89%, or a scoped policy whatever its ratio · N not yet enforced · – not gathered'
     const VALUE_W = 1.55
-    // The exception count of a control at E rides on its label line, so it adds a line only when it wraps there. The
+    // The exception count of a control at E rides on its label line, so it adds a line only when it wraps there, and so
+    // does the excluded sign-in account count of a device code or legacy authentication block in force (issue #27). The
     // small sample flag (issue #24) rides on the figure in the value column, "3 of 3 · small sample", so it never
     // lengthens the label. Where the two do not fit one line (Arial widths, bold figure), the flag goes under the figure
     // and the row takes two lines.
