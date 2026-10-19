@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, and 1.2.0 for NB.6-PAAS-DETAIL. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request (see `New-CyberSocChangeRequests.README.md`). The report embeds counts
 only. These lists name client resources and stay internal.
 
@@ -535,6 +535,23 @@ resources
 | where not(MinimalTlsVersion in ("1.2", "1.3"))
 | project Name = name, ResourceId = id, resourceGroup, subscriptionId, MinimalTlsVersion
 | order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### NB.6-PAAS-DETAIL Redis caches, Service Bus and Event Hubs namespaces and Cosmos DB accounts below minimum TLS 1.2
+
+Engine ARG. CyberSOC collector 1.2.0. One row per Azure Cache for Redis cache, Service Bus namespace, Event Hubs namespace or Azure Cosmos DB account whose minimum TLS version is below 1.2 or not set, with its resource type. Cosmos DB names the property minimalTlsVersion, with the values Tls, Tls11 and Tls12. An empty value means the property is missing. Feeds CR-11 (Redis), CR-12 (Service Bus), CR-13 (Event Hubs, with a client email) and CR-14 (Cosmos DB).
+
+```kql
+resources
+| where type in~ ("microsoft.cache/redis", "microsoft.servicebus/namespaces",
+                  "microsoft.eventhub/namespaces", "microsoft.documentdb/databaseaccounts")
+| where id !contains "{{MRG}}"
+// Cosmos DB names the property minimalTlsVersion. A missing property reads as not set.
+| extend ResourceType      = tolower(type),
+         MinimumTlsVersion = tostring(coalesce(properties.minimumTlsVersion, properties.minimalTlsVersion))
+| where not(MinimumTlsVersion in ("1.2", "1.3", "Tls12", "Tls13"))
+| project Name = name, ResourceId = id, ResourceType, resourceGroup, subscriptionId, MinimumTlsVersion
+| order by ResourceType asc, subscriptionId asc, resourceGroup asc, Name asc
 ```
 
 ### DP.1-DETAIL Storage accounts without secure transfer, minimum TLS 1.2 or anonymous access off

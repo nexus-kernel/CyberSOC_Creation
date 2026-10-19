@@ -201,7 +201,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.1.0, based on the EBR collector 1.14.0
+    Version: 1.2.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -242,7 +242,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.1.0'
+$script:EbrVersion = '1.2.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2059,6 +2059,19 @@ resources
 | where not(MinimalTlsVersion in ("1.2", "1.3"))
 | project Name = name, ResourceId = id, resourceGroup, subscriptionId, MinimalTlsVersion
 | order by subscriptionId asc, resourceGroup asc, Name asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'NB.6-PAAS-DETAIL' -Phase 'P2 Network' -Engine 'ARG' -Title 'Redis caches, Service Bus and Event Hubs namespaces and Cosmos DB accounts below minimum TLS 1.2' -Notes 'Added in CyberSOC 1.2.0. One row per Azure Cache for Redis cache, Service Bus namespace, Event Hubs namespace or Azure Cosmos DB account whose minimum TLS version is below 1.2 or not set, for the change requests. Cosmos DB names the property minimalTlsVersion, with the values Tls, Tls11 and Tls12. Internal: names resources, the report embeds counts only.' -Query @'
+resources
+| where type in~ ("microsoft.cache/redis", "microsoft.servicebus/namespaces",
+                  "microsoft.eventhub/namespaces", "microsoft.documentdb/databaseaccounts")
+| where id !contains "{{MRG}}"
+// Cosmos DB names the property minimalTlsVersion. A missing property reads as not set.
+| extend ResourceType      = tolower(type),
+         MinimumTlsVersion = tostring(coalesce(properties.minimumTlsVersion, properties.minimalTlsVersion))
+| where not(MinimumTlsVersion in ("1.2", "1.3", "Tls12", "Tls13"))
+| project Name = name, ResourceId = id, ResourceType, resourceGroup, subscriptionId, MinimumTlsVersion
+| order by ResourceType asc, subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
     $q.Add((New-EbrQuery -Id 'NB.7' -Phase 'P2 Network' -Engine 'LA' -Title 'DNS and egress telemetry present' -Query @'
