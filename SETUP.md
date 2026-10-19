@@ -1,4 +1,4 @@
-# CyberSOC Monthly Report Toolkit v1.0.0
+# CyberSOC Monthly Report Toolkit v1.1.0
 
 `Export-CyberSocToolkit.ps1` writes this file into each release zip with the packaging date.
 
@@ -39,6 +39,14 @@ pwsh ./Get-CyberSocEvidence.ps1 -TenantId <tenant> -SubscriptionId <subscription
 The window is the report month and the two full months before it, the 90-day trend. The report month defaults to the last full month. `-VulnAssessmentPath` imports the monthly Atmosera.VulnAssessment runs of that window for these subscriptions. A pack collected without them takes them later with `Import-CyberSocVulnAssessment.ps1 -EvidencePath <pack> -VulnAssessmentPath <runs>`, then `New-CyberSocReport.ps1 -EvidencePath <pack>`.
 
 Each run writes an evidence pack with the report in two HTML editions and a deck, and the SecOps worklist (`04-secops-worklist.md` and `.csv`). Send the client `03-security-report.client.html` and `03-security-report.pptx`. `03-security-report.html` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-CyberSocEvidence.README.md covers parameters, permissions and sign-ins.
+
+## Raise the hardening change requests
+
+```powershell
+pwsh ./New-CyberSocChangeRequests.ps1 -EvidencePath <pack>
+```
+
+Writes `05-change-requests` into the pack: one change request for each low-impact hardening item that still has resources to fix, and a ready-to-send client email for the changes that need the client first. New-CyberSocChangeRequests.README.md covers the changes and the options.
 
 ## Integrity
 

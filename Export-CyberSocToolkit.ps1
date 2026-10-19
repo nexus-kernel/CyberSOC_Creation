@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Writes dist/CyberSOC-Toolkit_v<version>_<timestamp>.zip with the collector, the vulnerability
-    assessment importer, the report, worklist and controls standard generators, the report assets and the pptxgenjs node_modules,
+    assessment importer, the report, worklist, change request and controls standard generators, the report assets and the pptxgenjs node_modules,
     so the target only needs PowerShell, Azure CLI and Node.js. The zip also carries SETUP.md
     (prerequisites and first commands) and MANIFEST.sha256 (a hash for every file).
 
@@ -58,6 +58,7 @@ Add-PackageItem 'Get-CyberSocEvidence.ps1'
 Add-PackageItem 'Import-CyberSocVulnAssessment.ps1'
 Add-PackageItem 'New-CyberSocReport.ps1'
 Add-PackageItem 'New-CyberSocSecOpsWorklist.ps1'
+Add-PackageItem 'New-CyberSocChangeRequests.ps1'
 Add-PackageItem 'New-CyberSocControlsStandard.ps1'
 Add-PackageItem 'report'
 Add-PackageItem 'package.json'
@@ -65,6 +66,7 @@ Add-PackageItem 'package-lock.json'
 Add-PackageItem 'Get-CyberSocEvidence.README.md' $false
 Add-PackageItem 'New-CyberSocReport.README.md' $false
 Add-PackageItem 'New-CyberSocSecOpsWorklist.README.md' $false
+Add-PackageItem 'New-CyberSocChangeRequests.README.md' $false
 Add-PackageItem 'EBR Security Evidence Collection Runbook.md' $false
 Add-PackageItem 'CyberSOC Monthly Report Runbook.md' $false
 Add-PackageItem 'README.md' $false
@@ -151,6 +153,14 @@ pwsh ./Get-CyberSocEvidence.ps1 -TenantId <tenant> -SubscriptionId <subscription
 The window is the report month and the two full months before it, the 90-day trend. The report month defaults to the last full month. ``-VulnAssessmentPath`` imports the monthly Atmosera.VulnAssessment runs of that window for these subscriptions. A pack collected without them takes them later with ``Import-CyberSocVulnAssessment.ps1 -EvidencePath <pack> -VulnAssessmentPath <runs>``, then ``New-CyberSocReport.ps1 -EvidencePath <pack>``.
 
 Each run writes an evidence pack with the report in two HTML editions and a deck, and the SecOps worklist (``04-secops-worklist.md`` and ``.csv``). Send the client ``03-security-report.client.html`` and ``03-security-report.pptx``. ``03-security-report.html`` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-CyberSocEvidence.README.md covers parameters, permissions and sign-ins.
+
+## Raise the hardening change requests
+
+``````powershell
+pwsh ./New-CyberSocChangeRequests.ps1 -EvidencePath <pack>
+``````
+
+Writes ``05-change-requests`` into the pack: one change request for each low-impact hardening item that still has resources to fix, and a ready-to-send client email for the changes that need the client first. New-CyberSocChangeRequests.README.md covers the changes and the options.
 
 ## Integrity
 
