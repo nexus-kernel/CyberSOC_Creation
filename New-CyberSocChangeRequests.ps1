@@ -735,10 +735,11 @@ $catalog = @(
                 $body.Add(('Subscription {0}:' -f (Format-Subscription $g.Name)))
                 $body.Add(@($g.Group | Sort-Object ResourceGroup, Name | ForEach-Object { '{0} (resource group {1})' -f $_.Name, $_.ResourceGroup }))
             }
-            $body.Add(('I do not expect this change to affect anything that uses {0} today, for three reasons:' -f (Get-Pick $n 'the account' 'these accounts')))
+            $body.Add(('I do not expect this change to affect anything that uses {0} today, for these reasons:' -f (Get-Pick $n 'the account' 'these accounts')))
             $body.Add(@(
-                    ('Every container in {0} is private today, so no one reads {1} without signing in.' -f (Get-Pick $n 'the account' 'these accounts'), (Get-Pick $n 'it' 'them'))
+                    ('Every container in {0} is private today, so no one reads {1} blob data without signing in.' -f (Get-Pick $n 'the account' 'these accounts'), (Get-Pick $n 'its' 'their'))
                     'Applications and people that sign in, or that use a shared access signature or an account key, keep working as they do now. The setting only affects requests made without any credentials.'
+                    'A static website hosted in a storage account keeps serving as it does now, since the setting does not apply to it.'
                     (Get-Pick $n 'Just before the change, I will check the containers of the account again, and leave it unchanged if a container has been made public since my review.' 'Just before the change, I will check the containers of each account again, and skip any account where a container has been made public since my review.')))
             $body.Add('If anything unexpected comes up, I can turn the setting back on straight away. It takes up to 30 seconds to apply, and the containers stay as they are.')
             $body.Add('Could you confirm that I can go ahead and schedule the change?')
@@ -749,7 +750,7 @@ $catalog = @(
                     ResourceIntro = '{0} anonymous blob access, with the containers listed at collection. No container in {1} is set to Blob or Container access.' -f $(if ($n -eq 1) { 'The storage account below allows' } else { "The $n storage accounts below allow" }), (Get-Pick $n 'it' 'them')
                     ResourceLines = Format-ResourceList $resources
                     Availability = 'No impact on the storage service, since authorized requests are unaffected.'
-                    UserExperience = 'No change, since no container in {0} allows anonymous access and nothing reads {1} without signing in.' -f (Get-Pick $n 'this account' 'these accounts'), (Get-Pick $n 'it' 'them')
+                    UserExperience = 'No change, since no container in {0} allows anonymous access and a static website hosted in a storage account is not affected by the setting.' -f (Get-Pick $n 'this account' 'these accounts')
                     Dependencies = 'None, since access through Microsoft Entra ID, shared access signatures or account keys is unaffected.'
                     Implementation = $impl.ToArray()
                     Testing = @(

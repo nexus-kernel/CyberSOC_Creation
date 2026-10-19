@@ -232,7 +232,7 @@ Describe 'Change request generation' {
         $text | Should -Not -Match 'stnfsblob' -Because 'an account that already blocks anonymous access needs no change'
         @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Set Allow Blob anonymous access to Disabled on the storage account listed below, none of which has a container open to anonymous access.'
         @(Get-Section $text 'B) PURPOSE')[0] | Should -Be 'Turning the setting off stops a container being opened to anonymous access later, by mistake or by a misconfigured deployment. No container in this account is open to anonymous access today.'
-        @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Be 'No change, since no container in this account allows anonymous access and nothing reads it without signing in.'
+        @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Be 'No change, since no container in this account allows anonymous access and a static website hosted in a storage account is not affected by the setting.'
         @(Get-Section $text 'C) DEPENDENCIES')[0] | Should -Be 'None, since access through Microsoft Entra ID, shared access signatures or account keys is unaffected.'
         (Get-Section $text 'E) MITIGATION') -join '|' | Should -Be 'If changes need to be reverted, follow the rollback plan.'
         @(Get-Section $text 'A) IMPLEMENTATION PLAN') | Should -Be @(
@@ -259,8 +259,9 @@ Describe 'Change request generation' {
         $email | Should -Match '\bI am planning a security hardening change that turns off anonymous access to Azure Blob Storage at the account level on one of your storage accounts\.'
         $email | Should -Match 'no container in it can be opened to anonymous access later, by mistake or by a misconfigured deployment\.'
         $email | Should -Match "The account is listed below:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- stdata \(resource group rg-data\)\r?\n"
-        $email | Should -Match 'I do not expect this change to affect anything that uses the account today, for three reasons:'
-        $email | Should -Match '- Every container in the account is private today, so no one reads it without signing in\.'
+        $email | Should -Match 'I do not expect this change to affect anything that uses the account today, for these reasons:'
+        $email | Should -Match '- Every container in the account is private today, so no one reads its blob data without signing in\.'
+        $email | Should -Match '- A static website hosted in a storage account keeps serving as it does now, since the setting does not apply to it\.' -Because 'the static website container stays public whatever the account setting'
         $email | Should -Match '- Applications and people that sign in, or that use a shared access signature or an account key, keep working as they do now\.'
         $email | Should -Match '- Just before the change, I will check the containers of the account again, and leave it unchanged if a container has been made public since my review\.'
         $email | Should -Match 'If anything unexpected comes up, I can turn the setting back on straight away\. It takes up to 30 seconds to apply, and the containers stay as they are\.'
@@ -952,12 +953,12 @@ Describe 'Change request variants' {
             '- stone, resource group rg-app, 1 container, private'
             '- stempty, resource group rg-data, no containers')
         $text | Should -Match '6\. Repeat steps 1 to 5 for each remaining storage account listed\.' -Because 'the change-time check repeats for every account'
-        @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Be 'No change, since no container in these accounts allows anonymous access and nothing reads them without signing in.'
+        @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Be 'No change, since no container in these accounts allows anonymous access and a static website hosted in a storage account is not affected by the setting.'
         $text | Should -Not -Match 'stpublic|stmissing|stdenied|stblocked|stfiles'
         $email = Get-Content (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') -Raw
         $email | Should -Match 'at the account level on 3 of your storage accounts\.'
         $email | Should -Match "The accounts are listed below by subscription:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- stclosed \(resource group rg-data\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- stone \(resource group rg-app\)\r?\n- stempty \(resource group rg-data\)"
-        $email | Should -Match '- Every container in these accounts is private today, so no one reads them without signing in\.'
+        $email | Should -Match '- Every container in these accounts is private today, so no one reads their blob data without signing in\.'
         $email | Should -Match '- Just before the change, I will check the containers of each account again, and skip any account where a container has been made public since my review\.'
         $email | Should -Match 'I can turn the setting back on straight away'
         $email | Should -Not -Match '(?i)lose access|loses access|stpublic|stmissing|stdenied|could not read'
