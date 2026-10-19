@@ -611,13 +611,14 @@ function Get-RuleAttachments($row) {
             '{0}{1}' -f ('network interface ' + (ConvertTo-CopyText ($n -split '/')[-1])), $(if ($vm) { ' of virtual machine ' + (ConvertTo-CopyText ($vm -split '/')[-1]) } else { '' })
         })
 }
-# Defender for Servers Plan 2, which just-in-time VM access needs, read from P0.3. Read is false when P0.3 could not
-# be read, and On holds each subscription whose VirtualMachines plan is Standard with sub-plan P2.
+# Defender for Servers Plan 2, which just-in-time VM access needs, read from P0.3: On or Off for each subscription
+# with a VirtualMachines row (On when its tier is Standard with sub-plan P2). A subscription without one, which a
+# PARTIAL or unread P0.3 can leave out, stays unknown, so the email never calls a plan off that was not read.
 function Get-ServersPlan2 {
-    $plan = @{ Read = Test-ResultRead 'P0.3'; On = @{} }
-    if (-not $plan.Read) { return $plan }
-    foreach ($p in @(Get-Rows 'P0.3' | Where-Object { (Get-Text $_.Plan) -ieq 'VirtualMachines' -and (Get-Text $_.Tier) -ieq 'Standard' -and (Get-Text $_.SubPlan) -ieq 'P2' })) {
-        $plan.On[(ConvertTo-CopyText $p.subscriptionId).ToLowerInvariant()] = $true
+    $plan = @{}
+    if (-not (Test-ResultRead 'P0.3')) { return $plan }
+    foreach ($p in @(Get-Rows 'P0.3' | Where-Object { (Get-Text $_.Plan) -ieq 'VirtualMachines' })) {
+        $plan[(ConvertTo-CopyText $p.subscriptionId).ToLowerInvariant()] = $(if ((Get-Text $p.Tier) -ieq 'Standard' -and (Get-Text $p.SubPlan) -ieq 'P2') { 'On' } else { 'Off' })
     }
     $plan
 }
@@ -1441,12 +1442,16 @@ $catalog = @(
                     $label = '{0} in {1} (resource group {2})' -f $rule, $nsg, (ConvertTo-CopyText $r.resourceGroup)
                     $subnets = @(Get-List $r.Subnets)
                     $nics = @(Get-List $r.Nics)
-                    $applianceNics = @(Get-List $r.ApplianceNics | ForEach-Object { $_.ToLowerInvariant() })
+                    # Every network interface of an appliance and the subnets it sits in, so a group that reaches one
+                    # directly or through its subnet is found.
+                    $applianceNics = @(Get-List $r.ApplianceNicIds | ForEach-Object { $_.ToLowerInvariant() })
+                    $applianceSubnets = @(Get-List $r.ApplianceSubnetIds | ForEach-Object { $_.ToLowerInvariant() })
                     $ports = @(Get-List $r.DestinationPorts)
                     if (-not $subnets.Count -and -not $nics.Count) { $unattached.Add($label); continue }
-                    if ($applianceNics.Count) {
-                        $onlyAppliances = -not $subnets.Count -and -not @($nics | Where-Object { $_.ToLowerInvariant() -notin $applianceNics }).Count
-                        if ($onlyAppliances) { $appliance.Add($label) } else { $shared.Add($label) }
+                    $onAppliance = @($nics | Where-Object { $_.ToLowerInvariant() -in $applianceNics }).Count
+                    $inApplianceSubnet = @($subnets | Where-Object { $_.ToLowerInvariant() -in $applianceSubnets }).Count
+                    if ($onAppliance -or $inApplianceSubnet) {
+                        if (-not $subnets.Count -and $onAppliance -eq $nics.Count) { $appliance.Add($label) } else { $shared.Add($label) }
                         continue
                     }
                     if (@($ports | Where-Object { $_ -eq '*' -or $_ -match '-' }).Count) { $ranges.Add(('{0}, ports {1}' -f $label, (ConvertTo-CopyText ($ports -join ', ')))); continue }
@@ -1482,7 +1487,7 @@ $catalog = @(
                 $notes.Add(('{0} left out of CR-16 because {1} attached only to network interfaces of network virtual appliances (P0.6-APPLIANCES), where an untrust interface takes internet traffic by design: {2}. Review each with the client against the management design of the appliance.' -f (Get-Count $appliance.Count 'rule' 'rules'), (Get-Pick $appliance.Count 'its network security group is' 'their network security groups are'), ($appliance -join ', ')))
             }
             if ($shared.Count) {
-                $notes.Add(('{0} left out of CR-16 for review because {1} attached to a network virtual appliance as well as other resources, so changing the rule would change the appliance too: {2}. Review each with the client and split the appliance interface into its own network security group if the rule is not needed there.' -f (Get-Count $shared.Count 'rule' 'rules'), (Get-Pick $shared.Count 'its network security group is' 'their network security groups are'), ($shared -join ', ')))
+                $notes.Add(('{0} left out of CR-16 for review because {1} a network virtual appliance through a subnet it sits in, or through its network interface as well as other resources, so changing the rule would change the appliance too: {2}. Review each with the client against the management design of the appliance, and give the appliance interface its own network security group if the rule is not needed there.' -f (Get-Count $shared.Count 'rule' 'rules'), (Get-Pick $shared.Count 'its network security group reaches' 'their network security groups reach'), ($shared -join ', ')))
             }
             if ($ranges.Count) {
                 $notes.Add(('{0} left out of CR-16 for review because {1} * or a port range, which may not mean a management port is meant to be open: {2}. Review each with the client and narrow it to the ports it needs. A rule narrowed to name 22, 3389, 5985 or 5986 joins CR-16 in a later pack.' -f (Get-Count $ranges.Count 'rule' 'rules'), (Get-Pick $ranges.Count 'its destination ports include' 'their destination ports include'), ($ranges -join ' / ')))
@@ -1494,37 +1499,51 @@ $catalog = @(
             # each subscription is named in the change request and suggested in the email.
             $plan = Get-ServersPlan2
             $subscriptions = @($resources | ForEach-Object SubscriptionId | Sort-Object -Unique | Sort-Object { Format-Subscription $_ })
-            $withPlan = @($subscriptions | Where-Object { $plan.On[$_] })
-            $withoutPlan = @($subscriptions | Where-Object { -not $plan.On[$_] })
+            $withPlan = @($subscriptions | Where-Object { $plan[$_] -eq 'On' })
+            $withoutPlan = @($subscriptions | Where-Object { $plan[$_] -eq 'Off' })
+            $unknownPlan = @($subscriptions | Where-Object { -not $plan[$_] })
             $planLines = @('', 'Defender for Servers Plan 2, which just-in-time VM access needs (P0.3):')
-            foreach ($s in $subscriptions) { $planLines += '- {0}: {1}' -f (Format-Subscription $s), $(if (-not $plan.Read) { 'not read' } elseif ($plan.On[$s]) { 'on, so just-in-time VM access is the path' } else { 'not on, so Azure Bastion is the path unless the client turns Plan 2 on' }) }
+            foreach ($s in $subscriptions) { $planLines += '- {0}: {1}' -f (Format-Subscription $s), $(switch ($plan[$s]) { 'On' { 'on, so just-in-time VM access is the path' } 'Off' { 'not on, so Azure Bastion is the path unless the client turns Plan 2 on' } default { 'not read, so check the plan under Microsoft Defender for Cloud > Environment settings before choosing the path' } }) }
             $subs = $subscriptions.Count
             $otherPorts = @($resources | Where-Object OtherPorts).Count
 
             $impl = [System.Collections.Generic.List[object]]::new()
             $impl.Add('Where the client agreed just-in-time VM access, in the Azure portal go to Microsoft Defender for Cloud > Workload protections > Just-in-time VM access, select the Not configured tab, select the virtual machines behind the rules listed in the RESOURCES section, select Enable JIT on VMs, keep the ports it proposes and select Save. The rules listed keep priority over its deny rules until they are removed below.')
             $impl.Add('Where the client agreed Azure Bastion, go to the virtual network of the machines behind each rule and select Connect > Bastion. If the virtual network has no Bastion host, deploy one with the tier agreed with the client.')
+            # Bastion reaches a machine over its private address on 22 or 3389, so every group on the subnet or
+            # network interface of the machine must let it in ahead of any deny rule before the public allow goes.
+            $impl.Add('Where Azure Bastion is the path, open each network security group on the subnet or network interface of the machines behind each rule and go to Settings > Inbound security rules. Unless a rule already allows ports 22 and 3389 from the AzureBastionSubnet address range ahead of every deny rule for those ports, select + Add and add one with Source set to IP Addresses and that range, at a lower priority number than those deny rules. Then open a Bastion session to one machine behind each rule from its Connect > Bastion page, and if it does not open, stop here and leave every rule listed unchanged.')
             $impl.Add('Go to Network security groups and open the network security group of the first rule listed in the RESOURCES section.')
             $impl.Add('Go to Settings > Inbound security rules and find the rule. If its priority, source or ports no longer read as listed, leave it unchanged and note it in the change record for the next pack.')
-            $impl.Add('If the client named source addresses that still need direct access, select the rule, set Source to IP Addresses, enter those addresses in Source IP addresses/CIDR ranges and select Save.')
-            $impl.Add('Otherwise, if the rule allows only ports 22, 3389, 5985 or 5986, select it, select Delete and then Yes. If it also allows other ports, select it, remove 22, 3389, 5985 and 5986 from Destination port ranges and select Save.')
-            Add-RepeatStep $impl $n 3 'rule'
+            # Narrowing the source of a rule that also allows other ports would narrow them too, so the management
+            # ports move to a rule of their own and the other ports keep the source they have.
+            $impl.Add('If the client named source addresses that still need direct access and the rule allows only ports 22, 3389, 5985 or 5986, select the rule, set Source to IP Addresses, enter those addresses in Source IP addresses/CIDR ranges and select Save.')
+            $impl.Add('If the client named such addresses and the rule also allows other ports, select + Add and add an allow rule with the protocol and destination of the rule, Destination port ranges set to the management ports it lists, Source set to IP Addresses with those addresses, and a free priority number, then select Add. Then select the original rule, remove 22, 3389, 5985 and 5986 from Destination port ranges and select Save, so its other ports keep the source they have.')
+            $impl.Add('If the client named no addresses, select the rule. If it allows only ports 22, 3389, 5985 or 5986, select Delete and then Yes. If it also allows other ports, remove 22, 3389, 5985 and 5986 from Destination port ranges and select Save.')
+            Add-RepeatStep $impl $n 4 'rule'
             $testing = @(
                 ('In the Azure portal, open the network security group of {0} and go to Settings > Inbound security rules.' -f (Get-EachStep $n 'rule'))
-                'Confirm each rule listed is gone, allows only the source addresses the client named, or no longer allows 22, 3389, 5985 or 5986, and that no other rule allows those ports from Any, Internet or 0.0.0.0/0.'
+                'Confirm each rule listed is gone, allows only the source addresses the client named, or no longer allows 22, 3389, 5985 or 5986 while its other ports keep their source, and that no other rule allows those ports from Any, Internet or 0.0.0.0/0.'
                 'Where just-in-time VM access was enabled, go to Microsoft Defender for Cloud > Workload protections > Just-in-time VM access and confirm the virtual machines behind the rules show on the Configured tab.'
                 'Where Azure Bastion is the path, open one virtual machine behind each rule, select Connect > Bastion and confirm a session opens.')
             $rollback = @(
                 'In the Azure portal, open the network security group of the rule to restore and go to Settings > Inbound security rules.'
                 'For a rule that was deleted, select + Add, enter the name, priority, source, source port ranges, destination, destination port ranges, protocol, action Allow and description recorded for it in the RESOURCES section and in change-requests.csv, and select Add.'
                 'For a rule that was narrowed, select it, set Source and Destination port ranges back to the values recorded for it and select Save.'
+                'Delete any rule this change added for the named addresses, and the rule added for the AzureBastionSubnet address range if Azure Bastion is no longer wanted.'
                 'If just-in-time VM access added a deny rule for the same ports at a lower priority number than the restored rule, give the restored rule a priority number below it, so it applies first as it did before the change.')
 
-            $planWords = if (-not $plan.Read) { 'I could not confirm which of these subscriptions have Plan 2, and I will check that before the change.' }
-            elseif (-not $withoutPlan.Count) { 'Plan 2 is on in {0}.' -f (Get-Pick $subs 'this subscription' 'each of these subscriptions') }
-            elseif (-not $withPlan.Count) { 'Plan 2 is not on in {0}, so this path would add the cost of Plan 2 for the servers there.' -f (Get-Pick $subs 'this subscription' 'these subscriptions') }
-            else { 'Plan 2 is on in {0}, and not on in {1}, where this path would add the cost of Plan 2 for the servers.' -f (Join-Words @($withPlan | ForEach-Object { 'subscription ' + (Format-Subscription $_) })), (Join-Words @($withoutPlan | ForEach-Object { 'subscription ' + (Format-Subscription $_) })) }
-            $suggest = if (-not $plan.Read) { 'I will suggest the path that fits each subscription once I know which have Plan 2.' }
+            # A subscription whose plan was not read stays unknown in the email, never on or off.
+            $named = { param($list) Join-Words @($list | ForEach-Object { 'subscription ' + (Format-Subscription $_) }) }
+            $unknownWords = 'I could not confirm whether Plan 2 is on in {0}, and I will check that before the change.' -f (& $named $unknownPlan)
+            $planWords = if ($unknownPlan.Count -eq $subs) { 'I could not confirm which of these subscriptions have Plan 2, and I will check that before the change.' }
+            elseif (-not $unknownPlan.Count -and -not $withoutPlan.Count) { 'Plan 2 is on in {0}.' -f (Get-Pick $subs 'this subscription' 'each of these subscriptions') }
+            elseif (-not $unknownPlan.Count -and -not $withPlan.Count) { 'Plan 2 is not on in {0}, so this path would add the cost of Plan 2 for the servers there.' -f (Get-Pick $subs 'this subscription' 'these subscriptions') }
+            elseif (-not $unknownPlan.Count) { 'Plan 2 is on in {0}, and not on in {1}, where this path would add the cost of Plan 2 for the servers.' -f (& $named $withPlan), (& $named $withoutPlan) }
+            elseif (-not $withoutPlan.Count) { 'Plan 2 is on in {0}. {1}' -f (& $named $withPlan), $unknownWords }
+            elseif (-not $withPlan.Count) { 'Plan 2 is not on in {0}, where this path would add the cost of Plan 2 for the servers. {1}' -f (& $named $withoutPlan), $unknownWords }
+            else { 'Plan 2 is on in {0}, and not on in {1}, where this path would add the cost of Plan 2 for the servers. {2}' -f (& $named $withPlan), (& $named $withoutPlan), $unknownWords }
+            $suggest = if ($unknownPlan.Count) { 'I will suggest the path that fits each subscription once I know which have Plan 2.' }
             elseif (-not $withoutPlan.Count) { 'Because Plan 2 is already on, I suggest just-in-time VM access.' }
             elseif (-not $withPlan.Count) { 'Because Plan 2 is not on, I suggest Azure Bastion, unless you would rather turn Plan 2 on.' }
             else { 'I suggest just-in-time VM access where Plan 2 is on and Azure Bastion elsewhere, unless you would rather turn Plan 2 on there.' }
@@ -1544,7 +1563,7 @@ $catalog = @(
                 -Resources (Get-EmailResourceList $resources { $_.Summary }) `
                 -Reversal ('Every setting of {0} is recorded, so {1} can be recreated exactly as it is today if anything unexpected comes up.' -f (Get-Pick $n 'the rule' 'each rule'), (Get-Pick $n 'it' 'any of them')) `
                 -Ask ('Could you tell me who still needs RDP, SSH or WinRM to these machines from the internet, and from which addresses, and which replacement you would like, just-in-time VM access or Azure Bastion? With that agreed, could you approve this change for {0}?' -f $proposedDay) `
-                -Options 'Where someone still needs direct access, I can narrow a rule to their named addresses instead of removing it. If another date suits you better, or anything listed above should stay out of the change, please let me know.'
+                -Options 'Where someone still needs direct access, I can keep the management ports open to their named addresses only, and any other port a rule allows keeps the access it has today. If another date suits you better, or anything listed above should stay out of the change, please let me know.'
             @{ Used = @('P0.3'); Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
                     Number = 16; Key = 'management-ports'; Title = 'Close internet-facing RDP, SSH and WinRM rules on network security groups'
                     Description = 'Remove {0} that allow RDP, SSH or WinRM from any internet address, or narrow each to named source addresses, and give administrators just-in-time VM access or Azure Bastion in their place.' -f (Get-Listed $n 'inbound security rule' 'inbound security rules')
@@ -1553,13 +1572,14 @@ $catalog = @(
                     ResourceLines = @(Format-ResourceList $resources) + $planLines
                     Availability = 'No impact on the virtual machines, since only new remote management connections from the internet are refused and connections already open stay up.'
                     UserExperience = 'Administrators who connect straight from the internet over RDP, SSH or WinRM move to just-in-time VM access or Azure Bastion, as agreed with the client.'
-                    Dependencies = 'Needs the replacement path the client agreed in place first, just-in-time VM access with Defender for Servers Plan 2 on the subscription or an Azure Bastion host in the virtual network.'
+                    Dependencies = 'Needs the replacement path the client agreed in place first, just-in-time VM access with Defender for Servers Plan 2 on the subscription, or an Azure Bastion host that every network security group of the machines lets in on 22 and 3389.'
                     Implementation = $impl.ToArray(); Testing = $testing; Rollback = $rollback
                     References = @(
                         , @('Create, change, or delete a network security group', 'https://learn.microsoft.com/azure/virtual-network/manage-network-security-group')
                         , @('How network security groups filter network traffic', 'https://learn.microsoft.com/azure/virtual-network/network-security-group-how-it-works')
                         , @('Enable just-in-time access', 'https://learn.microsoft.com/azure/defender-for-cloud/enable-just-in-time-access')
                         , @('Deploy Azure Bastion from the Azure portal', 'https://learn.microsoft.com/azure/bastion/quickstart-host-portal')
+                        , @('Configure NSG rules for Azure Bastion, target VM subnet', 'https://learn.microsoft.com/azure/bastion/bastion-nsg#target-vm-subnet')
                         , @('Choose the right Azure Bastion SKU', 'https://learn.microsoft.com/azure/bastion/bastion-sku-comparison'))
                     Csv = $resources
                     Email = $email

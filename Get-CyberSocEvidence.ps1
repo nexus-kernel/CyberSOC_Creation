@@ -2017,7 +2017,7 @@ resources
 | order by Association asc, Priority asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'NB.2-DETAIL' -Phase 'P2 Network' -Engine 'ARG' -Title 'Internet-exposed management port rules with their properties and attachments' -Notes 'Added in CyberSOC 1.6.0. The rules NB.2 lists, read the same way, one row each with everything change request CR-16 needs to change the rule and to recreate it on rollback: the subscription, the network security group and rule resource IDs, priority, protocol, source and destination prefixes and ports, the description, the destination application security groups, the association (Subnet, NIC or Unassociated), the subnets and network interfaces the group is attached to, and for each network interface its virtual machine and whether that machine is a network virtual appliance (the P0.6-APPLIANCES pattern). CR-16 takes the rules on a workload subnet or network interface and leaves to the index notes the groups attached only to appliances, the unassociated groups and the rules whose ports are * or a range. Internal: names rules, the report embeds counts only.' -Query @'
+    $q.Add((New-EbrQuery -Id 'NB.2-DETAIL' -Phase 'P2 Network' -Engine 'ARG' -Title 'Internet-exposed management port rules with their properties and attachments' -Notes 'Added in CyberSOC 1.6.0. The rules NB.2 lists, read the same way, one row each with everything change request CR-16 needs to change the rule and to recreate it on rollback: the subscription, the network security group and rule resource IDs, priority, protocol, source and destination prefixes and ports, the description, the destination application security groups, the association (Subnet, NIC or Unassociated), the subnets and network interfaces the group is attached to with the virtual machine of each network interface, and every network interface of a network virtual appliance (the P0.6-APPLIANCES pattern) with the subnets it sits in, so a rule that reaches an appliance through its network interface or its subnet is found. CR-16 takes the rules on a workload subnet or network interface and leaves to the index notes the groups attached only to appliances, the groups that reach an appliance as well as other resources, the unassociated groups and the rules whose ports are * or a range. Internal: names rules, the report embeds counts only.' -Query @'
 resources
 | where type =~ "microsoft.network/networksecuritygroups"
 | where id !contains "{{MRG}}"
@@ -2035,24 +2035,32 @@ resources
 | where SourceText contains '"*"' or SourceText contains '"Internet"' or SourceText contains '"0.0.0.0/0"'
 | where PortText contains '"*"' or PortText contains '"22"' or PortText contains '"3389"'
      or PortText contains '"5985"' or PortText contains '"5986"' or PortText contains "-"
-// Each network interface the group is attached to, with its virtual machine and whether that machine is a
-// network virtual appliance, so CR-16 can leave an appliance untrust interface out.
+// Each network interface the group is attached to directly, with its virtual machine.
 | join kind=leftouter (
     resources
     | where type =~ "microsoft.network/networkinterfaces"
-    | extend NsgKey = tolower(tostring(properties.networkSecurityGroup.id)),
-             VmKey  = tolower(tostring(properties.virtualMachine.id))
+    | extend NsgKey = tolower(tostring(properties.networkSecurityGroup.id))
     | where isnotempty(NsgKey)
-    | join kind=leftouter (
+    | summarize NicVms = make_list(pack("NicId", tolower(id), "VmId", tolower(tostring(properties.virtualMachine.id)))) by NsgKey
+  ) on NsgKey
+// Every network interface of a network virtual appliance and the subnets it sits in, so CR-16 can leave out a
+// rule that reaches an appliance through its network interface or through a subnet group.
+| extend ApplianceKey = 1
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/networkinterfaces"
+    | extend VmKey = tolower(tostring(properties.virtualMachine.id))
+    | join kind=inner (
         resources
         | where type =~ "microsoft.compute/virtualmachines"
         | where {{APPLIANCE}}   // network virtual appliances, see P0.6-APPLIANCES
-        | project VmKey = tolower(id), ApplianceVm = name
+        | project VmKey = tolower(id)
       ) on VmKey
-    | summarize NicVms        = make_list(pack("NicId", tolower(id), "VmId", VmKey, "Appliance", isnotempty(ApplianceVm))),
-                ApplianceNics = make_set_if(tolower(id), isnotempty(ApplianceVm))
-              by NsgKey
-  ) on NsgKey
+    | mv-expand IpConfig = properties.ipConfigurations
+    | summarize ApplianceNicIds    = make_set(tolower(id)),
+                ApplianceSubnetIds = make_set(tolower(tostring(IpConfig.properties.subnet.id)))
+    | extend ApplianceKey = 1
+  ) on ApplianceKey
 | extend Association = case(0 < array_length(Subnets), "Subnet", 0 < array_length(Nics), "NIC", "Unassociated"),
          RangeNeedsReview = PortText contains "-"
 | project subscriptionId, resourceGroup, NSG = name, NsgId = id,
@@ -2070,8 +2078,9 @@ resources
           Description = tostring(Rule.properties.description),
           Association, RangeNeedsReview,
           Subnets, Nics,
-          NicVms        = coalesce(NicVms, dynamic([])),
-          ApplianceNics = coalesce(ApplianceNics, dynamic([]))
+          NicVms             = coalesce(NicVms, dynamic([])),
+          ApplianceNicIds    = coalesce(ApplianceNicIds, dynamic([])),
+          ApplianceSubnetIds = coalesce(ApplianceSubnetIds, dynamic([]))
 | order by subscriptionId asc, resourceGroup asc, NSG asc, Priority asc
 '@))
 

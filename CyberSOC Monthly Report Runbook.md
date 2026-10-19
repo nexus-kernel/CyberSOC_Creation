@@ -496,7 +496,7 @@ resourcecontainers
 
 ### NB.2-DETAIL Internet-exposed management port rules with their properties and attachments
 
-Engine ARG. CyberSOC collector 1.6.0. The rules NB.2 lists, read the same way: allow inbound from any address (`*`), `Internet` or `0.0.0.0/0` on 22, 3389, 5985, 5986, `*` or a port range. One row per rule with everything CR-16 needs to change it and to recreate it on rollback: the subscription, the network security group and rule resource IDs, priority, direction, access, protocol, the source and destination prefixes and ports as lists (the single and the list form of each property together, so an empty single form shows as an empty entry), the description, the destination application security groups, and the association (Subnet, NIC or Unassociated, as in NB.2). `Subnets` and `Nics` list what the group is attached to. Each network interface that names the group is read with its virtual machine, and `NicVms` and `ApplianceNics` say whether that machine is a network virtual appliance, matched with the P0.6-APPLIANCES pattern. A missing property reads as an empty list. `mv-expand` takes up to 1,000 rules per group, the most a group can hold, rather than its default of 128. CR-16 closes the rules on a workload subnet or network interface that name their ports, and leaves to the index notes a group attached only to appliances (an untrust interface takes internet traffic by design), a group attached to an appliance and other resources (for review), a group attached to nothing (a cleanup item) and a rule whose ports are `*` or a range (for review). Feeds CR-16 and its client email, with P0.3 for Defender for Servers Plan 2 by subscription, which just-in-time VM access needs.
+Engine ARG. CyberSOC collector 1.6.0. The rules NB.2 lists, read the same way: allow inbound from any address (`*`), `Internet` or `0.0.0.0/0` on 22, 3389, 5985, 5986, `*` or a port range. One row per rule with everything CR-16 needs to change it and to recreate it on rollback: the subscription, the network security group and rule resource IDs, priority, direction, access, protocol, the source and destination prefixes and ports as lists (the single and the list form of each property together, so an empty single form shows as an empty entry), the description, the destination application security groups, and the association (Subnet, NIC or Unassociated, as in NB.2). `Subnets` and `Nics` list what the group is attached to, and `NicVms` names the virtual machine of each network interface that names the group. `ApplianceNicIds` and `ApplianceSubnetIds` list every network interface of a network virtual appliance (the P0.6-APPLIANCES pattern) and the subnets it sits in, the same on every row, so a rule that reaches an appliance through its network interface or through the group on its subnet is found. A missing property reads as an empty list. `mv-expand` takes up to 1,000 rules per group, the most a group can hold, rather than its default of 128. CR-16 closes the rules on a workload subnet or network interface that name their ports, and leaves to the index notes a group attached only to appliance network interfaces (an untrust interface takes internet traffic by design), a group that reaches an appliance through a subnet or as well as other resources (for review), a group attached to nothing (a cleanup item) and a rule whose ports are `*` or a range (for review). Feeds CR-16 and its client email, with P0.3 for Defender for Servers Plan 2 by subscription, which just-in-time VM access needs.
 
 ```kql
 resources
@@ -516,24 +516,32 @@ resources
 | where SourceText contains '"*"' or SourceText contains '"Internet"' or SourceText contains '"0.0.0.0/0"'
 | where PortText contains '"*"' or PortText contains '"22"' or PortText contains '"3389"'
      or PortText contains '"5985"' or PortText contains '"5986"' or PortText contains "-"
-// Each network interface the group is attached to, with its virtual machine and whether that machine is a
-// network virtual appliance, so CR-16 can leave an appliance untrust interface out.
+// Each network interface the group is attached to directly, with its virtual machine.
 | join kind=leftouter (
     resources
     | where type =~ "microsoft.network/networkinterfaces"
-    | extend NsgKey = tolower(tostring(properties.networkSecurityGroup.id)),
-             VmKey  = tolower(tostring(properties.virtualMachine.id))
+    | extend NsgKey = tolower(tostring(properties.networkSecurityGroup.id))
     | where isnotempty(NsgKey)
-    | join kind=leftouter (
+    | summarize NicVms = make_list(pack("NicId", tolower(id), "VmId", tolower(tostring(properties.virtualMachine.id)))) by NsgKey
+  ) on NsgKey
+// Every network interface of a network virtual appliance and the subnets it sits in, so CR-16 can leave out a
+// rule that reaches an appliance through its network interface or through a subnet group.
+| extend ApplianceKey = 1
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/networkinterfaces"
+    | extend VmKey = tolower(tostring(properties.virtualMachine.id))
+    | join kind=inner (
         resources
         | where type =~ "microsoft.compute/virtualmachines"
         | where {{APPLIANCE}}   // network virtual appliances, see P0.6-APPLIANCES
-        | project VmKey = tolower(id), ApplianceVm = name
+        | project VmKey = tolower(id)
       ) on VmKey
-    | summarize NicVms        = make_list(pack("NicId", tolower(id), "VmId", VmKey, "Appliance", isnotempty(ApplianceVm))),
-                ApplianceNics = make_set_if(tolower(id), isnotempty(ApplianceVm))
-              by NsgKey
-  ) on NsgKey
+    | mv-expand IpConfig = properties.ipConfigurations
+    | summarize ApplianceNicIds    = make_set(tolower(id)),
+                ApplianceSubnetIds = make_set(tolower(tostring(IpConfig.properties.subnet.id)))
+    | extend ApplianceKey = 1
+  ) on ApplianceKey
 | extend Association = case(0 < array_length(Subnets), "Subnet", 0 < array_length(Nics), "NIC", "Unassociated"),
          RangeNeedsReview = PortText contains "-"
 | project subscriptionId, resourceGroup, NSG = name, NsgId = id,
@@ -551,8 +559,9 @@ resources
           Description = tostring(Rule.properties.description),
           Association, RangeNeedsReview,
           Subnets, Nics,
-          NicVms        = coalesce(NicVms, dynamic([])),
-          ApplianceNics = coalesce(ApplianceNics, dynamic([]))
+          NicVms             = coalesce(NicVms, dynamic([])),
+          ApplianceNicIds    = coalesce(ApplianceNicIds, dynamic([])),
+          ApplianceSubnetIds = coalesce(ApplianceSubnetIds, dynamic([]))
 | order by subscriptionId asc, resourceGroup asc, NSG asc, Priority asc
 ```
 

@@ -295,8 +295,9 @@ in the pack (`results/<ID>.csv`).
   what change request CR-16 needs to change the rule and to recreate it on rollback: the subscription, the network
   security group and rule resource IDs, priority, protocol, source and destination prefixes and ports, the
   description, the destination application security groups, the association, the subnets and network interfaces the
-  group is attached to, and for each network interface its virtual machine and whether that machine is a network
-  virtual appliance (the `P0.6-APPLIANCES` pattern). A missing property reads as an empty list, and the managed
+  group is attached to, the virtual machine of each network interface, and every network interface of a network
+  virtual appliance (the `P0.6-APPLIANCES` pattern) with the subnets it sits in, so a rule that reaches an appliance
+  through the group on its subnet is found too. A missing property reads as an empty list, and the managed
   resource group is excluded. CR-16 closes the rules on workload subnets and network interfaces and leaves appliance
   untrust interfaces, groups attached to nothing and `*` or range rules to the index notes. On an earlier pack it reads
   "Needs recollection with CyberSOC collector 1.6.0 or later". The query is in section 6 of the CyberSOC Monthly

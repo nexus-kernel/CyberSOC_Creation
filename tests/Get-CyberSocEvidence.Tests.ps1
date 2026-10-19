@@ -180,12 +180,13 @@ Describe 'Query catalog' {
         $d.Query | Should -Match 'mv-expand Rule = properties\.securityRules limit 1000' -Because 'a network security group holds up to 1,000 rules and mv-expand stops at 128 by default'
         foreach ($c in 'Subnets = coalesce\(properties\.subnets, dynamic\(\[\]\)\)', 'Nics\s+= coalesce\(properties\.networkInterfaces, dynamic\(\[\]\)\)', 'coalesce\(Rule\.properties\.sourceAddressPrefixes, dynamic\(\[\]\)\)',
             'coalesce\(Rule\.properties\.destinationPortRanges, dynamic\(\[\]\)\)', 'coalesce\(Rule\.properties\.sourcePortRanges, dynamic\(\[\]\)\)', 'coalesce\(Rule\.properties\.destinationAddressPrefixes, dynamic\(\[\]\)\)',
-            'DestinationAsgs = coalesce\(Rule\.properties\.destinationApplicationSecurityGroups, dynamic\(\[\]\)\)', 'NicVms\s+= coalesce\(NicVms, dynamic\(\[\]\)\)', 'ApplianceNics = coalesce\(ApplianceNics, dynamic\(\[\]\)\)') {
+            'DestinationAsgs = coalesce\(Rule\.properties\.destinationApplicationSecurityGroups, dynamic\(\[\]\)\)', 'NicVms\s+= coalesce\(NicVms, dynamic\(\[\]\)\)', 'ApplianceNicIds\s+= coalesce\(ApplianceNicIds, dynamic\(\[\]\)\)', 'ApplianceSubnetIds = coalesce\(ApplianceSubnetIds, dynamic\(\[\]\)\)') {
             $d.Query | Should -Match $c -Because 'a missing property reads as an empty list'
         }
         $d.Query | Should -Match 'where type =~ "microsoft\.network/networkinterfaces"' -Because 'each network interface names its virtual machine'
         $d.Query | Should -Match '\| where \{\{APPLIANCE\}\}   // network virtual appliances, see P0\.6-APPLIANCES' -Because 'an appliance untrust interface is left to the index'
-        $d.Query | Should -Match 'ApplianceNics = make_set_if\(tolower\(id\), isnotempty\(ApplianceVm\)\)'
+        $d.Query | Should -Match 'mv-expand IpConfig = properties\.ipConfigurations' -Because 'an appliance interface without a group of its own is reached through the group on its subnet'
+        $d.Query | Should -Match 'ApplianceNicIds\s+= make_set\(tolower\(id\)\),\s+ApplianceSubnetIds = make_set\(tolower\(tostring\(IpConfig\.properties\.subnet\.id\)\)\)'
         $d.Query | Should -Match 'Association = case\(0 < array_length\(Subnets\), "Subnet", 0 < array_length\(Nics\), "NIC", "Unassociated"\)'
         $d.Query | Should -Match 'project subscriptionId, resourceGroup, NSG = name, NsgId = id,\s+RuleName\s+= tostring\(Rule\.name\), RuleId = tostring\(Rule\.id\),'
         foreach ($col in 'Priority', 'Direction', 'Access', 'Protocol', 'SourcePrefixes', 'SourcePorts', 'DestinationPrefixes', 'DestinationPorts', 'Description', 'RangeNeedsReview') { $d.Query | Should -Match "\b$col\b" -Because "CR-16 records $col" }
