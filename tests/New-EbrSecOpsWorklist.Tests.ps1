@@ -143,6 +143,25 @@ Describe 'SecOps worklist generation' {
         $rows[1].Detail | Should -Match 'excluded from Block Device Code Flow Enforcement\. Apps: Microsoft Teams'
         $rows[2].Detail | Should -Match 'excluded from Block Device Code Flow Enforcement' -Because 'notApplied on a policy for all users is a group, role or app exclusion'
     }
+    It 'lists legacy protocols whose attempts failed without a Conditional Access block, with the password spraying hint' {
+        Add-WorklistResult $pack 'IA.3' '[{"ClientAppUsed":"Exchange ActiveSync","Attempts":40,"Succeeded":4,"BlockedByCa":30,"Users":2},{"ClientAppUsed":"Authenticated SMTP","Attempts":500,"Succeeded":0,"BlockedByCa":2,"Users":0},{"ClientAppUsed":"IMAP4","Attempts":10,"Succeeded":0,"BlockedByCa":10,"Users":0},{"ClientAppUsed":"Unknown","Attempts":9,"Succeeded":0,"BlockedByCa":0,"Users":0}]'
+        $null = & $generator -EvidencePath $pack
+        $rows = @(Import-Csv (Join-Path $pack '04-secops-worklist.csv') | Where-Object Category -eq 'Legacy sign-ins that failed without a Conditional Access block')
+        $rows.Resource | Should -Be @('Authenticated SMTP', 'Exchange ActiveSync') -Because 'a protocol whose failures were all blocks, and Unknown, are left out'
+        $rows[0].Detail | Should -Be '498 of 500 attempts failed without a Conditional Access block. 2 blocked by Conditional Access, 0 succeeded'
+        $rows[1].Detail | Should -Be '6 of 40 attempts failed without a Conditional Access block. 30 blocked by Conditional Access, 4 succeeded'
+        $rows[0].ControlId | Should -Be 'IA.3'
+        $text = Get-Content (Join-Path $pack '04-secops-worklist.md') -Raw
+        $text | Should -Match 'A large number points to password spraying against legacy endpoints\.'
+        $text | Should -Match '\| Legacy sign-ins that failed without a Conditional Access block \| IA\.3 \| 2 \| 2 items \|'
+        $text | Should -Not -Match ';'
+    }
+    It 'says when a legacy pack cannot tell failures from blocks' {
+        Add-WorklistResult $pack 'IA.3' '[{"ClientAppUsed":"Exchange ActiveSync","Attempts":40,"Succeeded":4,"Users":2}]'
+        $null = & $generator -EvidencePath $pack
+        $text = Get-Content (Join-Path $pack '04-secops-worklist.md') -Raw
+        $text | Should -Match '\| Legacy sign-ins that failed without a Conditional Access block \| IA\.3 \| 0 \| None found, collected without the BlockedByCa column, so failures could not be told apart from Conditional Access blocks \|'
+    }
     It 'lists storage accounts with public blob containers, readable ones first, and accounts that could not be listed' {
         Add-WorklistResult $pack 'DP.1-CONTAINERS' '[{"subscriptionId":"s1","resourceGroup":"web-rg","Account":"lockedstore","AccountAnonymousAccess":"Disabled","Containers":4,"PublicContainers":1,"ExposedContainers":0,"PublicContainerNames":"legacy (Container)","ReadStatus":"OK","ResourceId":"/subscriptions/s1/resourceGroups/web-rg/providers/Microsoft.Storage/storageAccounts/lockedstore"},{"subscriptionId":"s1","resourceGroup":"web-rg","Account":"openstore","AccountAnonymousAccess":"Not set, allowed","Containers":3,"PublicContainers":2,"ExposedContainers":2,"PublicContainerNames":"images (Blob), assets (Container)","ReadStatus":"OK","ResourceId":"/subscriptions/s1/resourceGroups/web-rg/providers/Microsoft.Storage/storageAccounts/openstore"},{"subscriptionId":"s1","resourceGroup":"data-rg","Account":"cleanstore","AccountAnonymousAccess":"Disabled","Containers":9,"PublicContainers":0,"ExposedContainers":0,"PublicContainerNames":"","ReadStatus":"OK","ResourceId":"/subscriptions/s1/resourceGroups/data-rg/providers/Microsoft.Storage/storageAccounts/cleanstore"},{"subscriptionId":"s1","resourceGroup":"data-rg","Account":"deniedstore","AccountAnonymousAccess":"Allowed","Containers":0,"PublicContainers":0,"ExposedContainers":0,"PublicContainerNames":"","ReadStatus":"HTTP 403: Forbidden","ResourceId":"/subscriptions/s1/resourceGroups/data-rg/providers/Microsoft.Storage/storageAccounts/deniedstore"}]'
         $null = & $generator -EvidencePath $pack
@@ -160,6 +179,7 @@ Describe 'SecOps worklist generation' {
         $md | Should -Match '\| Virtual machines without encryption at host \| DP\.4 \| 0 \| Not collected \|'
         $md | Should -Match '\| Workload subnets without segmentation \| NB\.1 \| 0 \| None found \|'
         $md | Should -Match '\| Device code and legacy sign-ins to review \| IA\.3 \| 0 \| Needs recollection with collector 1\.10\.0 or later \|'
+        $md | Should -Match '\| Legacy sign-ins that failed without a Conditional Access block \| IA\.3 \| 0 \| Not collected \|'
         $md | Should -Match '\| Network virtual appliances excluded from VM measures \| P0\.6 \| 0 \| Needs recollection with collector 1\.10\.0 or later \|'
         @($csv | Where-Object Category -match 'Trusted Launch|encryption at host|segmentation|documented disposition').Count | Should -Be 0
     }

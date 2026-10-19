@@ -154,6 +154,13 @@ $categories = @(
             }
             $client = if ($_.ClientAppUsed -and $_.Flow -ne 'Device code') { ' ({0})' -f $_.ClientAppUsed } else { '' }
             New-Item2 $_.UserPrincipalName ('{0}{1}, {2} sign-in{3}, last {4}, {5}. Apps: {6}' -f $_.Flow, $client, $_.SignIns, $(if ($_.SignIns -eq 1) { '' } else { 's' }), (Get-Day $_.LastSignIn), $why, $(if ($_.Apps) { $_.Apps } else { 'not recorded' })) $_.Control 'IA.8-SIGNINS' } } }
+    @{ Title = 'Legacy sign-ins that failed without a Conditional Access block'; Id = 'IA.3'; Control = 'IA.3'
+       Why = 'Legacy protocol attempts in the last 30 days that failed without a Conditional Access block (error 53003), one line per protocol. Most are a wrong password or a locked account, and the client report never presents them as blocked. A large number points to password spraying against legacy endpoints. Review the sign-in logs for the source addresses and the accounts targeted, and disable the protocol where it is not needed. Where security defaults are on, their own block (error 530035) is counted here as well.'
+       Filter = { param($r) (Get-Text $r.ClientAppUsed) -notin '', 'Unknown' -and (Get-Text $r.BlockedByCa) -ne '' -and (Get-LegacyFailed $r) -gt 0 }
+       Note = { param($all) if (@($all | Where-Object { (Get-Text $_.BlockedByCa) -eq '' }).Count) { 'collected without the BlockedByCa column, so failures could not be told apart from Conditional Access blocks' } }
+       Map = { param($rows) $rows | Sort-Object { -1 * (Get-LegacyFailed $_) }, { Get-Text $_.ClientAppUsed } | ForEach-Object {
+            $failed = Get-LegacyFailed $_
+            New-Item2 (Get-Text $_.ClientAppUsed) ('{0} of {1} attempt{2} failed without a Conditional Access block. {3} blocked by Conditional Access, {4} succeeded' -f $failed, (Get-Text $_.Attempts), $(if ((Get-Text $_.Attempts) -eq '1') { '' } else { 's' }), (Get-Text $_.BlockedByCa), (Get-Text $_.Succeeded)) 'Entra sign-in logs, last 30 days' 'IA.3' } } }
     @{ Title = 'Virtual machines without Azure Backup'; Id = 'DP.5b'; Control = 'DP.5b'
        Why = 'Virtual machines with no protected backup item. Add them to a backup policy or record the exclusion. Pooled AVD session hosts may be excluded by agreement.'
        Map = { param($rows) $rows | Sort-Object { Get-Text $_.resourceGroup }, { Get-Text $_.VmName } | ForEach-Object {
@@ -252,6 +259,12 @@ function Add-BackupFinding($all) {
         $r | Add-Member -NotePropertyName FindingInferred -NotePropertyValue $true
     }
     $all
+}
+
+# Legacy attempts that neither succeeded nor reached a Conditional Access block (error 53003).
+function Get-LegacyFailed($r) {
+    foreach ($v in $r.Attempts, $r.Succeeded, $r.BlockedByCa) { if ((Get-Text $v) -notmatch '^\d+$') { return 0 } }
+    [Math]::Max(0, [int]$r.Attempts - [int]$r.Succeeded - [int]$r.BlockedByCa)
 }
 
 # How many rows a device category left out because the endpoint is not an Azure virtual machine.

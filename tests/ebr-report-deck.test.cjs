@@ -367,6 +367,34 @@ test('the control register counts the exceptions of a control at E on its label 
   const { notes } = await read(out)
   assert.ok(notes.some(n => n.includes('Azure virtual machines reporting to endpoint detection: 88 of 89, 1 exception.')), 'the speaker notes say the count')
 })
+test('Conditional Access controls in force carry the excluded accounts that signed in on the register label line, and every column still fits (issue #27)', async () => {
+  const p = pack('balanced')
+  const set = (id, rows) => { p.manifest = p.manifest.filter(r => r.ResultId !== id); p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-08T10:00:00Z' }); p.results[id] = rows }
+  const ca = (Flow, o = {}) => ({ Flow, PolicyRead: true, PolicyState: 'Enforced', EnforcedPolicies: 1, ExcludedIdentities: 12, DetailRead: true, SignIns: 0, SucceededExcluded: 0, AccountsExcluded: 0, SucceededUngoverned: 0, AccountsUngoverned: 0, ...o })
+  // The densest identity column: every Conditional Access row in force with excluded sign-ins, beside ratio exceptions elsewhere.
+  set('IA.1', [{ UserType: 'Member', UsersSignedIn: 194, UsersChallenged: 180 }])
+  set('IA.1-ADMINPORTAL', [{ UserType: 'Member', Users: 12, UsersChallenged: 12 }])
+  set('IA.3', [{ ClientAppUsed: 'Exchange ActiveSync', Attempts: 40, Succeeded: 4, BlockedByCa: 30, Users: 2 }])
+  set('IA.3-DEVICECODE', [{ Attempts: 3, Succeeded: 3, BlockedByCa: 0, Users: 2, Apps: 1, InForce: false }])
+  set('IA.8-CA', [ca('MFA at sign-in', { SucceededExcluded: 14, AccountsExcluded: 12 }), ca('Admin portals'), ca('Legacy authentication', { SucceededExcluded: 4, AccountsExcluded: 2 }), ca('Device code', { SucceededExcluded: 3, AccountsExcluded: 2 }), ca('Location')])
+  set('EW.1', [{ Scope: 'Azure VM', OSPlatform: 'WindowsServer2022', Devices: 89, Onboarded: 88, CanBeOnboarded: 1, SensorActive: 81 }])
+  set('DR.5', [{ Scope: 'Azure VM', Onboarded: 88, Assessed: 85 }])
+  set('EW.10', [{ Machines: 70, WithinCadence: 68 }])
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  fs.writeFileSync(dataFile, JSON.stringify(p))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  const xmls = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).filter(x => x.includes('register rule'))
+  const text = xmls.map(x => (x.match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => t.slice(5, -6)).join(' ')).join(' ').replace(/\u00A0/g, ' ')
+  for (const [label, count] of [['Multifactor authentication required at sign-in', '12 excluded accounts signed in'], ['Legacy authentication blocked', '2 excluded accounts signed in'], ['Device code flow sign-ins blocked', '2 excluded accounts signed in']]) {
+    assert.match(text, new RegExp(`${label}\\s+· ${count}\\b`), `${label} carries ${count}`)
+  }
+  assert.match(text, /Azure virtual machines reporting to endpoint detection\s+· 1 exception\b/, 'ratio exceptions read beside them')
+  assert.ok(!/approved/i.test(text), 'no approved wording on the register')
+  for (const xml of xmls) for (const r of xml.matchAll(/name="([^"]*) register rule"[\s\S]*?<a:off x="\d+" y="(\d+)"\/>/g)) assert.ok(Number(r[2]) <= 7.2 * EMU, `"${r[1]}" ends at ${(Number(r[2]) / EMU).toFixed(2)} in`)
+  const { notes } = await read(out)
+  assert.ok(notes.some(n => n.includes('Device code flow sign-ins blocked: In force, 2 excluded accounts signed in. ') && n.includes('3 successful sign-ins came from 2 accounts excluded from the policy. Atmosera reviews these exclusions with your team at each business review.')), 'the speaker notes say the count and the review sentence')
+})
 test('in a federated tenant the register detail line and the pillar slide carry the MFA split, and every row still fits', async () => {
   const p = pack('balanced')
   const set = (id, rows) => { p.manifest = p.manifest.filter(r => r.ResultId !== id); p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-08T10:00:00Z' }); p.results[id] = rows }
