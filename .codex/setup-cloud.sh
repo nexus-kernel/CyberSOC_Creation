@@ -31,8 +31,8 @@ if ! command -v dotnet >/dev/null; then
   test "$(git -C "$installer_source" rev-parse HEAD)" = "$installer_commit"
   bash "$installer_source/src/dotnet-install.sh" --version 8.0.408 --install-dir "$local_tools/dotnet" --no-path
 fi
-# This file is self-contained so its contents can be pasted into the saved
-# environment setup before these repository changes have been published.
+# Invoke this checked-out file from saved setup; do not paste its contents into
+# an inline shell or wrapper, where the script-relative root would be different.
 node -e 'if (Number(process.versions.node.split(".")[0]) < 18) process.exit(1)'
 python3 -c 'import sys; assert sys.version_info >= (3, 10)'
 export npm_config_cache="$PWD/.dev-cache/npm"

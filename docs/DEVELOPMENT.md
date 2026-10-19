@@ -71,16 +71,23 @@ Optional safe smoke test (writes only local HTML/PPTX):
 The Node suite intentionally skips its real-evidence-pack comparison when no local
 packs exist. Do not add client data merely to remove that optional skip.
 
-## Verified standalone setup for this saved environment
+## File-based setup for this saved environment
 
-The contents of [.codex/setup-cloud.sh](../.codex/setup-cloud.sh) can be pasted
-verbatim into the saved environment's setup-script field **before publication**.
-It is self-contained and works with the existing main checkout; it does not need
-other new repository files. With this prepared branch present, the equivalent is:
+Once the reviewed CyberSOC checkout contains this version of
+[.codex/setup-cloud.sh](../.codex/setup-cloud.sh), put this invocation in the saved
+environment's setup-script field:
 
 ```bash
 bash /workspace/CyberSOC_Creation/.codex/setup-cloud.sh
 ```
+
+Invoke the checked-out file; do not paste its contents into an inline shell or a
+wrapper script. Its default root is derived from the file's own location, so the
+correct version must be present in the checkout first. This is not a pre-publication
+bootstrap command against the inherited main script. `CYBERSOC_REPO_DIR` may select
+another CyberSOC checkout explicitly; origin validation still runs before any
+installation. `EBR_REPO_DIR` is ignored. Saving or changing the hosted environment
+setup is a separate owner action and has not been performed by this repository edit.
 
 Base-image prerequisites are Linux x64, Node 18+ (24 LTS recommended), npm,
 Python 3.10+ with venv, Git, gh, curl and tar. The script installs portable
@@ -159,8 +166,8 @@ rm -rf -- CyberSOC-Evidence_synthetic-validation
 ```
 
 The current workspace is adequate for full local validation using these installed
-paths. The saved environment's published configuration is unchanged: paste the
-setup and persist the variables before relying on it in a new session. Shell
+paths. The saved environment's published configuration is unchanged: use the
+file-based invocation above and persist the variables before relying on it in a new session. Shell
 `gh api` still returns Forbidden for the registered Actions workflow inventory;
 the connector exposes no callable inventory action. Git read-only checks verify
 main and the absence of tracked workflows at baseline, but do not prove that no

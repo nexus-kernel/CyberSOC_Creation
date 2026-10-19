@@ -69,6 +69,11 @@ class CyberSocPortTests(unittest.TestCase):
             result = subprocess.run(['bash', str(script)], cwd=temp, env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, str(checkout))
+            # Saved setup is an inline field invoking the checked-out file, not its contents.
+            result = subprocess.run(['bash', '-c', 'bash "$1"', 'saved-setup', str(script)],
+                                    cwd=temp, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, str(checkout))
             env['CYBERSOC_REPO_DIR'] = temp
             result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
             self.assertEqual(result.stdout, temp)
