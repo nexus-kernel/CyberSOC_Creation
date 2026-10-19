@@ -674,6 +674,15 @@ Describe 'Change request variants' {
         Get-Content (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') -Raw | Should -Not -Match 'build kickoff' -Because 'the switch covers purge protection only'
     }
 
+    It 'keeps the email structure check to the authored sentences, so a management group name with a full stop does not stop the run' {
+        $pack = Join-Path $TestDrive 'group-name'
+        New-ChangeFixture $pack
+        $null = & $generator -EvidencePath $pack -ManagementGroup 'Contoso Inc. Production'
+        $email = Get-Content (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-01 at a management group'
+        $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
+    }
+
     It 'writes a client email for every change request, CR-01 to CR-15' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
