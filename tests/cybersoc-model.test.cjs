@@ -93,7 +93,7 @@ test('the month at a glance shows the months side by side with a neutral change'
   const row = label => cs.glance.rows.find(r => r.label === label)
   assert.deepEqual(row('Alerts created').values, ['30', '32', '38'])
   assert.equal(row('Alerts created').change, '6 more')
-  assert.equal(row('Confirmed threats').change, '2 more')
+  assert.equal(row('True positive detections').change, '2 more')
   assert.equal(row('Password spraying sources').change, '1 more')
   assert.ok(!cs.glance.rows.some(r => /improv|worse|better|declin/i.test(r.change)))
   assert.equal(C.changeOf(20, 25, 'minutes'), '5 min shorter')
@@ -282,7 +282,7 @@ test('every shape on the CyberSOC slides ends above the content bottom, and thei
     assert.ok(!/Have the|Presenter notes|presenter|ready if asked/i.test(s.notes), s.notes)
   }
   const ti = cyber.find(s => s.text.includes('MITRE ATT&CK TACTICS ON THE ALERTS'))
-  assert.ok(!cyber.some(s => /Attack stage/.test(s.text)), 'the examples table column name stays the confirmed threats slide own')
+  assert.ok(!cyber.some(s => /Attack stage/.test(s.text)), 'the examples table column name stays the true positive detections slide own')
   assert.match(ti.text, /KNOWN EXPLOITED VULNERABILITIES PRESENT/)
   assert.match(ti.notes, /not investigation findings/)
 })

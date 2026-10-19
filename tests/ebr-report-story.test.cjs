@@ -74,11 +74,11 @@ test('the story carries the wins, asks and takeaways the review asked for, worde
   const { s } = story(quarterPack())
   assert.equal(s.quarter, 'Q3 2026')
   assert.deepEqual(s.kpis.map(k => k.value), ['615', '2', '7 min', '59.7%'])
-  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'Confirmed threats', 'Median time to close, high severity alerts', 'Defender for Cloud secure score'])
-  assert.equal(s.kpis[1].sub, 'Alerts the SOC classified as true positives', 'a true positive is a classification, never an investigation or a closure')
+  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'True positive detections', 'Median time to close, high severity alerts', 'Defender for Cloud secure score'])
+  assert.equal(s.kpis[1].sub, 'Classified by the SOC', 'a true positive is a classification, never an investigation or a closure')
   assert.equal(s.kpis[0].sub, 'Jul 1 to Sep 30, 2026', 'the alert KPI carries the period, not the detection count')
   assert.equal(s.kpis[3].sub, 'Up 6.1 points since Jul 2026, from 53.6%')
-  assert.deepEqual(s.wins.map(w => w.eyebrow), ['Response speed', 'Posture', 'Identity', 'Patching', 'Email protection'], 'confirmed threats are a measure, never a win')
+  assert.deepEqual(s.wins.map(w => w.eyebrow), ['Response speed', 'Posture', 'Identity', 'Patching', 'Email protection'], 'true positive detections are a measure, never a win')
   assert.equal(new Set(s.wins.map(w => w.area)).size, s.wins.length, 'at most one win per area')
   assert.equal(s.takeaways.summary, 'Secure score rose 6.1 points.')
   assert.ok(!/exfiltration|impact tactic|data exposure|business impact|compromise/i.test(JSON.stringify([s.kpis, s.wins, s.takeaways])), 'the story carries no exfiltration, impact or compromise wording')
@@ -253,7 +253,7 @@ test('counts read as natural English', () => {
   p.results['OUT.4'] = [{ IncidentNumber: 1, Severity: 'High', Tactics: 'InitialAccess' }]
   const { s } = story(p)
   assert.equal(s.takeaways.threats, 'The SOC classified 1 alert as a true positive this quarter.')
-  assert.deepEqual([s.kpis[1].value, s.kpis[1].label], ['1', 'Confirmed threats'])
+  assert.deepEqual([s.kpis[1].value, s.kpis[1].label], ['1', 'True positive detections'])
   assert.equal(s.asks[0].body, '1 user on text message or voice, which retire Feb 1, 2027 (Jul 1, 2027 for Global Administrators and external users).')
   assert.equal(s.takeaways.methods, 'Microsoft retires text message and voice sign-in on February 1, 2027 (July 1, 2027 for Global Administrators and external users). 1 user signed in with it in the last 30 days.')
   assert.ok(s.watch.every(w => !/^1$/.test(w.value) || !/^(members|users|devices|resources) /.test(w.label)), JSON.stringify(s.watch))
@@ -321,7 +321,7 @@ test('the identity win names the evaluated population in a federated tenant', ()
   assert.equal(win.sub, 'Members whose sign-ins in the last 30 days could be evaluated.')
   assert.equal(story(quarterPack()).s.wins.find(w => w.area === 'identity').sub, 'Members who signed in over the last 30 days.')
 })
-test('the confirmed threats takeaway counts the threats and stands without examples, with no tactic line', () => {
+test('the true positive detections takeaway counts the threats and stands without examples, with no tactic line', () => {
   const p = quarterPack()
   p.results['OUT.4'] = [
     { Severity: 'High', Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Tactics: 'CommandAndControl,Exfiltration', Created: '2026-08-18' },
@@ -330,7 +330,7 @@ test('the confirmed threats takeaway counts the threats and stands without examp
   const withExamples = story(p)
   assert.ok(withExamples.m.threats)
   assert.equal(withExamples.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter.')
-  assert.deepEqual([withExamples.s.kpis[1].value, withExamples.s.kpis[1].label], ['2', 'Confirmed threats'], 'an Exfiltration tactic on a confirmed threat never becomes a count')
+  assert.deepEqual([withExamples.s.kpis[1].value, withExamples.s.kpis[1].label], ['2', 'True positive detections'], 'an Exfiltration tactic on a true positive detection never becomes a count')
   const none = story(quarterPack())
   assert.equal(none.m.threats, null, 'rows without a title give no examples')
   assert.equal(none.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter.', 'the slide is built without the examples table, so the takeaway stands')

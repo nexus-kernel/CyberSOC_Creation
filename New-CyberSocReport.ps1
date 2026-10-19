@@ -137,7 +137,7 @@ $fields = [ordered]@{
     'VA.TOP' = @('Product','Severity','Vms','Findings','Cves','Kev','Exploit','MaxCvss','FixStatus','Owner')
     'VA.KEV' = @('Product','Severity','Vms','Findings','KevDateAdded','AddedThisMonth')
 }
-# Confirmed threat titles (OUT.4) reach the report only when they name no account, address, host, path,
+# True positive detection titles (OUT.4) reach the report only when they name no account, address, host, path,
 # GUID, long number, machine or ticket, and run to 200 characters or fewer. A bare account, a person's name and an
 # unhyphenated lowercase machine name are not recognised. Titles of true positives with no attack stage are left
 # out, since the report shows them nowhere.

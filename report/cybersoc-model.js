@@ -335,7 +335,7 @@
     if (ops.monthly.length) {
       glance('Alerts created', at(ops.monthly, 'total'), 'count', 'OUT.3')
       glance('High severity alerts', at(ops.monthly, 'high'), 'count', 'OUT.3')
-      glance('Confirmed threats', at(ops.monthly, 'tp'), 'count', 'OUT.3')
+      glance('True positive detections', at(ops.monthly, 'tp'), 'count', 'OUT.3')
     }
     if (ops.timing.length) {
       glance('Median time to close, high severity', ops.timing.map(t => t.high.withheld ? null : t.high.median), 'minutes', 'OUT.2-MONTH', duration)
@@ -402,7 +402,7 @@
     // Executive tiles for the month. Each names its month or period, and none claims an outcome the evidence lacks.
     const tile = (label, value, sub, src, tone = '') => cs.headline.push({ label: clean(label), value: clean(value), sub: clean(sub), source: clean(src), tone })
     const nowOps = reportIndex >= 0 ? ops.monthly[reportIndex] : null
-    if (nowOps) tile(`Alerts created in ${cs.month.label}`, fmt(nowOps.total), `${plural(ops.monthly.reduce((n, x) => n + x.total, 0), 'alert', 'alerts')} over the ${cs.months.length === 3 ? '90 days' : 'period'}. ${plural(nowOps.tp, 'confirmed threat', 'confirmed threats')} this month.`, ops.monthlySource)
+    if (nowOps) tile(`Alerts created in ${cs.month.label}`, fmt(nowOps.total), `${plural(ops.monthly.reduce((n, x) => n + x.total, 0), 'alert', 'alerts')} over the ${cs.months.length === 3 ? '90 days' : 'period'}. ${plural(nowOps.tp, 'true positive detection', 'true positive detections')} this month.`, ops.monthlySource)
     else if (m.alerts) tile('Alerts triaged', fmt(m.alerts.triaged), m.period.label, m.alerts.source)
     const nowTiming = reportIndex >= 0 ? ops.timing[reportIndex] : null
     if (nowTiming && !nowTiming.high.withheld) tile(`Median time to close, high severity, ${cs.month.short}`, duration(nowTiming.high.median), [nowTiming.high.p90 !== null ? `Nine in ten within ${duration(nowTiming.high.p90)}` : '', `Based on ${plural(nowTiming.high.n, 'closed alert', 'closed alerts')}`, nowTiming.high.belowFloor ? `Under ${MEDIAN_FLOOR} minutes, covered in the review` : '', nowTiming.high.overHour ? '90th percentile over one hour, covered in the review' : ''].filter(Boolean).join('. '), ops.timingSource)

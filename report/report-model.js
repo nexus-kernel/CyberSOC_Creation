@@ -186,7 +186,7 @@
       const automation = analystMode ? allRow.AutoClosed : 0
       const triaged = inc.Raised - automation, closed = inc.Closed - automation
       // A true positive is a closure classification, so the surfaces say classified, never investigated. The
-      // CyberSOC report counts confirmed threats only: it carries no data exfiltration, data exposure or
+      // CyberSOC report counts true positive detections only: it carries no data exfiltration, data exposure or
       // compromise determination, which stays with the EBR (Oct 19, 2026).
       m.alerts = {
         triaged, closed, open: inc.Open, raised: inc.Raised, automation: autoValid ? allRow.AutoClosed : null, analystMode, autoShare: autoValid ? pct(allRow.AutoClosed, allRow.Incidents) : null,
@@ -222,11 +222,11 @@
       else if (autoValid && autoShare >= 0.25) presenter('Automation share', `${fmt(allRow.AutoClosed)} of ${fmt(allRow.Incidents)} closed alerts (${pctText(m.alerts.autoShare)}) were closed by automation rules. Below the 50 percent threshold, so headline counts include them.`)
     } else if (alertsAllowed) unmeasured('OUT.1', 'Alerts triaged', inc ? 'the combined result does not reconcile' : state('OUT.1'))
 
-    // Confirmed threat examples (OUT.4). The builder embeds a screened title (Threat), the tactics and the day only.
+    // True positive detection examples (OUT.4). The builder embeds a screened title (Threat), the tactics and the day only.
     // Every row is an example, withheld or operational. Withheld covers screened out titles, rows the builder could not
     // screen and staged rows with no title or day. Operational true positives carry no attack stage, such as a service limit warning.
     const threatRows = alertsAllowed && m.alerts ? rows('OUT.4') : []
-    if (threatRows.length && !threatRows.some(r => 'Threat' in r)) note('Confirmed threat examples', 'The report data predates confirmed threat examples. Regenerate the report with the current builder to show them.')
+    if (threatRows.length && !threatRows.some(r => 'Threat' in r)) note('True positive detection examples', 'The report data predates true positive detection examples. Regenerate the report with the current builder to show them.')
     else if (threatRows.length) {
       const stagesOf = r => [...new Set(String(r.Tactics ?? '').split(',').map(t => t.trim()).filter(Boolean))]
       const isWithheld = r => clean(r.Threat) === 'Title withheld'
@@ -249,15 +249,15 @@
         // Severity is counted per alert before grouping and before the five-group cut, since a group carries its
         // highest severity while its count covers every severity in it.
         const severities = Object.fromEntries(['High', 'Medium', 'Low', 'Informational'].map(k => [k, examples.filter(r => sevName(r.Severity) === k).length]))
-        m.threats = { examples: shown.map(({ latest, ...g }) => g), more: more.length, moreAlerts: alertsIn(more), alerts: examples.length, severities, source: source('OUT.4', 'Confirmed threats with an attack stage, grouped by alert title.') }
-        presenter('Confirmed threat examples', `The examples use alert titles as Sentinel recorded them, with incident written as alert. Titles that carry an email address, IP address, host or domain name, path, GUID, ticket reference or machine-style name are withheld automatically. Check that no title shown names a person, account or machine, or implies containment, before the review. The table shows ${plural(alertsIn(shown), 'confirmed alert', 'confirmed alerts')} in ${plural(shown.length, 'group', 'groups')}.${more.length ? ` ${fmt(m.threats.moreAlerts)} more ${m.threats.moreAlerts === 1 ? 'sits' : 'sit'} in ${plural(more.length, 'further group', 'further groups')}.` : ''}`)
+        m.threats = { examples: shown.map(({ latest, ...g }) => g), more: more.length, moreAlerts: alertsIn(more), alerts: examples.length, severities, source: source('OUT.4', 'True positive detections with an attack stage, grouped by alert title.') }
+        presenter('True positive detection examples', `The examples use alert titles as Sentinel recorded them, with incident written as alert. Titles that carry an email address, IP address, host or domain name, path, GUID, ticket reference or machine-style name are withheld automatically. Check that no title shown names a person, account or machine, or implies containment, before the review. The table shows ${plural(alertsIn(shown), 'true positive detection', 'true positive detections')} in ${plural(shown.length, 'group', 'groups')}.${more.length ? ` ${fmt(m.threats.moreAlerts)} more ${m.threats.moreAlerts === 1 ? 'sits' : 'sit'} in ${plural(more.length, 'further group', 'further groups')}.` : ''}`)
         // An indicator match (a Log4Shell IP or domain indicator, for example) classified as a true positive confirms
-        // the indicator was seen in telemetry. The report counts it as a confirmed threat like any other.
+        // the indicator was seen in telemetry. The report counts it as a true positive detection like any other.
         const indicators = examples.filter(r => /\b(IOC|IOCs|indicator|indicators|Log4Shell|Log4j|threat intel|threat intelligence)\b/i.test(clean(r.Threat))).length
-        presenter('Indicator-based true positives', `A true-positive classification on an indicator detection, such as a Log4Shell IP or domain indicator match, confirms that the indicator was observed in telemetry. The report counts it as a confirmed threat like any other true positive.${indicators ? ` ${fmt(indicators)} of the ${plural(examples.length, 'confirmed alert', 'confirmed alerts')} with an attack stage ${indicators === 1 ? 'carries' : 'carry'} an indicator in the title.` : ''} Have each ticket ready if asked.`)
+        presenter('Indicator-based true positives', `A true-positive classification on an indicator detection, such as a Log4Shell IP or domain indicator match, confirms that the indicator was observed in telemetry. The report counts it as a true positive detection like any other.${indicators ? ` ${fmt(indicators)} of the ${plural(examples.length, 'true positive detection', 'true positive detections')} with an attack stage ${indicators === 1 ? 'carries' : 'carry'} an indicator in the title.` : ''} Have each ticket ready if asked.`)
       }
-      if (withheld) presenter('Confirmed threat titles withheld', `${plural(withheld, 'confirmed alert is', 'confirmed alerts are')} left out of the examples because ${withheld === 1 ? 'its title may identify' : 'their titles may identify'} an account, address, host or other internal detail, could not be screened, or ${withheld === 1 ? 'carries' : 'carry'} no title or date. The tickets and the pack's OUT.4 result carry the detail.`)
-      if (operational) presenter('Operational true positives', `${plural(operational, 'confirmed alert carries', 'confirmed alerts carry')} no attack stage, for example a service limit warning, and ${operational === 1 ? 'is' : 'are'} left out of the confirmed threat examples. The confirmed threat count still includes ${operational === 1 ? 'it' : 'them'}.`)
+      if (withheld) presenter('True positive detection titles withheld', `${plural(withheld, 'true positive detection is', 'true positive detections are')} left out of the examples because ${withheld === 1 ? 'its title may identify' : 'their titles may identify'} an account, address, host or other internal detail, could not be screened, or ${withheld === 1 ? 'carries' : 'carry'} no title or date. The tickets and the pack's OUT.4 result carry the detail.`)
+      if (operational) presenter('Operational true positives', `${plural(operational, 'true positive detection carries', 'true positive detections carry')} no attack stage, for example a service limit warning, and ${operational === 1 ? 'is' : 'are'} left out of the examples. The true positive detection count still includes ${operational === 1 ? 'it' : 'them'}.`)
     }
 
     // Response timing from one fixed cohort: every eligible high severity alert created in the alert period and closed
@@ -1256,14 +1256,14 @@
     if (m.service) tile('Months of managed security', fmt(m.service.months), 'Continuous coverage, not project work', `Service start ${m.service.start}, from the reviewed context file.`)
     else if (m.posture.assessed !== null) tile('Azure resources assessed by Defender for Cloud', fmt(m.posture.assessed), m.posture.estate !== null ? `Across ${fmt(m.posture.estate)} resources in the estate` : 'Continuous posture assessment', source('POS.2'))
     else if (m.posture.estate !== null) tile('Azure resources in the estate', fmt(m.posture.estate), 'Under managed security coverage', source('P0.5'))
-    if (m.alerts) tile('Alerts triaged', fmt(m.alerts.triaged), m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} closed by automation rules` : m.alerts.truePositives > 0 ? `${plural(m.alerts.truePositives, 'confirmed threat', 'confirmed threats')}, classified by the SOC` : m.detections ? `Across ${m.detections.sources}` : m.period.label, m.alerts.source)
+    if (m.alerts) tile('Alerts triaged', fmt(m.alerts.triaged), m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} closed by automation rules` : m.alerts.truePositives > 0 ? `${plural(m.alerts.truePositives, 'true positive detection', 'true positive detections')}, classified by the SOC` : m.detections ? `Across ${m.detections.sources}` : m.period.label, m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
     // The 90th percentile is creation to recorded close, so the line claims triage and closure, never investigation
     // completion or resolution quality, which the evidence does not hold.
     // A median under 20 minutes or a 90th percentile over one hour carries its note on the tile as well.
     if (m.response) tile(m.response.median.label, m.response.median.value, [m.response.p90 ? `Nine in ten triaged and closed within ${m.response.p90.value}` : 'High severity alerts', ...m.response.notes.map(t => t.replace(/\.$/, ''))].join('. '), m.response.median.source)
     // The tile never claims an outcome: the sub-line is the classification itself.
-    else if (m.alerts && m.alerts.truePositives !== null) tile('Confirmed threats', fmt(m.alerts.truePositives), 'Alerts the SOC classified as true positives', m.alerts.source)
+    else if (m.alerts && m.alerts.truePositives !== null) tile('True positive detections', fmt(m.alerts.truePositives), 'Classified by the SOC', m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
     if (m.tenantScore) tile('Microsoft tenant Secure Score', pctText(m.tenantScore.value), m.tenantScore.delta ? `Up ${fmt(m.tenantScore.delta.points)} points since ${m.tenantScore.delta.since}, from ${pctText(m.tenantScore.delta.from)}` : `Read ${m.tenantScore.read}`, m.tenantScore.source, m.tenantScore.delta ? 'up' : '')
     else if (m.cloudScore) tile('Defender for Cloud secure score', pctText(m.cloudScore.value), m.cloudScore.delta && m.cloudScore.delta.points > 0 ? `Up ${fmt(m.cloudScore.delta.points)} points since ${m.cloudScore.delta.since}, from ${pctText(m.cloudScore.delta.from)}` : 'Classic Defender for Cloud score', m.cloudScore.source, m.cloudScore.delta && m.cloudScore.delta.points > 0 ? 'up' : '')
@@ -1272,9 +1272,9 @@
     const row = (tier, label, value, id) => { if (value !== null && value !== undefined && value !== '' && value !== 'Not available') m.tiers[tier].push({ label: clean(label), value: clean(String(value)), id }) }
     if (m.alerts) {
       // The deck band shows the first three rows, so the tier leads with what "Did the program hold" names: alerts
-      // and confirmed threats, then the closed share.
+      // and true positive detections, then the closed share.
       row('outcomes', 'Alerts triaged', fmt(m.alerts.triaged), 'OUT.1')
-      if (m.alerts.truePositives !== null) row('outcomes', 'Confirmed threats', fmt(m.alerts.truePositives), 'OUT.1')
+      if (m.alerts.truePositives !== null) row('outcomes', 'True positive detections', fmt(m.alerts.truePositives), 'OUT.1')
       if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
     }
     if (m.response) {
