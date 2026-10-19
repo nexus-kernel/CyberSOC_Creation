@@ -1,6 +1,6 @@
 # Development and cloud environment
 
-CyberSOC note: this document was written for EBR_Creation and applies unchanged to this copy, with the scripts
+CyberSOC note: this document originated in EBR_Creation; the operational paths below now target CyberSOC_Creation, with the scripts
 renamed (`Get-CyberSocEvidence.ps1`, `New-CyberSocReport.ps1` and the rest) and evidence packs named
 `CyberSOC-Evidence_*`. The suites now also hold `tests/Import-CyberSocVulnAssessment.Tests.ps1` and
 `tests/cybersoc-model.test.cjs`, with the synthetic vulnerability assessment runs in `tests/fixtures/vuln-assessment`.
@@ -18,10 +18,13 @@ committed lockfile. No Azure CLI, Exchange module, Az module, browser or analyze
 is needed for these mocked local suites. Do not run evidence collection or tenant
 sign-ins to validate the repository.
 
+Current CyberSOC workflow port and validation: [REVIEW_WORKFLOW_MIGRATION.md](REVIEW_WORKFLOW_MIGRATION.md).
+Historical test counts and EBR deployment statements below are provenance, not CyberSOC activation evidence.
+
 ## Saved cloud environment recommendation
 
-- Repository: nexus-kernel/EBR_Creation; base branch: main; working directory:
-  `/workspace/EBR_Creation`.
+- Repository: nexus-kernel/CyberSOC_Creation; base branch: main; working directory:
+  `/workspace/CyberSOC_Creation`.
 - Preinstall a supported PowerShell 7 Linux build and Node 24, plus Python 3.12,
   npm, gh and Git in the environment image. PowerShell must be on PATH.
 - Setup command: `bash .codex/setup.sh`. It installs locked npm dependencies,
@@ -31,7 +34,7 @@ sign-ins to validate the repository.
   plus its package CDN redirects. PowerShell release assets and actionlint binaries
   may instead be preinstalled by the image owner. Do not disable TLS verification.
 - Keep npm cache and XDG cache/config/data paths writable. The setup uses
-  `/workspace/EBR_Creation/.dev-cache`; preserve these XDG values during tests:
+  `/workspace/CyberSOC_Creation/.dev-cache`; preserve these XDG values during tests:
   `XDG_CACHE_HOME=$PWD/.dev-cache/cache`,
   `XDG_CONFIG_HOME=$PWD/.dev-cache/config`,
   `XDG_DATA_HOME=$PWD/.dev-cache/data`.
@@ -64,7 +67,7 @@ if ($result.TotalCount -eq 0 -or $result.Result -ne 'Passed' -or
 ```
 
 Optional safe smoke test (writes only local HTML/PPTX):
-`pwsh ./New-CyberSocControlsStandard.ps1 -OutputPath /tmp/ebr-install-check/standard.html`.
+`pwsh ./New-CyberSocControlsStandard.ps1 -OutputPath /tmp/cybersoc-install-check/standard.html`.
 The Node suite intentionally skips its real-evidence-pack comparison when no local
 packs exist. Do not add client data merely to remove that optional skip.
 
@@ -76,7 +79,7 @@ It is self-contained and works with the existing main checkout; it does not need
 other new repository files. With this prepared branch present, the equivalent is:
 
 ```bash
-bash /workspace/EBR_Creation/.codex/setup-cloud.sh
+bash /workspace/CyberSOC_Creation/.codex/setup-cloud.sh
 ```
 
 Base-image prerequisites are Linux x64, Node 18+ (24 LTS recommended), npm,
@@ -99,10 +102,10 @@ Persist these environment variables in the saved environment (setup-shell export
 alone do not carry into a fresh shell):
 
 ```text
-PATH=/workspace/EBR_Creation/.dev-cache/tools/pwsh:/workspace/EBR_Creation/.dev-cache/tools/dotnet:<existing PATH>
-XDG_CACHE_HOME=/workspace/EBR_Creation/.dev-cache/cache
-XDG_CONFIG_HOME=/workspace/EBR_Creation/.dev-cache/config
-XDG_DATA_HOME=/workspace/EBR_Creation/.dev-cache/data
+PATH=/workspace/CyberSOC_Creation/.dev-cache/tools/pwsh:/workspace/CyberSOC_Creation/.dev-cache/tools/dotnet:<existing PATH>
+XDG_CACHE_HOME=/workspace/CyberSOC_Creation/.dev-cache/cache
+XDG_CONFIG_HOME=/workspace/CyberSOC_Creation/.dev-cache/config
+XDG_DATA_HOME=/workspace/CyberSOC_Creation/.dev-cache/data
 ```
 
 `<existing PATH>` means retain the image's actual PATH, not that literal text.
@@ -141,18 +144,18 @@ parsing and diff checks passed. The controls-standard smoke test produced both
 HTML and PPTX without signing in.
 
 The ordinary Node run passed 65 tests and skipped one optional real-evidence-pack
-comparison because no `EBR-Evidence_*/03-security-report.html` existed. A synthetic
+comparison because no `CyberSOC-Evidence_*/03-security-report.html` existed. A synthetic
 fixture exercised that test too: 66 passed, zero skips. This is synthetic coverage,
 not validation against real customer packs. Reproduce without client data:
 
 ```bash
 # Require that this destination does not already exist.
-test ! -e EBR-Evidence_synthetic-validation
-cp -R tests/fixtures/offline-pack EBR-Evidence_synthetic-validation
-pwsh -NoProfile -File ./New-CyberSocReport.ps1 -EvidencePath ./EBR-Evidence_synthetic-validation -SkipDeck
+test ! -e CyberSOC-Evidence_synthetic-validation
+cp -R tests/fixtures/offline-pack CyberSOC-Evidence_synthetic-validation
+pwsh -NoProfile -File ./New-CyberSocReport.ps1 -EvidencePath ./CyberSOC-Evidence_synthetic-validation -SkipDeck
 node --test tests/*.test.cjs
 # Remove only the temporary synthetic copy created above after inspecting results.
-rm -rf -- EBR-Evidence_synthetic-validation
+rm -rf -- CyberSOC-Evidence_synthetic-validation
 ```
 
 The current workspace is adequate for full local validation using these installed

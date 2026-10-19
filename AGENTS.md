@@ -4,8 +4,9 @@ This repository is the monthly CyberSOC copy of EBR_Creation and follows the sam
 how it differs and how EBR fixes are merged in.
 
 Work on a topic branch. Open draft PRs when publication is authorized. Void reviews
-the draft first; resolve its findings before marking the PR ready. Request Codex
-review only after readiness and after the final code changes. Never treat a
+the draft first; resolve its findings before marking the PR ready. Readiness should
+trigger the existing Codex integration after final changes; do not post a duplicate
+review request. Never treat a
 completed review with findings as clearance. Obtain a fresh current-head Codex
 thumbs-up, resolve all review threads (including outdated threads), and satisfy
 outstanding changes requests before requesting reviewed CI.
@@ -38,11 +39,10 @@ never infer the count from the latest mutable summary, finding count or head SHA
 At three rounds, do not post another `@codex review` or use readiness to trigger one.
 External/manual/integration requests are not suppressed by these instructions.
 
-At the cap, unresolved P0/P1 anywhere in relevant history blocks all deferral.
-Unknown priorities, incomplete history and an unreviewed current head also block.
-Only remaining P2/P3 Code Review findings may become deduplicated follow-up issues;
-Security Review and human approval requirements remain separate and mandatory.
-The staged `.github/scripts/review_budget.py` is NOT active CI clearance. Until the
-trusted controller in `.github/REVIEW_BUDGET.md` is approved and deployed, stop
-and report the cap/activation blocker; do not fabricate a thumbs-up, resolve threads
-just to pass the gate, or request a fourth review. Do not backfill merged PRs.
+At the cap, stop and report the blocker. The optional v1.1 controller in
+`.github/REVIEW_BUDGET.md` remains disabled and requires separate activation approval.
+Its prospective P1 exception and verified P2 handoff are not permission for an agent
+to request a fourth round, defer findings, or activate it. Security Review and native
+human requirements remain separate. Never infer/reset ledger counts, fabricate a
+thumbs-up, or resolve threads solely to pass CI. Workflow/controller/test changes
+require independent review and manual authorized merge.

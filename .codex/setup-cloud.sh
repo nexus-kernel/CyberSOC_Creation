@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Reproducible Linux x64 validation setup. No credentials or system-wide writes.
 set -euo pipefail
-cd "${EBR_REPO_DIR:-/workspace/EBR_Creation}"
+# Route only to this checkout (or an explicitly selected CyberSOC checkout).
+cybersoc_root="${CYBERSOC_REPO_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd -- "$cybersoc_root"
+case "$(git remote get-url origin)" in
+  https://github.com/nexus-kernel/CyberSOC_Creation.git|git@github.com:nexus-kernel/CyberSOC_Creation.git) ;;
+  *) echo 'Refusing setup outside nexus-kernel/CyberSOC_Creation.' >&2; exit 1 ;;
+esac
 test "$(uname -s)/$(uname -m)" = Linux/x86_64 || { echo 'This bootstrap requires Linux x64.' >&2; exit 1; }
 for executable in node npm python3 gh git curl tar; do
   command -v "$executable" >/dev/null || { echo "Missing prerequisite: $executable" >&2; exit 1; }
