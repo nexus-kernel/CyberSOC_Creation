@@ -69,6 +69,7 @@ h1 { font-size:46px; margin:10px 0 16px; }
 .tier-row { display:flex; justify-content:space-between; align-items:baseline; gap:10px; font-size:12.5px; padding:6px 0; border-top:1px solid #ffffff14; }
 .tier-row span { color:#d7e4f3; }
 .tier-row strong { white-space:nowrap; color:#fff; font-size:13px; }
+.tier-row .tier-note { font-style:normal; font-size:11px; color:#d7e4f3; }
 .tier-hardening .tier-row strong { color:var(--amber); }
 .tier-benchmark .eyebrow { color:#9fb6d4; }
 .tier-empty { font-size:12px; color:#9fb6d4; }
@@ -152,6 +153,8 @@ h1 { font-size:46px; margin:10px 0 16px; }
 .control-measure span { font-size:10px; color:var(--muted); }
 .control-measure .gap { display:block; margin-top:3px; font-size:10px; color:var(--amber); font-weight:700; }
 .control-measure .exceptions { display:block; margin-top:3px; font-size:10px; color:var(--navy); font-weight:700; }
+.control-measure .small-sample { display:block; margin-top:3px; font-size:10px; color:var(--navy); font-weight:700; }
+.control-measure .populations { display:block; margin-top:3px; font-size:10px; color:var(--muted); }
 /* Roadmap */
 .delivered { margin-bottom:22px; padding-bottom:6px; border-bottom:1px solid var(--line); }
 .delivered-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px 28px; }
@@ -483,6 +486,12 @@ thead th { background:var(--wash); color:var(--navy); }
   // Deck thresholds: E at 90 percent or more, P from 50 to 89, N below 50 (set Oct 11, 2026).
   const E_THRESHOLD = 90
   const mark = value => value === null ? null : value >= E_THRESHOLD ? 'E' : value >= 50 ? 'P' : 'N'
+  // A ratio control with fewer resources than this, or with more machines left out by tag than assessed, is on a
+  // small sample: it keeps its mark and its place in the tier counts, which name it beside the total, and it never
+  // leads a pillar or stands as a win. "2 of 2" is accurate but carries no weight beside the figures around it
+  // (Oct 18, 2026, issue #24).
+  const MIN_SAMPLE = 10
+  const smallSampleText = n => `${fmt(n)} on a small sample`
   const bool = value => value === true || String(value ?? '').toLowerCase() === 'true'
   const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`
   // Microsoft retires its own text message and voice delivery in two populations: most users on Feb 1, 2027, and
@@ -498,11 +507,12 @@ thead th { background:var(--wash); color:var(--navy); }
   // the item by its key, the same key the story gives the roadmap item and the ask (report/report-story.js, kept in
   // step by tests/ebr-report-story.test.cjs), so later surfaces can read owner, target date and status by key. No
   // surface says scheduled, approved or in progress without a record, and verified needs a Delivered record with the
-  // same reference as well (Oct 16, 2026).
+  // same reference as well (Oct 16, 2026). backupcheck is the backup coverage validation in Now, split from the backup
+  // item on Oct 18, 2026 (issue #25). backup keeps the Azure Backup extension and its ask.
   // The MFA method update is measured by what the next collection and the change record can show, never promised
   // as a non-event (Oct 16, 2026).
   const MFA_OUTCOME = `Every affected user registered on a replacement method before ${RETIREMENT.text}, the fallback tested, and no rise in failed sign-ins after enforcement.`
-  const ACTION_KEYS = ['drift', 'critical', 'methods', 'access', 'idp', 'phish', 'consent', 'workload', 'logging', 'kvrbac', 'diskenc', 'containers', 'vulnassess', 'segment', 'windows', 'backup', 'vmplatform', 'pim', 'allowlist', 'sharing', 'mdi']
+  const ACTION_KEYS = ['drift', 'critical', 'methods', 'access', 'backupcheck', 'idp', 'phish', 'consent', 'workload', 'logging', 'kvrbac', 'diskenc', 'containers', 'vulnassess', 'segment', 'windows', 'backup', 'vmplatform', 'pim', 'allowlist', 'sharing', 'mdi']
   const ACTION_STATUS = { Proposed: 'Proposed', PendingValidation: 'Pending validation', AwaitingApproval: 'Awaiting approval', Approved: 'Approved', Scheduled: 'Scheduled', InProgress: 'In progress', Verified: 'Verified' }
   // A median under the floor and a 90th percentile over one hour are presented with a note, never hidden.
   const MEDIAN_FLOOR = 20
@@ -564,10 +574,24 @@ thead th { background:var(--wash); color:var(--navy); }
       presenter('Alert reconciliation required', duplicateCount > 0 ? `${fmt(duplicateCount)} Defender XDR alerts appear in more than one workspace. Alert totals and response timing are withheld until the combined result is reconciled.` : 'Cross-workspace duplication has not been verified. Alert totals and response timing are withheld until the combined result is reconciled.')
     }
     if (dup && count(dup.XdrIncidents) === 0) presenter('Defender XDR scope', 'No Defender XDR alerts reached Sentinel in the collection. Alert figures cover Defender for Cloud, Sentinel analytics and Identity Protection. Endpoint, Office 365 and Identity alerts handled in the Defender portal are not in these counts. Say so if asked, or add portal counts.')
+    // The client surfaces state the same scope (Oct 17, 2026). Only a complete reading of zero says Defender XDR alerts
+    // are left out. A count above zero shows that some reach Sentinel, never that all do, since P0.1-XDRDUP reads
+    // Sentinel alone, so the statement stays qualified, also from a partial reading. A missing or unreadable reading,
+    // or a partial zero, says the routing was not read, never that Defender XDR alerts are in.
+    const xdrCount = dup ? count(dup.XdrIncidents) : null
+    const xdrScope = xdrCount > 0 ? 'received' : xdrCount === 0 && state('P0.1-XDRDUP') === 'OK' ? 'excluded' : 'unknown'
+    m.xdrScope = {
+      state: xdrScope,
+      sentence: xdrScope === 'excluded' ? 'Alerts investigated only in other platforms, including Microsoft Defender XDR, are not included. No Defender XDR alert was found in Sentinel in the year before collection.'
+        : xdrScope === 'received' ? 'Alerts investigated only in other platforms, including the Microsoft Defender XDR portal, are not included. Defender XDR alerts are counted where Sentinel received them.'
+        : 'Alerts investigated only in other platforms, including Microsoft Defender XDR, may not be included. Whether Defender XDR alerts reach Sentinel was not read in this collection.'
+    }
     if (!windowValid) presenter('Period dates', 'The alert period dates are invalid. Outcome figures are withheld until the pack is corrected.')
     const reach = rows('P0.1-BY-WORKSPACE')
+    // The SecurityIncident reach row of a workspace that holds alert records, matched on its ID, else its name.
+    const alertReach = w => reach.find(r => (r.WorkspaceId ? String(r.WorkspaceId).toLowerCase() === String(w.CustomerId).toLowerCase() : r.Workspace === w.Name) && /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0)
     if (reach.length) {
-      const absent = m.workspaces.filter(w => !reach.some(r => (r.WorkspaceId ? String(r.WorkspaceId).toLowerCase() === String(w.CustomerId).toLowerCase() : r.Workspace === w.Name) && /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0)).length
+      const absent = m.workspaces.filter(w => !alertReach(w)).length
       const late = reach.filter(r => /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0 && windowValid && validDate(iso(r.EarliestRecord)) && iso(r.EarliestRecord) > p.WindowStart).length
       if (absent) presenter('Workspace coverage', `${plural(absent, 'workspace holds', 'workspaces hold')} no alert records. Figures describe the workspaces that hold data.`)
       if (late) presenter('Workspace start dates', `${plural(late, 'workspace starts', 'workspaces start')} after ${date(p.WindowStart)}. Earlier months reflect the workspaces that were already collecting.`)
@@ -582,7 +606,7 @@ thead th { background:var(--wash); color:var(--navy); }
     const detTotal = windowValid ? sum(det, 'Alerts') : null
     if (detTotal !== null) {
       const bySource = [...det.reduce((acc, r) => acc.set(product(r.ProductName), (acc.get(product(r.ProductName)) || 0) + Number(r.Alerts)), new Map())].map(([name, total]) => ({ name, total })).sort((a, b) => b.total - a.total)
-      m.detections = { total: detTotal, bySource, sources: list(bySource.slice(0, 3).map(s => s.name)), source: source('OUT.5', m.ticketed ? 'Detections linked to ticketed alerts.' : '') }
+      m.detections = { total: detTotal, bySource, sources: list(bySource.slice(0, 3).map(s => s.name)), allSources: list([...bySource.filter(s => s.name && s.total > 0).map(s => s.name), ...bySource.some(s => !s.name && s.total > 0) ? ['sources not named in the collection'] : []]), source: source('OUT.5', m.ticketed ? 'Detections linked to ticketed alerts.' : '') }
     } else unmeasured('OUT.5', 'Detections received', state('OUT.5'))
 
     // Alerts (Sentinel incidents) and the automation adjustment.
@@ -795,6 +819,52 @@ thead th { background:var(--wash); color:var(--navy); }
     const trend = alertsAllowed ? rows('OUT.3').filter(r => validDate(iso(r.Month)) && iso(r.Month) >= p.WindowStart && iso(r.Month) <= p.WindowEnd && ['Total','High','Medium','Low','Informational'].every(k => count(r[k]) !== null)).sort((a, b) => iso(a.Month).localeCompare(iso(b.Month))) : []
     m.trend = trend.map(r => ({ month: iso(r.Month), label: monthLabel(r.Month), Total: r.Total, High: r.High, Medium: r.Medium, Low: r.Low, Informational: r.Informational }))
     m.trendSource = source('OUT.3')
+    // Workspace coverage of the months the chart shows (issue #23). P0.1-BY-WORKSPACE gives the first and last alert
+    // record each workspace still holds (TimeGenerated), never when collection began: a quiet workspace, or one whose
+    // retention is shorter than the window, also starts late. OUT.3 counts each alert in the month it was created, from
+    // its latest retained record, so a later update can place an alert in a month before the workspace's first retained
+    // record. The client copy therefore states retained record dates only, never which workspaces an alert came from,
+    // when collection began or a trend.
+    // A workspace counts in a month only when its records span the whole month, so a first record after the 1st or a
+    // last record before the month ends leaves that month out. Workspaces with no alert records stay in the
+    // denominator. A partial reach reading, or a workspace whose record dates are unreadable, shows no coverage.
+    // A pack with one Sentinel workspace has no breakdown: the collector reads P0.1 from that workspace alone.
+    m.trendCoverage = null
+    const reachId = state('P0.1-BY-WORKSPACE') === 'OK' ? 'P0.1-BY-WORKSPACE' : m.workspaces.length === 1 && state('P0.1-BY-WORKSPACE') === 'MISSING' && state('P0.1') === 'OK' ? 'P0.1' : null
+    if (m.trend.length && m.workspaces.length && reachId) {
+      const held = reachId === 'P0.1' ? [rows('P0.1').find(r => /(?:^|\.)SecurityIncident$/.test(r.SourceTable) && num(r.Records) > 0)] : m.workspaces.map(alertReach)
+      const spans = held.filter(Boolean).map(r => ({ start: iso(r.EarliestRecord), end: iso(r.LatestRecord) }))
+      if (spans.every(s => validDate(s.start) && validDate(s.end) && s.start <= s.end)) {
+        const monthStart = month => month.slice(0, 7) + '-01'
+        const monthEnd = month => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10)
+        m.trend.forEach(r => { r.workspaces = spans.filter(s => s.start <= monthStart(r.month) && s.end >= monthEnd(r.month)).length })
+        const shown = m.trend.slice(-12), total = m.workspaces.length
+        if (new Set(shown.map(r => r.workspaces)).size > 1) {
+          const first = monthStart(shown[0].month), last = monthEnd(shown[shown.length - 1].month)
+          const late = spans.filter(s => s.start > first).length, early = spans.filter(s => s.end < last).length
+          const of = n => total === 1 ? 'the Sentinel workspace' : `${fmt(n)} of the ${fmt(total)} Sentinel workspaces`
+          // One workspace takes one combined clause: "retained in the Sentinel workspace start after Jul 1, 2026 and end
+          // before Sep 30, 2026".
+          const both = total === 1 && late && early ? ` and end before ${date(last)}` : early ? `, and in ${fmt(early)} they end before ${date(last)}` : ''
+          const dates = late ? `retained in ${of(late)} start after ${date(first)}${both}` : `retained in ${of(early)} end before ${date(last)}`
+          // Runs of consecutive months with the same count, for example "3 of 6 in Jul 2026, 6 of 6 in Aug to Sep 2026".
+          // OUT.3 has no row for a month without alerts, so a missing month ends a run rather than joining across it.
+          const index = month => Number(month.slice(0, 4)) * 12 + Number(month.slice(5, 7))
+          const runs = []
+          shown.forEach(r => { const run = runs[runs.length - 1]; if (run && run.n === r.workspaces && index(r.month) === index(run.last.month) + 1) run.last = r; else runs.push({ n: r.workspaces, first: r, last: r }) })
+          const months = run => {
+            if (run.first === run.last) return run.first.label
+            const short = month => toDate(month).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' })
+            return run.first.month.slice(0, 4) === run.last.month.slice(0, 4) ? `${short(run.first.month)} to ${run.last.label}` : `${run.first.label} to ${run.last.label}`
+          }
+          m.trendCoverage = {
+            total, late, early, source: source(reachId),
+            sentence: `The alert records ${dates}. Alerts are counted in the month they were created.`,
+            caption: `Workspaces whose retained alert records span the whole month: ${runs.map(run => `${fmt(run.n)} of ${fmt(total)} in ${months(run)}`).join(', ')}.`
+          }
+        }
+      }
+    }
     if (trend.length >= 2) {
       const first = trend[0], last = trend[trend.length - 1]
       if (last.High > first.High) presenter('High severity trend', `High severity alerts rose from ${fmt(first.High)} in ${monthLabel(first.Month)} to ${fmt(last.High)} in ${monthLabel(last.Month)}. The report presents monthly volume as work absorbed by the SOC and draws no trend conclusion. Be ready to explain the drivers, for example new detections, tuning or a campaign.`)
@@ -820,8 +890,11 @@ thead th { background:var(--wash); color:var(--navy); }
       if (!ok) return { ...ungathered(id, label, where, reason(id), note), ...extra }
       // A reading at E can still leave resources out. The register counts them as exceptions, so meeting the
       // threshold and having no exceptions read differently (Oct 15, 2026).
+      // The excluded count is read only where the collector records one (EW.10-EXCLUDED), so the second rule never
+      // fires on a control without it. A verified configuration (inForce) is never on a small sample.
       const grade = mark(pct(good, total))
-      const item = { id, label: clean(label), ...where, good, total, pct: pct(good, total), mark: grade, value: `${fmt(good)} of ${fmt(total)}`, exceptions: grade === 'E' ? total - good : 0, note: clean(note), source: source(id), ...extra }
+      const smallSample = total < MIN_SAMPLE || (count(extra.excluded) ?? 0) > total
+      const item = { id, label: clean(label), ...where, good, total, pct: pct(good, total), mark: grade, value: `${fmt(good)} of ${fmt(total)}`, exceptions: grade === 'E' ? total - good : 0, smallSample, note: clean(note), source: source(id), ...extra }
       m.controls.push(item)
       return item
     }
@@ -876,13 +949,32 @@ thead th { background:var(--wash); color:var(--navy); }
     // not missing MFA, so the grade leaves them out. Without the Graph read, federated sign-ins in IA.1 decide.
     const federation = one('IA.1-FEDERATION')
     const fedDomains = count(federation?.FederatedDomains)
+    const fedProviders = String(federation?.Provider ?? '').split(', ').filter(p => p && !['Other', 'Unknown'].includes(p))
     const federated = fedDomains > 0 || (!has('IA.1-FEDERATION') && (count(member?.FederatedMfaAtLeastOnce) > 0 || count(member?.FederatedWithoutMfa) > 0))
     const unevaluated = federated ? count(member?.NoMfaOnlyUnevaluated) : null
     const evaluated = unevaluated !== null && count(member?.UsersSignedIn) !== null ? member.UsersSignedIn - unevaluated : null
+    // The client surfaces state who the grade covers (issue #21): of the members who signed in, how many could be
+    // evaluated, how many of those showed MFA on their own sign-ins and how many only by inference from an earlier
+    // MFA sign-in in the same session (MfaSessionLinkedOnly, collector 1.13.0, part of UsersChallenged), and how
+    // many were not evaluated. A tenant with nothing unevaluated and nothing inferred keeps its plain reading.
+    const signedIn = count(member?.UsersSignedIn), challenged = count(member?.UsersChallenged)
+    const sessionLinked = count(member?.MfaSessionLinkedOnly)
+    const base = evaluated ?? signedIn
+    const splitOk = signedIn !== null && challenged !== null && base > 0 && challenged <= base
+    const inferred = splitOk && sessionLinked > 0 && sessionLinked <= challenged ? sessionLinked : 0
+    const notEvaluated = splitOk && evaluated !== null && unevaluated > 0 ? unevaluated : 0
+    const ownSplit = inferred ? `, ${fmt(challenged - inferred)} on their own sign-ins and ${fmt(inferred)} inferred from an earlier MFA sign-in in the same session` : ''
+    // The note states why the unevaluated members are not missing MFA, and the pillar narrative says it in short.
+    const splitOf = why => !notEvaluated && !inferred ? ''
+      : notEvaluated ? `Of ${fmt(signedIn)} members who signed in over the last 30 days, ${fmt(evaluated)} could be evaluated. ${fmt(challenged)} of them showed multifactor authentication${ownSplit}. ${plural(notEvaluated, 'member', 'members')} signed in only through device sessions that no Conditional Access policy checked and ${notEvaluated === 1 ? 'is' : 'are'} ${why ? 'recorded as not evaluated, not as missing multifactor authentication' : 'not evaluated'}.`
+      : `${fmt(challenged)} of ${fmt(signedIn)} members who signed in over the last 30 days showed multifactor authentication${ownSplit}.`
+    const mfaSplit = splitOf(true), mfaSplitNarrative = splitOf(false)
+    // The same split in short, for the deck register detail line.
+    const mfaSplitShort = [notEvaluated ? `${fmt(evaluated)} of ${fmt(signedIn)} members evaluated` : '', inferred ? `${fmt(inferred)} inferred from an earlier MFA sign-in in the same session` : ''].filter(Boolean).join(' · ')
     const mfaLabel = 'Multifactor authentication required at sign-in'
     const mfaNote = unevaluated !== null
-      ? `Members with at least one successful sign-in in the last 30 days that carried multifactor authentication, out of the members whose sign-ins could be evaluated.${externalMfa > 0 ? ` ${plural(externalMfa, 'member', 'members')} satisfied it through the federated identity provider.` : ''} Windows logon is left out because a federated Windows logon cannot carry multifactor authentication. Members whose only sign-ins reused a device session that no Conditional Access policy checked are recorded as not evaluated, not as missing multifactor authentication.`
-      : `Members with at least one successful sign-in in the last 30 days that satisfied multifactor authentication.${externalMfa > 0 ? ` ${plural(externalMfa, 'user', 'users')} satisfied it through a federated identity provider claim.` : ''}${evidenceQuery ? ' Windows logon and device registration are left out.' : ''}`
+      ? `Members with at least one successful sign-in in the last 30 days that carried multifactor authentication, out of the members whose sign-ins could be evaluated.${externalMfa > 0 ? ` ${plural(externalMfa, 'member', 'members')} satisfied it through the federated identity provider.` : ''} Windows logon is left out because a federated Windows logon cannot carry multifactor authentication.${notEvaluated ? '' : ' Members whose only sign-ins reused a device session that no Conditional Access policy checked are recorded as not evaluated, not as missing multifactor authentication.'}${mfaSplit ? ` ${mfaSplit}` : ''}`
+      : `Members with at least one successful sign-in in the last 30 days that satisfied multifactor authentication.${externalMfa > 0 ? ` ${plural(externalMfa, 'user', 'users')} satisfied it through a federated identity provider claim.` : ''}${evidenceQuery ? ' Windows logon and device registration are left out.' : ''}${mfaSplit ? ` ${mfaSplit}` : ''}`
     // Conditional Access controls. IA.8-CA is evaluated by the report builder from the raw policies and
     // the per-account sign-in detail, and carries counts only. A successful sign-in by an account the
     // policy excludes is an approved exception, not a gap. Without a policy inventory and without any
@@ -898,7 +990,9 @@ thead th { background:var(--wash); color:var(--navy); }
         'Conditions': `The enabled Conditional Access policy that ${verb} ${what} applies under selected conditions only, such as a platform, risk level, device filter or location.`,
         'Users': `The enabled Conditional Access policy that ${verb} ${what} applies to selected users only.`,
         'Applications': `The enabled Conditional Access policy that ${verb} ${base} applies to selected applications only.`,
-        'UsersAndApplications': `The enabled Conditional Access policy that ${verb} ${base} applies to selected users and selected applications only.`
+        'UsersAndApplications': `The enabled Conditional Access policy that ${verb} ${base} applies to selected users and selected applications only.`,
+        // One enabled policy selects its applications for all users and another selects its users (Oct 16, 2026).
+        'UsersOrApplications': `Some of the enabled Conditional Access policies that ${verb.replace(/s$/, '')} ${base} apply to all users on selected applications only, and others to selected users only.`
       })[String(f.ScopeReason)] || `The enabled Conditional Access policy that ${verb} ${what} applies to selected users, applications or conditions only.`
     }
     const policyText = (f, what, verb = 'blocks', who = 'for all users') => ({
@@ -921,16 +1015,20 @@ thead th { background:var(--wash); color:var(--navy); }
     // inventory keep the sign-in ratio.
     const mfaFlow = caFlow('MFA at sign-in')
     const mfaPolicy = mfaFlow ? policyText(mfaFlow, 'multifactor authentication on every application', 'requires') : ''
-    const mfaSignIns = evaluated !== null && count(member?.UsersChallenged) !== null ? `${fmt(member.UsersChallenged)} of ${fmt(evaluated)} members whose sign-ins in the last 30 days could be evaluated satisfied it.`
-      : count(member?.UsersSignedIn) > 0 && count(member?.UsersChallenged) !== null ? `${fmt(member.UsersChallenged)} of ${fmt(member.UsersSignedIn)} members who signed in over the last 30 days satisfied it.` : ''
+    const mfaSignIns = mfaSplit || (evaluated !== null && count(member?.UsersChallenged) !== null ? `${fmt(member.UsersChallenged)} of ${fmt(evaluated)} members whose sign-ins in the last 30 days could be evaluated satisfied it.`
+      : count(member?.UsersSignedIn) > 0 && count(member?.UsersChallenged) !== null ? `${fmt(member.UsersChallenged)} of ${fmt(member.UsersSignedIn)} members who signed in over the last 30 days satisfied it.` : '')
     // The sign-in ratio behind the policy status, for the pillar page, the priorities and the Mostly enforced reading.
     const mfaRatio = count(member?.UsersChallenged) !== null && (evaluated ?? count(member?.UsersSignedIn)) > 0 ? { good: member.UsersChallenged, total: evaluated ?? member.UsersSignedIn, pct: pct(member.UsersChallenged, evaluated ?? member.UsersSignedIn) } : null
     const mfa = mfaFlow ? inForce('IA.1', mfaLabel, F.identity, flowCondition(mfaFlow), [mfaPolicy, mfaSignIns, exceptionText(mfaFlow)].filter(Boolean).join(' '), mfaRatio)
       : !member && has('IA.1') ? notApplicable('IA.1', mfaLabel, F.identity, 'No member sign-ins were recorded in the last 30 days, so there is no evidence either way.')
       : evaluated === 0 ? notApplicable('IA.1', mfaLabel, F.identity, 'Every member sign-in in the last 30 days reused a device session that no Conditional Access policy checked, so the logs hold no evidence either way.')
       : control('IA.1', mfaLabel, F.identity, member?.UsersChallenged, evaluated ?? member?.UsersSignedIn, mfaNote, unevaluated !== null ? { population: 'Members whose sign-ins in the last 30 days could be evaluated.' } : {})
-    const scopedHow = f => ({ Conditions: 'applies under selected conditions only', Users: 'applies to selected users only', Applications: 'applies to selected applications only', UsersAndApplications: 'applies to selected users and selected applications only' })[String(f?.ScopeReason)] || 'applies to selected users, applications or conditions only'
-    if (mfaFlow && mfaRatio && mfaRatio.pct < E_THRESHOLD) presenter('MFA at sign-in', `The control reads ${mfa.value.toLowerCase()} from the Conditional Access policy${mfa.value === MOSTLY_VALUE ? `, because the enabled policy ${scopedHow(mfaFlow)} and the sign-in ratio stands at or above 50 percent` : ''}. The sign-in logs show ${fmt(mfaRatio.good)} of ${fmt(mfaRatio.total)} members with multifactor authentication in the last 30 days${unevaluated !== null ? ', among members whose sign-ins could be evaluated' : ''}. Be ready to explain the difference, for example exclusions, service accounts or sign-ins made before the policy existed.`)
+    // The register reads the share against the members evaluated, and the deck register carries the split.
+    if (mfa.mark && unevaluated !== null) mfa.per = 'of members evaluated'
+    if (mfa.mark && mfaSplitShort) mfa.split = mfaSplitShort
+    const scopedHow = f => String(f?.ScopeReason) === 'UsersOrApplications' ? 'some enabled policies are limited to selected applications and others to selected users,'
+      : `the enabled policy ${({ Conditions: 'applies under selected conditions only', Users: 'applies to selected users only', Applications: 'applies to selected applications only', UsersAndApplications: 'applies to selected users and selected applications only' })[String(f?.ScopeReason)] || 'applies to selected users, applications or conditions only'}`
+    if (mfaFlow && mfaRatio && mfaRatio.pct < E_THRESHOLD) presenter('MFA at sign-in', `The control reads ${mfa.value.toLowerCase()} from the Conditional Access policy${mfa.value === MOSTLY_VALUE ? `, because ${scopedHow(mfaFlow)} and the sign-in ratio stands at or above 50 percent` : ''}. The sign-in logs show ${fmt(mfaRatio.good)} of ${fmt(mfaRatio.total)} members with multifactor authentication in the last 30 days${unevaluated !== null ? ', among members whose sign-ins could be evaluated' : ''}. Be ready to explain the difference, for example exclusions, service accounts or sign-ins made before the policy existed.`)
     if (legacyMfaQuery) presenter('MFA coverage query', 'This pack was collected before IA.1 recognised MFA satisfied by external identity provider claims. In a federated tenant the member figure can read far below true coverage. Recollect with the current collector before presenting identity coverage.')
     else if (member && !evidenceQuery && externalMfa > 0) presenter('MFA coverage query', 'This pack was collected before collector 1.12.0. In a federated tenant, members whose only sign-ins reused a device session that no policy checked read here as missing multifactor authentication, although the logs hold no evidence either way. Recollect with the current collector before presenting identity coverage.')
     const noBlockEvidence = 'No attempt reached a Conditional Access block and there is no policy inventory, so there is no evidence either way.'
@@ -1002,12 +1100,11 @@ thead th { background:var(--wash); color:var(--navy); }
     else if (!has('IA.1-ADMINPORTAL')) ungathered('IA.1-ADMINPORTAL', portalLabel, F.identity, reason('IA.1-ADMINPORTAL'), 'Members who signed in to a Microsoft admin portal in the last 30 days and satisfied multifactor authentication.')
     else notApplicable('IA.1-ADMINPORTAL', portalLabel, F.identity, `${portalUsers > 0 ? 'Every member sign-in to a Microsoft admin portal in the last 30 days reused a session that no policy checked' : 'No member signed in to a Microsoft admin portal in the last 30 days'} and no Conditional Access policy inventory, so there is no evidence either way.`)
     // Collector 1.13.0 counts a sign-in as MFA when an earlier sign-in in the same session carried direct MFA.
-    // Members whose only MFA evidence is that inference are named in the presenter notes, never on the client page.
-    const sessionLinked = count(member?.MfaSessionLinkedOnly)
+    // The client surfaces carry the inferred count in the split above, and the presenter notes explain it.
     const sessionLinkedText = sessionLinked > 0 ? `${plural(sessionLinked, 'member counts', 'members count')} as covered only by inference from an earlier MFA sign-in in the same session, not from MFA recorded on their own sign-ins.` : ''
     if (sessionLinkedText && !federated) presenter('MFA inferred from the session', sessionLinkedText)
     if (federated) {
-      const provider = String(federation?.Provider ?? '').split(', ').filter(p => p && !['Other', 'Unknown'].includes(p))
+      const provider = fedProviders
       const behavior = String(federation?.MfaBehavior ?? '')
       presenter('Federated sign-in and MFA', [
         `The tenant is federated${provider.length ? ` with ${list(provider)}` : ''}${fedDomains > 0 ? ` (${plural(fedDomains, 'domain', 'domains')})` : ', as the federated sign-ins in IA.1 show. The federated domains themselves could not be read'}.`,
@@ -1143,7 +1240,11 @@ thead th { background:var(--wash); color:var(--navy); }
     // Machines whose tags record patching as waived or client owned leave the measure (collector 1.14.0).
     const patchExcluded = count(one('EW.10-EXCLUDED')?.Machines)
     const patchExcludedText = patchExcluded > 0 ? ` ${plural(patchExcluded, 'machine is', 'machines are')} left out because a tag records patching as waived or client owned.` : ''
-    const patch = ew10 && count(ew10.Machines) !== null ? control('EW.10', 'Operating system findings remediated within the patch cadence', F.endpoint, ew10.WithinCadence, ew10.Machines, `Machines assessed by Update Manager with no critical or security patch older than the agreed cadence${cadenceText}.${patchExcludedText}`) : (has('EW.10') ? null : control('EW.10', 'Operating system findings remediated within the patch cadence', F.endpoint, null, null, 'Machines assessed by Update Manager with no critical or security patch older than the agreed cadence.'))
+    // The row names both populations, assessed and excluded by tag. Machines Update Manager never assessed are not
+    // counted by EW.10, so no third figure is printed. The tags are reviewed with the client, which the note says
+    // without claiming any tag was confirmed.
+    const patchReviewText = patchExcluded > 0 ? ' Atmosera reviews these tags with your team at each business review.' : ''
+    const patch = ew10 && count(ew10.Machines) !== null ? control('EW.10', 'Operating system findings remediated within the patch cadence', F.endpoint, ew10.WithinCadence, ew10.Machines, `Machines assessed by Update Manager with no critical or security patch older than the agreed cadence${cadenceText}.${patchExcludedText}${patchReviewText}`, patchExcluded > 0 ? { excluded: patchExcluded, populations: `${fmt(ew10.Machines)} assessed · ${fmt(patchExcluded)} excluded by tag` } : {}) : (has('EW.10') ? null : control('EW.10', 'Operating system findings remediated within the patch cadence', F.endpoint, null, null, 'Machines assessed by Update Manager with no critical or security patch older than the agreed cadence.'))
     if (patchExcluded > 0) note('Patch measures', `EW.10-EXCLUDED: ${plural(patchExcluded, 'machine is', 'machines are')} left out of EW.6 and EW.10 because a tag records patching as waived or client owned. The SecOps worklist names them. Confirm that each tag is still intended.`)
     const appControl = one('EW.13')
     if (has('EW.13')) inForce('EW.13', 'Application allow-listing policy assigned', D.endpoint, appControl ? count(appControl.Assigned) > 0 : false, appControl && count(appControl.Policies) > 0 ? `${plural(appControl.Policies, 'App Control for Business policy', 'App Control for Business policies')}, ${fmt(appControl.Assigned)} assigned.` : 'No App Control for Business policy is defined in Intune.')
@@ -1152,7 +1253,7 @@ thead th { background:var(--wash); color:var(--navy); }
     // Network and boundary.
     const nb4 = one('NB.4'), nb1 = one('NB.1'), nb5 = one('NB.5'), nb6 = one('NB.6'), dp1 = one('DP.1')
     const https = control('NB.4', 'Encryption in transit enforced on published web apps', F.network, nb4?.HttpsOnly, nb4?.Sites, 'Web and function apps with the HTTPS-only setting.')
-    const segmentation = control('NB.1', 'Workload subnets protected by segmentation', D.network, nb1?.Segmented, nb1?.WorkloadSubnets, 'Workload subnets with a network security group or a route through the firewall.')
+    const segmentation = control('NB.1', 'Workload subnets with a network security group or firewall route', D.network, nb1?.Segmented, nb1?.WorkloadSubnets, 'Workload subnets with a network security group or a route through the firewall configured. The rules and the traffic they permit are not evaluated.')
     const sqlTls = control('NB.6', 'Transport encryption enforced on Azure SQL', F.network, nb6?.MinTls12, nb6?.Servers, 'Azure SQL servers requiring TLS 1.2 or newer.')
     const appTls = control('NB.5', 'App Service minimum TLS 1.2', F.network, nb5?.MinTls12, nb5?.Configs, 'App Service configurations requiring TLS 1.2 or newer.')
     const publicOff = control('DP.1', 'Storage accounts closed to public networks', D.network, dp1?.PublicNetworkOff, dp1?.Accounts, 'Storage accounts with public network access disabled.')
@@ -1180,12 +1281,12 @@ thead th { background:var(--wash); color:var(--navy); }
     const rbac = control('DP.2', 'Key Vault access governed by role-based access control', D.data, dp2?.RbacAuth, dp2?.Vaults, 'Vaults using the Azure RBAC permission model.')
     const disks = dp3.filter(r => count(r.Disks) !== null)
     const diskTotal = sum(disks, 'Disks'), diskEncrypted = disks.length ? disks.filter(r => /EncryptionAtRest|Encrypted|Customer|Platform/i.test(String(r.EncryptionType))).reduce((n, r) => n + Number(r.Disks), 0) : null
-    control('DP.3', 'Managed disks encrypted at rest', F.data, diskEncrypted, diskTotal, 'Managed disks encrypted with platform or customer managed keys.')
+    control('DP.3', 'Managed disks encrypted at rest', F.data, diskEncrypted, diskTotal, 'Platform keys, the Azure default, or customer managed keys. Encryption at host is graded separately.')
     const vmTotal = sum(encRows, 'Resources'), noBackup = count(one('DP.5b')?.VmsWithoutBackup)
     const backup = control('DP.5b', 'Azure Backup protecting virtual machines', D.data, vmTotal !== null && noBackup !== null ? Math.max(0, vmTotal - noBackup) : null, vmTotal, `Virtual machines with a protected backup item. Pooled session hosts may be excluded by agreement.${applianceText}`)
     const safeLinks = rows('IA.9-SAFELINKS'), safeAttach = rows('IA.9-SAFEATTACH')
-    inForce('IA.9-SAFELINKS', 'Safe Links scanning on mail, Teams and Office', F.data, has('IA.9-SAFELINKS') ? safeLinks.some(r => [r.EnableSafeLinksForEmail, r.EnableSafeLinksForTeams, r.EnableSafeLinksForOffice].every(v => v === true || String(v).toLowerCase() === 'true')) : null, 'At least one Safe Links policy covers mail, Teams and Office.')
-    inForce('IA.9-SAFEATTACH', 'Safe Attachments blocking malicious files', F.data, has('IA.9-SAFEATTACH') ? safeAttach.some(r => (r.Enable === true || String(r.Enable).toLowerCase() === 'true') && /block|dynamic|replace/i.test(String(r.Action))) : null, 'At least one enabled Safe Attachments policy blocks or replaces malicious attachments.')
+    inForce('IA.9-SAFELINKS', 'Safe Links policy set for mail, Teams and Office', F.data, has('IA.9-SAFELINKS') ? safeLinks.some(r => [r.EnableSafeLinksForEmail, r.EnableSafeLinksForTeams, r.EnableSafeLinksForOffice].every(v => v === true || String(v).toLowerCase() === 'true')) : null, 'Reads In force when one policy has all three on. Recipients, exceptions and rule state are not read.')
+    inForce('IA.9-SAFEATTACH', 'Safe Attachments policy set to block or replace malicious files', F.data, has('IA.9-SAFEATTACH') ? safeAttach.some(r => (r.Enable === true || String(r.Enable).toLowerCase() === 'true') && /block|dynamic|replace/i.test(String(r.Action))) : null, 'Read from any one enabled policy. Scope and exceptions are not read.')
     const zap = rows('DP.7').filter(r => /ZAP|Remediation/i.test(String(r.ActionType)))
     const mailRemoved = zap.length ? sum(zap, 'Succeeded') : null
     m.mailRemoved = mailRemoved
@@ -1211,7 +1312,7 @@ thead th { background:var(--wash); color:var(--navy); }
       .sort((a, b) => b[1] - a[1]).map(([planCode, n]) => ({ n, name: PLAN_NAMES[planCode] || clean(planCode).replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() }))
     const planGapText = planGaps.length ? ` Not covered: ${list(planGaps.map(g => `${fmt(g.n)} ${g.name} ${g.n === 1 ? 'resource' : 'resources'}`))}.` : ''
     const planGapShort = planGaps.length ? `${list(planGaps.map(g => `${fmt(g.n)} ${g.name}`))} not covered` : ''
-    const plan = control('DR.2', 'Cloud workload protection across the resource estate', F.detection, sum(rows('DR.2'), 'Covered'), sum(rows('DR.2'), 'Resources'), `Eligible resources on a Standard Defender for Cloud plan, read from the subscription plan configuration.${planGapText}`, { estimate: true, ...(planGapShort ? { gap: planGapShort } : {}) })
+    const plan = control('DR.2', 'Cloud workload protection plan coverage, a plan-level estimate', F.detection, sum(rows('DR.2'), 'Covered'), sum(rows('DR.2'), 'Resources'), `Eligible resources on a Standard Defender for Cloud plan, a plan-level estimate read from the subscription plan configuration.${planGapText}`, { estimate: true, ...(planGapShort ? { gap: planGapShort } : {}) })
     const aiRow = rows('DR.2').find(r => r.Plan === 'AI')
     // DR.6 counts assessment entries and duplicated DR.13, so it no longer has a control row (Oct 12, 2026).
     // Diagnostic logging is graded per resource by DR.13 in defense in depth. DR.6 remains a fallback for the backlog.
@@ -1312,16 +1413,20 @@ thead th { background:var(--wash); color:var(--navy); }
     // Counted against the same members as the Multifactor authentication required at sign-in control, so the
     // executive summary figure and the control figure share their denominator.
     const mfaPopulation = mfaRatio && !isInForce(mfa) ? mfaRatio : mfa.total !== null && !mfa.boolean ? { good: mfa.good, total: mfa.total } : null
-    harden('Members who signed in without MFA, last 30 days', mfaPopulation ? mfaPopulation.total - mfaPopulation.good : null, 'IA.1', 2, mfaPopulation ? mfaPopulation.total : null)
+    // In a federated tenant the count is among the members evaluated, not every member who signed in (issue #21).
+    harden(unevaluated !== null ? 'Evaluated members without MFA, last 30 days' : 'Members who signed in without MFA, last 30 days', mfaPopulation ? mfaPopulation.total - mfaPopulation.good : null, 'IA.1', 2, mfaPopulation ? mfaPopulation.total : null)
     harden('Open alerts referred for client action', m.alerts?.open ?? null, 'OUT.1', 99)
     m.hardening = hardening.sort((a, b) => a.rank - b.rank)
 
     // Priorities, ranked by a fixed sequence. Open alerts are never a priority.
     const priority = (rank, title, evidence, action, success, id) => m.priorities.push({ rank, title: clean(title), evidence: clean(evidence), action: clean(action), success: clean(success), id, source: source(id) })
     if (criticalCves > 0) priority(1, 'Critical vulnerability remediation', `${fmt(criticalCves)} critical exploitable findings are open across operating system and application software. The same finding can appear on several device groups.`, 'Validate the affected workloads and business impact, then schedule remediation or compensating controls with the owners inside the regular patch cadence.', 'Critical exploitable findings resolved or covered by an approved treatment plan.', 'BKL.1')
-    if (mfa.boolean && !isInForce(mfa)) priority(2, 'Multifactor authentication for every user', `${mfaPolicy}${mfaRatio ? ` ${fmt(mfaRatio.total - mfaRatio.good)} of ${fmt(mfaRatio.total)} members showed no multifactor authentication in the last 30 days.` : ''}`, 'Extend the Conditional Access policy to all users and every application, confirm exclusions and service accounts, pilot in report-only mode, then move to enforcement in waves.', 'An enabled Conditional Access policy requires multifactor authentication for all users on every application, with documented exceptions.', 'IA.1')
+    // In a federated tenant the identity provider's own sign-on rules and federatedIdpMfaBehavior decide what a Require
+    // MFA policy enforces, so they are reviewed first, as an explicit step (issue #21).
+    const fedReview = unevaluated !== null ? `Review the authentication policy of the federated identity provider${fedProviders.length ? ` (${list(fedProviders)})` : ''} and the federatedIdpMfaBehavior setting of each federated domain before extending Conditional Access, since enforcement depends on how federation and existing sessions are handled. ` : ''
+    if (mfa.boolean && !isInForce(mfa)) priority(2, 'Multifactor authentication for every user', `${mfaPolicy}${mfaRatio ? ` ${fmt(mfaRatio.total - mfaRatio.good)} of ${fmt(mfaRatio.total)} members${unevaluated !== null ? ' whose sign-ins could be evaluated' : ''} showed no multifactor authentication in the last 30 days.` : ''}`, `${fedReview}${fedReview ? 'Then extend' : 'Extend'} the Conditional Access policy to all users and every application, confirm exclusions and service accounts, pilot in report-only mode, then move to enforcement in waves.`, 'An enabled Conditional Access policy requires multifactor authentication for all users on every application, with documented exceptions.', 'IA.1')
     else if (!mfa.boolean && mfa.pct !== null && mfa.pct < E_THRESHOLD) {
-      if (unevaluated !== null) priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} members whose sign-ins could be evaluated showed no multifactor authentication in the last 30 days. Members whose only sign-ins reused a device session that no policy checked are not part of this figure.`, 'Deploy a report-only Conditional Access policy requiring multifactor authentication for all members to measure session coverage, confirm the identity provider sign-on rules, then move to enforcement in waves.', 'Every member sign-in evaluated by policy and covered by multifactor authentication, with documented exceptions.', 'IA.1')
+      if (unevaluated !== null) priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} members whose sign-ins could be evaluated showed no multifactor authentication in the last 30 days. Members whose only sign-ins reused a device session that no policy checked are not part of this figure.`, `${fedReview}Then deploy a report-only Conditional Access policy requiring multifactor authentication for all members to measure session coverage, and move to enforcement in waves.`, 'Every member sign-in evaluated by policy and covered by multifactor authentication, with documented exceptions.', 'IA.1')
       else priority(2, 'Multifactor authentication for every user', `${fmt(mfa.total - mfa.good)} of ${fmt(mfa.total)} active members signed in without a recorded multifactor requirement in the last 30 days.`, 'Confirm exclusions and service accounts, pilot the Conditional Access change in report-only mode, then move to enforcement in waves.', 'Every intended user covered by validated policy, with documented exceptions.', 'IA.1')
     }
     // IA.2 counts methods used, not registered, so use alone never reads as sole reliance. PhoneOnly (IA.5,
@@ -1366,7 +1471,17 @@ thead th { background:var(--wash); color:var(--navy); }
       }
     }
 
-    // Scores and posture.
+    // Scores and posture. Each score records its model, where it was read, its scope and its read date (Oct 16, 2026).
+    // Defender for Cloud offers two models with different calculations and values: the classic secure score in the
+    // Azure portal, which Resource Graph (POS.1, securescores) and the continuous export (POS.7) carry, and the
+    // risk-based Cloud Secure Score in the Defender portal, which no query here reads. Microsoft Secure Score is a
+    // separate score for the Microsoft 365 tenant. The scope is a count, never an identifier.
+    // A movement line compares two readings only when both use the same model and the same maximum. A different
+    // maximum means the evaluated scope or the scoring changed between them, so the score reads as current state and
+    // the evidence review or presenter notes name the two readings.
+    const CLOUD_MODEL = 'Classic Defender for Cloud secure score', TENANT_MODEL = 'Microsoft Secure Score'
+    const sameModel = (a, b) => clean(a).toLowerCase() === clean(b).toLowerCase()
+    const sameMax = (a, b) => num(a) > 0 && num(b) > 0 && Number(a).toFixed(2) === Number(b).toFixed(2)
     const cloud = one('POS.1')
     const scoreValid = cloud && num(cloud.Current) !== null && num(cloud.Max) > 0 && cloud.Current <= cloud.Max
     const trendRows = rows('POS.7').filter(r => validDate(iso(r.Month)) && num(r.Percent) !== null && Number(r.Percent) <= 100).sort((a, b) => iso(a.Month).localeCompare(iso(b.Month)))
@@ -1379,11 +1494,16 @@ thead th { background:var(--wash); color:var(--navy); }
       // last point is not the truth about today.
       // The movement is stated in percentage points with the starting percentage (from), never as points available.
       // A movement that rounds to zero is no gain: the score then reads as current state everywhere.
-      const cloudPoints = trendRows.length >= 2 ? Number((value - Number(first.Percent)).toFixed(1)) : null
+      // Both readings are the classic model, so the gate is the maximum: the first month's against the current one.
+      const cloudComparable = trendRows.length >= 2 && sameMax(first.Max, cloud.Max)
+      const cloudPoints = cloudComparable ? Number((value - Number(first.Percent)).toFixed(1)) : null
       const delta = cloudPoints !== null && cloudPoints > 0 ? { points: cloudPoints, since: monthLabel(first.Month), from: Number(first.Percent) } : null
-      m.cloudScore = { value, current: Number(cloud.Current), max: Number(cloud.Max), subscriptions: count(cloud.Subscriptions), delta, trend: trendRows.map(r => ({ label: monthLabel(r.Month), pct: Number(r.Percent) })), note: `Secure score across ${plural(cloud.Subscriptions, 'subscription', 'subscriptions')}, calculated by Microsoft.`, source: source('POS.1') }
-      if (trendRows.length >= 2 && !delta) presenter('Defender for Cloud score movement', `The continuous export shows ${pctText(first.Percent)} in ${monthLabel(first.Month)} and ${pctText(last.Percent)} in ${monthLabel(last.Month)}. The report shows the monthly trend, including declines, beside the current score. Changes in the measurement model, scope or weighting can move the score without a change in the underlying controls.`)
+      const scope = plural(cloud.Subscriptions, 'subscription', 'subscriptions'), readTime = index.get('POS.1')?.ReadTimeUtc, read = validDate(iso(readTime)) ? date(readTime) : null
+      m.cloudScore = { value, current: Number(cloud.Current), max: Number(cloud.Max), subscriptions: count(cloud.Subscriptions), model: CLOUD_MODEL, origin: 'Azure Resource Graph', scope, read, basis: `${CLOUD_MODEL} across ${scope}. ${read ? `Read ${read} from Azure Resource Graph.` : 'Read from Azure Resource Graph.'}`, delta, trend: trendRows.map(r => ({ label: monthLabel(r.Month), pct: Number(r.Percent) })), note: `${CLOUD_MODEL} across ${scope}, calculated by Microsoft. ${read ? `Read ${read} from Azure Resource Graph.` : 'Read from Azure Resource Graph, with no read date recorded.'}`, source: source('POS.1') }
+      if (trendRows.length >= 2 && !cloudComparable) presenter('Defender for Cloud score movement', num(first.Max) > 0 ? `The continuous export reads a maximum of ${fmt(Number(first.Max))} points in ${monthLabel(first.Month)} and the current reading ${fmt(Number(cloud.Max))} points, so the evaluated scope or the scoring changed between them. The two are not compared and the score reads as current state. The report shows the monthly trend beside it.` : `The continuous export records no maximum for ${monthLabel(first.Month)}, so it is not compared with the current reading and the score reads as current state. The report shows the monthly trend beside it.`)
+      else if (trendRows.length >= 2 && !delta) presenter('Defender for Cloud score movement', `The continuous export shows ${pctText(first.Percent)} in ${monthLabel(first.Month)} and ${pctText(last.Percent)} in ${monthLabel(last.Month)}. The report shows the monthly trend, including declines, beside the current score. Changes in the measurement model, scope or weighting can move the score without a change in the underlying controls.`)
       if (count(cloud.Subscriptions) !== m.subscriptions) presenter('Score subscription scope', `The cloud score covers ${fmt(cloud.Subscriptions)} of ${fmt(m.subscriptions)} in-scope subscriptions.`)
+      if (count(cloud.Subscriptions) > 1) presenter('Score across subscriptions', `POS.1 adds the points of ${scope}. When the Azure portal combines subscriptions, Microsoft weights each one by its healthy and unhealthy resources, so the portal percentage can differ from this one.`)
     } else unmeasured('POS.1', 'Defender for Cloud score', state('POS.1'))
     // Tenant Secure Score: the reviewed context file wins, otherwise the Graph reading (POS.6) with movement from the 90-day trend.
     const pos6 = one('POS.6')
@@ -1405,12 +1525,20 @@ thead th { background:var(--wash); color:var(--navy); }
       const value = pct(tenant.Current, tenant.Max)
       const snapshot = validDate(tenant.PreviousReadDate) ? trend6.find(r => iso(r.Date) === iso(tenant.PreviousReadDate) && num(r.Max) > 0) : null
       const previousMax = num(tenant.PreviousMax) > 0 ? Number(tenant.PreviousMax) : snapshot ? Number(snapshot.Max) : null
-      const previousPct = previousMax !== null && num(tenant.Previous) !== null && tenant.Previous <= previousMax ? pct(tenant.Previous, previousMax) : null
+      // The earlier reading is compared only when it uses the same model (PreviousModel in the context file, Microsoft
+      // Secure Score when absent) and the same maximum as the current reading.
+      const previousModel = clean(tenant.PreviousModel) || TENANT_MODEL
+      const tenantComparable = previousMax !== null && sameModel(previousModel, TENANT_MODEL) && sameMax(previousMax, tenant.Max)
+      const previousPct = tenantComparable && num(tenant.Previous) !== null && tenant.Previous <= previousMax ? pct(tenant.Previous, previousMax) : null
       // A movement that rounds to zero is no gain, so no surface prints "Up 0 points".
       const tenantPoints = previousPct !== null ? Number((value - previousPct).toFixed(1)) : null
       const previous = tenantPoints !== null && tenantPoints > 0 && validDate(tenant.PreviousReadDate) ? { points: tenantPoints, since: monthLabel(tenant.PreviousReadDate), from: previousPct } : null
       if (num(tenant.Previous) !== null && previousMax === null) note('Microsoft tenant Secure Score movement', 'The context file gives a Previous reading without PreviousMax, and no POS.6-TREND snapshot is dated PreviousReadDate, so the movement line is omitted rather than measured against the current maximum. Add PreviousMax, the maximum at that reading, to show it.')
-      m.tenantScore = { value, current: Number(tenant.Current), max: Number(tenant.Max), read: date(tenant.ReadDate), delta: previous, categories, note: `Secure score for the Microsoft 365 tenant, calculated by Microsoft. Read ${date(tenant.ReadDate)}.`, source: clean(tenant.Source) }
+      const since = validDate(tenant.PreviousReadDate) ? date(tenant.PreviousReadDate) : 'an undated reading'
+      if (num(tenant.Previous) !== null && previousMax !== null && !sameModel(previousModel, TENANT_MODEL)) note('Microsoft tenant Secure Score movement', `The earlier reading from ${since} uses ${previousModel} and the current reading uses ${TENANT_MODEL}, so the two are not compared and the score reads as current state.`)
+      else if (num(tenant.Previous) !== null && previousMax !== null && !tenantComparable) note('Microsoft tenant Secure Score movement', `The earlier reading from ${since} has a maximum of ${fmt(previousMax)} points and the current reading ${fmt(Number(tenant.Max))} points, so the evaluated scope or the scoring changed between them. The two are not compared and the score reads as current state.`)
+      const origin = tenant === graphTenant ? 'Microsoft Graph' : 'a reviewed portal reading'
+      m.tenantScore = { value, current: Number(tenant.Current), max: Number(tenant.Max), model: TENANT_MODEL, origin, scope: 'Microsoft 365 tenant', read: date(tenant.ReadDate), basis: `${TENANT_MODEL}. Read ${date(tenant.ReadDate)} from ${origin}.`, delta: previous, categories, note: `${TENANT_MODEL} for the Microsoft 365 tenant, calculated by Microsoft. Read ${date(tenant.ReadDate)} from ${origin}.`, source: clean(tenant.Source) }
     } else note('Microsoft tenant Secure Score', 'Add a dated portal reading through the context file to show the tenant score beside the Defender for Cloud score. Optional Previous and PreviousReadDate fields add the movement line.')
     const high = rows('POS.4').find(r => /High/i.test(r.Severity))
     // POS.5 carries every assigned standard. The Microsoft cloud security benchmark is the one reported, so a preview
@@ -1434,7 +1562,19 @@ thead th { background:var(--wash); color:var(--navy); }
       estate: sum(rows('P0.5'), 'Resources'), assessed: count(one('POS.2')?.AssessedResources),
       highHealthy: high && count(high.Healthy) !== null && count(high.Total) > 0 ? { good: high.Healthy, total: high.Total, pct: pct(high.Healthy, high.Total), source: source('POS.4') } : null,
       benchmark: bench.length ? { passed: sum(bench, 'Passed'), total: sum(bench, 'Passed') + sum(bench, 'Failed'), pct: pct(sum(bench, 'Passed'), sum(bench, 'Passed') + sum(bench, 'Failed')), source: source('POS.5') } : null,
-      scoreControls: rows('POS.3').filter(r => num(r.Current) !== null && num(r.Max) > 0 && r.Current <= r.Max).map(r => ({ label: clean(r.Control), pct: pct(r.Current, r.Max), remaining: Number((r.Max - r.Current).toFixed(2)), healthy: count(r.Healthy), unhealthy: count(r.Unhealthy) })).sort((a, b) => b.remaining - a.remaining),
+      // Healthy of assessed resources per control: resources is null when either count is missing or both are zero,
+      // so no surface prints 0 of 0.
+      scoreControls: rows('POS.3').filter(r => num(r.Current) !== null && num(r.Max) > 0 && r.Current <= r.Max).map(r => {
+        const healthy = count(r.Healthy), unhealthy = count(r.Unhealthy)
+        const resources = healthy !== null && unhealthy !== null && healthy >= 0 && unhealthy >= 0 && healthy + unhealthy > 0 ? healthy + unhealthy : null
+        return { label: clean(r.Control), pct: pct(r.Current, r.Max), remaining: Number((r.Max - r.Current).toFixed(2)), healthy, unhealthy, resources }
+      }).sort((a, b) => b.remaining - a.remaining),
+      // How a classic score control earns points, from Microsoft's secure score page (dated Jun 30, 2026): within a
+      // subscription or connector, the current score is the score per resource (the maximum over the healthy and
+      // unhealthy resources) times the healthy resources, so a control gains points before it completes. POS.3 adds
+      // the points and the resource counts of each control across subscriptions, so with more than one subscription
+      // (or an unknown count) the page says the healthy share can differ from the share of points earned.
+      scoreControlBasis: `Defender for Cloud secure score provides a standardized view of assessed cloud security controls. Within each subscription, a control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources in that subscription, so points can be gained before a control completes.${(count(cloud?.Subscriptions) ?? m.subscriptions) === 1 ? '' : ' The points and resource counts shown for each control are added across subscriptions, so the share of resources healthy can differ from the share of points earned.'} Changes in the score may reflect remediation activity, changes to the evaluated resource population, or differences in the underlying scoring model. Atmosera evaluates the individual findings, the affected resources and the controls in force alongside the Microsoft-calculated score.`,
       scoreControlSource: source('POS.3'), telemetryTables: telemetry, rules: ruleTotal !== null ? { total: ruleTotal, enabled: ruleEnabled } : null
     }
 
@@ -1486,14 +1626,17 @@ thead th { background:var(--wash); color:var(--navy); }
       const parts = []
       if (mfa.boolean) parts.push(isInForce(mfa) ? `Conditional Access requires multifactor authentication for every user on every application.${mfaRatio ? ` ${pctText(mfaRatio.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied it.` : ''}` : `${mfaPolicy}${mfaRatio ? ` ${pctText(mfaRatio.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied multifactor authentication.` : ''}`)
       else if (mfa.pct !== null) parts.push(`${pctText(mfa.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied multifactor authentication${externalMfa > 0 ? ', including sign-ins where a federated identity provider supplied the multifactor claim' : ''}.${legacyMfaQuery && mfa.pct < 50 ? ' Multifactor authentication completed through a federated identity provider is confirmed in the review.' : ''}`)
+      // The split follows the share, and no deck row may cut it.
+      if (mfaSplit && mfa.pct !== null) parts.push(mfaSplitNarrative)
       if (isInForce(locControl)) parts.push('Conditional Access restricts sign-ins by location for every user.')
       const legacyBlockedInForce = isInForce(legacyControl)
       if (legacyBlockedInForce) parts.push('Legacy authentication is blocked.')
       if (advancedPhish) parts.push('An advanced anti-phishing policy protects every mailbox.')
       else if (basicPhish) parts.push('The Microsoft default anti-phishing policy covers every mailbox.')
-      const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', `Multifactor authentication covers ${measureText(mfa)} members at sign-in, ${remaining(mfa)}${legacyBlockedInForce ? ', and legacy protocols are blocked' : ''}`, 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')
-      const mfaMeasure = mfa.boolean ? (mfaRatio ? { ...mfa, good: mfaRatio.good, total: mfaRatio.total, pct: mfaRatio.pct, mark: mark(mfaRatio.pct), label: 'Users challenged for MFA at sign-in' } : null) : mfa.pct !== null ? { ...mfa, label: 'Users challenged for MFA at sign-in' } : null
-      pillar(G.identity, headline, parts.join(' ') || 'Sign-in telemetry was not available in this collection. Identity coverage is confirmed from the Entra admin center during the review.', mfaMeasure, m.mfaMethods && m.mfaMethods.resistant > 0 ? { value: fmt(m.mfaMethods.resistant), label: 'users already on phishing-resistant sign-in' } : null, mfa.pct !== null ? mfa.source : legacyBlockedInForce ? legacyControl.source : locControl.source)
+      const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', `Multifactor authentication covers ${measureText(mfa)} ${unevaluated !== null ? 'evaluated members' : 'members'} at sign-in, ${remaining(mfa)}${legacyBlockedInForce ? ', and legacy protocols are blocked' : ''}`, 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')
+      const mfaMeasureLabel = unevaluated !== null ? 'Evaluated members on MFA at sign-in' : 'Users challenged for MFA at sign-in'
+      const mfaMeasure = mfa.boolean ? (mfaRatio ? { ...mfa, good: mfaRatio.good, total: mfaRatio.total, pct: mfaRatio.pct, mark: mark(mfaRatio.pct), label: mfaMeasureLabel } : null) : mfa.pct !== null ? { ...mfa, label: mfaMeasureLabel } : null
+      pillar(G.identity, headline, parts.join(' ') || 'Sign-in telemetry was not available in this collection. Identity coverage is confirmed from the Entra admin center during the review.', mfaMeasure, m.mfaMethods && m.mfaMethods.resistant > 0 ? { value: fmt(m.mfaMethods.resistant), label: 'users already on phishing-resistant sign-in' } : null, mfa.pct !== null ? mfa.source : legacyBlockedInForce ? legacyControl.source : locControl.source, mfaSplit && mfa.pct !== null ? { keep: mfaSplitNarrative } : {})
     }
     {
       const parts = []
@@ -1514,11 +1657,11 @@ thead th { background:var(--wash); color:var(--navy); }
     {
       const parts = []
       if (boundaryCount !== null && windowValid) parts.push(boundaryCount > 0 ? `${plural(boundaryCount, 'boundary and egress detection was', 'boundary and egress detections were')} raised and triaged ${m.period.label}.` : `No boundary or egress detections were raised ${m.period.label}.`)
-      if (segmentation.pct !== null) parts.push(`${pctText(segmentation.pct)} of workload subnets have platform, firewall or segmented controls in place${segmentation.pct < E_THRESHOLD ? `, and ${fmt(segmentation.total - segmentation.good)} would benefit from added segmentation` : ''}.`)
+      if (segmentation.pct !== null) parts.push(`${pctText(segmentation.pct)} of workload subnets have a network control configured, a network security group or a firewall route${segmentation.pct < E_THRESHOLD ? `, and ${fmt(segmentation.total - segmentation.good)} have neither` : ''}. The rules themselves are not evaluated.`)
       if (https.pct !== null) parts.push(`${complete(https) ? 'Every published web app enforces HTTPS' : `${fmt(https.good)} of ${fmt(https.total)} published web apps enforce HTTPS`}.`)
       const lead = https.pct !== null ? https : segmentation
-      const headline = band(https, 'Encryption in transit enforced on every published service', `Encryption in transit enforced on ${measureText(https)} published web apps, ${remaining(https)}`, 'Encryption in transit enforced on most published services', 'Transport hardening is sequenced on the roadmap') || band(segmentation, 'Segmentation enforced across workload subnets', `Segmentation covers ${measureText(segmentation)} workload subnets, ${remaining(segmentation)}`, 'Segmentation covers most workload subnets', 'Segmentation is the network priority on the roadmap') || 'Boundary detections investigated to a documented disposition'
-      pillar(G.network, headline, parts.join(' ') || 'Network readings are completed in the review.', segmentation.pct !== null ? { ...segmentation, label: 'Workload subnets segmented' } : https, boundaryCount !== null ? { value: fmt(boundaryCount), label: 'boundary detections triaged' } : https.pct !== null ? { value: measureText(https), label: 'web apps enforcing HTTPS' } : null, lead.source)
+      const headline = band(https, 'Encryption in transit enforced on every published service', `Encryption in transit enforced on ${measureText(https)} published web apps, ${remaining(https)}`, 'Encryption in transit enforced on most published services', 'Transport hardening is sequenced on the roadmap') || band(segmentation, 'Every workload subnet has a network control configured', `A network control is configured on ${measureText(segmentation)} workload subnets, ${remaining(segmentation)}`, 'Most workload subnets have a network control configured', 'Segmentation is the network priority on the roadmap') || 'Boundary detections investigated to a documented disposition'
+      pillar(G.network, headline, parts.join(' ') || 'Network readings are completed in the review.', segmentation.pct !== null ? { ...segmentation, label: 'Workload subnets with a network control configured' } : https, boundaryCount !== null ? { value: fmt(boundaryCount), label: 'boundary detections triaged' } : https.pct !== null ? { value: measureText(https), label: 'web apps enforcing HTTPS' } : null, lead.source)
     }
     {
       const parts = []
@@ -1546,7 +1689,7 @@ thead th { background:var(--wash); color:var(--navy); }
         if (a.unclassified > 0) parts.push(`${plural(a.unclassified, 'closed alert carries', 'closed alerts carry')} no recorded classification.`)
       }
       if (m.response) parts.push(`High severity alerts closed at a median of ${m.response.median.value}.${m.response.median.belowFloor ? ` ${m.response.notes[0]}` : ''}`)
-      if (plan.pct !== null) parts.push(`Workload protection covers ${pctText(plan.pct)} of eligible resources.`)
+      if (plan.pct !== null) parts.push(`Standard workload protection plans cover an estimated ${pctText(plan.pct)} of eligible resources, a plan-level estimate from the subscription plan configuration.`)
       if (ruleControl.mark && ruleEnabled > 0) parts.push(`${fmt(ruleEnabled)} analytics rules are active${ti && count(ti.Indicators) > 0 ? ` alongside ${fmt(ti.Indicators)} threat intelligence indicators` : ''}.`)
       // The disposition statement says every alert, so it needs a complete DR.10 reading of every workspace and an
       // OUT.1 reading with no open alert and no unclassified closure. Open alerts at collection lead the
@@ -1564,11 +1707,11 @@ thead th { background:var(--wash); color:var(--navy); }
         : dispositionLed && complete(dispositions) && m.alerts.unclassified === 0 ? 'Every alert closed with a documented disposition'
         : dispositionLed ? `${measureText(dispositions)} alerts closed in the last 30 days carry a documented disposition`
         : `${plural(m.alerts.triaged, 'alert', 'alerts')} triaged ${m.period.label}`
-      const headline = disposition || band(plan, 'Workload protection covers the resource estate', `Workload protection covers ${measureText(plan)} eligible resources, ${remaining(plan)}`, 'Workload protection covers most of the resource estate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
+      const headline = disposition || band(plan, 'Workload protection plans cover the resource estate, a plan-level estimate', `Workload protection plans cover an estimated ${measureText(plan)} eligible resources, ${remaining(plan)}`, 'Workload protection plans cover most of the resource estate, a plan-level estimate', 'Workload protection scope is sequenced on the roadmap') || 'Detection coverage is confirmed in the review'
       // When DR.10 earns the statement the source line cites it beside OUT.1, so the statement traces to its evidence.
       // A reviewed open alert split in the narrative cites its record as well.
       const detectionSource = !m.alerts ? plan.source : [m.alerts.source, dispositionLed ? dispositions.source : '', m.alerts.openSplit ? m.alerts.openSplit.source : ''].filter(Boolean).join(' ')
-      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection' } : null, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, detectionSource)
+      pillar(G.detection, headline, parts.join(' ') || 'Detection readings are completed in the review.', plan.pct !== null ? { ...plan, label: 'Eligible resources with workload protection, plan-level estimate' } : null, m.response ? { value: m.response.median.value, label: `median time to close, ${m.response.scope === 'High' ? 'high severity alerts' : 'all alerts'}` } : m.alerts ? { value: fmt(m.alerts.triaged), label: 'alerts triaged' } : null, detectionSource)
     }
 
     // Executive summary tiles and tiers.
@@ -1612,12 +1755,14 @@ thead th { background:var(--wash); color:var(--navy); }
     const measuredIn = tier => m.controls.filter(c => c.tier === tier && c.measured !== false && c.pct !== null)
     m.tierSummary = Object.fromEntries([['foundational', TIERS.foundational], ['defense', TIERS.defense]].map(([tier, label]) => {
       const items = measuredIn(tier)
-      return [tier, { label, enforced: items.filter(c => c.mark === 'E').length, measured: items.length, total: m.controls.filter(c => c.tier === tier).length }]
+      return [tier, { label, enforced: items.filter(c => c.mark === 'E').length, measured: items.length, small: items.filter(c => c.smallSample).length, total: m.controls.filter(c => c.tier === tier).length }]
     }))
     const drift = measuredIn('foundational').filter(c => c.mark !== 'E')
     if (drift.length) presenter('Foundational controls below E', `${plural(drift.length, 'foundational control reads', 'foundational controls read')} below E: ${list(drift.map(c => `${c.label} (${c.id}, ${c.boolean ? c.value.toLowerCase() + (c.ratioText ? ', ' + c.ratioText : '') : pctText(c.pct)})`))}. The controls baseline expects every foundational control at E at each review, so have a fix date ready for each rather than carrying them on the roadmap. The evidence shows the current reading only, not whether a control was ever enforced before, so say below the baseline, never regressed.`)
-    if (m.tierSummary.foundational.measured) row('controls', 'Foundational controls enforced', `${fmt(m.tierSummary.foundational.enforced)} of ${fmt(m.tierSummary.foundational.measured)}`, 'TIER.FOUNDATIONAL')
-    if (m.tierSummary.defense.measured) row('controls', 'Defense in depth controls enforced', `${fmt(m.tierSummary.defense.enforced)} of ${fmt(m.tierSummary.defense.measured)}`, 'TIER.DEFENSE')
+    // A tier count that holds a control on a small sample names it beside the total (issue #24).
+    const tierRow = (tier, label, id) => { const t = m.tierSummary[tier]; if (!t.measured) return; row('controls', label, `${fmt(t.enforced)} of ${fmt(t.measured)}`, id); if (t.small) m.tiers.controls[m.tiers.controls.length - 1].note = smallSampleText(t.small) }
+    tierRow('foundational', 'Foundational controls enforced', 'TIER.FOUNDATIONAL')
+    tierRow('defense', 'Defense in depth controls enforced', 'TIER.DEFENSE')
     const tierOrder = { E: 0, P: 1, N: 2 }
     for (const c of [mfa, edr, plan, antimalware, vaControl, transfer, softDelete, https, ruleControl, sensors, backup, segmentation].filter(c => c && c.pct !== null).sort((a, b) => tierOrder[a.mark] - tierOrder[b.mark])) {
       if (m.tiers.controls.length >= 6) break
@@ -1649,7 +1794,7 @@ thead th { background:var(--wash); color:var(--navy); }
     }
     return m
   }
-  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced' }
+  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, MIN_SAMPLE, smallSampleText, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced' }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.EbrReport = api
 })(typeof globalThis !== 'undefined' ? globalThis : this)

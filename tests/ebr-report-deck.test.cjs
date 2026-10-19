@@ -969,3 +969,38 @@ test('the alert volume chart carries the workspace coverage line when it varies,
   assert.ok(dcap.h >= Math.round(lines(dline, (require('../report/deck-common.cjs').CW - 0.5) / 2 - 0.1, 10) * 0.17 * EMU), 'the box holds every wrapped line')
   assert.ok(dchart.h >= Math.round(0.9 * EMU), `the chart keeps ${(dchart.h / EMU).toFixed(2)} in`)
 })
+test('workload protection reads as a plan-level estimate and subnets as configured on every slide and note (issue #26)', async () => {
+  const p = pack('detailed')
+  p.manifest.push({ ResultId: 'DR.2', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-08T10:00:00Z' }, { ResultId: 'NB.1', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-08T10:00:00Z' })
+  Object.assign(p.results, { 'DR.2': [{ Plan: 'VirtualMachines', ResourceType: 'microsoft.compute/virtualmachines', Resources: 40, Covered: 35 }], 'NB.1': [{ WorkloadSubnets: 30, Segmented: 20 }] })
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-deck-')), dataFile = path.join(dir, 'data.json'), out = path.join(dir, 'deck.pptx')
+  fs.writeFileSync(dataFile, JSON.stringify(p))
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-report-deck.cjs'), dataFile, out])
+  const { slides, notes } = await read(out)
+  const all = [...slides, ...notes]
+  assert.ok(slides.some(t => t.includes('Cloud workload protection plan coverage, a plan-level estimate')), 'the register row names the estimate')
+  assert.ok(notes.some(t => /Standard workload protection plans cover an estimated 87\.5% of eligible resources, a plan-level estimate/.test(t)), 'the pillar narrative names the estimate')
+  for (const t of all) for (const hit of t.match(/[^.]*[Ww]orkload protection (plans )?covers?[^.]*/g) || []) assert.match(hit, /estimate/, hit)
+  assert.ok(!all.some(t => /subnets segmented|Segmentation covers|Workload subnets protected|scanning on mail|across the resource estate/.test(t)), 'no outcome wording for configuration presence')
+})
+test('the controls standard cards for the configuration-presence controls hold their label and note (issue #26)', async () => {
+  // The builder sizes every card on a page to the fullest one, capped by the space on the slide, so a note that
+  // outgrows the cap runs past its card. The same estimate the builder uses must fit the text box it was given.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-standard-')), out = path.join(dir, 'standard.pptx')
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'report', 'build-controls-deck.cjs'), out])
+  const zip = await JSZip.loadAsync(fs.readFileSync(out))
+  const xml = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).join('\n')
+  const m = build({ parameters: { ClientName: 'MXDR controls standard' }, manifest: [], results: {}, standard: true })
+  const EMU = 914400
+  const ids = ['NB.1', 'DR.2', 'DP.3', 'IA.9-SAFELINKS', 'IA.9-SAFEATTACH']
+  for (const id of ids) {
+    const c = m.controls.find(x => x.source.includes(id) && (id !== 'NB.1' || /^Workload subnets/.test(x.label)) && (id !== 'DR.2' || /^Cloud workload/.test(x.label)))
+    assert.ok(c, id)
+    const name = c.label.replace(/&/g, '&amp;')
+    const box = [...xml.matchAll(/name="[A-Z]\d+ ([^"]+)"[\s\S]*?<a:ext cx="(\d+)" cy="(\d+)"\/>/g)].find(x => x[1] === name)
+    assert.ok(box, `${c.label} has a card`)
+    const w = Number(box[2]) / EMU, h = Number(box[3]) / EMU
+    const textH = lines(c.label, w, 14, true) * 0.245 + 0.08 + lines(c.note, w, 12) * 0.2
+    assert.ok(textH + 0.1 <= h + 1e-6, `${c.label}: needs ${textH.toFixed(2)} in, card text box ${h.toFixed(2)} in`)
+  }
+})

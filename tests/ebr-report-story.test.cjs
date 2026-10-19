@@ -539,3 +539,82 @@ test('backup coverage under half of a weighty estate adds a no-cost validation i
   assert.equal(itemsOf(checked.s, 'backup')[0].action, null)
   assert.ok(!/\b(scheduled|approved|in progress|verified)\b/i.test(itemsOf(checked.s, 'backup')[0].evidence))
 })
+// Configuration-presence controls (Oct 18, 2026, issue #26): the labels state the configuration the check reads,
+// and the story, roadmap and deck still find each control by its label.
+test('the configuration-presence controls keep their short name, tier, roadmap item and matrix unit under the new labels', () => {
+  const p = quarterPack()
+  p.manifest.push({ ResultId: 'DR.2', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' }, { ResultId: 'DP.3', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' }, { ResultId: 'IA.9-SAFELINKS', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' }, { ResultId: 'IA.9-SAFEATTACH', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' })
+  Object.assign(p.results, {
+    'DR.2': [{ Plan: 'VirtualMachines', ResourceType: 'microsoft.compute/virtualmachines', Resources: 40, Covered: 35 }],
+    'DP.3': [{ EncryptionType: 'EncryptionAtRestWithPlatformKey', Disks: 60 }],
+    'IA.9-SAFELINKS': [{ Name: 'Standard', EnableSafeLinksForEmail: true, EnableSafeLinksForTeams: true, EnableSafeLinksForOffice: true }],
+    'IA.9-SAFEATTACH': [{ Name: 'Standard', Enable: true, Action: 'Block' }]
+  })
+  const { m, s } = story(p)
+  const { shortName } = require('../report/report-story.js')
+  const expected = [
+    ['NB.1', 'Workload subnets with a network security group or firewall route', 'defense', 'subnet segmentation', 'segment'],
+    ['DR.2', 'Cloud workload protection plan coverage, a plan-level estimate', 'foundational', 'workload protection', 'workload'],
+    ['DP.3', 'Managed disks encrypted at rest', 'foundational', 'disk encryption at rest', null],
+    ['IA.9-SAFELINKS', 'Safe Links policy set for mail, Teams and Office', 'foundational', 'Safe Links', null],
+    ['IA.9-SAFEATTACH', 'Safe Attachments policy set to block or replace malicious files', 'foundational', 'Safe Attachments', null]
+  ]
+  for (const [id, label, tier, name, item] of expected) {
+    const c = m.controls.find(x => x.source.includes(id) && x.label === label)
+    assert.ok(c, `${id} reads "${label}"`)
+    assert.equal(c.tier, tier, label)
+    assert.equal(shortName(c), name, label)
+    if (item) assert.equal(CATALOG.find(e => e.match.test(label)).key, item, label)
+  }
+  // The notes say what the check does not read.
+  const note = id => m.controls.find(x => x.source.includes(id)).note
+  assert.match(note('NB.1'), /The rules and the traffic they permit are not evaluated\./)
+  assert.match(note('DR.2'), /a plan-level estimate read from the subscription plan configuration/)
+  assert.match(note('DP.3'), /^Platform keys, the Azure default, or customer managed keys\. Encryption at host is graded separately\.$/)
+  assert.match(note('IA.9-SAFELINKS'), /^Reads In force when one policy has all three on\. Recipients, exceptions and rule state are not read\.$/)
+  assert.match(note('IA.9-SAFEATTACH'), /^Read from any one enabled policy\. Scope and exceptions are not read\.$/)
+  // Below E, NB.1 lands on the segmentation item in Later and DR.2 is foundational drift in Now.
+  const segment = s.roadmap.flatMap(h => h.items).find(i => i.key === 'segment')
+  assert.ok(segment.controls.some(c => c.label === expected[0][1]), 'NB.1 is on the segmentation item')
+  assert.ok(s.roadmap.find(h => h.key === 'now').items[0].controls.some(c => c.label === expected[1][1]), 'DR.2 is drift in Now')
+  // The network matrix unit and the network narrative state the configuration, not segmentation achieved.
+  const network = s.matrix.find(r => r.group === 'Network and boundary')
+  assert.match(network.measure, /14 of 36 subnets with a network control/)
+  const text = JSON.stringify([m.pillars, s.matrix, s.wins, s.takeaways])
+  assert.ok(!/subnets segmented|segmented controls|Workload subnets protected|scanning on mail|across the resource estate/i.test(text), text)
+  assert.match(m.pillars.find(x => x.name === 'Network and boundary').narrative, /38\.9% of workload subnets have a network control configured, a network security group or a firewall route, and 22 have neither\. The rules themselves are not evaluated\./)
+  const detection = m.pillars.find(x => x.name === 'Detection and response')
+  assert.match(detection.narrative, /Standard workload protection plans cover an estimated 87\.5% of eligible resources, a plan-level estimate from the subscription plan configuration\./)
+})
+test('managed disk encryption at rest is never a win, even as the only weighty data protection control at E', () => {
+  const p = quarterPack()
+  p.manifest = p.manifest.filter(r => r.ResultId !== 'DP.7'); delete p.results['DP.7'] // no post-delivery removal to win on
+  p.manifest.push({ ResultId: 'DP.3', Status: 'OK', Rows: 1, ReadTimeUtc: '2026-10-12T10:00:00Z' })
+  p.results['DP.3'] = [{ EncryptionType: 'EncryptionAtRestWithPlatformKey', Disks: 60 }]
+  const m = build(p)
+  const disks = m.controls.find(c => c.source.includes('DP.3'))
+  assert.equal(disks.mark, 'E'); assert.ok(!disks.smallSample && disks.total >= 10, 'a weighty sample')
+  // Every other control reads below E, so DP.3 is the only control a win could take.
+  for (const c of m.controls) if (c !== disks) Object.assign(c, { mark: 'N', pct: 10, good: 1, total: 10, measured: true, na: false, value: '1 of 10', boolean: false })
+  for (const s of [buildStory(m, p), story(p).s]) {
+    assert.ok(!s.wins.some(w => w.source === disks.source || /disk/i.test(w.label)), JSON.stringify(s.wins))
+    assert.ok(!s.wins.some(w => w.area === 'data'), 'no data protection win without post-delivery removal')
+    assert.ok(!s.summaryWins.some(w => /disk/i.test(w.label)), JSON.stringify(s.summaryWins))
+  }
+})
+test('the wins line counts the wins shown and never claims one from each part of the service', () => {
+  // Codex review on PR #63: with DP.3 out of the wins, a pack without post-delivery removal has no data win, so the
+  // line cannot say each part of the service is represented.
+  const full = story(quarterPack()).s
+  assert.equal(full.takeaways.wins, `Six outcomes from ${build(quarterPack()).period.label}, each from a different part of the service and traced to collected evidence.`)
+  const p = quarterPack()
+  p.manifest = p.manifest.filter(r => r.ResultId !== 'DP.7'); delete p.results['DP.7']
+  const noData = story(p).s
+  assert.ok(!noData.wins.some(w => w.area === 'data'))
+  assert.match(noData.takeaways.wins, new RegExp(`^${['One', 'Two', 'Three', 'Four', 'Five'][noData.wins.length - 1]} outcomes? from `))
+  const empty = { parameters: { ClientName: 'x', WindowStart: '2026-07-01', WindowEnd: '2026-09-30', PostureReadDate: '2026-10-12' }, manifest: [], results: {}, context: null }
+  const none = story(empty).s
+  assert.equal(none.wins.length, 0)
+  assert.equal(none.takeaways.wins, 'No outcome from Jul 1 to Sep 30, 2026 qualifies as a win in the collected evidence.')
+  for (const s of [full, noData, none]) assert.ok(!/one from each part|No outcomes/.test(s.takeaways.wins), s.takeaways.wins)
+})
