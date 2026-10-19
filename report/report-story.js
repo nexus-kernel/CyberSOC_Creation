@@ -331,7 +331,9 @@
     const parts = [lead, gain ? `secure score rose ${fmt(gain.points)} points` : null, !lead && s.foundational.measured && s.foundational.enforced === s.foundational.measured ? 'every measured foundational control is enforced' : null].filter(Boolean)
     s.takeaways = {
       summary: parts.length ? `${sentence(parts.join(', and '))}.` : m.alerts ? `${fmt(m.alerts.triaged)} alerts triaged ${s.periodPhrase}.` : 'Readings are completed in the review.',
-      wins: `${sentence(word(s.wins.length))} ${s.wins.length === 1 ? 'outcome' : 'outcomes'} ${m.period.valid ? `from ${m.period.label}` : ''}, one from each part of the service, each traced to collected evidence.`.replace(/\s+,/, ','),
+      // At most one win per area, and an area with no qualifying reading has none, so the line counts what is shown
+      // and never says every part of the service is represented (Oct 19, 2026, issue #26).
+      wins: (() => { const from = m.period.valid ? ` from ${m.period.label}` : ''; const n = s.wins.length; return !n ? `No outcome${from} qualifies as a win in the collected evidence.` : n === 1 ? `One outcome${from}, traced to collected evidence.` : `${sentence(word(n))} outcomes${from}, each from a different part of the service and traced to collected evidence.` })(),
       operations: m.alerts ? `${fmt(m.alerts.triaged)} alerts triaged ${s.periodPhrase}.${s.speed ? ` ${s.speed.line}` : ''}` : 'Alert readings are completed in the review.',
       // The threats slide is built whenever the pack has true positives, with or without an examples table, so
       // the takeaway needs no examples either.

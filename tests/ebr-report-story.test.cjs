@@ -602,3 +602,19 @@ test('managed disk encryption at rest is never a win, even as the only weighty d
     assert.ok(!s.summaryWins.some(w => /disk/i.test(w.label)), JSON.stringify(s.summaryWins))
   }
 })
+test('the wins line counts the wins shown and never claims one from each part of the service', () => {
+  // Codex review on PR #63: with DP.3 out of the wins, a pack without post-delivery removal has no data win, so the
+  // line cannot say each part of the service is represented.
+  const full = story(quarterPack()).s
+  assert.equal(full.takeaways.wins, `Six outcomes from ${build(quarterPack()).period.label}, each from a different part of the service and traced to collected evidence.`)
+  const p = quarterPack()
+  p.manifest = p.manifest.filter(r => r.ResultId !== 'DP.7'); delete p.results['DP.7']
+  const noData = story(p).s
+  assert.ok(!noData.wins.some(w => w.area === 'data'))
+  assert.match(noData.takeaways.wins, new RegExp(`^${['One', 'Two', 'Three', 'Four', 'Five'][noData.wins.length - 1]} outcomes? from `))
+  const empty = { parameters: { ClientName: 'x', WindowStart: '2026-07-01', WindowEnd: '2026-09-30', PostureReadDate: '2026-10-12' }, manifest: [], results: {}, context: null }
+  const none = story(empty).s
+  assert.equal(none.wins.length, 0)
+  assert.equal(none.takeaways.wins, 'No outcome from Jul 1 to Sep 30, 2026 qualifies as a win in the collected evidence.')
+  for (const s of [full, noData, none]) assert.ok(!/one from each part|No outcomes/.test(s.takeaways.wins), s.takeaways.wins)
+})
