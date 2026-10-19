@@ -262,9 +262,13 @@ in the pack (`results/<ID>.csv`).
 - CyberSOC collector 1.1.0 (October 19, 2026): the per-resource lists the hardening change requests read
   (`New-CyberSocChangeRequests.ps1`). `P0.7` names each subscription. `NB.4-DETAIL`, `NB.5-DETAIL`, `NB.6-DETAIL`,
   `DP.1-DETAIL` and `DP.2-DETAIL` list the sites, servers, storage accounts and vaults that NB.4, NB.5, NB.6, DP.1 and
-  DP.2 count as gaps, read the same way, and `DR.6-NONCOMPLIANT` the resources DR.6-INITIATIVE counts as NonCompliant
-  with the policies each one fails. The report embeds counts only. The queries are in section 6 of the CyberSOC
-  Monthly Report Runbook.
+  DP.2 count as gaps, read the same way. `DR.6-COVERAGE` counts the ATMO-MXDR policy states in each subscription, so
+  a subscription without the initiative is found, and `DR.6-NONCOMPLIANT` lists the resources DR.6-INITIATIVE counts
+  as NonCompliant with the assignment and the policies each one fails. `DP.4-ELIGIBILITY` (engine COMPUTE-SKUS) lists the virtual
+  machines without encryption at host and whether each can take it: Azure Disk Encryption is read from the disks and
+  extensions in Resource Graph, and size support from the Compute resource SKUs API, one GET per subscription and
+  region (Reader is enough). The report embeds counts only. The queries are in section 6 of the CyberSOC Monthly
+  Report Runbook.
 - Managed resource group exclusion on every query that names a resource (collector 1.9.0). Before 1.9.0 only the ARG property queries carried it, so Defender devices, backup items, policy states, Defender for Cloud alerts and recommendation snapshots from `aznativesol0` were still counted.
 
 ## The reporting window

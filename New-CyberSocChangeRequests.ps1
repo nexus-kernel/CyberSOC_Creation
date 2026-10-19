@@ -4,7 +4,8 @@
 .DESCRIPTION
     Offline only. Reads the manifest, parameters and the per-resource hardening results of a finished
     pack and writes one change request for each hardening item that still has resources to fix, laid
-    out on the change request template: diagnostic logging through the ATMO-MXDR-DIAG-TOSENT initiative,
+    out on the change request template: diagnostic logging through the ATMO-MXDR-DIAG-TOSENT initiative
+    (assigned where it is missing, and remediated where resources are not compliant),
     secure transfer and minimum TLS 1.2 on storage accounts, minimum TLS 1.2 on App Service and Azure
     SQL, and Key Vault purge protection. The changes that need the client first (anonymous blob access,
     HTTPS only on App Service and encryption at host) also get a client email, drafted and ready to send.
@@ -23,6 +24,9 @@
 .PARAMETER SentinelWorkspace
     The workspace the diagnostic logging initiative sends to. Defaults to the workspace in the pack
     when it holds exactly one.
+.PARAMETER ManagementGroup
+    The client management group to assign the diagnostic logging initiative at, once. Without it the
+    change assigns the initiative at each subscription in the pack.
 .PARAMETER ClientContact
     The name the client emails open with. Without it they open with Hello.
 .PARAMETER SenderName
@@ -32,8 +36,8 @@
 .EXAMPLE
     ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000 -DrClient -ClientContact 'Dana' -SenderName 'Scott'
 .NOTES
-    The per-resource results (P0.7, NB.4-DETAIL, NB.5-DETAIL, NB.6-DETAIL, DP.1-DETAIL, DP.2-DETAIL and
-    DR.6-NONCOMPLIANT) were added in CyberSOC collector 1.1.0. Changes that read them say "needs
+    The per-resource results (P0.7, NB.4-DETAIL, NB.5-DETAIL, NB.6-DETAIL, DP.1-DETAIL, DP.2-DETAIL,
+    DP.4-ELIGIBILITY, DR.6-COVERAGE and DR.6-NONCOMPLIANT) were added in CyberSOC collector 1.1.0. Changes that read them say "needs
     recollection" on packs collected with an earlier version.
 #>
 #Requires -Version 5.1
@@ -43,6 +47,7 @@ param(
     [string]$OutputPath,
     [switch]$DrClient,
     [string]$SentinelWorkspace,
+    [string]$ManagementGroup,
     [string]$ClientContact,
     [string]$SenderName
 )
@@ -58,51 +63,57 @@ $parameters = Get-Content -LiteralPath (Join-Path $pack '00-parameters.json') -R
 $manifest = @(Import-Csv -LiteralPath (Join-Path $pack '00-manifest.csv'))
 $inv = [cultureinfo]::InvariantCulture
 # The CyberSOC collector that added the per-resource results, for the needs recollection status.
-$detailIds = 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DR.6-NONCOMPLIANT'
+$detailIds = 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DP.4-ELIGIBILITY', 'DR.6-COVERAGE', 'DR.6-NONCOMPLIANT'
 $needsRecollection = 'Needs recollection with CyberSOC collector 1.1.0 or later'
 
 function Get-Text($value) { if ($null -eq $value) { '' } else { ([string]$value).Trim() } }
 function Test-True($value) { $v = Get-Text $value; $v -eq '1' -or $v -ieq 'true' }
 function Get-Number($value) { $n = 0; if ([int]::TryParse((Get-Text $value), [ref]$n)) { $n } else { 0 } }
-function Get-Status([string]$id) {
-    $row = $manifest | Where-Object ResultId -eq $id | Select-Object -First 1
-    if ($null -eq $row) { 'MISSING' } else { [string]$row.Status }
-}
-function Get-Rows([string]$id) {
+$statusById = @{}
+foreach ($row in $manifest) { $id = [string]$row.ResultId; if ($id -and -not $statusById.ContainsKey($id)) { $statusById[$id] = [string]$row.Status } }
+function Get-Status([string]$id) { if ($statusById.ContainsKey($id)) { $statusById[$id] } else { 'MISSING' } }
+# Each result file is parsed once. Parenthesised, so Windows PowerShell 5.1 enumerates the array that
+# ConvertFrom-Json returns as one object, as PowerShell 7 does.
+$resultCache = @{}
+function Read-Result([string]$id) {
+    if ($resultCache.ContainsKey($id)) { return $resultCache[$id] }
+    $entry = @{ Rows = @(); Unreadable = $false }
     $file = Join-Path $pack "results/$id.json"
-    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return @() }
-    try { return @(Get-Content -LiteralPath $file -Raw | ConvertFrom-Json | Where-Object { $null -ne $_ }) }
-    catch { Write-Warning "$id could not be read. Regenerate or recollect this result."; return @() }
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { $entry.Unreadable = $true }
+    else {
+        try {
+            $raw = Get-Content -LiteralPath $file -Raw
+            if ([string]::IsNullOrWhiteSpace($raw)) { $entry.Unreadable = $true }
+            else { $entry.Rows = @(($raw | ConvertFrom-Json) | Where-Object { $null -ne $_ }) }
+        }
+        catch { $entry.Unreadable = $true }
+    }
+    if ($entry.Unreadable -and (Get-Status $id) -in 'OK', 'PARTIAL') { Write-Warning "$id could not be read. Recollect or restore this result." }
+    $resultCache[$id] = $entry
+    $entry
 }
+function Get-Rows([string]$id) { (Read-Result $id).Rows }
 # A result the manifest reads as OK or PARTIAL needs a file that parses, or a damaged pack would read
 # as no gaps found and leave a change out without saying so.
-function Test-Unreadable([string]$id) {
-    if ((Get-Status $id) -notin 'OK', 'PARTIAL') { return $false }
-    $file = Join-Path $pack "results/$id.json"
-    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $true }
-    try {
-        $raw = Get-Content -LiteralPath $file -Raw
-        if ([string]::IsNullOrWhiteSpace($raw)) { return $true }
-        $null = $raw | ConvertFrom-Json
-        $false
-    }
-    catch { $true }
-}
+function Test-Unreadable([string]$id) { (Get-Status $id) -in 'OK', 'PARTIAL' -and (Read-Result $id).Unreadable }
 function Get-UnreadableState([string[]]$ids) { 'Result file unreadable ({0}), recollect or restore the pack' -f ($ids -join ', ') }
 
 # Copy rules: no semicolons, arrows, emoji or angle brackets, and the greater-than sign only in a
 # navigation step such as Settings > Configuration. Values read from the pack are cleaned first, and
 # every file is checked before it is written, so a rule broken by the text below stops the run.
+# The cleaner removes every character the check rejects, so a value read from the pack never stops the run.
+$arrowCharacters = '\u2190-\u21FF\u27F0-\u27FF\u2900-\u297F\u2B00-\u2BFF\u25B6\u25BA'
+$emojiCharacters = '\u2600-\u27BF\uD800-\uDFFF'
 function ConvertTo-CopyText($value) {
     $v = (Get-Text $value) -replace ';', ',' -replace '[<>]', ' '
-    $v = $v -replace '[\u2190-\u21FF\u27F0-\u27FF\u2900-\u297F\u2B00-\u2BFF\u2600-\u27BF\uD800-\uDFFF]', ''
+    $v = $v -replace ('[' + $arrowCharacters + $emojiCharacters + ']'), ''
     ($v -replace '\s+', ' ').Trim()
 }
 function Assert-CopyRules([string]$Text, [string]$Label) {
     $broken = @(
         if ($Text -match ';') { 'a semicolon' }
-        if ($Text -match '[\u2190-\u21FF\u27F0-\u27FF\u2900-\u297F\u2B00-\u2BFF\u25B6\u25BA]|->|=>') { 'an arrow' }
-        if ($Text -match '[\u2600-\u27BF\uD800-\uDFFF]') { 'an emoji' }
+        if ($Text -match ('[' + $arrowCharacters + ']|->|=>')) { 'an arrow' }
+        if ($Text -match ('[' + $emojiCharacters + ']')) { 'an emoji' }
         if ($Text -match '<') { 'an angle bracket' }
         if (($Text -replace '[A-Za-z0-9)] > [A-Za-z]', '') -match '>') { 'a greater-than sign outside a navigation step' }
     )
@@ -127,17 +138,17 @@ function Add-RepeatStep($steps, [int]$n, [int]$from, [string]$nouns) {
 $client = ConvertTo-CopyText $parameters.ClientName
 $subscriptionNames = @{}
 foreach ($s in @(Get-Rows 'P0.7')) {
-    $id = (Get-Text $s.subscriptionId).ToLowerInvariant()
+    $id = (ConvertTo-CopyText $s.subscriptionId).ToLowerInvariant()
     if ($id) { $subscriptionNames[$id] = ConvertTo-CopyText $s.SubscriptionName }
 }
 function Format-Subscription([string]$id) {
-    $key = (Get-Text $id).ToLowerInvariant()
+    $key = (ConvertTo-CopyText $id).ToLowerInvariant()
     if ($subscriptionNames[$key]) { '{0} ({1})' -f $subscriptionNames[$key], $key } else { $key }
 }
 function New-Resource([string]$Name, [string]$ResourceGroup, [string]$SubscriptionId, [string]$Setting, [string]$ResourceId) {
     [pscustomobject]@{
         Name = ConvertTo-CopyText $Name; ResourceGroup = ConvertTo-CopyText $ResourceGroup
-        SubscriptionId = (Get-Text $SubscriptionId).ToLowerInvariant(); Setting = ConvertTo-CopyText $Setting; ResourceId = Get-Text $ResourceId
+        SubscriptionId = (ConvertTo-CopyText $SubscriptionId).ToLowerInvariant(); Setting = ConvertTo-CopyText $Setting; ResourceId = Get-Text $ResourceId
     }
 }
 # Resources grouped by subscription, one bullet each with its resource group and current setting.
@@ -165,6 +176,7 @@ function Format-TlsVersion($value) {
 $workspaces = @($parameters.Workspaces | Where-Object { $_ })
 $workspaceName = if ($SentinelWorkspace) { ConvertTo-CopyText $SentinelWorkspace } elseif ($workspaces.Count -eq 1) { ConvertTo-CopyText $workspaces[0].Name } else { '' }
 $workspace = if ($workspaceName) { "the Sentinel workspace $workspaceName" } else { 'the client Sentinel workspace' }
+$managementGroup = ConvertTo-CopyText $ManagementGroup
 $standardMitigation = 'If changes need to be reverted, follow the rollback plan.'
 $drImpact = if ($DrClient) { 'N/A - No DR impact' } else { 'Not a DR Client' }
 $drPlan = if ($DrClient) { 'No updates to the DR Playbook are required.' } else { 'Not a DR Client. No updates to the DR Playbook are required.' }
@@ -254,26 +266,54 @@ $diagnosticReferences = @(
     , @('Create diagnostic settings at scale using Azure Policy', 'https://learn.microsoft.com/azure/azure-monitor/platform/diagnostics-settings-policies-deployifnotexists')
 )
 
-function New-DiagnosticAssignment {
-    $subscriptions = @($parameters.Subscriptions | ForEach-Object { (Get-Text $_).ToLowerInvariant() } | Where-Object { $_ })
+# Assigns the initiative at the subscriptions given. Covered is true when other subscriptions in the pack
+# already have it, and then each subscription gets its own assignment, since one at the management
+# group would overlap theirs.
+function New-DiagnosticAssignment([string[]]$Subscriptions, [bool]$Covered) {
+    $subscriptions = @($Subscriptions)
+    $n = $subscriptions.Count
+    $atGroup = $managementGroup -and -not $Covered
+    # The estate inventory (P0.5) counts each covered type. Without it, or in the older shape without
+    # resource types, every covered type is listed without a count.
+    $inventory = @(if ((Get-Status 'P0.5') -in 'OK', 'PARTIAL', 'EMPTY' -and -not (Test-Unreadable 'P0.5')) { Get-Rows 'P0.5' })
+    $counted = (Get-Status 'P0.5') -eq 'EMPTY' -or ($inventory.Count -and $inventory[0].PSObject.Properties.Name -contains 'ResourceType')
     $counts = [ordered]@{}
-    foreach ($row in @(Get-Rows 'P0.5')) {
-        $type = (Get-Text $row.ResourceType).ToLowerInvariant()
-        if ($diagnosticTypes.Contains($type)) { $counts[$type] = [int]$counts[$type] + (Get-Number $row.Resources) }
+    if ($counted) {
+        foreach ($row in $inventory) {
+            $type = (Get-Text $row.ResourceType).ToLowerInvariant()
+            if ($diagnosticTypes.Contains($type)) { $counts[$type] = [int]$counts[$type] + (Get-Number $row.Resources) }
+        }
     }
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add('Subscriptions:')
     foreach ($s in $subscriptions) { $lines.Add('- ' + (Format-Subscription $s)) }
     $lines.Add(''); $lines.Add('Resource types the initiative covers:')
-    # With the estate inventory (P0.5) only the types present are listed, with their counts.
     foreach ($type in $diagnosticTypes.Keys) {
-        if ($counts.Count -and -not $counts[$type]) { continue }
-        $lines.Add('- ' + $diagnosticTypes[$type][1] + $(if ($counts.Count) { ': ' + $counts[$type] } else { '' }))
+        if ($counted -and -not $counts[$type]) { continue }
+        $lines.Add('- ' + $diagnosticTypes[$type][1] + $(if ($counted) { ': ' + $counts[$type] } else { '' }))
     }
-    $lines.Add('- Subscription Activity Log: ' + $subscriptions.Count)
+    $lines.Add('- Subscription Activity Log: ' + $n)
     $lines.Add(''); $lines.Add("Destination: $workspace")
-    $intro = 'The initiative is assigned at the client top management group, or at each subscription below when there is no management group, and covers the resource types listed{0}.' -f $(if ($counts.Count) { ' with their current counts' } else { '' })
-    @{ Cr = New-ChangeRequest @{
+    $countWords = if ($counted) { ' with their current counts' } else { '' }
+    # An assignment has one scope: the management group when one is named, otherwise each subscription.
+    $impl = [System.Collections.Generic.List[object]]::new()
+    $impl.Add('In the Azure portal, go to Policy > Authoring > Definitions and open the ATMO-MXDR-DIAG-TOSENT initiative.')
+    $impl.Add('Select Assign initiative.')
+    if ($atGroup) {
+        $intro = "The initiative is assigned once at the management group $managementGroup, which holds the subscriptions below, and covers the resource types listed$countWords."
+        $impl.Add("On the Basics tab, set Scope to the management group $managementGroup and name the assignment ATMO-MXDR-DIAG-TOSENT.")
+    }
+    else {
+        $intro = 'The initiative is assigned at {0}{1} and covers the resource types listed{2}.' -f (Get-Pick $n 'the subscription below' 'each subscription below'), $(if ($Covered) { Get-Pick $n ', which has no ATMO-MXDR policy state yet,' ', which have no ATMO-MXDR policy state yet,' } else { '' }), $countWords
+        $impl.Add(('On the Basics tab, set Scope to the {0} listed in the RESOURCES section and name the assignment ATMO-MXDR-DIAG-TOSENT.' -f (Get-Pick $n 'subscription' 'first subscription')))
+    }
+    $impl.Add("On the Parameters tab, set the Log Analytics workspace to $workspace.")
+    $impl.Add('On the Remediation tab, set the managed identity type to User assigned managed identity and select ATMO-MXDR-DIAG-MI.')
+    $impl.Add('Select Review + create > Create.')
+    if (-not $atGroup) { Add-RepeatStep $impl $n 1 'subscription' }
+    $each = if ($atGroup -or $n -eq 1) { 'the ATMO-MXDR-DIAG-TOSENT assignment' } else { 'each ATMO-MXDR-DIAG-TOSENT assignment' }
+    $impl.Add("Once the first compliance scan completes, go to Policy > Remediation, select the Policies to remediate tab, and for $each create a remediation task for each policy in the initiative.")
+    @{ Used = @('P0.5'); Cr = New-ChangeRequest @{
             Number = 1; Key = 'diagnostic-logging'; Title = 'Deploy the ATMO-MXDR diagnostic logging initiative'
             Description = "Assign the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative and run its remediation tasks, so the audit logs of supported Azure resources are sent to $workspace."
             Purpose = 'The initiative keeps audit logging in place on every supported resource, including resources created later. Sending these logs to Sentinel gives the SOC the telemetry it needs to detect and investigate activity on them.'
@@ -281,49 +321,60 @@ function New-DiagnosticAssignment {
             Availability = 'No impact, since the Azure platform applies diagnostic settings without touching the running workloads.'
             UserExperience = 'No change for users or applications.'
             Dependencies = 'Relies on the ATMO-MXDR-DIAG-MI managed identity and adds a small amount of audit log ingestion to the Sentinel workspace.'
-            Implementation = @(
-                'In the Azure portal, go to Policy > Authoring > Definitions and open the ATMO-MXDR-DIAG-TOSENT initiative.'
-                'Select Assign initiative.'
-                'On the Basics tab, set Scope to the client top management group, or to each subscription listed in the RESOURCES section when there is no management group, and name the assignment ATMO-MXDR-DIAG-TOSENT.'
-                "On the Parameters tab, set the Log Analytics workspace to $workspace."
-                'On the Remediation tab, set the managed identity type to User assigned managed identity and select ATMO-MXDR-DIAG-MI.'
-                'Select Review + create > Create.'
-                'Once the first compliance scan completes, go to Policy > Remediation, select the Policies to remediate tab, select the ATMO-MXDR-DIAG-TOSENT assignment and create a remediation task for each policy in the initiative.')
+            Implementation = $impl.ToArray()
             Testing = @(
-                'In the Azure portal, go to Policy > Compliance and open the ATMO-MXDR-DIAG-TOSENT assignment.'
+                "In the Azure portal, go to Policy > Compliance and open $each created by this change."
                 'Confirm the resources in scope show as Compliant.'
                 "Open one resource of each type listed in the RESOURCES section, go to Monitoring > Diagnostic settings and confirm the ATMO-MXDR setting sends to $workspace.")
             Rollback = @(
-                'In the Azure portal, go to Policy > Authoring > Assignments, open the ATMO-MXDR-DIAG-TOSENT assignment and select Delete assignment.'
+                "In the Azure portal, go to Policy > Authoring > Assignments, open $each created by this change and select Delete assignment."
                 'On each resource the remediation tasks updated, go to Monitoring > Diagnostic settings, select Edit setting on the ATMO-MXDR setting and select Delete.')
             References = @(, @('Assign a policy in the Azure portal', 'https://learn.microsoft.com/azure/governance/policy/assign-policy-portal')) + $diagnosticReferences
-            Csv = @($subscriptions | ForEach-Object { New-Resource $_ '' $_ 'Initiative assignment scope' "/subscriptions/$_" })
+            Csv = @($subscriptions | ForEach-Object { New-Resource $_ '' $_ $(if ($atGroup) { "Under the management group $managementGroup" } else { 'Initiative assignment scope' }) "/subscriptions/$_" })
         } }
 }
 
+# Where an assignment applies, read from its ID: a management group, a subscription or a resource group.
+function Format-AssignmentScope([string]$AssignmentId) {
+    $id = Get-Text $AssignmentId
+    if ($id -match '(?i)^/providers/microsoft\.management/managementgroups/([^/]+)/') { return 'management group ' + (ConvertTo-CopyText $Matches[1]) }
+    if ($id -match '(?i)^/subscriptions/([^/]+)/resourcegroups/([^/]+)/') { return 'resource group {0} in subscription {1}' -f (ConvertTo-CopyText $Matches[2]), (Format-Subscription $Matches[1]) }
+    if ($id -match '(?i)^/subscriptions/([^/]+)/') { return 'subscription ' + (Format-Subscription $Matches[1]) }
+    ''
+}
+
 function New-DiagnosticRemediation($rows) {
-    $resources = foreach ($r in $rows) {
+    # DR.6-NONCOMPLIANT has a row per resource and assignment. A resource that fails under two assignments
+    # is listed once, with the policies of both.
+    $resources = foreach ($g in @($rows | Group-Object { (Get-Text $_.ResourceId).ToLowerInvariant() })) {
+        $r = $g.Group[0]
         $id = Get-Text $r.ResourceId
         $type = (Get-Text $r.ResourceType).ToLowerInvariant()
         $parts = $id.Split('/')
         $sub = if ($parts.Count -gt 2) { $parts[2] } else { '' }
         $label = if ($diagnosticTypes.Contains($type)) { $diagnosticTypes[$type][0] } else { ConvertTo-CopyText $type }
-        if ($id -match '^/subscriptions/[^/]+$') { New-Resource 'Subscription Activity Log' '' $sub ('policies ' + (Get-Text $r.Policies)) $id }
+        $failing = (@($g.Group | ForEach-Object { (Get-Text $_.Policies) -split ',\s*' } | Where-Object { $_ } | Sort-Object -Unique) -join ', ')
+        if ($id -match '^/subscriptions/[^/]+$') { New-Resource 'Subscription Activity Log' '' $sub ('policies ' + $failing) $id }
         else {
             $rg = if ($id -match '/resourcegroups/([^/]+)/') { $Matches[1] } else { '' }
-            New-Resource $parts[-1] $rg $sub ('{0}, policies {1}' -f $label, (Get-Text $r.Policies)) $id
+            New-Resource $parts[-1] $rg $sub ('{0}, policies {1}' -f $label, $failing) $id
         }
     }
     $resources = @($resources)
-    $policies = @($rows | ForEach-Object { (Get-Text $_.Policies) -split ',\s*' } | Where-Object { $_ } | ForEach-Object { ConvertTo-CopyText $_ } | Sort-Object -Unique)
-    $assignments = @($rows | ForEach-Object { ConvertTo-CopyText $_.AssignmentName } | Where-Object { $_ } | Sort-Object -Unique)
-    $assignment = if ($assignments.Count -eq 1) { "the $($assignments[0]) assignment" } else { 'the ATMO-MXDR assignment' }
+    # A remediation task belongs to one assignment and one policy. The initiative may be assigned once
+    # per subscription under the same name, so each assignment, told apart by its ID, gets its own tasks.
+    $pairs = foreach ($g in @($rows | Group-Object { $id = Get-Text $_.AssignmentId; if ($id) { $id } else { Get-Text $_.AssignmentName } } | Sort-Object Name)) {
+        $first = $g.Group[0]
+        $name = ConvertTo-CopyText $first.AssignmentName
+        if (-not $name) { $name = 'ATMO-MXDR' }
+        $scope = Format-AssignmentScope $(if (Get-Text $first.AssignmentScope) { (Get-Text $first.AssignmentScope) + '/' } else { $first.AssignmentId })
+        $policies = @($g.Group | ForEach-Object { (Get-Text $_.Policies) -split ',\s*' } | Where-Object { $_ } | ForEach-Object { ConvertTo-CopyText $_ } | Sort-Object -Unique)
+        '- Assignment {0}{1}: {2}' -f $name, $(if ($scope) { " at $scope" } else { '' }), ($policies -join ', ')
+    }
     $activity = @($resources | Where-Object { $_.ResourceId -match '^/subscriptions/[^/]+$' }).Count
     $impl = [System.Collections.Generic.List[object]]::new()
     $impl.Add('In the Azure portal, go to Policy > Remediation and select the Policies to remediate tab.')
-    $impl.Add("Select $assignment and select New remediation task.")
-    $impl.Add(('Choose the policy {0}, keep the scope at the assignment scope and select Remediate.' -f $policies[0]))
-    if ($policies.Count -gt 1) { $impl.Add(('Repeat steps 2 and 3 for each remaining policy: {0}.' -f (@($policies | Select-Object -Skip 1) -join ', '))) }
+    $impl.Add(@('Create one remediation task for each assignment and policy below. Select the assignment, select New remediation task, choose the policy, keep the scope at the assignment scope and select Remediate:') + @($pairs))
     $testing = [System.Collections.Generic.List[object]]::new()
     $testing.Add('In the Azure portal, go to Policy > Remediation and select the Remediation tasks tab.')
     $testing.Add('Confirm each remediation task created for this change finished with no failed resources.')
@@ -335,8 +386,8 @@ function New-DiagnosticRemediation($rows) {
         $rollback.Add('For the Subscription Activity Log, go to Monitor > Activity log > Export Activity Logs, select the subscription, select Edit setting on the ATMO-MXDR setting and select Delete.')
     }
     $n = $resources.Count
-    @{ Cr = New-ChangeRequest @{
-            Number = 1; Key = 'diagnostic-logging'; Title = 'Remediate resources missing ATMO-MXDR diagnostic logging'
+    @{ Used = @('DR.6-NONCOMPLIANT'); Cr = New-ChangeRequest @{
+            Number = 10; Key = 'diagnostic-remediation'; Title = 'Remediate resources missing ATMO-MXDR diagnostic logging'
             Description = ('Run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on {0}, so their audit logs reach {1}.' -f (Get-Listed $n 'resource' 'resources'), $workspace)
             Purpose = 'These resources are not compliant with the diagnostic logging initiative, so their audit activity does not reach Sentinel. Remediation deploys the missing diagnostic settings and returns them to compliance.'
             ResourceIntro = ('{0} not compliant with the initiative, with the policies each one fails.' -f $(if ($n -eq 1) { 'The resource below is' } else { "The $n resources below are" }))
@@ -350,20 +401,31 @@ function New-DiagnosticRemediation($rows) {
 }
 
 $catalog = @(
-    @{ Number = 1; Key = 'diagnostic-logging'; Change = 'Diagnostic logging through the ATMO-MXDR-DIAG-TOSENT initiative'; Sources = @('DR.6-INITIATIVE')
+    @{ Number = 1; Key = 'diagnostic-logging'; Change = 'Diagnostic logging initiative assigned on every subscription'; Sources = @('DR.6-INITIATIVE')
        Build = {
-            $initiative = @(Get-Rows 'DR.6-INITIATIVE')
-            if ((Get-Status 'DR.6-INITIATIVE') -eq 'EMPTY' -or $initiative.Count -eq 0) { return New-DiagnosticAssignment }
-            $nonCompliant = 0
-            foreach ($r in $initiative) { $nonCompliant += Get-Number $r.NonCompliant }
-            if ($nonCompliant -eq 0) { return @{ State = 'No gaps found, every resource is compliant with the initiative' } }
-            $status = Get-Status 'DR.6-NONCOMPLIANT'
+            $all = @($parameters.Subscriptions | ForEach-Object { (ConvertTo-CopyText $_).ToLowerInvariant() } | Where-Object { $_ })
+            $fresh = 'CR-01 assigns the initiative where no ATMO-MXDR policy state was found. An assignment made shortly before collection shows no state until its first compliance scan, so confirm under Policy > Assignments that it is not already there before raising CR-01.'
+            if ((Get-Status 'DR.6-INITIATIVE') -eq 'EMPTY' -or @(Get-Rows 'DR.6-INITIATIVE').Count -eq 0) {
+                $built = New-DiagnosticAssignment $all $false
+                $built.Notes = @($fresh)
+                return $built
+            }
+            # The initiative has policy states somewhere. A subscription without any is still to be assigned.
+            $status = Get-Status 'DR.6-COVERAGE'
             if ($status -eq 'MISSING') { return @{ State = $needsRecollection } }
-            if ($status -notin 'OK', 'PARTIAL', 'EMPTY') { return @{ State = "Not collected (DR.6-NONCOMPLIANT $status)" } }
-            if (Test-Unreadable 'DR.6-NONCOMPLIANT') { return @{ State = Get-UnreadableState 'DR.6-NONCOMPLIANT' } }
-            $rows = @(Get-Rows 'DR.6-NONCOMPLIANT')
-            if (-not $rows.Count) { return @{ State = 'No gaps found in DR.6-NONCOMPLIANT' } }
-            New-DiagnosticRemediation $rows } }
+            # A partial coverage list cannot tell a subscription without the initiative from one that was not
+            # read, and assigning there again would overlap an existing assignment.
+            if ($status -eq 'PARTIAL') { return @{ State = 'DR.6-COVERAGE is partial, so subscriptions without the initiative cannot be told apart. Recollect' } }
+            if ($status -notin 'OK', 'EMPTY') { return @{ State = "Not collected (DR.6-COVERAGE $status)" } }
+            if (Test-Unreadable 'DR.6-COVERAGE') { return @{ State = Get-UnreadableState 'DR.6-COVERAGE' } }
+            $coverage = @(Get-Rows 'DR.6-COVERAGE' | ForEach-Object { (ConvertTo-CopyText $_.subscriptionId).ToLowerInvariant() })
+            $uncovered = @($all | Where-Object { $_ -notin $coverage })
+            if (-not $uncovered.Count) { return @{ State = 'No gaps found, every subscription has the initiative' } }
+            $covered = $uncovered.Count -lt $all.Count
+            $built = New-DiagnosticAssignment $uncovered $covered
+            $built.Used = @('P0.5')
+            $built.Notes = @($fresh) + @(if ($managementGroup -and $covered) { 'CR-01 assigns the initiative per subscription, not at the management group {0}, because other subscriptions already have it and an assignment at the group would overlap theirs.' -f $managementGroup })
+            $built } }
 
     @{ Number = 2; Key = 'storage-secure-transfer'; Change = 'Secure transfer required on storage accounts'; Sources = @('DP.1-DETAIL')
        Build = {
@@ -425,7 +487,7 @@ $catalog = @(
                         'Confirm Minimum TLS version shows Version 1.2.')
                     Rollback = @(
                         'In the Azure portal, open the storage account to revert and go to Settings > Configuration.'
-                        'Set Minimum TLS version back to the version recorded for the account in the RESOURCES section and select Save.')
+                        'Set Minimum TLS version back to the version recorded for the account in the RESOURCES section, or to Version 1.0 where it is recorded as not set, since an account without the setting accepts TLS 1.0, and select Save.')
                     References = @(
                         , @('Enforce a minimum required version of TLS for requests to a storage account', 'https://learn.microsoft.com/azure/storage/common/transport-layer-security-configure-minimum-version')
                         , @('Migrate to TLS 1.2 for Azure Storage', 'https://learn.microsoft.com/azure/storage/common/transport-layer-security-configure-migrate-to-tls2'))
@@ -434,15 +496,20 @@ $catalog = @(
 
     @{ Number = 4; Key = 'app-service-minimum-tls'; Change = 'Minimum TLS 1.2 on App Service apps'; Sources = @('NB.5-DETAIL')
        Build = {
-            $resources = @(Get-Rows 'NB.5-DETAIL' | ForEach-Object { New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('minimum TLS ' + (Format-TlsVersion $_.MinTlsVersion)) $_.ResourceId })
+            # App Service applies TLS 1.2 to an app without a minimum, so a site whose value reads empty is
+            # named in the index instead of changed.
+            $rows = @(Get-Rows 'NB.5-DETAIL')
+            $unset = @($rows | Where-Object { -not (Get-Text $_.MinTlsVersion) })
+            $notes = @(if ($unset.Count) { '{0} left out of CR-04 because Resource Graph returned no minimum TLS version, and App Service applies 1.2 when none is set: {1}. Check {2} in the portal if the value may be missing from Resource Graph.' -f (Get-Count $unset.Count 'App Service app' 'App Service apps'), (@($unset | ForEach-Object { ConvertTo-CopyText $_.Name } | Sort-Object) -join ', '), (Get-Pick $unset.Count 'it' 'them') })
+            $resources = @($rows | Where-Object { Get-Text $_.MinTlsVersion } | ForEach-Object { New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('minimum TLS ' + (Format-TlsVersion $_.MinTlsVersion)) $_.ResourceId })
             $n = $resources.Count
-            if (-not $n) { return @{ State = 'No gaps found' } }
+            if (-not $n) { return @{ State = $(if ($unset.Count) { 'Only apps without a recorded minimum remain' } else { 'No gaps found' }); Notes = $notes } }
             $impl = [System.Collections.Generic.List[object]]::new()
             $impl.Add((Get-OpenStep $n 'App Services' 'app'))
             $impl.Add('Go to Settings > Configuration and select the General settings tab.')
             $impl.Add('Set Minimum Inbound TLS Version to 1.2, select Apply and confirm.')
             Add-RepeatStep $impl $n 1 'app'
-            @{ Cr = New-ChangeRequest @{
+            @{ Notes = $notes; Cr = New-ChangeRequest @{
                     Number = 4; Key = 'app-service-minimum-tls'; Title = 'Set minimum inbound TLS version 1.2 on App Service apps'
                     Description = 'Set the minimum inbound TLS version to 1.2 on {0}.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps')
                     Purpose = 'TLS 1.0 and 1.1 have known weaknesses, and App Service stops accepting them on May 31, 2027. Setting 1.2 now refuses these older protocols and matches the default for new apps.'
@@ -539,7 +606,8 @@ $catalog = @(
             $closed = [System.Collections.Generic.List[string]]::new()
             $unread = [System.Collections.Generic.List[string]]::new()
             $exposed = 0
-            $resources = @(Get-Rows 'DP.1-DETAIL' | Where-Object { Test-True $_.AllowBlobPublicAccess } | ForEach-Object {
+            # A FileStorage account holds no blob service, so the setting does not apply to it.
+            $resources = @(Get-Rows 'DP.1-DETAIL' | Where-Object { (Test-True $_.AllowBlobPublicAccess) -and (Get-Text $_.Kind) -ine 'FileStorage' } | ForEach-Object {
                     $c = $containers[(Get-Text $_.ResourceId).ToLowerInvariant()]
                     $label = '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup)
                     $setting = if ($null -eq $c) { $unread.Add($label); '' }
@@ -579,7 +647,7 @@ $catalog = @(
             }
             $body.Add($(if ($public.Count -or $unread.Count) { 'If a container is meant to be public, please tell me which one. I can leave its account out of this change and work with you on an authorized alternative, such as a shared access signature or Azure Front Door. Otherwise, could you confirm that I can go ahead and schedule the change?' }
                     else { 'Could you confirm that I can go ahead and schedule the change?' }))
-            @{ Cr = New-ChangeRequest @{
+            @{ Used = @('DP.1-CONTAINERS'); Cr = New-ChangeRequest @{
                     Number = 7; Key = 'storage-anonymous-access'; Title = 'Disable anonymous blob access on storage accounts'
                     Description = 'Set Allow Blob anonymous access to Disabled on {0}.' -f (Get-Listed $n 'storage account' 'storage accounts')
                     Purpose = 'Anonymous access lets anyone read the data in a public container without signing in. Disabling it at the account level blocks every anonymous request, whatever access level a container is set to.'
@@ -638,20 +706,30 @@ $catalog = @(
                             ('Could you let me know whether any of your systems or partners still call {0} over HTTP? Once I have your confirmation, I will schedule the change.' -f (Get-Pick $n 'the application' 'these applications'))) }
                 } } } }
 
-    @{ Number = 9; Key = 'encryption-at-host'; Change = 'Encryption at host on virtual machines'; Sources = @('DP.4-DETAIL')
+    @{ Number = 9; Key = 'encryption-at-host'; Change = 'Encryption at host on virtual machines'; Sources = @('DP.4-ELIGIBILITY')
        Build = {
-            $rows = @(Get-Rows 'DP.4-DETAIL')
+            # DP.4-ELIGIBILITY lists the virtual machines without encryption at host and whether each can
+            # take it. A machine that used Azure Disk Encryption, runs on a size without support, or whose
+            # size support was not read would be deallocated for a change Azure then rejects, so only the
+            # eligible ones are listed.
+            $rows = @(Get-Rows 'DP.4-ELIGIBILITY')
+            $ineligible = @($rows | Where-Object { -not (Test-True $_.Eligible) })
+            $notes = [System.Collections.Generic.List[string]]::new()
+            if ($ineligible.Count) {
+                $notes.Add(('{0} left out of CR-09 because {1} encryption at host as {2}: {3}.' -f (Get-Count $ineligible.Count 'virtual machine' 'virtual machines'), (Get-Pick $ineligible.Count 'it cannot take' 'they cannot take'), (Get-Pick $ineligible.Count 'it stands' 'they stand'),
+                        (@($ineligible | Sort-Object Name | ForEach-Object { '{0} ({1}, {2})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.Size), ((ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1') }) -join ', ')))
+            }
             # Scale sets take the setting through their model and an instance update, and AKS node pools
             # through the node pool, so they need their own change.
-            $scaleSets = @($rows | Where-Object { (Get-Text $_.ResourceType) -match 'scalesets' })
-            $notes = @(if ($scaleSets.Count) { '{0} left out of CR-09: {1}. Scale sets take encryption at host through their model and an instance update, and AKS node pools through the node pool, so they need their own change.' -f (Get-Count $scaleSets.Count 'scale set' 'scale sets'), (@($scaleSets | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', ') })
-            $vms = @($rows | Where-Object { $_ -notin $scaleSets })
-            # DP.4-DETAIL carries no resource ID, and a virtual machine's ID follows from its subscription, group and name.
-            $resources = @($vms | ForEach-Object {
-                    $id = if (Get-Text $_.ResourceId) { Get-Text $_.ResourceId } else { '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Compute/virtualMachines/{2}' -f (Get-Text $_.subscriptionId), (Get-Text $_.resourceGroup), (Get-Text $_.Name) }
-                    New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('size {0}, {1}' -f (Get-Text $_.Size), (Get-PowerText $_.PowerState)) $id })
+            $detailStatus = Get-Status 'DP.4-DETAIL'
+            if ($detailStatus -in 'OK', 'PARTIAL' -and -not (Test-Unreadable 'DP.4-DETAIL')) {
+                $scaleSets = @(Get-Rows 'DP.4-DETAIL' | Where-Object { (Get-Text $_.ResourceType) -match 'scalesets' })
+                if ($scaleSets.Count) { $notes.Add(('{0} left out of CR-09: {1}. Scale sets take encryption at host through their model and an instance update, and AKS node pools through the node pool, so they need their own change.' -f (Get-Count $scaleSets.Count 'scale set' 'scale sets'), (@($scaleSets | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', '))) }
+            }
+            elseif ($detailStatus -ne 'EMPTY') { $notes.Add(('Scale sets were not checked for encryption at host, because DP.4-DETAIL {0}.' -f $(if ($detailStatus -eq 'MISSING') { 'was not collected' } elseif (Test-Unreadable 'DP.4-DETAIL') { 'is unreadable' } else { "reads $detailStatus" }))) }
+            $resources = @($rows | Where-Object { Test-True $_.Eligible } | ForEach-Object { New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('size {0}, {1}' -f (Get-Text $_.Size), (Get-PowerText $_.PowerState)) $_.ResourceId })
             $n = $resources.Count
-            if (-not $n) { return @{ State = $(if ($scaleSets.Count) { 'Only scale sets remain' } else { 'No gaps found' }); Notes = $notes } }
+            if (-not $n) { return @{ State = $(if ($rows.Count) { 'No eligible virtual machines' } else { 'No gaps found' }); Notes = $notes.ToArray() } }
             $subscriptions = @($resources | ForEach-Object SubscriptionId | Sort-Object -Unique)
             $register = @('In the Azure portal, open Cloud Shell in Bash and register the EncryptionAtHost feature on each subscription in the RESOURCES section:')
             foreach ($s in $subscriptions) { $register += "az account set --subscription $s"; $register += 'az feature register --name EncryptionAtHost --namespace Microsoft.Compute' }
@@ -659,9 +737,9 @@ $catalog = @(
             $impl.Add($register)
             $impl.Add('Run az feature show --name EncryptionAtHost --namespace Microsoft.Compute on each subscription and continue once the state reads Registered.')
             $impl.Add((Get-OpenStep $n 'Virtual machines' 'virtual machine'))
-            $impl.Add('On Overview, select Stop and wait for the status to read Stopped (deallocated).')
+            $impl.Add('On Overview, note whether the status reads Running, then select Stop and wait for the status to read Stopped (deallocated).')
             $impl.Add('Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.')
-            $impl.Add('Go back to Overview and select Start only if the RESOURCES section lists the machine as running, so a machine that was not running stays stopped.')
+            $impl.Add('Go back to Overview and select Start only if the status read Running before the stop, so a machine that was not running stays stopped.')
             Add-RepeatStep $impl $n 3 'virtual machine'
             $references = @(
                 , @('Use the Azure portal to enable end-to-end encryption using encryption at host', 'https://learn.microsoft.com/azure/virtual-machines/disks-enable-host-based-encryption-portal')
@@ -670,7 +748,7 @@ $catalog = @(
                 Number = 9; Key = 'encryption-at-host'; Title = 'Enable encryption at host on virtual machines'
                 Description = 'Enable encryption at host on {0}, which needs a stop and start of each machine.' -f (Get-Listed $n 'virtual machine' 'virtual machines')
                 Purpose = 'Encryption at host encrypts the temporary disk and the OS and data disk caches on the Azure host, so the data of each machine is encrypted from end to end. Platform encryption covers only the managed disks at rest, which leaves these paths unencrypted today.'
-                ResourceIntro = '{0} with the size and power state of each at collection.' -f $(if ($n -eq 1) { 'The virtual machine below is listed' } else { "The $n virtual machines below are listed" })
+                ResourceIntro = $(if ($n -eq 1) { 'The virtual machine below is listed with its size and power state at collection. It is returned to the power state it has when the change is made.' } else { "The $n virtual machines below are listed with the size and power state of each at collection. Each machine is returned to the power state it has when the change is made." })
                 ResourceLines = Format-ResourceList $resources
                 Availability = 'Each virtual machine is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window.'
                 UserExperience = 'Users of each server lose access during its restart and see no change afterwards.'
@@ -679,20 +757,20 @@ $catalog = @(
                 Testing = @(
                     ('In the Azure portal, open {0} and go to Settings > Disks > Additional settings.' -f (Get-EachStep $n 'virtual machine'))
                     'Confirm Encryption at host shows Yes.'
-                    'On Overview, confirm each machine the RESOURCES section lists as running shows Running.')
+                    (Get-Pick $n 'On Overview, confirm the machine shows Running if it was running before the change.' 'On Overview, confirm each machine that was running before the change shows Running.'))
                 Rollback = @(
-                    'In the Azure portal, open the virtual machine to revert, select Stop on Overview and wait for the status to read Stopped (deallocated).'
+                    'In the Azure portal, open the virtual machine to revert, note on Overview whether the status reads Running, then select Stop and wait for the status to read Stopped (deallocated).'
                     'Go to Settings > Disks > Additional settings, set Encryption at host to No and select Save.'
-                    'Go back to Overview and select Start only if the RESOURCES section lists the machine as running.')
+                    'Go back to Overview and select Start only if the status read Running before the stop.')
                 References = $references
                 Csv = $resources
                 Email = @{ Subject = 'Maintenance window request: encryption at host for Azure virtual machines'; Body = @(
                         ('I am planning to enable encryption at host on {0}. This setting encrypts the temporary disk and the disk caches on the Azure host, so the data on {1} stays encrypted from the virtual machine all the way to Azure Storage.' -f $(if ($n -eq 1) { 'the virtual machine below' } else { "the $n virtual machines below" }), $(if ($n -eq 1) { 'this server' } else { 'these servers' }))
                         , @($resources | Sort-Object Name | ForEach-Object {
-                                $state = switch -Regex ($_.Setting) { 'running$' { 'currently running' } '(deallocated|stopped)$' { 'currently stopped and will be left stopped' } default { 'power state not recorded, so it will be left stopped unless you ask me to start it' } }
-                                '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $state })
-                        ('To apply it, each virtual machine has to be stopped first. Each running server will be unavailable for a few minutes until it is started again, and nothing changes inside the operating system or the applications.')
-                        ('Could you suggest a maintenance window that works for {0}, and let me know if any of them need to be handled separately or in a particular order? I will schedule the change once I have your confirmation.' -f $(if ($n -eq 1) { 'this server' } else { 'these servers' }))) }
+                                $state = switch -Regex ($_.Setting) { 'running$' { ', running at my last review' } '(deallocated|stopped)$' { ', stopped at my last review' } default { '' } }
+                                '{0} (resource group {1}{2})' -f $_.Name, $_.ResourceGroup, $state })
+                        (Get-Pick $n 'To apply it, the virtual machine has to be stopped first. If it is running at the time, it will be unavailable for a few minutes until I start it again, and if it is already stopped, it will be left stopped. Nothing changes inside the operating system or the applications.' 'To apply it, each virtual machine has to be stopped first. A server that is running at the time will be unavailable for a few minutes until I start it again, and a server that is already stopped will be left stopped. Nothing changes inside the operating system or the applications.')
+                        (Get-Pick $n 'Could you suggest a maintenance window that works for this server? I will schedule the change once I have your confirmation.' 'Could you suggest a maintenance window that works for these servers, and let me know if any of them need to be handled separately or in a particular order? I will schedule the change once I have your confirmation.')) }
             }
             if ($DrClient) {
                 $spec.DrImpact = 'This is a DR client. Azure Site Recovery does not carry encryption at host to test failover or failover virtual machines, so the DR Playbook needs an update.'
@@ -702,7 +780,22 @@ $catalog = @(
                     'Attach the link to the updated DR Playbook, or a screenshot of the new step, to this change request before it is closed.')
                 $spec.References = $references + , @('Support matrix for Azure VM disaster recovery, replicated machines storage', 'https://learn.microsoft.com/azure/site-recovery/azure-to-azure-support-matrix#replicated-machines---storage')
             }
-            @{ Notes = $notes; Cr = New-ChangeRequest $spec } } }
+            @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest $spec } } }
+
+    @{ Number = 10; Key = 'diagnostic-remediation'; Change = 'Diagnostic logging remediated on non-compliant resources'; Sources = @('DR.6-INITIATIVE')
+       Build = {
+            $initiative = @(Get-Rows 'DR.6-INITIATIVE')
+            if ((Get-Status 'DR.6-INITIATIVE') -eq 'EMPTY' -or $initiative.Count -eq 0) { return @{ State = 'Nothing to remediate until the initiative is assigned (CR-01)' } }
+            $nonCompliant = 0
+            foreach ($r in $initiative) { $nonCompliant += Get-Number $r.NonCompliant }
+            if ($nonCompliant -eq 0) { return @{ State = 'No gaps found, every resource is compliant with the initiative' } }
+            $status = Get-Status 'DR.6-NONCOMPLIANT'
+            if ($status -eq 'MISSING') { return @{ State = $needsRecollection } }
+            if ($status -notin 'OK', 'PARTIAL', 'EMPTY') { return @{ State = "Not collected (DR.6-NONCOMPLIANT $status)" } }
+            if (Test-Unreadable 'DR.6-NONCOMPLIANT') { return @{ State = Get-UnreadableState 'DR.6-NONCOMPLIANT' } }
+            $rows = @(Get-Rows 'DR.6-NONCOMPLIANT')
+            if (-not $rows.Count) { return @{ State = 'No gaps found in DR.6-NONCOMPLIANT' } }
+            New-DiagnosticRemediation $rows } }
 )
 #endregion
 
@@ -720,34 +813,36 @@ $results = foreach ($item in $catalog) {
         $cr = $built.Cr
         $notes = @($built.Notes | Where-Object { $_ })
         $state = if ($cr) { 'Change request{0}' -f $(if ($cr.Email) { ' and client email' } else { '' }) } else { $built.State }
-        if ($cr -and @($item.Sources | Where-Object { (Get-Status $_) -eq 'PARTIAL' }).Count) { $state += ', partial collection scope' }
+        # A change request also reads results beyond its sources, such as the container list behind CR-07.
+        # The index says when one of them was partial, not collected or unreadable.
+        $partial = @($item.Sources | Where-Object { (Get-Status $_) -eq 'PARTIAL' }).Count -gt 0
+        if ($cr) {
+            foreach ($used in @($built.Used | Where-Object { $_ })) {
+                $status = Get-Status $used
+                if ($status -eq 'PARTIAL') { $partial = $true }
+                elseif ($status -notin 'OK', 'EMPTY') { $notes += ('CR-{0:00} was written without {1}, which {2}.' -f $item.Number, $used, $(if ($status -eq 'MISSING') { 'was not collected' } else { "reads $status" })) }
+                elseif (Test-Unreadable $used) { $notes += ('CR-{0:00} was written without {1}, whose result file is unreadable. Recollect or restore the pack.' -f $item.Number, $used) }
+            }
+            if ($partial) { $state += ', partial collection scope' }
+        }
     }
     [pscustomobject]@{ Item = $item; State = $state; Cr = $cr; Notes = $notes }
 }
 
-# Write the files. Earlier runs may have left a change request this run no longer needs, so the
-# files this script names are cleared first. Nothing else in the folder is touched.
+# Every file is built and checked against the copy rules before anything is written, so a run that stops
+# leaves the earlier files as they were.
 $folder = if ($OutputPath) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath) } else { Join-Path $pack '05-change-requests' }
-if (-not (Test-Path -LiteralPath $folder -PathType Container)) { [void](New-Item -ItemType Directory -Path $folder -Force) }
 $fileBase = { param($item) 'CR-{0:00}-{1}' -f $item.Number, $item.Key }
-foreach ($item in $catalog) {
-    foreach ($suffix in '.txt', '.email.txt') {
-        $old = Join-Path $folder ((& $fileBase $item) + $suffix)
-        if (Test-Path -LiteralPath $old -PathType Leaf) { Remove-Item -LiteralPath $old }
-    }
-}
-$utf8 = [Text.UTF8Encoding]::new($false)
-$written = [System.Collections.Generic.List[string]]::new()
-function Write-CopyFile([string]$Path, [string[]]$Lines, [string]$NewLine = "`r`n") {
+$outputs = [System.Collections.Generic.List[object]]::new()
+function Add-Output([string]$Name, [string[]]$Lines, [string]$NewLine = "`r`n", [bool]$Bom = $false, [bool]$Prose = $true) {
     $text = ($Lines -join $NewLine) + $NewLine
-    Assert-CopyRules $text (Split-Path -Leaf $Path)
-    [IO.File]::WriteAllText($Path, $text, $utf8)
-    $written.Add($Path)
+    if ($Prose) { Assert-CopyRules $text $Name }
+    $outputs.Add([pscustomobject]@{ Path = Join-Path $folder $Name; Text = $text; Bom = $Bom })
 }
 foreach ($r in $results | Where-Object Cr) {
-    $base = Join-Path $folder (& $fileBase $r.Item)
-    Write-CopyFile "$base.txt" (Format-ChangeRequest $r.Cr)
-    if ($r.Cr.Email) { Write-CopyFile "$base.email.txt" (Format-Email $r.Cr.Email) }
+    $base = & $fileBase $r.Item
+    Add-Output "$base.txt" (Format-ChangeRequest $r.Cr)
+    if ($r.Cr.Email) { Add-Output "$base.email.txt" (Format-Email $r.Cr.Email) }
 }
 
 # The index: what was written, what was not and why, and the resources each change left out.
@@ -766,12 +861,8 @@ $notes = @($results | ForEach-Object { $_.Notes })
 if (-not $DrClient) { $notes += 'DR Impact reads Not a DR Client. Run again with -DrClient for a DR client.' }
 if (-not $workspaceName -and @($results | Where-Object { $_.Cr -and $_.Item.Number -eq 1 }).Count) { $notes += 'The pack lists {0}, so CR-01 names the client Sentinel workspace without its name. Run again with -SentinelWorkspace to name it.' -f (Get-Count $workspaces.Count 'workspace' 'workspaces') }
 if ((Get-Status 'P0.7') -notin 'OK', 'PARTIAL' -or (Test-Unreadable 'P0.7')) { $notes += 'Subscription names were not read (P0.7), so the change requests show subscription IDs only.' }
-foreach ($id in 'P0.5', 'DP.1-CONTAINERS') {
-    if (Test-Unreadable $id) { $notes += "The $id result file is unreadable, so the change requests that use it were written without it. Recollect or restore the pack." }
-}
 if ($notes.Count) { $md.Add(''); $md.Add('## Notes'); $md.Add(''); foreach ($n in $notes) { $md.Add("- $n") } }
-$indexPath = Join-Path $folder '00-index.md'
-Write-CopyFile $indexPath $md.ToArray() "`n"
+Add-Output '00-index.md' $md.ToArray() "`n"
 
 # CSV: one row per resource in each change request, for tracking the work.
 $csvRows = foreach ($r in $results | Where-Object Cr) {
@@ -781,7 +872,19 @@ $csvRows = foreach ($r in $results | Where-Object Cr) {
 }
 $csvLines = @('"CR","Change","Subscription","ResourceGroup","Resource","CurrentSetting","ResourceId"')
 if (@($csvRows).Count) { $csvLines = @($csvRows | ConvertTo-Csv -NoTypeInformation) }
-$csvPath = Join-Path $folder 'change-requests.csv'
-[IO.File]::WriteAllText($csvPath, (($csvLines -join "`r`n") + "`r`n"), [Text.UTF8Encoding]::new($true))
-$written.Add($csvPath)
-$written.ToArray()
+# The CSV carries resource IDs as Azure has them, so it is data rather than copy and skips the copy check.
+Add-Output 'change-requests.csv' $csvLines "`r`n" $true $false
+
+# Earlier runs may have left a change request this run no longer needs, so the files this script names
+# are cleared first. Nothing else in the folder is touched.
+if (-not (Test-Path -LiteralPath $folder -PathType Container)) { [void](New-Item -ItemType Directory -Path $folder -Force) }
+foreach ($item in $catalog) {
+    foreach ($suffix in '.txt', '.email.txt') {
+        $old = Join-Path $folder ((& $fileBase $item) + $suffix)
+        if (Test-Path -LiteralPath $old -PathType Leaf) { Remove-Item -LiteralPath $old }
+    }
+}
+foreach ($o in $outputs) {
+    [IO.File]::WriteAllText($o.Path, $o.Text, [Text.UTF8Encoding]::new($o.Bom))
+    $o.Path
+}

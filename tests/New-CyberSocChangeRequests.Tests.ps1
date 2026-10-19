@@ -34,14 +34,22 @@ BeforeAll {
             @{ Name = 'stdata'; ResourceId = (& $sa 'stdata' 'rg-data' $s1); Kind = 'StorageV2'; resourceGroup = 'rg-data'; subscriptionId = $s1; SecureTransfer = $false; MinimumTlsVersion = 'TLS1_0'; AllowBlobPublicAccess = $true; NfsV3 = $false }
             @{ Name = 'stweb'; ResourceId = (& $sa 'stweb' 'rg-web' $s1); Kind = 'StorageV2'; resourceGroup = 'rg-web'; subscriptionId = $s1; SecureTransfer = $false; MinimumTlsVersion = ''; AllowBlobPublicAccess = $true; NfsV3 = $false }
             @{ Name = 'stnfsblob'; ResourceId = (& $sa 'stnfsblob' 'rg-files' $s2); Kind = 'StorageV2'; resourceGroup = 'rg-files'; subscriptionId = $s2; SecureTransfer = $false; MinimumTlsVersion = 'TLS1_2'; AllowBlobPublicAccess = $false; NfsV3 = $true }
-            @{ Name = 'stpremfiles'; ResourceId = (& $sa 'stpremfiles' 'rg-files' $s2); Kind = 'FileStorage'; resourceGroup = 'rg-files'; subscriptionId = $s2; SecureTransfer = $false; MinimumTlsVersion = 'TLS1_2'; AllowBlobPublicAccess = $false; NfsV3 = $false })
+            @{ Name = 'stpremfiles'; ResourceId = (& $sa 'stpremfiles' 'rg-files' $s2); Kind = 'FileStorage'; resourceGroup = 'rg-files'; subscriptionId = $s2; SecureTransfer = $false; MinimumTlsVersion = 'TLS1_2'; AllowBlobPublicAccess = $true; NfsV3 = $false })
         Set-PackResult $Path 'DP.1-CONTAINERS' @(
             @{ Account = 'stdata'; ResourceId = (& $sa 'stdata' 'rg-data' $s1).ToUpperInvariant(); Containers = 4; PublicContainers = 0; ExposedContainers = 0; PublicContainerNames = ''; ReadStatus = 'OK' }
             @{ Account = 'stweb'; ResourceId = (& $sa 'stweb' 'rg-web' $s1); Containers = 3; PublicContainers = 2; ExposedContainers = 2; PublicContainerNames = 'images (Blob), downloads (Container)'; ReadStatus = 'OK' })
         Set-PackResult $Path 'DP.2-DETAIL' @(@{ Name = 'kv-app'; ResourceId = 'kv1'; resourceGroup = 'rg-app'; subscriptionId = $s1; RetentionDays = 90 }, @{ Name = 'kv-dev'; ResourceId = 'kv2'; resourceGroup = 'rg-dev'; subscriptionId = $s2; RetentionDays = 7 })
         Set-PackResult $Path 'NB.4-DETAIL' @(@{ Name = 'app-portal'; ResourceId = 'app1'; Kind = 'app'; resourceGroup = 'rg-web'; subscriptionId = $s1; DefaultHostName = 'app-portal.azurewebsites.net' }, @{ Name = 'func-jobs'; ResourceId = 'app2'; Kind = 'functionapp'; resourceGroup = 'rg-web'; subscriptionId = $s1; DefaultHostName = 'func-jobs.azurewebsites.net' })
-        Set-PackResult $Path 'NB.5-DETAIL' @(@{ Name = 'app-portal'; ResourceId = 'app1'; resourceGroup = 'rg-web'; subscriptionId = $s1; MinTlsVersion = '1.0' })
+        Set-PackResult $Path 'NB.5-DETAIL' @(@{ Name = 'app-portal'; ResourceId = 'app1'; resourceGroup = 'rg-web'; subscriptionId = $s1; MinTlsVersion = '1.0' }, @{ Name = 'app-blank'; ResourceId = 'app3'; resourceGroup = 'rg-web'; subscriptionId = $s1; MinTlsVersion = '' })
         Set-PackResult $Path 'NB.6-DETAIL' @()
+        $vm = { param($name, $sub) "/subscriptions/$sub/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/$name" }
+        Set-PackResult $Path 'DP.4-ELIGIBILITY' @(
+            @{ Name = 'vm-app01'; ResourceId = (& $vm 'vm-app01' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
+            @{ Name = 'vm-old'; ResourceId = (& $vm 'vm-old' $s2); resourceGroup = 'rg-app'; subscriptionId = $s2; Location = 'westus'; Size = 'Standard_B2s'; PowerState = 'PowerState/deallocated'; AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
+            @{ Name = 'vm-paused'; ResourceId = (& $vm 'vm-paused' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_B2s'; PowerState = 'PowerState/stopped'; AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
+            @{ Name = 'vm-ade'; ResourceId = (& $vm 'vm-ade' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D2s_v5'; PowerState = 'PowerState/running'; AdeUsed = $true; SizeSupported = 'Yes'; Eligible = $false; Reason = 'Azure Disk Encryption used' }
+            @{ Name = 'vm-a1'; ResourceId = (& $vm 'vm-a1' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_A1'; PowerState = 'PowerState/running'; AdeUsed = $false; SizeSupported = 'No'; Eligible = $false; Reason = 'size not supported' }
+            @{ Name = 'vm-unread'; ResourceId = (& $vm 'vm-unread' $s2); resourceGroup = 'rg-app'; subscriptionId = $s2; Location = 'westus'; Size = 'Standard_D2s_v5'; PowerState = 'PowerState/running'; AdeUsed = $false; SizeSupported = 'Unknown'; Eligible = $false; Reason = 'size support not read: HTTP 403; Forbidden' })
         Set-PackResult $Path 'DP.4-DETAIL' @(
             @{ Name = 'vm-app01'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s1; PowerState = 'PowerState/running'; Size = 'Standard_D4s_v5' }
             @{ Name = 'vm-old'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s2; PowerState = 'PowerState/deallocated'; Size = 'Standard_B2s' }
@@ -182,6 +190,7 @@ Describe 'Change request generation' {
         $text = & $read 'CR-07-storage-anonymous-access.txt'
         $text | Should -Match 'stweb, resource group rg-web, 2 containers open to anonymous read: images \(Blob\), downloads \(Container\)'
         $text | Should -Match 'stdata, resource group rg-data, no container open to anonymous read' -Because 'container rows match the account whatever the case of the resource ID'
+        $text | Should -Not -Match 'stpremfiles' -Because 'a FileStorage account holds no blob service'
         @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Match '^Anyone who reads the public containers'
         $email = & $read 'CR-07-storage-anonymous-access.email.txt'
         $email | Should -Match '^Subject: Planned change: turning off anonymous access to Azure Blob Storage\r?\n\r?\nHello Dana,'
@@ -201,18 +210,23 @@ Describe 'Change request generation' {
         $text = & $read 'CR-09-encryption-at-host.txt'
         $text | Should -Not -Match 'aks-nodepool1-vmss'
         $index | Should -Match '1 scale set left out of CR-09: aks-nodepool1-vmss\.'
+        foreach ($name in 'vm-ade', 'vm-a1', 'vm-unread') { $text | Should -Not -Match $name -Because "$name cannot take encryption at host as it stands" }
+        $index | Should -Match '3 virtual machines left out of CR-09 because they cannot take encryption at host as they stand: vm-a1 \(Standard_A1, size not supported\), vm-ade \(Standard_D2s_v5, Azure Disk Encryption used\), vm-unread \(Standard_D2s_v5, size support not read\)\.'
+        $index | Should -Match '\| 09 \| Encryption at host on virtual machines \| 3 \| Change request and client email \|'
         foreach ($s in $s1, $s2) { $text | Should -Match "    az account set --subscription $s" }
         $text | Should -Match 'Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save\.'
         $text | Should -Match '7\. Repeat steps 3 to 6 for each remaining virtual machine listed\.'
-        $text | Should -Match '6\. Go back to Overview and select Start only if the RESOURCES section lists the machine as running' -Because 'a machine that was stopped or deallocated stays that way'
+        $text | Should -Match '4\. On Overview, note whether the status reads Running, then select Stop'
+        $text | Should -Match '6\. Go back to Overview and select Start only if the status read Running before the stop' -Because 'the machine returns to its power state at the time of the change, not at collection'
         $text | Should -Match '- vm-paused, resource group rg-app, size Standard_B2s, stopped'
-        @(Get-Section $text 'C) ROLLBACK PLAN')[-1] | Should -Match '^3\. Go back to Overview and select Start only if the RESOURCES section lists the machine as running\.$' -Because 'rollback restores the power state recorded at collection'
+        @(Get-Section $text 'C) ROLLBACK PLAN')[-1] | Should -Match '^3\. Go back to Overview and select Start only if the status read Running before the stop\.$' -Because 'rollback restores the power state the machine had'
         (Get-Section $text 'D) DR Impact') -join '|' | Should -Be 'Not a DR Client'
         (Get-Section $text 'D) DR PLAN') -join '|' | Should -Be 'Not a DR Client. No updates to the DR Playbook are required.'
         $email = & $read 'CR-09-encryption-at-host.email.txt'
-        $email | Should -Match '- vm-app01 \(resource group rg-app, currently running\)'
-        $email | Should -Match '- vm-old \(resource group rg-app, currently stopped and will be left stopped\)'
-        $email | Should -Match '- vm-paused \(resource group rg-app, currently stopped and will be left stopped\)' -Because 'a machine stopped but still allocated is not running either'
+        $email | Should -Match '- vm-app01 \(resource group rg-app, running at my last review\)'
+        $email | Should -Match '- vm-old \(resource group rg-app, stopped at my last review\)'
+        $email | Should -Match '- vm-paused \(resource group rg-app, stopped at my last review\)' -Because 'a machine stopped but still allocated is not running either'
+        $email | Should -Match 'a server that is already stopped will be left stopped'
         $email | Should -Match 'Could you suggest a maintenance window'
     }
 
@@ -223,6 +237,58 @@ Describe 'Change request generation' {
         $text | Should -Match '- Key vaults: 6\r?\n- Subscription Activity Log: 2' -Because 'only the covered types present in the estate are counted'
         $text | Should -Match 'set the Log Analytics workspace to the Sentinel workspace law-example-sentinel\.'
         $text | Should -Match 'User assigned managed identity and select ATMO-MXDR-DIAG-MI'
+        $text | Should -Match 'The initiative is assigned at each subscription below'
+        $text | Should -Match '3\. On the Basics tab, set Scope to the first subscription listed in the RESOURCES section'
+        $text | Should -Match '7\. Repeat steps 1 to 6 for each remaining subscription listed\.' -Because 'an assignment has one scope, so each subscription gets its own'
+        $text | Should -Match '8\. Once the first compliance scan completes, .* for each ATMO-MXDR-DIAG-TOSENT assignment create a remediation task'
+        $text | Should -Match 'open each ATMO-MXDR-DIAG-TOSENT assignment created by this change and select Delete assignment'
+        $index | Should -Match 'CR-01 assigns the initiative where no ATMO-MXDR policy state was found\. An assignment made shortly before collection'
+        $index | Should -Match '\| 10 \| Diagnostic logging remediated on non-compliant resources \|  \| Nothing to remediate until the initiative is assigned \(CR-01\) \|'
+    }
+
+    It 'assigns the initiative only at the subscriptions without it, one by one, when others already have it' {
+        $pack = Join-Path $TestDrive 'coverage'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 4; Compliant = 4; NonCompliant = 0 })
+        Set-PackResult $pack 'DR.6-COVERAGE' @(@{ subscriptionId = $s1; Resources = 4; Assignments = 1 })
+        $null = & $generator -EvidencePath $pack -ManagementGroup 'mg-example'
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.txt') -Raw
+        $text | Should -Match 'The initiative is assigned at the subscription below, which has no ATMO-MXDR policy state yet,'
+        $text | Should -Match "Subscriptions:\r?\n- Example, Dev Test \($s2\)\r?\n\r?\n"
+        $text | Should -Not -Match "\($s1\)" -Because 'the covered subscription already has the initiative'
+        $text | Should -Not -Match 'management group mg-example' -Because 'an assignment at the group would overlap the existing one'
+        $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+        $index | Should -Match 'CR-01 assigns the initiative per subscription, not at the management group mg-example'
+        # Coverage that names no subscription of the pack leaves every subscription to assign, at the group.
+        Set-PackResult $pack 'DR.6-COVERAGE' @(@{ subscriptionId = 'ffffffff-0000-0000-0000-000000000000'; Resources = 4; Assignments = 1 })
+        $null = & $generator -EvidencePath $pack -ManagementGroup 'mg-example'
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.txt') -Raw
+        $text | Should -Match 'set Scope to the management group mg-example'
+        Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Not -Match 'other subscriptions already have it'
+        # A partial coverage list cannot tell a missing assignment from an unread one.
+        Set-PackResult $pack 'DR.6-COVERAGE' @(@{ subscriptionId = $s1; Resources = 4; Assignments = 1 }) 'PARTIAL'
+        $null = & $generator -EvidencePath $pack
+        Test-Path (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.txt') | Should -BeFalse
+        Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Match '\| 01 \| .* \| DR\.6-COVERAGE is partial, so subscriptions without the initiative cannot be told apart\. Recollect \|'
+    }
+
+    It 'assigns the initiative once at a named management group' {
+        $pack = Join-Path $TestDrive 'mg'
+        New-ChangeFixture $pack
+        $null = & $generator -EvidencePath $pack -ManagementGroup 'mg-example'
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.txt') -Raw
+        $text | Should -Match 'The initiative is assigned once at the management group mg-example'
+        $text | Should -Match '3\. On the Basics tab, set Scope to the management group mg-example and name the assignment ATMO-MXDR-DIAG-TOSENT\.'
+        $text | Should -Not -Match 'Repeat steps'
+        $text | Should -Match 'for the ATMO-MXDR-DIAG-TOSENT assignment create a remediation task'
+    }
+
+    It 'leaves App Service sites without a recorded minimum out of CR-04 and rolls storage back to 1.0 where none was set' {
+        $app = & $read 'CR-04-app-service-minimum-tls.txt'
+        $app | Should -Not -Match 'app-blank' -Because 'App Service applies TLS 1.2 to an app without a minimum'
+        $index | Should -Match '1 App Service app left out of CR-04 because Resource Graph returned no minimum TLS version, and App Service applies 1\.2 when none is set: app-blank\. Check it in the portal'
+        $stg = & $read 'CR-03-storage-minimum-tls.txt'
+        @(Get-Section $stg 'C) ROLLBACK PLAN')[-1] | Should -Match 'or to Version 1\.0 where it is recorded as not set, since an account without the setting accepts TLS 1\.0, and select Save\.$'
     }
 
     It 'lists one row per resource in the CSV' {
@@ -253,15 +319,25 @@ Describe 'Change request variants' {
         $pack = Join-Path $TestDrive 'remediate'
         New-ChangeFixture $pack
         Set-PackResult $pack 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 6; Compliant = 5; NonCompliant = 1 })
+        Set-PackResult $pack 'DR.6-COVERAGE' @(@{ subscriptionId = $s1; Resources = 5; Assignments = 1 }, @{ subscriptionId = $s2; Resources = 1; Assignments = 1 })
         Set-PackResult $pack 'DR.6-NONCOMPLIANT' @(
-            @{ ResourceId = "/subscriptions/$s1/resourcegroups/rg-app/providers/microsoft.keyvault/vaults/kv-app"; ResourceType = 'microsoft.keyvault/vaults'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; Policies = 'ATMO-MXDR-KV-TOSENT' }
-            @{ ResourceId = "/subscriptions/$s2"; ResourceType = 'microsoft.resources/subscriptions'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; Policies = 'ATMO-MXDR-ACT-TOSENT' })
+            @{ ResourceId = "/subscriptions/$s1/resourcegroups/rg-app/providers/microsoft.keyvault/vaults/kv-app"; ResourceType = 'microsoft.keyvault/vaults'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; AssignmentId = "/subscriptions/$s1/providers/microsoft.authorization/policyassignments/atmo-mxdr-diag-tosent"; Policies = 'ATMO-MXDR-KV-TOSENT' }
+            @{ ResourceId = "/subscriptions/$s1/resourcegroups/rg-app/providers/microsoft.keyvault/vaults/kv-app"; ResourceType = 'microsoft.keyvault/vaults'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; AssignmentId = '/providers/microsoft.management/managementgroups/mg-root/providers/microsoft.authorization/policyassignments/atmo-mxdr-diag'; AssignmentScope = '/providers/Microsoft.Management/managementGroups/MG-Root'; Policies = 'ATMO-MXDR-KV-TOSENT' }
+            @{ ResourceId = "/subscriptions/$s1/resourcegroups/rg-ops/providers/microsoft.automation/automationaccounts/aa-ops"; ResourceType = 'microsoft.automation/automationaccounts'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; AssignmentId = "/subscriptions/$s1/providers/microsoft.authorization/policyassignments/atmo-mxdr-diag-tosent"; Policies = 'ATMO-MXDR-AA-TOSENT' }
+            @{ ResourceId = "/subscriptions/$s2"; ResourceType = 'microsoft.resources/subscriptions'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; AssignmentId = "/subscriptions/$s2/providers/microsoft.authorization/policyassignments/atmo-mxdr-diag-tosent"; Policies = 'ATMO-MXDR-ACT-TOSENT' })
         $null = & $generator -EvidencePath $pack -SentinelWorkspace 'law-chosen'
-        $text = Get-Content (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.txt') -Raw
+        Test-Path (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.txt') | Should -BeFalse -Because 'every subscription already has the initiative'
+        Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Match '\| 01 \| .* \| No gaps found, every subscription has the initiative \|'
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-10-diagnostic-remediation.txt') -Raw
         $text | Should -Match 'Title: Remediate resources missing ATMO-MXDR diagnostic logging'
+        ([regex]::Matches($text, '- kv-app, ')).Count | Should -Be 1 -Because 'a resource failing under two assignments is listed once'
+        $text | Should -Match 'on the 3 resources listed below'
+        $text | Should -Match '    - Assignment ATMO-MXDR-DIAG-TOSENT at management group MG-Root: ATMO-MXDR-KV-TOSENT' -Because 'the scope is shown as the portal writes it'
         $text | Should -Match '- kv-app, resource group rg-app, Key vault, policies ATMO-MXDR-KV-TOSENT'
         $text | Should -Match '- Subscription Activity Log, policies ATMO-MXDR-ACT-TOSENT'
-        $text | Should -Match '3\. Choose the policy ATMO-MXDR-ACT-TOSENT, keep the scope at the assignment scope and select Remediate\.\r?\n4\. Repeat steps 2 and 3 for each remaining policy: ATMO-MXDR-KV-TOSENT\.'
+        $text | Should -Match '2\. Create one remediation task for each assignment and policy below\. Select the assignment, select New remediation task, choose the policy, keep the scope at the assignment scope and select Remediate:'
+        $text | Should -Match "    - Assignment ATMO-MXDR-DIAG-TOSENT at subscription Example Production \($s1\): ATMO-MXDR-AA-TOSENT, ATMO-MXDR-KV-TOSENT"
+        $text | Should -Match "    - Assignment ATMO-MXDR-DIAG-TOSENT at subscription Example, Dev Test \($s2\): ATMO-MXDR-ACT-TOSENT" -Because 'a remediation task belongs to one assignment, and each subscription holds its own'
         $text | Should -Match 'Monitor > Activity log > Export Activity Logs'
         $text | Should -Match 'the Sentinel workspace law-chosen'
     }
@@ -271,11 +347,12 @@ Describe 'Change request variants' {
         New-ChangeFixture $pack
         Set-PackResult $pack 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 6; Compliant = 6; NonCompliant = 0 })
         $null = & $generator -EvidencePath $pack
-        Test-Path (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.txt') | Should -BeFalse
-        Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Match '\| 01 \| .* \| No gaps found, every resource is compliant with the initiative \|'
+        Test-Path (Join-Path $pack '05-change-requests/CR-10-diagnostic-remediation.txt') | Should -BeFalse
+        Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Match '\| 10 \| .* \| No gaps found, every resource is compliant with the initiative \|'
         Set-PackResult $pack 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 6; Compliant = 5; NonCompliant = 1 })
         $null = & $generator -EvidencePath $pack
-        Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Match '\| 01 \| .* \| Needs recollection with CyberSOC collector 1\.1\.0 or later \|'
+        Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Match '\| 10 \| .* \| Needs recollection with CyberSOC collector 1\.1\.0 or later \|'
+        Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Match '\| 01 \| .* \| Needs recollection with CyberSOC collector 1\.1\.0 or later \|' -Because 'coverage by subscription needs DR.6-COVERAGE once the initiative has states'
     }
 
     It 'reads needs recollection on a pack collected before the per-resource results, and clears stale change requests' {
@@ -283,13 +360,13 @@ Describe 'Change request variants' {
         New-ChangeFixture $pack
         $null = & $generator -EvidencePath $pack
         foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL') { Remove-PackResult $pack $id }
-        Set-PackResult $pack 'DP.4-DETAIL' @() 'FAILED'
+        Set-PackResult $pack 'DP.4-ELIGIBILITY' @() 'FAILED'
         $null = & $generator -EvidencePath $pack
         $out = Join-Path $pack '05-change-requests'
         @(Get-ChildItem $out -Filter 'CR-*' | ForEach-Object Name) -join '|' | Should -Be 'CR-01-diagnostic-logging.txt' -Because 'change requests from the earlier run that this pack can no longer support are removed'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         $index | Should -Match '\| 02 \| Secure transfer required on storage accounts \|  \| Needs recollection with CyberSOC collector 1\.1\.0 or later \|'
-        $index | Should -Match '\| 09 \| Encryption at host on virtual machines \|  \| Not collected \(DP\.4-DETAIL FAILED\) \|'
+        $index | Should -Match '\| 09 \| Encryption at host on virtual machines \|  \| Not collected \(DP\.4-ELIGIBILITY FAILED\) \|'
         $index | Should -Match 'Subscription names were not read \(P0\.7\)'
         Get-Content (Join-Path $out 'CR-01-diagnostic-logging.txt') -Raw | Should -Match "- $s1\r?\n"
     }
@@ -330,10 +407,49 @@ Describe 'Change request variants' {
         $index | Should -Match '\| 04 \| .* \| Result file unreadable \(NB\.5-DETAIL\), recollect or restore the pack \|'
         $index | Should -Match '\| 06 \| .* \| Result file unreadable \(DP\.2-DETAIL\), recollect or restore the pack \|'
         $index | Should -Match '\| 08 \| .* \| Result file unreadable \(NB\.4-DETAIL\), recollect or restore the pack \|'
-        $index | Should -Match 'The DP\.1-CONTAINERS result file is unreadable'
+        $index | Should -Match 'CR-07 was written without DP\.1-CONTAINERS, whose result file is unreadable\.'
         $email = Get-Content (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') -Raw
         $email | Should -Match 'I could not read the container settings on these accounts' -Because 'without the container list no account is presented as closed'
         $email | Should -Not -Match 'no container open'
+    }
+
+    It 'cleans every character the copy check rejects from pack values instead of stopping' {
+        $pack = Join-Path $TestDrive 'symbols'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'P0.7' @(@{ subscriptionId = $s1; SubscriptionName = ('Prod {0} EU {1}' -f [char]0x25BA, [char]0x25B6) }, @{ subscriptionId = $s2; SubscriptionName = ('Dev {0}' -f [char]0x2192) })
+        { $null = & $generator -EvidencePath $pack } | Should -Not -Throw
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-06-key-vault-purge-protection.txt') -Raw
+        $text | Should -Match "Subscription: Prod EU \($s1\)"
+        $text | Should -Match "Subscription: Dev \($s2\)"
+    }
+
+    It 'notes the results a change request read beyond its sources when they were partial or not collected' {
+        $pack = Join-Path $TestDrive 'secondary'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'DP.1-CONTAINERS' @() 'FAILED'
+        Set-PackResult $pack 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 6; Compliant = 5; NonCompliant = 1 })
+        Set-PackResult $pack 'DR.6-NONCOMPLIANT' @(@{ ResourceId = "/subscriptions/$s1/resourcegroups/rg-app/providers/microsoft.keyvault/vaults/kv-app"; ResourceType = 'microsoft.keyvault/vaults'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; AssignmentId = "/subscriptions/$s1/providers/microsoft.authorization/policyassignments/a1"; Policies = 'ATMO-MXDR-KV-TOSENT' }) 'PARTIAL'
+        Set-PackResult $pack 'DP.4-DETAIL' @() 'SKIPPED'
+        $null = & $generator -EvidencePath $pack
+        $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+        $index | Should -Match 'CR-07 was written without DP\.1-CONTAINERS, which reads FAILED\.'
+        $index | Should -Match 'Scale sets were not checked for encryption at host, because DP\.4-DETAIL reads SKIPPED\.'
+        $index | Should -Match '\| 10 \| .* \| 1 \| Change request, partial collection scope \|' -Because 'a partial resource list must not read as complete'
+    }
+
+    It 'lists no covered resource type when the estate inventory holds none of them' {
+        $pack = Join-Path $TestDrive 'inventory'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'P0.5' @(@{ subscriptionId = $s1; ResourceType = 'microsoft.compute/virtualmachines'; Resources = 9 })
+        $null = & $generator -EvidencePath $pack
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.txt') -Raw
+        $text | Should -Match 'Resource types the initiative covers:\r?\n- Subscription Activity Log: 2'
+        $text | Should -Match 'covers the resource types listed with their current counts\.'
+        Set-PackResult $pack 'P0.5' @(@{ Resources = 240 })
+        $null = & $generator -EvidencePath $pack
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.txt') -Raw
+        $text | Should -Match '- Key vaults\r?\n- Automation accounts' -Because 'an inventory without resource types lists every covered type without a count'
+        $text | Should -Not -Match 'with their current counts'
     }
 
     It 'stops when the pack is not finished' {

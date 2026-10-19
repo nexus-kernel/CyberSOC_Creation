@@ -508,7 +508,7 @@ resources
 
 ### NB.5-DETAIL App Service sites below minimum TLS 1.2
 
-Engine ARG. The site configurations NB.5 counts as below TLS 1.2, one row per site. The site name, resource group and subscription are read from the configuration ID, because the config record is not the site. Feeds CR-04.
+Engine ARG. The site configurations NB.5 counts as below TLS 1.2, one row per site. The site name, resource group and subscription are read from the configuration ID, because the config record is not the site. Feeds CR-04, which leaves out a site whose value reads empty, since App Service applies 1.2 when no minimum is set.
 
 ```kql
 appserviceresources
@@ -539,7 +539,7 @@ resources
 
 ### DP.1-DETAIL Storage accounts without secure transfer, minimum TLS 1.2 or anonymous access off
 
-Engine ARG. One row per storage account DP.1 counts against secure transfer, minimum TLS 1.2 or anonymous blob access, read the same way: a missing allowBlobPublicAccess means anonymous access is allowed. NfsV3 and the FileStorage kind mark accounts that may serve NFS, which CR-02 leaves out because NFS mounts are refused once secure transfer is required. Feeds CR-02, CR-03 and CR-07, with DP.1-CONTAINERS naming the public containers.
+Engine ARG. One row per storage account DP.1 counts against secure transfer, minimum TLS 1.2 or anonymous blob access, read the same way: a missing allowBlobPublicAccess means anonymous access is allowed. NfsV3 and the FileStorage kind mark accounts that may serve NFS, which CR-02 leaves out because NFS mounts are refused once secure transfer is required. CR-07 also leaves out FileStorage accounts, which hold no blob service. Feeds CR-02, CR-03 and CR-07, with DP.1-CONTAINERS naming the public containers.
 
 ```kql
 resources
@@ -569,9 +569,59 @@ resources
 | order by subscriptionId asc, resourceGroup asc, Name asc
 ```
 
+### DP.4-ELIGIBILITY Virtual machines that can take encryption at host
+
+Engine ARG, then the Compute resource SKUs API. The virtual machines without encryption at host, network virtual appliances and scale sets left out, with whether each can take it. A machine that ever used Azure Disk Encryption cannot: its disks keep an encryptionSettingsCollection, enabled or not, or it carries an ADE extension. Size support is not in Resource Graph, so for each region the collector reads `GET https://management.azure.com/subscriptions/<id>/providers/Microsoft.Compute/skus?api-version=2021-07-01&$filter=location eq '<region>'` (Reader is enough) through one of the subscriptions there, trying the next one if a read fails, and takes the EncryptionAtHostSupported capability of each size. A size the list cannot answer for, or a region whose list could not be read, reads Unknown. The result reads PARTIAL when some lists could not be read or Resource Graph truncated the machine list, and FAILED when no list could be read. CR-09 lists only the eligible machines and names the others in the index, so no machine is deallocated for a change Azure would reject.
+
+```kql
+resources
+| where type =~ "microsoft.compute/virtualmachines"
+| where id !contains "{{MRG}}"
+| where not({{APPLIANCE}})   // network virtual appliances, see P0.6-APPLIANCES
+| where not(coalesce(tobool(properties.securityProfile.encryptionAtHost), false))
+| project VmKey = tolower(id), ResourceId = id, Name = name, resourceGroup, subscriptionId, Location = tolower(location),
+          Size = tostring(properties.hardwareProfile.vmSize),
+          PowerState = tostring(properties.extended.instanceView.powerState.code)
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.compute/disks"
+    | where isnotnull(properties.encryptionSettingsCollection)
+    | summarize AdeDisks = count() by VmKey = tolower(tostring(managedBy))
+  ) on VmKey
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.compute/virtualmachines/extensions"
+    | where tostring(properties.type) in~ ("AzureDiskEncryption", "AzureDiskEncryptionForLinux")
+    | summarize AdeExtensions = count() by VmKey = tolower(tostring(split(id, "/extensions/")[0]))
+  ) on VmKey
+| extend AdeUsed = coalesce(AdeDisks, 0) > 0 or coalesce(AdeExtensions, 0) > 0
+| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed
+| order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### DR.6-COVERAGE ATMO-MXDR diagnostic logging initiative coverage by subscription
+
+Engine ARG. The resources with a policy state from the ATMO-MXDR-DIAG initiative in each subscription, counted only for assignments at subscription or management group scope, since an assignment on one resource group leaves the rest of the subscription out. Policy states are read per resource, so an assignment at a management group counts for every subscription under it. A subscription in the pack without a row has no evaluated assignment, and CR-01 assigns the initiative there. A PARTIAL result stops CR-01, since a subscription without the initiative cannot be told from one that was not read. An assignment made shortly before collection shows no state until its first compliance scan, so the index asks to confirm under Policy > Assignments before raising CR-01.
+
+```kql
+policyresources
+| where type =~ "microsoft.policyinsights/policystates"
+| extend AssignmentName  = tostring(properties.policyAssignmentName),
+         InitiativeName  = tostring(properties.policySetDefinitionName),
+         AssignmentId    = tolower(tostring(properties.policyAssignmentId)),
+         AssignmentScope = tolower(tostring(properties.policyAssignmentScope)),
+         ResourceId      = tolower(tostring(properties.resourceId))
+| where AssignmentName contains "ATMO-MXDR-DIAG" or InitiativeName contains "ATMO-MXDR-DIAG"
+| where AssignmentScope !contains "/resourcegroups/"
+| where ResourceId !contains "{{MRG}}"
+| extend SubscriptionKey = tostring(split(ResourceId, "/")[2])
+| summarize Resources = dcount(ResourceId), Assignments = dcount(AssignmentId) by subscriptionId = SubscriptionKey
+| order by subscriptionId asc
+```
+
 ### DR.6-NONCOMPLIANT Resources not compliant with the ATMO-MXDR diagnostic logging initiative
 
-Engine ARG. The resources DR.6-INITIATIVE counts as NonCompliant, one row per resource and assignment, with the policies each one fails: the reference ID inside the initiative, or the definition name. Feeds CR-01 when the initiative is assigned. When DR.6-INITIATIVE is EMPTY, CR-01 assigns the initiative instead and counts the covered resource types from P0.5.
+Engine ARG. The resources DR.6-INITIATIVE counts as NonCompliant, one row per resource and assignment, with the assignment ID and scope and the policies each one fails: the reference ID inside the initiative, or the definition name. A remediation task belongs to one assignment and one policy, so CR-10 lists a task for each pair and each resource once, and an initiative assigned once per subscription under the same name keeps each assignment apart. When DR.6-INITIATIVE is EMPTY, CR-01 assigns the initiative instead, once at a management group named with -ManagementGroup or at each subscription, and counts the covered resource types from P0.5.
 
 ```kql
 policyresources
@@ -582,11 +632,13 @@ policyresources
          ReferenceId    = tostring(properties.policyDefinitionReferenceId),
          Compliance     = tostring(properties.complianceState),
          ResourceId     = tolower(tostring(properties.resourceId)),
-         ResourceType   = tolower(tostring(properties.resourceType))
+         ResourceType   = tolower(tostring(properties.resourceType)),
+         AssignmentId   = tolower(tostring(properties.policyAssignmentId)),
+         AssignmentScope = tostring(properties.policyAssignmentScope)
 | where AssignmentName contains "ATMO-MXDR" or InitiativeName contains "ATMO-MXDR" or DefinitionName contains "ATMO-MXDR"
 | where ResourceId !contains "{{MRG}}"
 | where Compliance =~ "NonCompliant"
 | extend Policy = iff(isnotempty(ReferenceId), ReferenceId, DefinitionName)
-| summarize Policies = strcat_array(make_set(Policy), ", ") by ResourceId, ResourceType, AssignmentName
+| summarize Policies = strcat_array(make_set(Policy), ", ") by ResourceId, ResourceType, AssignmentName, AssignmentId, AssignmentScope
 | order by ResourceType asc, ResourceId asc
 ```

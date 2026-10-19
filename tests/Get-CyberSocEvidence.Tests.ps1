@@ -84,7 +84,7 @@ Describe 'Query catalog' {
     }
 
     It 'adds the per-resource hardening lists the change requests read, each with the gap its parent count reads' {
-        foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DR.6-NONCOMPLIANT') {
+        foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DR.6-COVERAGE', 'DR.6-NONCOMPLIANT') {
             $item = $catalog | Where-Object Id -eq $id
             $item.Engine | Should -Be 'ARG' -Because $id
             $item.Notes | Should -Match '^Added in CyberSOC 1\.1\.0\.' -Because $id
@@ -104,6 +104,23 @@ Describe 'Query catalog' {
         $dr6 | Should -Match 'Compliance =~ "NonCompliant"'
         $dr6 | Should -Match 'where AssignmentName contains "ATMO-MXDR" or InitiativeName contains "ATMO-MXDR" or DefinitionName contains "ATMO-MXDR"' -Because 'it lists exactly the resources DR.6-INITIATIVE counts'
         $dr6 | Should -Match 'ResourceId !contains "\{\{MRG\}\}"'
+        $dr6 | Should -Match 'AssignmentId   = tolower\(tostring\(properties\.policyAssignmentId\)\)'
+        $dr6 | Should -Match 'by ResourceId, ResourceType, AssignmentName, AssignmentId, AssignmentScope' -Because 'a remediation task belongs to one assignment, and same-named assignments in two subscriptions stay apart'
+        $dr6 | Should -Match 'AssignmentScope = tostring\(properties\.policyAssignmentScope\)' -Because 'the scope keeps the case the portal shows'
+        $coverage = ($catalog | Where-Object Id -eq 'DR.6-COVERAGE').Query
+        $coverage | Should -Match 'where AssignmentName contains "ATMO-MXDR-DIAG" or InitiativeName contains "ATMO-MXDR-DIAG"' -Because 'only the diagnostic logging initiative covers a subscription'
+        $coverage | Should -Match 'where AssignmentScope !contains "/resourcegroups/"' -Because 'an assignment on one resource group leaves the rest of the subscription out'
+        $coverage | Should -Match 'by subscriptionId = SubscriptionKey'
+        $eah = $catalog | Where-Object Id -eq 'DP.4-ELIGIBILITY'
+        $eah.Engine | Should -Be 'COMPUTE-SKUS'
+        $eah.Notes | Should -Match '^Added in CyberSOC 1\.1\.0\.'
+        $eah.Query | Should -Match 'where type =~ "microsoft\.compute/virtualmachines"'
+        $eah.Query | Should -Match 'id !contains "\{\{MRG\}\}"'
+        $eah.Query | Should -Match 'where not\(\{\{APPLIANCE\}\}\)' -Because 'network virtual appliances leave DP.4 and DP.4-DETAIL too'
+        $eah.Query | Should -Match 'where not\(coalesce\(tobool\(properties\.securityProfile\.encryptionAtHost\), false\)\)'
+        $eah.Query | Should -Match 'isnotnull\(properties\.encryptionSettingsCollection\)' -Because 'a disk that ever carried Azure Disk Encryption keeps its settings'
+        $eah.Query | Should -Match '"AzureDiskEncryption", "AzureDiskEncryptionForLinux"'
+        $eah.Query | Should -Match 'project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed'
     }
 
     It 'scopes the SecOps worklist incident lists like OUT.1 and DR.10 and extracts the ticket with the raw pattern' {
@@ -160,7 +177,7 @@ Describe 'Query catalog' {
     }
 
     It 'uses only known engines' {
-        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'DEFENDER-SCORES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
+        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
         $catalog | Where-Object { $_.Engine -notin $known } | Should -BeNullOrEmpty
     }
 
@@ -453,6 +470,50 @@ Describe 'Network devices and blob containers (1.11.0)' {
         $r = Get-EbrBlobContainerRow -Account ([pscustomobject]@{ ResourceId = '/x'; Account = 'a'; AllowBlobPublicAccess = 'true' }) -Tenant 't'
         $r.ReadStatus | Should -Match '403'
         $r.Containers | Should -Be 0
+    }
+    It 'reads encryption at host support per size from the Compute resource SKUs API, one region at a time' {
+        Mock Invoke-EbrRest {
+            if ($Uri -match 'page2') { return [pscustomobject]@{ value = @([pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_A1'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'False' }) }) } }
+            [pscustomobject]@{
+                value = @(
+                    [pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_D4s_v5'; capabilities = @([pscustomobject]@{ name = 'vCPUs'; value = '4' }, [pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'True' }) }
+                    [pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_B1ls'; capabilities = @([pscustomobject]@{ name = 'vCPUs'; value = '1' }) }
+                    [pscustomobject]@{ resourceType = 'disks'; name = 'Premium_LRS'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'True' }) })
+                nextLink = 'https://management.azure.com/x?page2'
+            }
+        }
+        $sizes = Get-EbrEncryptionAtHostSizes -SubscriptionId 's1' -Location 'eastus' -Tenant 't'
+        $sizes['standard_d4s_v5'] | Should -BeTrue
+        $sizes['standard_a1'] | Should -BeFalse
+        $sizes['standard_b1ls'] | Should -BeFalse -Because 'a size without the capability does not support it'
+        $sizes.ContainsKey('premium_lrs') | Should -BeFalse -Because 'only virtual machine sizes count'
+        Should -Invoke Invoke-EbrRest -Times 1 -Exactly -ParameterFilter { $Method -eq 'GET' -and $Uri -eq "https://management.azure.com/subscriptions/s1/providers/Microsoft.Compute/skus?api-version=2021-07-01&`$filter=location%20eq%20%27eastus%27" }
+        { Assert-EbrReadOnlyRequest -Method GET -Uri 'https://management.azure.com/subscriptions/s1/providers/Microsoft.Compute/skus?api-version=2021-07-01' } | Should -Not -Throw
+    }
+    It 'marks a machine eligible for encryption at host only when its size supports it and it never used Azure Disk Encryption' {
+        Mock Invoke-EbrRest {
+            if ($Uri -match '/subscriptions/s2/') { throw 'HTTP 403: Forbidden' }
+            [pscustomobject]@{ value = @(
+                    [pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_D4s_v5'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'True' }) }
+                    [pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_A1'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'False' }) }) }
+        }
+        $vm = { param($name, $sub, $size, $ade, $region = 'eastus') [pscustomobject]@{ Name = $name; ResourceId = "/subscriptions/$sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/$name"; resourceGroup = 'rg'; subscriptionId = $sub; Location = $region; Size = $size; PowerState = 'PowerState/running'; AdeUsed = $ade } }
+        $rows = @(Get-EbrEncryptionAtHostRows -Vms @((& $vm 'shared' 's2' 'Standard_D4s_v5' $false), (& $vm 'ok' 's1' 'Standard_D4s_v5' $false), (& $vm 'ade' 's1' 'Standard_D4s_v5' 'True'), (& $vm 'old' 's1' 'Standard_A1' $false), (& $vm 'new' 's1' 'Standard_Z9' $false), (& $vm 'denied' 's2' 'Standard_D4s_v5' $false 'westus')) -Tenant 't')
+        $by = @{}; foreach ($r in $rows) { $by[$r.Name] = $r }
+        @($by.ok.Eligible, $by.ok.SizeSupported, $by.ok.Reason) | Should -Be @($true, 'Yes', '')
+        @($by.shared.Eligible, $by.shared.SizeRead) | Should -Be @($true, 'OK') -Because 'the size belongs to the region, so the list read through another subscription answers for it'
+        @($by.ade.Eligible, $by.ade.AdeUsed, $by.ade.Reason) | Should -Be @($false, $true, 'Azure Disk Encryption used')
+        @($by.old.Eligible, $by.old.SizeSupported, $by.old.Reason) | Should -Be @($false, 'No', 'size not supported')
+        @($by.new.Eligible, $by.new.SizeSupported, $by.new.Reason) | Should -Be @($false, 'Unknown', 'size not listed for the region')
+        @($by.denied.Eligible, $by.denied.SizeSupported) | Should -Be @($false, 'Unknown')
+        $by.denied.Reason | Should -Match '^size support not read: .*403'
+        $by.denied.SizeRead | Should -Match '^Not read: .*403'
+        $by.ok.SizeRead | Should -Be 'OK'
+        $deniedAde = @(Get-EbrEncryptionAtHostRows -Vms @((& $vm 'both' 's2' 'Standard_D4s_v5' 'true' 'westus')) -Tenant 't')[0]
+        $deniedAde.Reason | Should -Be 'Azure Disk Encryption used'
+        $deniedAde.SizeRead | Should -Match '^Not read' -Because 'a failed SKU read still counts when Azure Disk Encryption already rules the machine out'
+        $by.ok.ResourceId | Should -Be '/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/ok'
+        Should -Invoke Invoke-EbrRest -Times 4 -Exactly -Because 'each region is read once, eastus through s2 then s1, westus through s2, and westus again for the second call'
     }
 }
 
