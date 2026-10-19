@@ -325,6 +325,34 @@ class ReviewRegressionTests(unittest.TestCase):
         self.assertEqual(permissions['statuses'], 'read')
         self.assertEqual(permissions['contents'], 'read')
 
+    def test_trusted_ci_expects_the_actual_clearance_workflow_jobs(self):
+        import base64
+        from workflow_support import parse_workflow
+        root = Path(__file__).resolve().parents[2]
+        workflow = parse_workflow((root / '.github/workflows/review-clearance.yml').read_text())
+        jobs = [dict(id=i, name=job['name'], conclusion='success')
+                for i, job in enumerate(workflow['jobs'].values(), 1)]
+        run = dict(id=7, path='.github/workflows/review-clearance.yml', head_branch='main',
+                   event='workflow_dispatch', run_attempt=1, head_sha='c' * 40,
+                   status='completed', conclusion='success')
+        status = dict(id=1, context='Reviewed CI', state='success', creator=dict(b.ACTIONS_BOT),
+                      target_url=f'https://github.com/{b.REPO}/actions/runs/7',
+                      description=f'base:{BASE} evidence:digest')
+
+        def api(path, method='GET', data=None):
+            if '/contents/' in path:
+                name = path.split('/contents/')[1].split('?')[0]
+                return {'content': base64.b64encode((root / name).read_bytes()).decode()}
+            return {'status': 'identical'} if '/compare/' in path else run
+
+        with patch.object(b.gate, 'matching_runs', return_value=[run]), \
+             patch.object(b, 'api', side_effect=api), \
+             patch.object(b, 'pages', side_effect=lambda path, key=None: jobs if key == 'jobs' else [status]):
+            self.assertTrue(b.trusted_ci(2, HEAD, BASE, 'main', 'digest'))
+            next(j for j in jobs if j['name'] == workflow['jobs']['test']['name'])['conclusion'] = 'skipped'
+            with self.assertRaisesRegex(b.Blocked, 'Incomplete trusted CI jobs'):
+                b.trusted_ci(2, HEAD, BASE, 'main', 'digest')
+
 class ActivationAndMergeabilityRegressionTests(unittest.TestCase):
     def configured(self):
         return dict(enabled=True, repository=b.REPO, activation_after='2026-10-19T01:00:00Z',

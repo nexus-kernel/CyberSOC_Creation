@@ -59,12 +59,14 @@ not a claim that the unavailable ZIP or generator was executed.
 ## Naming audit and intentionally retained identifiers
 
 Corrected saved-environment repo/path examples, package/lock name
-`cybersoc-creation` (private), IDE module `CyberSOC_Creation.iml`, test job label,
+`cybersoc-creation` (private), IDE module `CyberSOC_Creation.iml`, test job label
+(also the job name the disabled budget controller's CI verification expects),
 collector query/progress labels and SecOps help. `setup-cloud.sh` now derives its
 checkout from its own path, accepts only `CYBERSOC_REPO_DIR`, and verifies the
-CyberSOC origin before any dependency operation. `EBR_REPO_DIR` is deliberately
-not an alias. Offline routing tests cover spaces, explicit override, legacy variable
-isolation and wrong-repository rejection. Saved setup commands outside the repository
+CyberSOC origin (HTTPS or SSH, with or without `.git`) before any dependency
+operation. `EBR_REPO_DIR` is deliberately not an alias. Offline routing tests cover
+spaces, explicit override, both origin forms, legacy variable isolation and
+wrong-repository rejection. Saved setup commands outside the repository
 must be reviewed separately; files do not update the saved environment configuration.
 
 The current main already uses CyberSOC public script names, monthly HTML/PPTX titles
@@ -120,3 +122,6 @@ subscription is changed by this port.
   documented local PowerShell/XDG paths and passed.
 - actionlint 1.7.7, shell syntax, Python compilation and staged diff whitespace passed.
 - No hosted CI run is claimed. No production credentials or tenant actions used.
+- Draft review follow-up (budget CI job name, suffix-less origin, npm-ordered lock):
+  Python 179 passed; Node 182 passed with the same optional skip; Pester 281 passed;
+  actionlint 1.7.7 and diff whitespace clean.

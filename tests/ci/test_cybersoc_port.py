@@ -74,10 +74,19 @@ class CyberSocPortTests(unittest.TestCase):
                                     cwd=temp, env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, str(checkout))
+            # Clones made without the .git suffix keep that origin form.
+            for remote in ('https://github.com/nexus-kernel/CyberSOC_Creation',
+                           'git@github.com:nexus-kernel/CyberSOC_Creation.git'):
+                env['MOCK_REMOTE'] = remote
+                result = subprocess.run(['bash', str(script)], cwd=temp, env=env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, remote)
+                self.assertEqual(result.stdout, str(checkout))
             env['CYBERSOC_REPO_DIR'] = temp
             result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
             self.assertEqual(result.stdout, temp)
-            env['MOCK_REMOTE'] = 'https://github.com/nexus-kernel/EBR_Creation.git'
-            result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('Refusing setup', result.stderr)
+            for remote in ('https://github.com/nexus-kernel/EBR_Creation.git',
+                           'https://github.com/other/CyberSOC_Creation'):
+                env['MOCK_REMOTE'] = remote
+                result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, remote)
+                self.assertIn('Refusing setup', result.stderr)

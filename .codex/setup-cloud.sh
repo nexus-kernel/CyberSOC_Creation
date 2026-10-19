@@ -5,7 +5,8 @@ set -euo pipefail
 cybersoc_root="${CYBERSOC_REPO_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd -- "$cybersoc_root"
 case "$(git remote get-url origin)" in
-  https://github.com/nexus-kernel/CyberSOC_Creation.git|git@github.com:nexus-kernel/CyberSOC_Creation.git) ;;
+  https://github.com/nexus-kernel/CyberSOC_Creation|https://github.com/nexus-kernel/CyberSOC_Creation.git) ;;
+  git@github.com:nexus-kernel/CyberSOC_Creation|git@github.com:nexus-kernel/CyberSOC_Creation.git) ;;
   *) echo 'Refusing setup outside nexus-kernel/CyberSOC_Creation.' >&2; exit 1 ;;
 esac
 test "$(uname -s)/$(uname -m)" = Linux/x86_64 || { echo 'This bootstrap requires Linux x64.' >&2; exit 1; }
