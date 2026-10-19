@@ -45,6 +45,7 @@ BeforeAll {
         Set-PackResult $Path 'DP.4-DETAIL' @(
             @{ Name = 'vm-app01'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s1; PowerState = 'PowerState/running'; Size = 'Standard_D4s_v5' }
             @{ Name = 'vm-old'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s2; PowerState = 'PowerState/deallocated'; Size = 'Standard_B2s' }
+            @{ Name = 'vm-paused'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s1; PowerState = 'PowerState/stopped'; Size = 'Standard_B2s' }
             @{ Name = 'aks-nodepool1-vmss'; ResourceType = 'microsoft.compute/virtualmachinescalesets'; resourceGroup = 'rg-aks'; subscriptionId = $s1; PowerState = 'Scale set'; Size = 'Standard_D2s_v5' })
     }
     function Get-Section([string]$Text, [string]$Heading) {
@@ -203,11 +204,15 @@ Describe 'Change request generation' {
         foreach ($s in $s1, $s2) { $text | Should -Match "    az account set --subscription $s" }
         $text | Should -Match 'Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save\.'
         $text | Should -Match '7\. Repeat steps 3 to 6 for each remaining virtual machine listed\.'
+        $text | Should -Match '6\. Go back to Overview and select Start only if the RESOURCES section lists the machine as running' -Because 'a machine that was stopped or deallocated stays that way'
+        $text | Should -Match '- vm-paused, resource group rg-app, size Standard_B2s, stopped'
+        @(Get-Section $text 'C) ROLLBACK PLAN')[-1] | Should -Match '^3\. Go back to Overview and select Start only if the RESOURCES section lists the machine as running\.$' -Because 'rollback restores the power state recorded at collection'
         (Get-Section $text 'D) DR Impact') -join '|' | Should -Be 'Not a DR Client'
         (Get-Section $text 'D) DR PLAN') -join '|' | Should -Be 'Not a DR Client. No updates to the DR Playbook are required.'
         $email = & $read 'CR-09-encryption-at-host.email.txt'
         $email | Should -Match '- vm-app01 \(resource group rg-app, currently running\)'
         $email | Should -Match '- vm-old \(resource group rg-app, currently stopped and will be left stopped\)'
+        $email | Should -Match '- vm-paused \(resource group rg-app, currently stopped and will be left stopped\)' -Because 'a machine stopped but still allocated is not running either'
         $email | Should -Match 'Could you suggest a maintenance window'
     }
 
@@ -224,6 +229,8 @@ Describe 'Change request generation' {
         @($csv | Where-Object CR -eq 'CR-06').Resource | Should -Be @('kv-app', 'kv-dev')
         ($csv | Where-Object { $_.CR -eq 'CR-04' }).CurrentSetting | Should -Be 'minimum TLS 1.0'
         @($csv | Where-Object CR -eq 'CR-01').Count | Should -Be 2
+        ($csv | Where-Object { $_.CR -eq 'CR-09' -and $_.Resource -eq 'vm-old' }).ResourceId | Should -Be "/subscriptions/$s2/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-old"
+        @($csv | Where-Object { -not $_.ResourceId }).Count | Should -Be 0 -Because 'every tracking row carries the resource ID'
     }
 }
 
@@ -283,7 +290,7 @@ Describe 'Change request variants' {
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         $index | Should -Match '\| 02 \| Secure transfer required on storage accounts \|  \| Needs recollection with CyberSOC collector 1\.1\.0 or later \|'
         $index | Should -Match '\| 09 \| Encryption at host on virtual machines \|  \| Not collected \(DP\.4-DETAIL FAILED\) \|'
-        $index | Should -Match 'Subscription names were not collected \(P0\.7\)'
+        $index | Should -Match 'Subscription names were not read \(P0\.7\)'
         Get-Content (Join-Path $out 'CR-01-diagnostic-logging.txt') -Raw | Should -Match "- $s1\r?\n"
     }
 
@@ -307,6 +314,26 @@ Describe 'Change request variants' {
         $email | Should -Match 'Thank you,\r?\n$'
         Get-Content (Join-Path $folder 'notes.txt') -Raw | Should -Match 'keep me'
         Test-Path (Join-Path $pack '05-change-requests') | Should -BeFalse
+    }
+
+    It 'reports an unreadable result file instead of reading it as no gaps' {
+        $pack = Join-Path $TestDrive 'damaged'
+        New-ChangeFixture $pack
+        '{"Name": "kv-app", ' | Set-Content (Join-Path $pack 'results/DP.2-DETAIL.json')
+        Remove-Item (Join-Path $pack 'results/NB.5-DETAIL.json')
+        '' | Set-Content (Join-Path $pack 'results/NB.4-DETAIL.json')
+        'not json' | Set-Content (Join-Path $pack 'results/DP.1-CONTAINERS.json')
+        $null = & $generator -EvidencePath $pack -WarningAction SilentlyContinue
+        $out = Join-Path $pack '05-change-requests'
+        foreach ($f in 'CR-04-app-service-minimum-tls.txt', 'CR-06-key-vault-purge-protection.txt', 'CR-08-app-service-https-only.txt') { Test-Path (Join-Path $out $f) | Should -BeFalse -Because $f }
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 04 \| .* \| Result file unreadable \(NB\.5-DETAIL\), recollect or restore the pack \|'
+        $index | Should -Match '\| 06 \| .* \| Result file unreadable \(DP\.2-DETAIL\), recollect or restore the pack \|'
+        $index | Should -Match '\| 08 \| .* \| Result file unreadable \(NB\.4-DETAIL\), recollect or restore the pack \|'
+        $index | Should -Match 'The DP\.1-CONTAINERS result file is unreadable'
+        $email = Get-Content (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') -Raw
+        $email | Should -Match 'I could not read the container settings on these accounts' -Because 'without the container list no account is presented as closed'
+        $email | Should -Not -Match 'no container open'
     }
 
     It 'stops when the pack is not finished' {

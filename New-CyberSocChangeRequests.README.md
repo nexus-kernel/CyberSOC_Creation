@@ -38,7 +38,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 06 | Purge protection on key vaults | DP.2-DETAIL | No |
 | 07 | Anonymous blob access disabled on storage accounts, naming the containers open to anonymous read today | DP.1-DETAIL, DP.1-CONTAINERS | Yes |
 | 08 | HTTPS Only on App Service and Function apps | NB.4-DETAIL | Yes |
-| 09 | Encryption at host on virtual machines, which needs a stop and start of each | DP.4-DETAIL | Yes, asking for a maintenance window |
+| 09 | Encryption at host on virtual machines. Each is stopped for the change, and only the machines recorded as running are started again, during the change and on rollback | DP.4-DETAIL | Yes, asking for a maintenance window |
 
 Resources a change leaves out are named in the index notes:
 
@@ -85,7 +85,9 @@ breaks a rule stops the run before it is written.
 | `change-requests.csv` | One row per resource: CR, Change, Subscription, ResourceGroup, Resource, CurrentSetting, ResourceId |
 
 Each change reports one of these statuses in the index: a change request (and client email), no gaps found, not
-collected with the manifest status, or needs recollection with CyberSOC collector 1.1.0 or later. The per-resource
+collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
+later. A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
+read as no gaps. The per-resource
 results (P0.7, NB.4-DETAIL, NB.5-DETAIL, NB.6-DETAIL, DP.1-DETAIL, DP.2-DETAIL, DR.6-NONCOMPLIANT) were added in
 that version. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
 

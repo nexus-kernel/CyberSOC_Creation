@@ -74,6 +74,21 @@ function Get-Rows([string]$id) {
     try { return @(Get-Content -LiteralPath $file -Raw | ConvertFrom-Json | Where-Object { $null -ne $_ }) }
     catch { Write-Warning "$id could not be read. Regenerate or recollect this result."; return @() }
 }
+# A result the manifest reads as OK or PARTIAL needs a file that parses, or a damaged pack would read
+# as no gaps found and leave a change out without saying so.
+function Test-Unreadable([string]$id) {
+    if ((Get-Status $id) -notin 'OK', 'PARTIAL') { return $false }
+    $file = Join-Path $pack "results/$id.json"
+    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $true }
+    try {
+        $raw = Get-Content -LiteralPath $file -Raw
+        if ([string]::IsNullOrWhiteSpace($raw)) { return $true }
+        $null = $raw | ConvertFrom-Json
+        $false
+    }
+    catch { $true }
+}
+function Get-UnreadableState([string[]]$ids) { 'Result file unreadable ({0}), recollect or restore the pack' -f ($ids -join ', ') }
 
 # Copy rules: no semicolons, arrows, emoji or angle brackets, and the greater-than sign only in a
 # navigation step such as Settings > Configuration. Values read from the pack are cleaned first, and
@@ -345,6 +360,7 @@ $catalog = @(
             $status = Get-Status 'DR.6-NONCOMPLIANT'
             if ($status -eq 'MISSING') { return @{ State = $needsRecollection } }
             if ($status -notin 'OK', 'PARTIAL', 'EMPTY') { return @{ State = "Not collected (DR.6-NONCOMPLIANT $status)" } }
+            if (Test-Unreadable 'DR.6-NONCOMPLIANT') { return @{ State = Get-UnreadableState 'DR.6-NONCOMPLIANT' } }
             $rows = @(Get-Rows 'DR.6-NONCOMPLIANT')
             if (-not $rows.Count) { return @{ State = 'No gaps found in DR.6-NONCOMPLIANT' } }
             New-DiagnosticRemediation $rows } }
@@ -517,7 +533,7 @@ $catalog = @(
        Build = {
             # The containers each account holds (DP.1-CONTAINERS) name what anonymous readers lose.
             $containers = @{}
-            $containersRead = (Get-Status 'DP.1-CONTAINERS') -in 'OK', 'PARTIAL', 'EMPTY'
+            $containersRead = (Get-Status 'DP.1-CONTAINERS') -in 'OK', 'PARTIAL', 'EMPTY' -and -not (Test-Unreadable 'DP.1-CONTAINERS')
             if ($containersRead) { foreach ($c in @(Get-Rows 'DP.1-CONTAINERS')) { $containers[(Get-Text $c.ResourceId).ToLowerInvariant()] = $c } }
             $public = [System.Collections.Generic.List[string]]::new()
             $closed = [System.Collections.Generic.List[string]]::new()
@@ -630,7 +646,10 @@ $catalog = @(
             $scaleSets = @($rows | Where-Object { (Get-Text $_.ResourceType) -match 'scalesets' })
             $notes = @(if ($scaleSets.Count) { '{0} left out of CR-09: {1}. Scale sets take encryption at host through their model and an instance update, and AKS node pools through the node pool, so they need their own change.' -f (Get-Count $scaleSets.Count 'scale set' 'scale sets'), (@($scaleSets | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', ') })
             $vms = @($rows | Where-Object { $_ -notin $scaleSets })
-            $resources = @($vms | ForEach-Object { New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('size {0}, {1}' -f (Get-Text $_.Size), (Get-PowerText $_.PowerState)) '' })
+            # DP.4-DETAIL carries no resource ID, and a virtual machine's ID follows from its subscription, group and name.
+            $resources = @($vms | ForEach-Object {
+                    $id = if (Get-Text $_.ResourceId) { Get-Text $_.ResourceId } else { '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Compute/virtualMachines/{2}' -f (Get-Text $_.subscriptionId), (Get-Text $_.resourceGroup), (Get-Text $_.Name) }
+                    New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('size {0}, {1}' -f (Get-Text $_.Size), (Get-PowerText $_.PowerState)) $id })
             $n = $resources.Count
             if (-not $n) { return @{ State = $(if ($scaleSets.Count) { 'Only scale sets remain' } else { 'No gaps found' }); Notes = $notes } }
             $subscriptions = @($resources | ForEach-Object SubscriptionId | Sort-Object -Unique)
@@ -642,7 +661,7 @@ $catalog = @(
             $impl.Add((Get-OpenStep $n 'Virtual machines' 'virtual machine'))
             $impl.Add('On Overview, select Stop and wait for the status to read Stopped (deallocated).')
             $impl.Add('Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.')
-            $impl.Add('Go back to Overview and select Start, unless the RESOURCES section lists the machine as deallocated.')
+            $impl.Add('Go back to Overview and select Start only if the RESOURCES section lists the machine as running, so a machine that was not running stays stopped.')
             Add-RepeatStep $impl $n 3 'virtual machine'
             $references = @(
                 , @('Use the Azure portal to enable end-to-end encryption using encryption at host', 'https://learn.microsoft.com/azure/virtual-machines/disks-enable-host-based-encryption-portal')
@@ -660,19 +679,19 @@ $catalog = @(
                 Testing = @(
                     ('In the Azure portal, open {0} and go to Settings > Disks > Additional settings.' -f (Get-EachStep $n 'virtual machine'))
                     'Confirm Encryption at host shows Yes.'
-                    'On Overview, confirm each machine that was running before the change shows Running.')
+                    'On Overview, confirm each machine the RESOURCES section lists as running shows Running.')
                 Rollback = @(
                     'In the Azure portal, open the virtual machine to revert, select Stop on Overview and wait for the status to read Stopped (deallocated).'
                     'Go to Settings > Disks > Additional settings, set Encryption at host to No and select Save.'
-                    'Go back to Overview and select Start.')
+                    'Go back to Overview and select Start only if the RESOURCES section lists the machine as running.')
                 References = $references
                 Csv = $resources
                 Email = @{ Subject = 'Maintenance window request: encryption at host for Azure virtual machines'; Body = @(
                         ('I am planning to enable encryption at host on {0}. This setting encrypts the temporary disk and the disk caches on the Azure host, so the data on {1} stays encrypted from the virtual machine all the way to Azure Storage.' -f $(if ($n -eq 1) { 'the virtual machine below' } else { "the $n virtual machines below" }), $(if ($n -eq 1) { 'this server' } else { 'these servers' }))
                         , @($resources | Sort-Object Name | ForEach-Object {
-                                $state = if ($_.Setting -match 'deallocated$') { 'currently stopped and will be left stopped' } else { 'currently ' + ($_.Setting -replace '^size [^,]*, ', '') }
+                                $state = switch -Regex ($_.Setting) { 'running$' { 'currently running' } '(deallocated|stopped)$' { 'currently stopped and will be left stopped' } default { 'power state not recorded, so it will be left stopped unless you ask me to start it' } }
                                 '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $state })
-                        ('To apply it, each virtual machine has to be stopped and started again. Each server will be unavailable for a few minutes while this happens, and nothing changes inside the operating system or the applications.')
+                        ('To apply it, each virtual machine has to be stopped first. Each running server will be unavailable for a few minutes until it is started again, and nothing changes inside the operating system or the applications.')
                         ('Could you suggest a maintenance window that works for {0}, and let me know if any of them need to be handled separately or in a particular order? I will schedule the change once I have your confirmation.' -f $(if ($n -eq 1) { 'this server' } else { 'these servers' }))) }
             }
             if ($DrClient) {
@@ -692,8 +711,10 @@ $results = foreach ($item in $catalog) {
     $state = ''; $cr = $null; $notes = @()
     $missing = @($item.Sources | Where-Object { (Get-Status $_) -eq 'MISSING' })
     $failed = @($item.Sources | Where-Object { (Get-Status $_) -notin 'OK', 'PARTIAL', 'EMPTY', 'MISSING' })
+    $unreadable = @($item.Sources | Where-Object { Test-Unreadable $_ })
     if ($missing.Count) { $state = if (@($missing | Where-Object { $_ -in $detailIds }).Count) { $needsRecollection } else { "Not collected ($($missing -join ', '))" } }
     elseif ($failed.Count) { $state = 'Not collected ({0})' -f (@($failed | ForEach-Object { "$_ $(Get-Status $_)" }) -join ', ') }
+    elseif ($unreadable.Count) { $state = Get-UnreadableState $unreadable }
     else {
         $built = & $item.Build
         $cr = $built.Cr
@@ -744,7 +765,10 @@ foreach ($r in $results) {
 $notes = @($results | ForEach-Object { $_.Notes })
 if (-not $DrClient) { $notes += 'DR Impact reads Not a DR Client. Run again with -DrClient for a DR client.' }
 if (-not $workspaceName -and @($results | Where-Object { $_.Cr -and $_.Item.Number -eq 1 }).Count) { $notes += 'The pack lists {0}, so CR-01 names the client Sentinel workspace without its name. Run again with -SentinelWorkspace to name it.' -f (Get-Count $workspaces.Count 'workspace' 'workspaces') }
-if ((Get-Status 'P0.7') -notin 'OK', 'PARTIAL') { $notes += 'Subscription names were not collected (P0.7), so the change requests show subscription IDs only.' }
+if ((Get-Status 'P0.7') -notin 'OK', 'PARTIAL' -or (Test-Unreadable 'P0.7')) { $notes += 'Subscription names were not read (P0.7), so the change requests show subscription IDs only.' }
+foreach ($id in 'P0.5', 'DP.1-CONTAINERS') {
+    if (Test-Unreadable $id) { $notes += "The $id result file is unreadable, so the change requests that use it were written without it. Recollect or restore the pack." }
+}
 if ($notes.Count) { $md.Add(''); $md.Add('## Notes'); $md.Add(''); foreach ($n in $notes) { $md.Add("- $n") } }
 $indexPath = Join-Path $folder '00-index.md'
 Write-CopyFile $indexPath $md.ToArray() "`n"
