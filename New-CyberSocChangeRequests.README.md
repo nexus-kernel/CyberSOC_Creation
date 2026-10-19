@@ -38,7 +38,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 04 | Minimum inbound TLS 1.2 on App Service and Function apps. App Service refuses TLS 1.0 and 1.1 from May 31, 2027 | NB.5-DETAIL | No |
 | 05 | Minimum TLS 1.2 on Azure SQL logical servers. Azure SQL retired TLS 1.0 and 1.1 on August 31, 2025 | NB.6-DETAIL | No |
 | 06 | Purge protection on key vaults, with the soft delete retention period of each vault. Purge protection cannot be disabled once enabled, so the client approves it in writing first | DP.2-DETAIL | Yes, asking for written approval, unless `-PurgeProtectionApproved` records that the client approved it at build kickoff |
-| 07 | Anonymous blob access disabled on storage accounts, naming the containers open to anonymous read today | DP.1-DETAIL, DP.1-CONTAINERS | Yes |
+| 07 | Anonymous blob access disabled on the storage accounts where it carries no risk: DP.1-CONTAINERS listed every container (`ReadStatus` OK) and none is set to Blob or Container access. RESOURCES lists the container count of each account. Before Save, the steps check under Data storage > Containers that every container's anonymous access level still reads Private, and an account where one reads Blob or Container is left unchanged for the next pack. The rollback sets Allow Blob anonymous access back to Enabled, which applies within 30 seconds and leaves the containers as they are | DP.1-DETAIL, DP.1-CONTAINERS | Yes, a notice that walks through why nothing breaks (every container is private, and sign-in, shared access signature and account key access are unaffected), says each account is checked again just before the change, offers to turn the setting back on straight away, and asks the client to confirm |
 | 08 | HTTPS Only on App Service and Function apps | NB.4-DETAIL | Yes |
 | 09 | Encryption at host on the virtual machines that can take it. RESOURCES lists the VM ID of each machine, and before stopping a machine the steps check under Overview > JSON View that `properties.vmId` still reads that ID. A machine whose ID differs was deleted and created again under the same name after collection, so it is skipped and left for the next pack. Each machine changed is stopped for the change, and started again only if it was running when the change began, during the change and on rollback. The machines of a Flexible scale set that CR-15 changes are left to it | DP.4-ELIGIBILITY, DP.4-VMSS-ELIGIBILITY | Yes, asking for a maintenance window |
 | 10 | Diagnostic logging remediated on the resources not compliant with the initiative: one remediation task for each assignment and policy, each resource listed once | DR.6-INITIATIVE, DR.6-NONCOMPLIANT | No |
@@ -52,7 +52,17 @@ Resources a change leaves out are named in the index notes:
 
 - CR-04 leaves out App Service apps whose minimum TLS version Resource Graph returned empty, because App Service
   applies 1.2 when none is set. Check them in the portal if the value may be missing from Resource Graph.
-- CR-07 leaves out FileStorage accounts, which hold no blob service.
+- CR-07 leaves out FileStorage accounts, which hold no blob service, and every account it cannot show is safe to change:
+  - an account with a container set to Blob or Container access, named with its public containers. Turning the
+    setting off would stop those anonymous reads, so each container's owner confirms first that it serves no public
+    content and the container is set to private. A later pack picks the account up for CR-07 once every container in
+    it is private.
+  - an account whose containers were not listed, because DP.1-CONTAINERS has no row for it or was not collected,
+    failed or is unreadable. Recollect the pack.
+  - an account whose containers DP.1-CONTAINERS could not list when it reads PARTIAL (a `ReadStatus` other than OK).
+    Only an account read in full qualifies.
+
+  When no account qualifies, CR-07 reads "No gaps found" and the notes still name the accounts left out.
 - CR-01 assigns the initiative where no ATMO-MXDR policy state was found. An assignment made shortly before
   collection shows no state until its first compliance scan, so the index asks to confirm under Policy > Assignments
   first. When other subscriptions already have the initiative, CR-01 assigns per subscription even with
