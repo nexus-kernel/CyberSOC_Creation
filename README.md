@@ -57,7 +57,9 @@ missing evidence never becomes a favorable zero.
 
    `05-change-requests/` holds one change request for each low-impact hardening item that still has resources to
    fix (diagnostic logging, secure transfer, minimum TLS 1.2, purge protection), and a ready-to-send client email for
-   the changes that need the client first (anonymous blob access, HTTPS only, encryption at host).
+   the changes that need the client first (purge protection, which cannot be undone and needs the client's written
+   approval, anonymous blob access, HTTPS only, encryption at host). Add `-PurgeProtectionApproved` when the client
+   approved purge protection at build kickoff, and the index records that approval instead of an email.
 
 A pack collected without the vulnerability runs takes them later:
 

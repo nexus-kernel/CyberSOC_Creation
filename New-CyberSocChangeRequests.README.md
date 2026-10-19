@@ -21,6 +21,7 @@ Writes `05-change-requests` into the pack. Offline only. Nothing in the pack is 
 | `-ManagementGroup <name>` | Assigns the diagnostic logging initiative once at this management group. Without it CR-01 assigns it at each subscription, since an assignment has one scope |
 | `-ClientContact <name>` | The name the client emails open with. Without it they open with Hello |
 | `-SenderName <name>` | The name under the sign-off of the client emails |
+| `-PurgeProtectionApproved` | The client approved purge protection at build kickoff. CR-06 is written without its client email, and the index notes the approval |
 
 Run it again after a recollection. It replaces the change requests it wrote before, removes the ones the pack no
 longer supports, and leaves every other file in the folder alone.
@@ -36,7 +37,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 03 | Minimum TLS 1.2 on storage accounts. Azure Storage has refused TLS 1.0 and 1.1 since February 3, 2026, so this aligns the configuration | DP.1-DETAIL | No |
 | 04 | Minimum inbound TLS 1.2 on App Service and Function apps. App Service refuses TLS 1.0 and 1.1 from May 31, 2027 | NB.5-DETAIL | No |
 | 05 | Minimum TLS 1.2 on Azure SQL logical servers. Azure SQL retired TLS 1.0 and 1.1 on August 31, 2025 | NB.6-DETAIL | No |
-| 06 | Purge protection on key vaults | DP.2-DETAIL | No |
+| 06 | Purge protection on key vaults, with the soft delete retention period of each vault. Purge protection cannot be disabled once enabled, so the client approves it in writing first | DP.2-DETAIL | Yes, asking for written approval, unless `-PurgeProtectionApproved` records that the client approved it at build kickoff |
 | 07 | Anonymous blob access disabled on storage accounts, naming the containers open to anonymous read today | DP.1-DETAIL, DP.1-CONTAINERS | Yes |
 | 08 | HTTPS Only on App Service and Function apps | NB.4-DETAIL | Yes |
 | 09 | Encryption at host on the virtual machines that can take it. Each is stopped for the change, and started again only if it was running when the change began, during the change and on rollback | DP.4-ELIGIBILITY, DP.4-DETAIL | Yes, asking for a maintenance window |
@@ -83,8 +84,12 @@ The sections follow the template headings, in order, so each one pastes into the
 - References are Microsoft Learn pages only.
 - The notification list is left empty to fill in.
 
-The client emails are written in the first person, explain the change and what it means for the client, list the
-affected resources and ask for a confirmation or a maintenance window before anything is scheduled.
+The client emails are written in the first person singular, explain the change and what it means for the client, list the
+affected resources and ask for a confirmation or a maintenance window before anything is scheduled. The purge
+protection email lists the vaults by subscription with the soft delete retention period of each, explains that
+purge protection cannot be turned off and that a deleted vault, key, secret or certificate is kept for that period,
+cannot be purged early and keeps its name until the period ends, and asks for the client's written approval before
+the change is scheduled.
 
 Every change request, email and the index keep to the copy rules: no semicolons, arrows, emoji or angle brackets, and
 the greater-than sign only in navigation steps such as Settings > Configuration. The CSV is tracking data and carries
