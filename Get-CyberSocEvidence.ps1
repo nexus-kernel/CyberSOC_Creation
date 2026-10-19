@@ -201,7 +201,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.3.0, based on the EBR collector 1.14.0
+    Version: 1.4.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -242,7 +242,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.3.0'
+$script:EbrVersion = '1.4.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2188,7 +2188,7 @@ resources
 | order by resourceGroup asc, Name asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'DP.4-ELIGIBILITY' -Phase 'P2 Data protection' -Engine 'COMPUTE-SKUS' -Title 'Virtual machines that can take encryption at host' -Notes 'Added in CyberSOC 1.1.0. The virtual machines DP.4-DETAIL lists, scale sets left out, with whether each can take encryption at host. Azure Disk Encryption is read from the disks (any encryptionSettingsCollection, enabled or not) and the ADE extensions, because a machine that ever used it cannot take encryption at host. An attached Ultra Disk or Premium SSD v2 with 512e sectors created before May 13, 2023 rules a machine out too. Size support is read per subscription and region from the Compute resource SKUs API (the EncryptionAtHostSupported capability, a GET that Reader can make), because Resource Graph does not index it. The change requests leave out every machine that is not proven eligible. Since CyberSOC 1.3.0 each row carries ScaleSet, the Flexible scale set the machine belongs to, so CR-09 can leave the instances of a scale set to CR-15. Internal: names machines, the report embeds counts only.' -Query @'
+    $q.Add((New-EbrQuery -Id 'DP.4-ELIGIBILITY' -Phase 'P2 Data protection' -Engine 'COMPUTE-SKUS' -Title 'Virtual machines that can take encryption at host' -Notes 'Added in CyberSOC 1.1.0. The virtual machines DP.4-DETAIL lists, scale sets left out, with whether each can take encryption at host. Azure Disk Encryption is read from the disks (any encryptionSettingsCollection, enabled or not) and the ADE extensions, because a machine that ever used it cannot take encryption at host. An attached Ultra Disk or Premium SSD v2 with 512e sectors created before May 13, 2023 rules a machine out too. Size support is read per subscription and region from the Compute resource SKUs API (the EncryptionAtHostSupported capability, a GET that Reader can make), because Resource Graph does not index it. The change requests leave out every machine that is not proven eligible. Since CyberSOC 1.3.0 each row carries ScaleSet, the Flexible scale set the machine belongs to, so CR-09 can leave the instances of a scale set to CR-15. Since CyberSOC 1.4.0 each row carries VmId (properties.vmId), the unique ID Azure gives each machine, so CR-09 and CR-15 change only the machine that was checked, never a machine deleted and created again under the same name after collection. Internal: names machines, the report embeds counts only.' -Query @'
 resources
 | where type =~ "microsoft.compute/virtualmachines"
 | where id !contains "{{MRG}}"
@@ -2197,7 +2197,8 @@ resources
 | project VmKey = tolower(id), ResourceId = id, Name = name, resourceGroup, subscriptionId, Location = tolower(location),
           Size = tostring(properties.hardwareProfile.vmSize),
           PowerState = tostring(properties.extended.instanceView.powerState.code),
-          ScaleSet = tolower(tostring(properties.virtualMachineScaleSet.id))
+          ScaleSet = tolower(tostring(properties.virtualMachineScaleSet.id)),
+          VmId = tostring(properties.vmId)
 | join kind=leftouter (
     resources
     | where type =~ "microsoft.compute/disks"
@@ -2220,11 +2221,11 @@ resources
   ) on VmKey
 | extend AdeUsed       = coalesce(AdeDisks, 0) > 0 or coalesce(AdeExtensions, 0) > 0,
          OldSectorDisk = coalesce(OldSectorDisks, 0) > 0
-| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, ScaleSet, AdeUsed, OldSectorDisk
+| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, ScaleSet, VmId, AdeUsed, OldSectorDisk
 | order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'DP.4-VMSS-ELIGIBILITY' -Phase 'P2 Data protection' -Engine 'COMPUTE-SKUS' -Title 'Scale sets that can take encryption at host' -Notes 'Added in CyberSOC 1.3.0. The scale sets DP.4-DETAIL lists, one row each with the orchestration mode, upgrade policy, instance count and size of the model, and whether the model can take encryption at host. Azure Disk Encryption is read from the extensions on the model, because a scale set that ever used it cannot take encryption at host. An Ultra Disk or Premium SSD v2 in the model of a scale set created before May 13, 2023 rules it out too, since its instance disks may use 512e sectors from before that date. Size support comes from the Compute resource SKUs API, as in DP.4-ELIGIBILITY. A scale set in the node resource group of an AKS cluster, or tagged aks-managed-, is an AKS node pool: AKS manages its model and sets encryption at host only when a node pool is created, so it is never eligible and its cluster and node pool are named. A Flexible scale set without a model has no setting to change, and its machines are in DP.4-ELIGIBILITY. The change requests leave out every scale set that is not proven eligible. Internal: names scale sets, the report embeds counts only.' -Query @'
+    $q.Add((New-EbrQuery -Id 'DP.4-VMSS-ELIGIBILITY' -Phase 'P2 Data protection' -Engine 'COMPUTE-SKUS' -Title 'Scale sets that can take encryption at host' -Notes 'Added in CyberSOC 1.3.0. The scale sets DP.4-DETAIL lists, one row each with the orchestration mode, upgrade policy, instance count and size of the model, and whether the model can take encryption at host. Azure Disk Encryption is read from the extensions on the model, because a scale set that ever used it cannot take encryption at host. An Ultra Disk or Premium SSD v2 in the model of a scale set created before May 13, 2023 rules it out too, since its instance disks may use 512e sectors from before that date. Size support comes from the Compute resource SKUs API, as in DP.4-ELIGIBILITY. A scale set in the node resource group of an AKS cluster, or tagged aks-managed-, is an AKS node pool: AKS manages its model and sets encryption at host only when a node pool is created, so it is never eligible and its cluster and node pool are named. A Flexible scale set without a model has no setting to change, and its machines are in DP.4-ELIGIBILITY. Since CyberSOC 1.4.0 each row carries UniqueId (properties.uniqueId), the unique ID Azure gives each scale set, so CR-15 changes only the scale set that was checked, never one deleted and created again under the same name after collection. The change requests leave out every scale set that is not proven eligible. Internal: names scale sets, the report embeds counts only.' -Query @'
 resources
 | where type =~ "microsoft.compute/virtualmachinescalesets"
 | where id !contains "{{MRG}}"
@@ -2242,6 +2243,7 @@ resources
 | extend OrchestrationMode = coalesce(tostring(properties.orchestrationMode), "Uniform"),
          UpgradePolicy     = tostring(properties.upgradePolicy.mode),
          Instances         = toint(sku.capacity),
+         UniqueId          = tostring(properties.uniqueId),
          Size              = tostring(sku.name),
          HasModel          = isnotnull(Model),
          AdeUsed           = tostring(Model.extensionProfile.extensions) contains "AzureDiskEncryption",
@@ -2250,7 +2252,7 @@ resources
          AksNodePool       = tostring(tags["aks-managed-poolName"]),
          Aks               = isnotempty(AksCluster) or tostring(bag_keys(tags)) contains "aks-managed-"
 | project Name = name, ResourceId = id, resourceGroup, subscriptionId, Location = tolower(location), OrchestrationMode,
-          UpgradePolicy, Instances, Size, HasModel, AdeUsed, OldSectorDisk, Aks, AksCluster, AksClusterResourceGroup, AksNodePool
+          UpgradePolicy, Instances, Size, UniqueId, HasModel, AdeUsed, OldSectorDisk, Aks, AksCluster, AksClusterResourceGroup, AksNodePool
 | order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
@@ -3983,7 +3985,7 @@ function Get-EbrEncryptionAtHostRows {
         else { '' }
         [pscustomobject][ordered]@{
             subscriptionId = [string]$vm.subscriptionId; resourceGroup = [string]$vm.resourceGroup; Name = [string]$vm.Name
-            Location = [string]$vm.Location; Size = [string]$vm.Size; PowerState = [string]$vm.PowerState; ScaleSet = [string]$vm.ScaleSet
+            Location = [string]$vm.Location; Size = [string]$vm.Size; PowerState = [string]$vm.PowerState; ScaleSet = [string]$vm.ScaleSet; VmId = [string]$vm.VmId
             AdeUsed = $ade; OldSectorDisk = $oldSector; SizeSupported = $supported; SizeRead = $(if ($list.Error) { 'Not read: ' + $list.Error } else { 'OK' })
             Eligible = (-not $ade -and -not $oldSector -and $supported -eq 'Yes'); Reason = $reason; ResourceId = [string]$vm.ResourceId
         }
@@ -4020,7 +4022,7 @@ function Get-EbrScaleSetEncryptionAtHostRows {
         [pscustomobject][ordered]@{
             subscriptionId = [string]$ss.subscriptionId; resourceGroup = [string]$ss.resourceGroup; Name = [string]$ss.Name
             Location = [string]$ss.Location; OrchestrationMode = [string]$ss.OrchestrationMode; UpgradePolicy = [string]$ss.UpgradePolicy
-            Instances = [string]$ss.Instances; Size = [string]$ss.Size; HasModel = $model; AdeUsed = $ade; OldSectorDisk = $oldSector
+            Instances = [string]$ss.Instances; Size = [string]$ss.Size; UniqueId = [string]$ss.UniqueId; HasModel = $model; AdeUsed = $ade; OldSectorDisk = $oldSector
             SizeSupported = $supported; SizeRead = $read; Aks = $aks; AksCluster = [string]$ss.AksCluster
             AksClusterResourceGroup = [string]$ss.AksClusterResourceGroup; AksNodePool = [string]$ss.AksNodePool
             Eligible = ($reason -eq ''); Reason = $reason; ResourceId = [string]$ss.ResourceId
@@ -5312,8 +5314,8 @@ function Invoke-EbrCatalogItem {
         'COMPUTE-SKUS' {
             Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the Microsoft.Compute/skus path of each subscription and region, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
             $scaleSets = $Item.Id -eq 'DP.4-VMSS-ELIGIBILITY'
-            $columns = if ($scaleSets) { @('subscriptionId', 'resourceGroup', 'Name', 'Location', 'OrchestrationMode', 'UpgradePolicy', 'Instances', 'Size', 'HasModel', 'AdeUsed', 'OldSectorDisk', 'SizeSupported', 'SizeRead', 'Aks', 'AksCluster', 'AksClusterResourceGroup', 'AksNodePool', 'Eligible', 'Reason', 'ResourceId') }
-            else { @('subscriptionId', 'resourceGroup', 'Name', 'Location', 'Size', 'PowerState', 'ScaleSet', 'AdeUsed', 'OldSectorDisk', 'SizeSupported', 'SizeRead', 'Eligible', 'Reason', 'ResourceId') }
+            $columns = if ($scaleSets) { @('subscriptionId', 'resourceGroup', 'Name', 'Location', 'OrchestrationMode', 'UpgradePolicy', 'Instances', 'Size', 'UniqueId', 'HasModel', 'AdeUsed', 'OldSectorDisk', 'SizeSupported', 'SizeRead', 'Aks', 'AksCluster', 'AksClusterResourceGroup', 'AksNodePool', 'Eligible', 'Reason', 'ResourceId') }
+            else { @('subscriptionId', 'resourceGroup', 'Name', 'Location', 'Size', 'PowerState', 'ScaleSet', 'VmId', 'AdeUsed', 'OldSectorDisk', 'SizeSupported', 'SizeRead', 'Eligible', 'Reason', 'ResourceId') }
             try { $arg = Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant }
             catch { return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed) }
             $found = @($arg.Rows)

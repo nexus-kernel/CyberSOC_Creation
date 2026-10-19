@@ -46,7 +46,8 @@
     The per-resource results (P0.7, NB.4-DETAIL, NB.5-DETAIL, NB.6-DETAIL, DP.1-DETAIL, DP.2-DETAIL,
     DP.4-ELIGIBILITY, DR.6-COVERAGE and DR.6-NONCOMPLIANT) were added in CyberSOC collector 1.1.0,
     NB.6-PAAS-DETAIL in 1.2.0 and DP.4-VMSS-ELIGIBILITY in 1.3.0. Changes that read them say "needs
-    recollection" on packs collected with an earlier version.
+    recollection" on packs collected with an earlier version. CR-09 and CR-15 also need the machine and scale
+    set IDs added in 1.4.0, and say "needs recollection" on an earlier pack that lists anything to change.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -82,6 +83,10 @@ function Get-RecollectionState([string[]]$Ids) {
     "Needs recollection with CyberSOC collector $version or later"
 }
 $needsRecollection = Get-RecollectionState 'DR.6-COVERAGE', 'DR.6-NONCOMPLIANT'
+# CR-09 and CR-15 match each machine and scale set by the ID Azure gives it (VmId in DP.4-ELIGIBILITY,
+# UniqueId in DP.4-VMSS-ELIGIBILITY), added in 1.4.0. A name alone cannot tell the machine that was checked
+# from one deleted and created again under the same name, which would be stopped for a change Azure rejects.
+$needsIdRecollection = 'Needs recollection with CyberSOC collector 1.4.0 or later'
 
 # Get-Text, Test-True, Get-Status, Get-Rows, Test-Unreadable and Get-UnreadableState. Each result file is
 # parsed once. A result the manifest reads as OK or PARTIAL needs a file that parses, or a damaged pack would
@@ -406,6 +411,7 @@ function Get-PaasTlsResource([string]$Type) {
 # Flexible scale set are virtual machines, so DP.4-ELIGIBILITY lists them too (with their scale set since
 # collector 1.3.0). Those of a Flexible scale set that CR-15 takes are changed with it there, and the
 # machines of every other scale set stay in CR-09.
+function Get-VmId($row) { (ConvertTo-CopyText $row.VmId).ToLowerInvariant() }
 function Test-ResultRead([string]$Id) { (Get-Status $Id) -in 'OK', 'PARTIAL', 'EMPTY' -and -not (Test-Unreadable $Id) }
 function Get-ScaleSetText($value) { (Get-Text $value).ToLowerInvariant() }
 # The scale sets CR-15 can take on their model alone: not AKS, with a model, and eligible.
@@ -424,15 +430,17 @@ function Test-FlexibleScaleSets($flexible) {
     $complete = (Get-Status 'DP.4-ELIGIBILITY') -in 'OK', 'EMPTY' -and -not (Test-Unreadable 'DP.4-ELIGIBILITY')
     $vms = @(if ($complete) { Get-Rows 'DP.4-ELIGIBILITY' })
     $named = (Get-Status 'DP.4-ELIGIBILITY') -eq 'EMPTY' -or ($vms.Count -and $vms[0].PSObject.Properties.Name -contains 'ScaleSet')
-    if (-not $complete -or -not $named) {
-        $check.Unchecked = if ($complete) { 'does not name the scale set of each machine' } elseif ((Get-Status 'DP.4-ELIGIBILITY') -eq 'MISSING') { 'was not collected' } elseif (Test-Unreadable 'DP.4-ELIGIBILITY') { 'is unreadable' } else { 'reads ' + (Get-Status 'DP.4-ELIGIBILITY') }
+    $identified = (Get-Status 'DP.4-ELIGIBILITY') -eq 'EMPTY' -or ($vms.Count -and $vms[0].PSObject.Properties.Name -contains 'VmId')
+    if (-not $complete -or -not $named -or -not $identified) {
+        $check.Unchecked = if ($complete -and -not $named) { 'does not name the scale set of each machine' } elseif ($complete) { 'does not carry the VM ID of each machine' } elseif ((Get-Status 'DP.4-ELIGIBILITY') -eq 'MISSING') { 'was not collected' } elseif (Test-Unreadable 'DP.4-ELIGIBILITY') { 'is unreadable' } else { 'reads ' + (Get-Status 'DP.4-ELIGIBILITY') }
         return $check
     }
     foreach ($f in @($flexible)) {
         $key = (Get-Text $f.ResourceId).ToLowerInvariant()
         $members = @($vms | Where-Object { (Get-ScaleSetText $_.ScaleSet) -eq $key })
-        $bad = @($members | Where-Object { -not (Test-True $_.Eligible) })
-        if ($bad.Count) { $check.Blocked.Add(('{0} ({1})' -f (ConvertTo-CopyText $f.Name), (@($bad | Sort-Object Name | ForEach-Object { '{0} {1}' -f (ConvertTo-CopyText $_.Name), ((ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1') }) -join ', '))) }
+        # A machine without its VM ID cannot be told from one created again under its name, so it blocks too.
+        $bad = @($members | Where-Object { -not (Test-True $_.Eligible) -or -not (Get-VmId $_) })
+        if ($bad.Count) { $check.Blocked.Add(('{0} ({1})' -f (ConvertTo-CopyText $f.Name), (@($bad | Sort-Object Name | ForEach-Object { '{0} {1}' -f (ConvertTo-CopyText $_.Name), $(if (-not (Test-True $_.Eligible)) { (ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1' } else { 'VM ID not read' }) }) -join ', '))) }
         else { $check.Qualified[$key] = $members }
     }
     $check
@@ -807,12 +815,22 @@ $catalog = @(
                 $notes.Add(('{0} left out of CR-09 because {1} encryption at host as {2}: {3}.' -f (Get-Count $ineligible.Count 'virtual machine' 'virtual machines'), (Get-Pick $ineligible.Count 'it cannot take' 'they cannot take'), (Get-Pick $ineligible.Count 'it stands' 'they stand'),
                         (@($ineligible | Sort-Object Name | ForEach-Object { '{0} ({1}, {2})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.Size), ((ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1') }) -join ', ')))
             }
-            $resources = @($rows | Where-Object { Test-True $_.Eligible } | ForEach-Object { New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('size {0}, {1}' -f (Get-Text $_.Size), (Get-PowerText $_.PowerState)) $_.ResourceId })
+            # Each machine is matched by its VM ID before it is stopped. A pack from before collector 1.4.0 has
+            # no VM ID, so it cannot tell the machine that was checked from one created again under its name.
+            $eligible = @($rows | Where-Object { Test-True $_.Eligible })
+            if ($eligible.Count -and $eligible[0].PSObject.Properties.Name -notcontains 'VmId') { return @{ State = $needsIdRecollection; Notes = $notes.ToArray() } }
+            $unnamed = @($eligible | Where-Object { -not (Get-VmId $_) })
+            if ($unnamed.Count) {
+                $notes.Add(('{0} left out of CR-09 because {1} VM ID was not read, so {2} cannot be told from a machine created again under the same name: {3}.' -f (Get-Count $unnamed.Count 'virtual machine' 'virtual machines'), (Get-Pick $unnamed.Count 'its' 'their'), (Get-Pick $unnamed.Count 'it' 'they'), (@($unnamed | Sort-Object Name | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', ')))
+            }
+            $resources = @($eligible | Where-Object { $_ -notin $unnamed } | ForEach-Object { New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('size {0}, {1}, VM ID {2}' -f (Get-Text $_.Size), (Get-PowerText $_.PowerState), (Get-VmId $_)) $_.ResourceId })
             $n = $resources.Count
             if (-not $n) { return @{ State = $(if ($rows.Count) { 'No eligible virtual machines' } else { 'No gaps found' }); Notes = $notes.ToArray() } }
+            $notes.Add('CR-09 changes a virtual machine only when the VM ID that Overview > JSON View shows matches the VM ID listed for it. A machine whose VM ID differs was deleted and created again under the same name after collection and was never checked, so it is skipped and left for the next pack.')
             $impl = [System.Collections.Generic.List[object]]::new()
             foreach ($step in New-EncryptionAtHostRegistration $resources) { $impl.Add($step) }
             $impl.Add((Get-OpenStep $n 'Virtual machines' 'virtual machine'))
+            $impl.Add('On Overview, select JSON View and confirm properties.vmId reads the VM ID listed for the machine in the RESOURCES section. If it reads another ID, the machine was created again under the same name after collection and was never checked, so leave it unchanged for the next pack and skip the remaining steps for it.')
             $impl.Add('On Overview, note whether the status reads Running, then select Stop and wait for the status to read Stopped (deallocated).')
             $impl.Add('Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.')
             $impl.Add('Go back to Overview and select Start only if the status read Running before the stop, so a machine that was not running stays stopped.')
@@ -824,14 +842,14 @@ $catalog = @(
                 Number = 9; Key = 'encryption-at-host'; Title = 'Enable encryption at host on virtual machines'
                 Description = 'Enable encryption at host on {0}, which needs a stop and start of each machine.' -f (Get-Listed $n 'virtual machine' 'virtual machines')
                 Purpose = 'Encryption at host encrypts the temporary disk and the OS and data disk caches on the Azure host, so the data of each machine is encrypted from end to end. Platform encryption covers only the managed disks at rest, which leaves these paths unencrypted today.'
-                ResourceIntro = $(if ($n -eq 1) { 'The virtual machine below is listed with its size and power state at collection. It is returned to the power state it has when the change is made.' } else { "The $n virtual machines below are listed with the size and power state of each at collection. Each machine is returned to the power state it has when the change is made." })
+                ResourceIntro = $(if ($n -eq 1) { 'The virtual machine below is listed with its size, power state and VM ID at collection. It is changed only if its VM ID still matches, and it is returned to the power state it has when the change is made.' } else { "The $n virtual machines below are listed with the size, power state and VM ID of each at collection. Each machine is changed only if its VM ID still matches, and it is returned to the power state it has when the change is made." })
                 ResourceLines = Format-ResourceList $resources
                 Availability = 'Each virtual machine is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window.'
                 UserExperience = 'Users of each server lose access during its restart and see no change afterwards.'
                 Dependencies = 'Needs the EncryptionAtHost feature on each subscription, a VM size that supports it and a machine that never used Azure Disk Encryption.'
                 Implementation = $impl.ToArray()
                 Testing = @(
-                    ('In the Azure portal, open {0} and go to Settings > Disks > Additional settings.' -f (Get-EachStep $n 'virtual machine'))
+                    ('In the Azure portal, open {0} whose VM ID matched and go to Settings > Disks > Additional settings.' -f (Get-EachStep $n 'virtual machine'))
                     'Confirm Encryption at host shows Yes.'
                     (Get-Pick $n 'On Overview, confirm the machine shows Running if it was running before the change.' 'On Overview, confirm each machine that was running before the change shows Running.'))
                 Rollback = @(
@@ -843,7 +861,7 @@ $catalog = @(
                 Email = @{ Subject = 'Maintenance window request: encryption at host for Azure virtual machines'; Body = @(
                         ('I am planning to enable encryption at host on {0}. This setting encrypts the temporary disk and the disk caches on the Azure host, so the data on {1} stays encrypted from the virtual machine all the way to Azure Storage.' -f $(if ($n -eq 1) { 'the virtual machine below' } else { "the $n virtual machines below" }), $(if ($n -eq 1) { 'this server' } else { 'these servers' }))
                         , @($resources | Sort-Object Name | ForEach-Object {
-                                $state = switch -Regex ($_.Setting) { 'running$' { ', running at my last review' } '(deallocated|stopped)$' { ', stopped at my last review' } default { '' } }
+                                $state = switch -Regex ($_.Setting) { ', running,' { ', running at my last review' } ', (deallocated|stopped),' { ', stopped at my last review' } default { '' } }
                                 '{0} (resource group {1}{2})' -f $_.Name, $_.ResourceGroup, $state })
                         (Get-Pick $n 'To apply it, the virtual machine has to be stopped first. If it is running at the time, it will be unavailable for a few minutes until I start it again, and if it is already stopped, it will be left stopped. Nothing changes inside the operating system or the applications.' 'To apply it, each virtual machine has to be stopped first. A server that is running at the time will be unavailable for a few minutes until I start it again, and a server that is already stopped will be left stopped. Nothing changes inside the operating system or the applications.')
                         (Get-Pick $n 'Could you suggest a maintenance window that works for this server? I will schedule the change once I have your confirmation.' 'Could you suggest a maintenance window that works for these servers, and let me know if any of them need to be handled separately or in a particular order? I will schedule the change once I have your confirmation.')) }
@@ -1036,6 +1054,15 @@ $catalog = @(
                         (@($ineligible | Sort-Object Name | ForEach-Object { '{0} ({1}, {2})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.Size), ((ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1') }) -join ', ')))
             }
             $eligible = @($models | Where-Object { Test-True $_.Eligible })
+            # Each scale set is matched by its unique ID before its model is changed and its instances stopped.
+            # A pack from before collector 1.4.0 has no unique ID, so it cannot tell the scale set that was
+            # checked from one created again under its name.
+            if ($eligible.Count -and $eligible[0].PSObject.Properties.Name -notcontains 'UniqueId') { return @{ State = $needsIdRecollection; Notes = $notes.ToArray() } }
+            $unnamed = @($eligible | Where-Object { -not (ConvertTo-CopyText $_.UniqueId) })
+            if ($unnamed.Count) {
+                $notes.Add(('{0} left out of CR-15 because {1} unique ID was not read, so {2} cannot be told from a scale set created again under the same name: {3}.' -f (Get-Count $unnamed.Count 'scale set' 'scale sets'), (Get-Pick $unnamed.Count 'its' 'their'), (Get-Pick $unnamed.Count 'it' 'they'), (@($unnamed | Sort-Object Name | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', ')))
+                $eligible = @($eligible | Where-Object { $_ -notin $unnamed })
+            }
             # The machines of each Flexible scale set must all be proven eligible too (Test-FlexibleScaleSets).
             $flexible = @($eligible | Where-Object { (Get-Text $_.OrchestrationMode) -ieq 'Flexible' })
             $check = Test-FlexibleScaleSets $flexible
@@ -1049,10 +1076,10 @@ $catalog = @(
             $eligible = @($eligible | Where-Object { (Get-Text $_.OrchestrationMode) -ine 'Flexible' -or $instances.ContainsKey((Get-Text $_.ResourceId).ToLowerInvariant()) })
             $resources = @($eligible | ForEach-Object {
                     $mode = if ((Get-Text $_.OrchestrationMode) -ieq 'Flexible') { 'Flexible' } else { 'Uniform' }
-                    $setting = '{0}, {1}, {2}, size {3}' -f $mode, (Format-UpgradePolicy $_.UpgradePolicy), (Get-Count (Get-Number $_.Instances) 'instance' 'instances'), (ConvertTo-CopyText $_.Size)
+                    $setting = '{0}, {1}, {2}, size {3}, unique ID {4}' -f $mode, (Format-UpgradePolicy $_.UpgradePolicy), (Get-Count (Get-Number $_.Instances) 'instance' 'instances'), (ConvertTo-CopyText $_.Size), (ConvertTo-CopyText $_.UniqueId).ToLowerInvariant()
                     if ($mode -eq 'Flexible') {
                         $members = @($instances[(Get-Text $_.ResourceId).ToLowerInvariant()])
-                        $setting += if ($members.Count) { ', instances without encryption at host: ' + (@($members | Sort-Object Name | ForEach-Object { '{0} ({1})' -f (ConvertTo-CopyText $_.Name), (Get-PowerText $_.PowerState) }) -join ', ') } else { ', no instance without encryption at host' }
+                        $setting += if ($members.Count) { ', instances without encryption at host: ' + (@($members | Sort-Object Name | ForEach-Object { '{0} ({1}, VM ID {2})' -f (ConvertTo-CopyText $_.Name), (Get-PowerText $_.PowerState), (Get-VmId $_) }) -join ', ') } else { ', no instance without encryption at host' }
                     }
                     $r = New-Resource $_.Name $_.resourceGroup $_.subscriptionId $setting $_.ResourceId
                     $r | Add-Member -NotePropertyName Mode -NotePropertyValue $mode
@@ -1064,9 +1091,11 @@ $catalog = @(
             $uniform = @($resources | Where-Object Mode -eq 'Uniform')
             $flex = @($resources | Where-Object Mode -eq 'Flexible')
             $automatic = @($resources | Where-Object { $_.Policy -in 'Automatic', 'Rolling' })
+            $notes.Add(('CR-15 changes a scale set only when the unique ID that Overview > JSON View shows matches the unique ID listed for it{0}. One whose ID differs was deleted and created again under the same name after collection and was never checked, so it is skipped and left for the next pack.' -f $(if ($flex.Count) { ', and a Flexible scale set instance only when its VM ID matches one listed for its scale set' } else { '' })))
             $impl = [System.Collections.Generic.List[object]]::new()
             foreach ($step in New-EncryptionAtHostRegistration $resources) { $impl.Add($step) }
-            $set = @(('In Cloud Shell, set encryption at host on the model of {0}{1}:' -f (Get-EachStep $n 'scale set'), $(if ($automatic.Count) { '. A scale set with an Automatic upgrade policy may take all its instances down at once to apply the new model, and one with a Rolling policy applies it in batches, so run this only inside the agreed maintenance window' } else { '' })))
+            $impl.Add(('In the Azure portal, go to Virtual machine scale sets, open {0}, select JSON View on Overview and confirm properties.uniqueId reads the unique ID listed for it. A scale set that reads another ID was created again under the same name after collection and was never checked, so leave it out of every step below, which leaves it for the next pack.' -f (Get-EachStep $n 'scale set')))
+            $set = @(('In Cloud Shell, set encryption at host on the model of {0} whose unique ID matched{1}:' -f (Get-EachStep $n 'scale set'), $(if ($automatic.Count) { '. A scale set with an Automatic upgrade policy may take all its instances down at once to apply the new model, and one with a Rolling policy applies it in batches, so run this only inside the agreed maintenance window' } else { '' })))
             foreach ($r in @($resources | Sort-Object SubscriptionId, ResourceGroup, Name)) { $set += 'az vmss update --subscription {0} --resource-group {1} --name {2} --set virtualMachineProfile.securityProfile.encryptionAtHost=true' -f (Format-ShellArgument $r.SubscriptionId), (Format-ShellArgument $r.ResourceGroup), (Format-ShellArgument $r.Name) }
             $impl.Add($set)
             # Existing instances take the setting only once deallocated and started again. A Uniform instance
@@ -1083,17 +1112,19 @@ $catalog = @(
             if ($flex.Count) {
                 $from = $impl.Count + 1
                 # The steps work through the instances the scale set holds when the change is made, since it may
-                # have gained some since collection. Only the instances named were checked for Azure Disk
-                # Encryption, old 512e disks and size support, so any other one is left for a follow-up change.
+                # have gained some since collection. Only the instances listed were checked for Azure Disk
+                # Encryption, old 512e disks and size support, and each is matched by its VM ID, since a name
+                # alone would also match an instance created again under it. Any other one is left for the next pack.
                 $impl.Add(('In the Azure portal, go to Virtual machine scale sets, open the {0}Flexible scale set listed in the RESOURCES section, go to Settings > Instances and open the first instance listed there, since the scale set may have gained instances since collection.' -f $(if ($flex.Count -gt 1) { 'first ' } else { '' })))
-                $impl.Add('Go to Settings > Disks > Additional settings and go on to the next instance if Encryption at host already shows Yes, or if the instance is not named in the RESOURCES section, since it joined after collection and was not checked, which leaves it for a follow-up change.')
+                $impl.Add('On Overview, select JSON View and go on to the next instance if properties.vmId does not read a VM ID listed for this scale set in the RESOURCES section, since the instance joined or was created again under the same name after collection and was not checked, which leaves it for the next pack.')
+                $impl.Add('Go to Settings > Disks > Additional settings and go on to the next instance if Encryption at host already shows Yes.')
                 $impl.Add('On Overview, note whether the status reads Running, then select Stop and wait for the status to read Stopped (deallocated).')
                 $impl.Add('Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.')
                 $impl.Add('Go back to Overview and select Start only if the status read Running before the stop, so an instance that was not running stays stopped.')
                 $impl.Add(('Repeat steps {0} to {1} for each remaining instance under Settings > Instances{2}.' -f ($from + 1), $impl.Count, $(if ($flex.Count -gt 1) { ", then steps $from to $($impl.Count) for each remaining Flexible scale set listed" } else { '' })))
             }
             $testing = [System.Collections.Generic.List[object]]::new()
-            $testing.Add(('In the Azure portal, open {0}, select JSON View on Overview and confirm virtualMachineProfile.securityProfile.encryptionAtHost reads true.' -f (Get-EachStep $n 'scale set')))
+            $testing.Add(('In the Azure portal, open {0} whose unique ID matched, select JSON View on Overview and confirm virtualMachineProfile.securityProfile.encryptionAtHost reads true.' -f (Get-EachStep $n 'scale set')))
             if ($uniform.Count) { $testing.Add(('For {0}, go to Settings > Instances and confirm every instance shows Latest model Yes, and every instance that was running before the change shows Running.' -f (Get-Pick $uniform.Count 'the Uniform scale set' 'each Uniform scale set'))) }
             if ($flex.Count) { $testing.Add(('For {0}, open each instance changed under Settings > Instances, go to Settings > Disks > Additional settings and confirm Encryption at host shows Yes, and on Overview confirm each instance that was running before the change shows Running.' -f (Get-Pick $flex.Count 'the Flexible scale set' 'each Flexible scale set'))) }
             $rollback = [System.Collections.Generic.List[object]]::new()
@@ -1127,7 +1158,7 @@ $catalog = @(
                 Number = 15; Key = 'scale-set-encryption-at-host'; Title = 'Enable encryption at host on virtual machine scale sets'
                 Description = 'Enable encryption at host on the model and the existing instances of {0}, which needs a stop and start of each instance.' -f (Get-Listed $n 'virtual machine scale set' 'virtual machine scale sets')
                 Purpose = 'Encryption at host encrypts the temporary disk and the OS and data disk caches on the Azure host, so the data of each instance is encrypted from end to end. Setting it on the model covers the instances a scale set creates later, and the stop and start brings in the instances it already has.'
-                ResourceIntro = $(if ($n -eq 1) { 'The scale set below is listed with its orchestration mode, upgrade policy, instance count and size at collection. Each instance is returned to the power state it has when the change is made.' } else { "The $n scale sets below are listed with the orchestration mode, upgrade policy, instance count and size of each at collection. Each instance is returned to the power state it has when the change is made." })
+                ResourceIntro = $(if ($n -eq 1) { 'The scale set below is listed with its orchestration mode, upgrade policy, instance count, size and unique ID at collection, and a Flexible scale set with the VM ID of each instance to change. Only a scale set and an instance whose ID still matches are changed, and each instance is returned to the power state it has when the change is made.' } else { "The $n scale sets below are listed with the orchestration mode, upgrade policy, instance count, size and unique ID of each at collection, and a Flexible scale set with the VM ID of each instance to change. Only a scale set and an instance whose ID still matches are changed, and each instance is returned to the power state it has when the change is made." })
                 ResourceLines = Format-ResourceList $resources
                 Availability = $availability
                 UserExperience = 'Users of a scale set see reduced capacity while one of its instances restarts, or a short outage where it runs a single instance, and no change afterwards.'
