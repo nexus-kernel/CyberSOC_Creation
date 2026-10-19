@@ -8,7 +8,7 @@
    cover, executive summary (the outcome KPIs, the four tier "How we report posture" block as the HTML
    executive summary shows it, then wins, watch and the items that need action), wins, security operations,
    confirmed threats (whenever the pack has true positives, with the examples table when titles can be shown,
-   then the outcome cards, the impact statement and the handling strip when the table leaves room), control posture, measured outcomes by pillar, hardening roadmap, priority workstreams, the
+   then the outcome cards and the handling strip when the table leaves room), control posture, measured outcomes by pillar, hardening roadmap, priority workstreams, the
    MFA method update, decisions needed, then the appendix: the control register, scope and evidence. Brief
    keeps the cover, summary, wins, roadmap, the MFA method update and decisions. Detailed adds the two
    Microsoft score slides to the appendix.
@@ -133,8 +133,7 @@ async function main() {
   // How we report posture: the four tiers of the HTML executive summary on a navy band, up to three rows each.
   // Long row labels are shortened for the band. The HTML keeps the full label.
   const TIER_SHORT = [
-    [/^True positives whose alerts carried a collection/, 'Collection, exfiltration or impact tactic'], [/^True positives whose alerts carried an exfiltration/, 'Exfiltration or impact tactic'], [/^Confirmed threats$/, 'Confirmed threats'],
-    [/^Confirmed data exposure or business impact$/, 'Confirmed impact, reviewed'],
+    [/^Confirmed threats$/, 'Confirmed threats'],
     [/^Median time to close, high severity alerts$/, 'Median close, high severity'], [/^Median time to close, all alerts$/, 'Median close, all alerts'],
     [/^90th percentile close/, 'Nine in ten closed within'], [/^Detections correlated into alerts$/, 'Detections correlated'],
     [/^Foundational controls enforced$/, 'Foundational controls'], [/^Defense in depth controls enforced$/, 'Defense in depth controls'],
@@ -212,7 +211,7 @@ async function main() {
     if (ti.matches) {
       eyebrow(s, 'Threat intelligence matches', rx, ry, rw, C.text2, 'Threat matches')
       ry = deckTable(s, ['Month', 'Matches', 'In ticketed alerts'], ti.matches.byMonth.map(x => [x.label, fmt(x.total), fmt(x.ticketed)]), { x: rx, y: ry + 0.35, w: rw, colW: [rw * 0.4, rw * 0.25, rw * 0.35], name: 'Threat matches table', numeric: [1, 2] })
-      ry = caption(s, 'A match is a known indicator observed in your telemetry, not a confirmed compromise.', rx, ry + 0.05, rw, 'Threat matches caption') + 0.1
+      ry = caption(s, 'A match is a known indicator observed in your telemetry, not an investigation finding.', rx, ry + 0.05, rw, 'Threat matches caption') + 0.1
     }
     if (vk.mode === 'runs' && vk.kevKnown && ry < BOTTOM - 1.2) {
       eyebrow(s, 'Known exploited vulnerabilities present', rx, ry, rw, C.text2, 'KEV')
@@ -411,17 +410,15 @@ async function main() {
 
     // 4b. Confirmed threats: up to five examples, highest severity first, when the pack has any. A pack with true
     // positives but no screened example (every title withheld, or rows without titles or tactics) still gets the
-    // slide without the table, so the outcome cards and the impact statement never disappear with the examples.
-    if (m.threats || m.impactStatement) {
+    // slide without the table, so the outcome cards never disappear with the examples.
+    const tp = m.alerts ? m.alerts.truePositives : null
+    if (m.threats || tp > 0) {
       s = content('Operations and posture', 'Confirmed threats', st.takeaways.threats)
       const HEAD_H = 0.4, GAP = 0.2, PAD_X = 0.1
-      const tp = m.alerts ? m.alerts.truePositives : null
-      // The caption carries the impact statement the model built: the reviewed determination when the context file
-      // holds one, otherwise the tactic reading and the request for additional investigation evidence. It takes
-      // the lines it needs, so the table, the cards and the strip stay below it.
+      // The caption takes the lines it needs, so the table, the cards and the strip stay below it.
       const caption = m.threats
-        ? `${m.threats.more ? `And ${plural(m.threats.moreAlerts, 'more confirmed alert', 'more confirmed alerts')} in ${plural(m.threats.more, 'further group', 'further groups')}. ` : ''}Classified as true positives by the SOC, grouped by alert title.${m.impactStatement ? ` ${m.impactStatement}` : ''}`
-        : `${fmt(tp)} ${tp === 1 ? 'alert' : 'alerts'} the SOC classified as ${tp === 1 ? 'a true positive' : 'true positives'} ${st.periodPhrase}. ${m.impactStatement}`
+        ? `${m.threats.more ? `And ${plural(m.threats.moreAlerts, 'more confirmed alert', 'more confirmed alerts')} in ${plural(m.threats.more, 'further group', 'further groups')}. ` : ''}Classified as true positives by the SOC, grouped by alert title.`
+        : `${fmt(tp)} ${tp === 1 ? 'alert' : 'alerts'} the SOC classified as ${tp === 1 ? 'a true positive' : 'true positives'} ${st.periodPhrase}.`
       const CAPTION_H = 0.17 + lines(caption, CW - 0.2, 11) * 0.18
       // The table, when there are examples. tableH is the room it takes above the caption.
       let tableH = 0
@@ -453,23 +450,17 @@ async function main() {
       // (the outcome cards) and how every confirmed threat is handled (the strip). Five long titles leave no
       // room, and the slide then holds the table alone (Oct 14, 2026).
       // The strip and its note name only what the evidence records for each confirmed threat: detected, triaged
-      // and classified. Investigation, impact assessment and closure are not recorded (the classification carries
-      // no status), so the last step says impact is confirmed only from reviewed investigation records, which
-      // holds with or without the context Impact record and never contradicts the caption (Oct 15, 2026).
+      // and classified. The CyberSOC report carries no data exfiltration or compromise determination (Oct 19, 2026).
       // The outcome cards stay within the evidence: the true positive count (OUT.1) and the rows (OUT.4) are
-      // classifications regardless of status, so the cards never claim closure. The tactic count is of tactics
-      // recorded on the alert, in the scope the model names (exfiltration or impact, or the wider flag scope for
-      // packs without tactics), never a verified outcome or a notification, so the card says carried, never
-      // reached. The severity count comes from the model, counted per alert before grouping.
+      // classifications regardless of status, so the cards never claim closure. The severity count comes from the
+      // model, counted per alert before grouping.
       const high = m.threats ? m.threats.severities.High : 0
-      const tactic = m.alerts ? m.alerts.tacticPhrase : ''
       const outcomeCards = [
         tp !== null && tp > 0 ? [fmt(tp), tp === 1 ? 'Confirmed threat' : 'Confirmed threats', `${tp === 1 ? 'An alert' : 'Alerts'} the SOC classified as ${tp === 1 ? 'a true positive' : 'true positives'} ${st.periodPhrase}.`] : null,
-        m.alerts && m.alerts.flaggedKnown && tp > 0 ? [`${fmt(m.alerts.flagged)} of ${fmt(tp)}`, sentence(`carried ${tactic}`), m.alerts.flagged === 0 ? 'A tactic Sentinel recorded on the alert, not a verified outcome.' : `${plural(m.alerts.flagged, 'alert carried', 'alerts carried')} ${tactic} in Sentinel, not a verified outcome.`] : null,
         m.threats && m.threats.alerts > 0 ? [fmt(high), high === 1 ? 'High severity alert' : 'High severity alerts', `Of the ${plural(m.threats.alerts, 'confirmed alert', 'confirmed alerts')} grouped above, at the severity Sentinel recorded.`] : null,
         st.speed ? [st.speed.value, sentence(st.speed.label), st.speed.sub] : null
       ].filter(Boolean).slice(0, 4)
-      const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages each alert and confirms its severity'], ['3 Classify', ' the SOC records a true-positive classification on the alert'], ['4 Impact', ' confirmed only from reviewed investigation records']]
+      const handling = [['1 Detect', ' Sentinel and Defender detections are correlated into one alert'], ['2 Triage', ' the SOC triages each alert and confirms its severity'], ['3 Classify', ' the SOC records a true-positive classification on the alert']]
       const STRIP_H = 0.85, cardTop = TOP + tableH + CAPTION_H + 0.2
       const roomWithStrip = BOTTOM - STRIP_H - 0.25 - cardTop, roomAlone = BOTTOM - cardTop
       const cardH = outcomeCards.length && roomWithStrip >= 1.1 ? Math.min(1.6, roomWithStrip) : outcomeCards.length && roomAlone >= 1.1 ? Math.min(1.6, roomAlone) : 0
@@ -478,7 +469,7 @@ async function main() {
         outcomeCards.forEach(([value, label, sub], i) => {
           const x = X0 + i * (ocw + 0.3)
           card(s, x, cardTop, ocw, cardH, `Threat outcome ${i + 1} card`)
-          rule(s, x, cardTop, ocw, i === 1 && m.alerts.flagged > 0 ? C.accent4 : C.accent1, 2.5, `Threat outcome ${i + 1} rule`)
+          rule(s, x, cardTop, ocw, C.accent1, 2.5, `Threat outcome ${i + 1} rule`)
           text(s, [{ text: value, options: { fontSize: 26, bold: true, color: C.accent2, breakLine: true } }, { text: label, options: { fontSize: 13, bold: true, color: C.text2, breakLine: true, paraSpaceBefore: 2 } }, { text: sub, options: { fontSize: 11, color: C.accent6, paraSpaceBefore: 4 } }], { x: x + 0.25, y: cardTop + 0.2, w: ocw - 0.5, h: cardH - 0.3, objectName: `Threat outcome ${i + 1}` })
         })
       }
@@ -493,9 +484,8 @@ async function main() {
         m.threats ? 'These are alerts the SOC confirmed as true positive threats, grouped by alert title, highest severity first.' : '',
         m.ticketed ? 'Each one opened a ticket with the managed security service.' : '',
         st.takeaways.threats,
-        m.impactStatement,
         cardH ? outcomeCards.map(([value, label, sub]) => `${value} ${label.charAt(0).toLowerCase() + label.slice(1)}. ${sub}`) : '',
-        strip ? 'Every confirmed threat follows the same path: detections are correlated into one alert, the SOC triages it and confirms its severity, and the SOC records a true-positive classification. Data exposure or business impact is confirmed only from reviewed investigation records, never from the classification or the tactics on the alert.' : ''
+        strip ? 'Every confirmed threat follows the same path: detections are correlated into one alert, the SOC triages it and confirms its severity, and the SOC records a true-positive classification.' : ''
       ]))
     }
 
@@ -865,7 +855,7 @@ async function main() {
     text(s, 'How we grade posture', { x: gx, y: TOP - 0.05, w: half, h: 0.4, fontSize: 18, bold: true, color: C.text2, objectName: 'Grading heading' })
     rule(s, gx, TOP + 0.4, half, C.text2, 1, 'Grading rule')
     const bench = m.tiers.benchmark.slice(0, 4).map(r => `${r.label} ${r.value}`).join(' · ')
-    const grade = [['Outcomes', 'Did the program hold? Alerts, confirmed threats, impact.'], ['Control effectiveness', 'What is actually enforced, graded E, P or N. An E that leaves resources out lists its exceptions.'], ['Hardening next', 'Proposed in priority order on the roadmap.'], ['Vendor benchmark, as context', bench || 'Microsoft scores are read as context, never as the objective.']]
+    const grade = [['Outcomes', 'Did the program hold? Alerts, confirmed threats, response speed.'], ['Control effectiveness', 'What is actually enforced, graded E, P or N. An E that leaves resources out lists its exceptions.'], ['Hardening next', 'Proposed in priority order on the roadmap.'], ['Vendor benchmark, as context', bench || 'Microsoft scores are read as context, never as the objective.']]
     let gy = TOP + 0.55
     grade.forEach(([head, body], i) => {
       const h = 0.3 + lines(body, half - 0.5, 12) * 0.2 + 0.12

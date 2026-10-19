@@ -17,7 +17,7 @@ function quarterPack() {
   const timing = [{ Scope: 'High', Incidents: 208, AutoClosed: 0, MedianCloseMin: 7, P90CloseMin: 36 }, { Scope: 'Medium', Incidents: 15, AutoClosed: 0, MedianCloseMin: 178, P90CloseMin: 1302 }, { Scope: 'Low', Incidents: 15, AutoClosed: 0, MedianCloseMin: 99, P90CloseMin: 1608 }, { Scope: 'All', Incidents: 238, AutoClosed: 0, MedianCloseMin: 8, P90CloseMin: 76 }]
   put('OUT.2', timing); put('OUT.2-ANALYST', timing)
   put('OUT.3', [{ Month: '2026-07-01', Total: 105, High: 6, Medium: 14, Low: 85, Informational: 0 }, { Month: '2026-08-01', Total: 163, High: 22, Medium: 20, Low: 121, Informational: 0 }, { Month: '2026-09-01', Total: 347, High: 208, Medium: 7, Low: 132, Informational: 0 }])
-  put('OUT.4', [{ IncidentNumber: 1, Severity: 'High', Tactics: 'InitialAccess', ExfilOrImpactTactic: false }, { IncidentNumber: 2, Severity: 'High', Tactics: 'Execution', ExfilOrImpactTactic: false }])
+  put('OUT.4', [{ IncidentNumber: 1, Severity: 'High', Tactics: 'InitialAccess' }, { IncidentNumber: 2, Severity: 'High', Tactics: 'Execution' }])
   put('OUT.5', [{ ProductName: 'Azure Sentinel', AlertSeverity: 'High', Alerts: 659 }])
   put('P0.1-BY-WORKSPACE', [{ WorkspaceId: 'w1', SourceTable: 'SecurityIncident', EarliestRecord: '2026-01-01', Records: 900 }])
   put('IA.1', [{ UserType: 'Member', UsersSignedIn: 194, UsersChallenged: 180 }])
@@ -73,15 +73,15 @@ test('open alerts and the severity spike stay out of the story', () => {
 test('the story carries the wins, asks and takeaways the review asked for, worded within the copy rules', () => {
   const { s } = story(quarterPack())
   assert.equal(s.quarter, 'Q3 2026')
-  assert.deepEqual(s.kpis.map(k => k.value), ['615', '0 of 2', '7 min', '59.7%'])
-  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'True positives whose alerts carried an exfiltration or impact tactic', 'Median time to close, high severity alerts', 'Defender for Cloud secure score'])
-  assert.equal(s.kpis[1].sub, 'Both classified as true positives by the SOC', 'a true positive is a classification, never an investigation or a closure')
+  assert.deepEqual(s.kpis.map(k => k.value), ['615', '2', '7 min', '59.7%'])
+  assert.deepEqual(s.kpis.map(k => k.label), ['Alerts triaged', 'Confirmed threats', 'Median time to close, high severity alerts', 'Defender for Cloud secure score'])
+  assert.equal(s.kpis[1].sub, 'Alerts the SOC classified as true positives', 'a true positive is a classification, never an investigation or a closure')
   assert.equal(s.kpis[0].sub, 'Jul 1 to Sep 30, 2026', 'the alert KPI carries the period, not the detection count')
   assert.equal(s.kpis[3].sub, 'Up 6.1 points since Jul 2026, from 53.6%')
-  assert.deepEqual(s.wins.map(w => w.eyebrow), ['Confirmed threats', 'Response speed', 'Posture', 'Identity', 'Patching', 'Email protection'])
-  assert.deepEqual([s.wins[0].value, s.wins[0].label, s.wins[0].sub], ['0 of 2', 'confirmed threats carried an exfiltration or impact tactic', 'Both classified as true positives by the SOC this quarter.'])
+  assert.deepEqual(s.wins.map(w => w.eyebrow), ['Response speed', 'Posture', 'Identity', 'Patching', 'Email protection'], 'confirmed threats are a measure, never a win')
   assert.equal(new Set(s.wins.map(w => w.area)).size, s.wins.length, 'at most one win per area')
-  assert.equal(s.takeaways.summary, 'Neither confirmed threat carried an exfiltration or impact tactic, and secure score rose 6.1 points.')
+  assert.equal(s.takeaways.summary, 'Secure score rose 6.1 points.')
+  assert.ok(!/exfiltration|impact tactic|data exposure|business impact|compromise/i.test(JSON.stringify([s.kpis, s.wins, s.takeaways])), 'the story carries no exfiltration, impact or compromise wording')
   assert.match(s.takeaways.posture, /foundational controls are enforced( \(\d+ on a small sample\))?\. (Two|Three|Four) read below the baseline and are first on the roadmap\./)
   assert.ok(!/\breached\b|no impact|did not reach|investigated/i.test(JSON.stringify(s)), 'an outcome verb or an unrecorded impact determination reached the story')
   const spoken = JSON.stringify([s.takeaways, s.roadmap.map(h => h.items.map(i => [i.title, i.evidence])), s.watch, s.wins, s.asks, s.summaryWins, s.matrix])
@@ -250,10 +250,10 @@ test('counts read as natural English', () => {
   p.results['IA.1'] = [{ UserType: 'Member', UsersSignedIn: 194, UsersChallenged: 193 }]
   p.results['IA.2'] = [{ Bucket: 'Retiring: SMS or voice', DistinctUsers: 1 }]
   p.results['OUT.1'][0].TruePositive = 1
-  p.results['OUT.4'] = [{ IncidentNumber: 1, Severity: 'High', Tactics: 'InitialAccess', ExfilOrImpactTactic: false }]
+  p.results['OUT.4'] = [{ IncidentNumber: 1, Severity: 'High', Tactics: 'InitialAccess' }]
   const { s } = story(p)
-  assert.equal(s.takeaways.summary.startsWith('The confirmed threat did not carry an exfiltration or impact tactic'), true)
-  assert.equal(s.kpis[1].sub, 'Classified as a true positive by the SOC')
+  assert.equal(s.takeaways.threats, 'The SOC classified 1 alert as a true positive this quarter.')
+  assert.deepEqual([s.kpis[1].value, s.kpis[1].label], ['1', 'Confirmed threats'])
   assert.equal(s.asks[0].body, '1 user on text message or voice, which retire Feb 1, 2027 (Jul 1, 2027 for Global Administrators and external users).')
   assert.equal(s.takeaways.methods, 'Microsoft retires text message and voice sign-in on February 1, 2027 (July 1, 2027 for Global Administrators and external users). 1 user signed in with it in the last 30 days.')
   assert.ok(s.watch.every(w => !/^1$/.test(w.value) || !/^(members|users|devices|resources) /.test(w.label)), JSON.stringify(s.watch))
@@ -283,7 +283,7 @@ test('a win, headline or narrative at E that leaves resources out never says eve
   const patch = s.wins.find(w => w.eyebrow === 'Patching')
   assert.deepEqual([patch.value, patch.sub], ['68 of 70', '2 machines carry a critical or security patch past the cadence at collection.'], 'never "No critical or security patch past the cadence"')
   const ratioWins = s.wins.filter(w => m.controls.some(c => c.source === w.source && c.exceptions > 0))
-  assert.deepEqual(ratioWins.map(w => w.value), ['180 of 194', '68 of 70'])
+  assert.deepEqual(ratioWins.map(w => w.value), ['180 of 194', '68 of 70', '97 of 100'])
   for (const w of ratioWins) assert.ok(!ABSOLUTE.test(`${w.label} ${w.sub}`), `${w.label} ${w.sub}`)
   for (const x of m.pillars) for (const t of [x.headline, x.headlineShort, x.narrative].filter(Boolean)) assert.ok(!ABSOLUTE.test(t), `${x.name}: ${t}`)
   // The register shows meeting the threshold and having no exceptions as different things.
@@ -321,55 +321,29 @@ test('the identity win names the evaluated population in a federated tenant', ()
   assert.equal(win.sub, 'Members whose sign-ins in the last 30 days could be evaluated.')
   assert.equal(story(quarterPack()).s.wins.find(w => w.area === 'identity').sub, 'Members who signed in over the last 30 days.')
 })
-test('the confirmed threats takeaway counts the threats, adds the tactic line when known and stands without examples', () => {
-  const withRows = flaggedOne => {
-    const p = quarterPack()
-    p.results['OUT.4'] = [
-      { Severity: 'High', ExfilOrImpactTactic: flaggedOne, Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Tactics: flaggedOne ? 'CommandAndControl,Exfiltration' : 'CommandAndControl', Created: '2026-08-18' },
-      { Severity: 'Medium', ExfilOrImpactTactic: false, Threat: 'Password spray attack against Microsoft Entra ID application', Tactics: 'CredentialAccess', Created: '2026-07-28' }
-    ]
-    return story(p)
-  }
-  const clean = withRows(false)
-  assert.ok(clean.m.threats)
-  assert.equal(clean.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter. Neither confirmed threat carried an exfiltration or impact tactic.')
-  const flagged = withRows(true)
-  assert.equal(flagged.m.alerts.flagged, 1)
-  assert.equal(flagged.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter.')
-  // A Collection tactic sets the collector flag but is not exfiltration or impact, so the count stays narrow.
+test('the confirmed threats takeaway counts the threats and stands without examples, with no tactic line', () => {
   const p = quarterPack()
-  p.results['OUT.4'] = [{ Severity: 'High', ExfilOrImpactTactic: true, Threat: 'Suspicious inbox rule created', Tactics: 'Collection', Created: '2026-08-18' }, { Severity: 'High', ExfilOrImpactTactic: false, Threat: 'Password spray attack', Tactics: 'CredentialAccess', Created: '2026-07-28' }]
-  const collection = story(p)
-  assert.deepEqual([collection.m.alerts.flagged, collection.m.alerts.flaggedScope], [0, 'exfiltration or impact'])
-  assert.equal(collection.s.takeaways.summary, 'Neither confirmed threat carried an exfiltration or impact tactic, and secure score rose 6.1 points.')
-  // Rows without tactics keep the flag count and name the wider scope on every surface.
-  p.results['OUT.4'] = p.results['OUT.4'].map(({ Tactics, Threat, Created, ...r }) => r)
-  const wide = story(p)
-  assert.deepEqual([wide.m.alerts.flagged, wide.m.alerts.flaggedScope], [1, 'collection, exfiltration or impact'])
-  assert.equal(wide.s.kpis[1].label, 'True positives whose alerts carried a collection, exfiltration or impact tactic')
-  assert.ok(!/carried an exfiltration or impact tactic/.test(JSON.stringify([wide.s.kpis, wide.s.wins, wide.s.takeaways, wide.m.tiers, wide.m.headline])), 'the narrow wording never appears without tactics')
+  p.results['OUT.4'] = [
+    { Severity: 'High', Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Tactics: 'CommandAndControl,Exfiltration', Created: '2026-08-18' },
+    { Severity: 'Medium', Threat: 'Password spray attack against Microsoft Entra ID application', Tactics: 'CredentialAccess', Created: '2026-07-28' }
+  ]
+  const withExamples = story(p)
+  assert.ok(withExamples.m.threats)
+  assert.equal(withExamples.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter.')
+  assert.deepEqual([withExamples.s.kpis[1].value, withExamples.s.kpis[1].label], ['2', 'Confirmed threats'], 'an Exfiltration tactic on a confirmed threat never becomes a count')
   const none = story(quarterPack())
   assert.equal(none.m.threats, null, 'rows without a title give no examples')
-  assert.equal(none.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter. Neither confirmed threat carried an exfiltration or impact tactic.', 'the slide is built without the examples table, so the takeaway stands')
+  assert.equal(none.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter.', 'the slide is built without the examples table, so the takeaway stands')
 })
-test('a reviewed impact record leads the takeaways, and a confirmed impact withdraws the tactic win', () => {
-  const withImpact = (confirmed, truePositives = 2) => {
+test('an Impact record copied from an EBR context file leaves the KPIs, wins and takeaways unchanged', () => {
+  const plain = story(quarterPack()).s
+  for (const confirmed of [0, 1]) {
     const p = quarterPack()
-    p.results['OUT.1'][0].TruePositive = truePositives
-    p.results['OUT.4'] = [{ Severity: 'High', ExfilOrImpactTactic: false, Threat: 'Log4j vulnerability exploit aka Log4Shell IP IOC', Tactics: 'CommandAndControl', Created: '2026-08-18' }, { Severity: 'Medium', ExfilOrImpactTactic: false, Threat: 'Password spray attack', Tactics: 'CredentialAccess', Created: '2026-07-28' }]
     p.context = { Impact: { Confirmed: confirmed, Reviewed: '2026-10-10', Reference: 'CHG-123', WindowStart: '2026-07-01', WindowEnd: '2026-09-30' } }
-    return story(p)
+    const { s } = story(p)
+    assert.deepEqual([s.kpis, s.wins, s.takeaways], [plain.kpis, plain.wins, plain.takeaways], `Confirmed ${confirmed}`)
+    assert.ok(!/data exposure|investigation records|CHG-123/i.test(JSON.stringify(s)), `Confirmed ${confirmed}`)
   }
-  const clear = withImpact(0)
-  assert.equal(clear.s.takeaways.summary, 'The reviewed investigation records confirm no data exposure or business impact, and secure score rose 6.1 points.')
-  assert.equal(clear.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter. Neither confirmed threat carried an exfiltration or impact tactic. The reviewed investigation records confirm no data exposure or business impact.')
-  assert.equal(clear.s.wins[0].label, 'confirmed threats carried an exfiltration or impact tactic', 'the tactic win stands beside a clean determination')
-  const hit = withImpact(1)
-  assert.equal(hit.s.takeaways.summary, 'The reviewed investigation records confirm data exposure or business impact from 1 of the 2 confirmed threats, and secure score rose 6.1 points.')
-  assert.equal(hit.s.takeaways.threats, 'The SOC classified 2 alerts as true positives this quarter. The reviewed investigation records confirm data exposure or business impact from 1 of the 2 confirmed threats.')
-  assert.ok(!hit.s.wins.some(w => w.area === 'threat'), 'a confirmed impact is no win')
-  assert.equal(hit.s.kpis[1].value, '0 of 2', 'the tactic KPI still reports the recorded tactics')
-  assert.equal(withImpact(1, 1).s.takeaways.threats, 'The SOC classified 1 alert as a true positive this quarter. The reviewed investigation records confirm data exposure or business impact from the confirmed threat.')
 })
 test('a median at the floor reads as nine in ten triaged and closed, never investigated or resolved, and names high severity alerts', () => {
   const p = quarterPack()
@@ -619,7 +593,7 @@ test('the wins line counts the wins shown and never claims one from each part of
   // Codex review on PR #63: with DP.3 out of the wins, a pack without post-delivery removal has no data win, so the
   // line cannot say each part of the service is represented.
   const full = story(quarterPack()).s
-  assert.equal(full.takeaways.wins, `Six outcomes from ${build(quarterPack()).period.label}, each from a different part of the service and traced to collected evidence.`)
+  assert.equal(full.takeaways.wins, `Five outcomes from ${build(quarterPack()).period.label}, each from a different part of the service and traced to collected evidence.`)
   const p = quarterPack()
   p.manifest = p.manifest.filter(r => r.ResultId !== 'DP.7'); delete p.results['DP.7']
   const noData = story(p).s

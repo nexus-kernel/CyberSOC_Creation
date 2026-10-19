@@ -54,9 +54,12 @@
     T1619: 'Cloud Storage Object Discovery', T1620: 'Reflective Code Loading', T1621: 'Multi-Factor Authentication Request Generation',
     T1649: 'Steal or Forge Authentication Certificates', T1651: 'Cloud Administration Command', T1656: 'Impersonation', T1657: 'Financial Theft'
   }
-  // Microsoft Entra ID Protection risk detection types (riskEventType), with the names the Entra portal uses.
+  // Microsoft Entra ID Protection risk detection types (riskEventType), with the names the Entra portal uses. An
+  // administrator's compromise confirmation (adminConfirmedUserCompromised) is not a detection, and the CyberSOC
+  // report carries no compromise determination, so its rows are left out of every risk figure (Oct 19, 2026).
+  const RISK_EXCLUDED = new Set(['adminconfirmedusercompromised'])
   const RISK_TYPES = {
-    adminconfirmedusercompromised: 'Admin confirmed user compromised', anomaloustoken: 'Anomalous token', anomaloususeractivity: 'Anomalous user activity',
+    anomaloustoken: 'Anomalous token', anomaloususeractivity: 'Anomalous user activity',
     anonymizedipaddress: 'Anonymous IP address', attackerinthemiddle: 'Attacker in the middle', impossibletravel: 'Impossible travel',
     investigationsthreatintelligence: 'Microsoft Entra threat intelligence', leakedcredentials: 'Leaked credentials', maliciousipaddress: 'Malicious IP address',
     mcasimpossibletravel: 'Impossible travel', mcassuspiciousinboxmanipulationrules: 'Suspicious inbox manipulation rules', newcountry: 'New country',
@@ -204,7 +207,7 @@
       const byMonth = cs.months.map(mo => { const x = r.filter(y => monthOf(y.Month) === mo.key); return { key: mo.key, label: mo.label, report: mo.report, total: sumOf(x, 'Detections'), ticketed: sumOf(x, 'Ticketed') } })
       const byType = INDICATOR_KINDS.map(type => ({ type, total: sumOf(r.filter(x => (INDICATOR_KINDS.includes(x.Indicator) ? x.Indicator : 'Other') === type), 'Detections') })).filter(t => t.total > 0)
       ti.matches = { total: sumOf(r, 'Detections'), ticketed: sumOf(r, 'Ticketed'), month: byMonth.find(x => x.report)?.total ?? 0, high: sumOf(r.filter(x => x.AlertSeverity === 'High'), 'Detections'), byMonth, byType, source: source('TI.2') }
-      if (ti.matches.total > 0) presenter('Threat intelligence matches', `${plural(ti.matches.total, 'detection', 'detections')} from the threat intelligence analytics rules in the period, ${fmt(ti.matches.ticketed)} of them in alerts that opened a ticket. A match confirms the indicator was observed in telemetry, not that exploitation or compromise occurred. Have the indicators and the closing notes of the ticketed ones ready.`)
+      if (ti.matches.total > 0) presenter('Threat intelligence matches', `${plural(ti.matches.total, 'detection', 'detections')} from the threat intelligence analytics rules in the period, ${fmt(ti.matches.ticketed)} of them in alerts that opened a ticket. A match confirms the indicator was observed in telemetry and is not an investigation finding. Have the indicators and the closing notes of the ticketed ones ready.`)
     } else tiMissing('TI.2', 'Threat intelligence matches', !measured('TI.0') ? `the table reach was not read (TI.0 ${state('TI.0')})` : !held('SecurityAlert') ? 'Sentinel holds no detection records in the window' : state('TI.2'))
     // Attack stages and techniques on the detections the SOC handled.
     if (alertsAllowed && measured('TI.3')) {
@@ -233,18 +236,19 @@
       ti.identity = { byMonth, riskVisible: signIns > 0 && hidden * 2 < signIns, source: source('TI.5', `Interactive sign-ins. Password spraying is an address failing a password against ${SPRAY_TARGETS} or more accounts in one day.`) }
       if (!ti.identity.riskVisible) note('Sign-in risk levels', 'Most sign-ins carry the hidden risk level, which means the tenant has no Entra ID P2 license or the risk is not shared with the reader. The risky sign-in row is left out rather than shown as zero.')
       const spray = byMonth.find(x => x.report)?.sprayIps ?? 0
-      if (spray > 0) presenter('Password spraying signal', `${plural(spray, 'address', 'addresses')} failed a password against ${SPRAY_TARGETS} or more accounts in one day in ${cs.month.label}. This is a signal, not a confirmed attack, and a failed attempt is not a compromise. Have the blocking or Conditional Access position ready.`)
+      if (spray > 0) presenter('Password spraying signal', `${plural(spray, 'address', 'addresses')} failed a password against ${SPRAY_TARGETS} or more accounts in one day in ${cs.month.label}. This is a signal, not a confirmed attack. Have the blocking or Conditional Access position ready.`)
     } else tiMissing('TI.5', 'Identity threat activity', !measured('TI.0') ? `the table reach was not read (TI.0 ${state('TI.0')})` : !held('SigninLogs') ? 'Sentinel holds no sign-in logs in the window' : state('TI.5'))
     if (measured('TI.5-RISK') && held('AADUserRiskEvents')) {
       const byType = new Map()
-      for (const r of rows('TI.5-RISK')) {
+      const riskRows = rows('TI.5-RISK').filter(r => !RISK_EXCLUDED.has(String(r.RiskEventType ?? '').toLowerCase()))
+      for (const r of riskRows) {
         const label = riskLabel(r.RiskEventType), t = byType.get(label) || { label, total: 0, month: 0, high: 0 }
         t.total += count(r.Detections) ?? 0; t.high += count(r.High) ?? 0
         if (monthOf(r.Month) === key) t.month += count(r.Detections) ?? 0
         byType.set(label, t)
       }
       const typeRows = [...byType.values()].sort((a, b) => b.total - a.total || a.label.localeCompare(b.label))
-      ti.risk = { rows: typeRows.slice(0, 8), total: typeRows.reduce((n, t) => n + t.total, 0), month: typeRows.reduce((n, t) => n + t.month, 0), byMonth: cs.months.map(mo => ({ key: mo.key, label: mo.label, total: sumOf(rows('TI.5-RISK').filter(r => monthOf(r.Month) === mo.key), 'Detections') })), source: source('TI.5-RISK', 'Microsoft Entra ID Protection.') }
+      ti.risk = { rows: typeRows.slice(0, 8), total: typeRows.reduce((n, t) => n + t.total, 0), month: typeRows.reduce((n, t) => n + t.month, 0), byMonth: cs.months.map(mo => ({ key: mo.key, label: mo.label, total: sumOf(riskRows.filter(r => monthOf(r.Month) === mo.key), 'Detections') })), source: source('TI.5-RISK', 'Microsoft Entra ID Protection.') }
     } else tiMissing('TI.5-RISK', 'Entra ID Protection risk detections', !measured('TI.0') ? `the table reach was not read (TI.0 ${state('TI.0')})` : !held('AADUserRiskEvents') ? 'Sentinel holds no Entra ID Protection risk detections, which need Entra ID P2 and the risk event diagnostic setting' : state('TI.5-RISK'))
     if (measured('TI.6') && held('EmailEvents')) {
       const r = rows('TI.6')
@@ -403,7 +407,7 @@
     const nowTiming = reportIndex >= 0 ? ops.timing[reportIndex] : null
     if (nowTiming && !nowTiming.high.withheld) tile(`Median time to close, high severity, ${cs.month.short}`, duration(nowTiming.high.median), [nowTiming.high.p90 !== null ? `Nine in ten within ${duration(nowTiming.high.p90)}` : '', `Based on ${plural(nowTiming.high.n, 'closed alert', 'closed alerts')}`, nowTiming.high.belowFloor ? `Under ${MEDIAN_FLOOR} minutes, covered in the review` : '', nowTiming.high.overHour ? '90th percentile over one hour, covered in the review' : ''].filter(Boolean).join('. '), ops.timingSource)
     else if (m.response) tile(`${m.response.median.label}, ${cs.months.length === 3 ? '90 days' : 'period'}`, m.response.median.value, [m.response.p90 ? `Nine in ten within ${m.response.p90.value}` : '', nowTiming ? `Fewer than ${TIMING_SAMPLE} closed in ${cs.month.label}` : ''].filter(Boolean).join('. '), m.response.median.source)
-    if (ti.matches) tile(`Threat intelligence matches, ${cs.month.short}`, fmt(ti.matches.month), `${fmt(ti.matches.total)} over the ${cs.months.length === 3 ? '90 days' : 'period'}. An indicator observed in telemetry, not a confirmed compromise.`, ti.matches.source)
+    if (ti.matches) tile(`Threat intelligence matches, ${cs.month.short}`, fmt(ti.matches.month), `${fmt(ti.matches.total)} over the ${cs.months.length === 3 ? '90 days' : 'period'}. An indicator observed in telemetry, not an investigation finding.`, ti.matches.source)
     else if (ti.stages && ti.stages.observed) tile('Attack stages observed', fmt(ti.stages.observed), `MITRE ATT&CK tactics on the alerts over the period`, ti.stages.source)
     if (vuln.mode === 'runs' && vuln.latest) tile('Open critical and high vulnerability findings', fmt(vuln.latest.critical + vuln.latest.high), [vuln.latest.kev !== null ? `${fmt(vuln.latest.kev)} with a CISA KEV-listed CVE` : '', `Assessment of ${vuln.latest.label}`].filter(Boolean).join('. '), vuln.source)
     else if (vuln.mode === 'defender') tile('Critical and high CVEs open on Azure virtual machines', fmt(vuln.defender.bySeverity[0].cves + vuln.defender.bySeverity[1].cves), `${fmt(vuln.defender.exploitable)} with public exploit code, current state`, vuln.defender.source)
@@ -416,14 +420,14 @@
     if (nowTiming && !nowTiming.high.withheld) say(`High severity alerts created in the month closed in a median of ${duration(nowTiming.high.median)} from creation.`)
     const commonest = ti.stages ? ti.stages.rows.filter(t => t.alerts > 0).sort((a, b) => b.alerts - a.alerts || a.order - b.order)[0] : null
     if (commonest) say(`Across the ${cs.months.length === 3 ? '90 days' : 'period'}, the alerts carried ${plural(ti.stages.observed, 'MITRE ATT&CK tactic', 'MITRE ATT&CK tactics')}, most often ${commonest.label.toLowerCase()}. A tactic is a label recorded at detection, not an investigation finding.`)
-    if (ti.matches) say(ti.matches.month > 0 ? `Threat intelligence matched known indicators ${plural(ti.matches.month, 'time', 'times')} in your telemetry this month. A match is an observation, not a confirmed compromise.` : 'No threat intelligence indicator matched your telemetry this month.')
+    if (ti.matches) say(ti.matches.month > 0 ? `Threat intelligence matched known indicators ${plural(ti.matches.month, 'time', 'times')} in your telemetry this month. A match is an observation, not an investigation finding.` : 'No threat intelligence indicator matched your telemetry this month.')
     if (vuln.mode === 'runs' && vuln.latest) say(`The vulnerability assessment of ${vuln.latest.label} reported ${plural(vuln.latest.open, 'open finding', 'open findings')} on ${plural(vuln.latest.vms, 'virtual machine', 'virtual machines')}, ${fmt(vuln.latest.critical)} critical and ${fmt(vuln.latest.high)} high${vuln.latest.kev !== null ? `, ${fmt(vuln.latest.kev)} with a CVE CISA lists as known exploited` : ''}.${vuln.change && vuln.change.compared ? ` Since the assessment of ${date(vuln.change.from)}, ${plural(vuln.change.openNew, 'open finding is', 'open findings are')} new and ${plural(vuln.change.openGone, 'is', 'are')} no longer open, pending validation.` : ''}`)
     else if (vuln.mode === 'defender') say(`Defender reports ${plural(vuln.defender.cves, 'CVE', 'CVEs')} open on Azure virtual machines at collection, ${fmt(vuln.defender.exploitable)} with public exploit code.`)
     cs.whatNext = `The month at a glance with the 90-day trend, what the SOC handled, the threat intelligence observed in your environment, ${vuln.mode ? 'vulnerability management' : 'the vulnerability position'}, the controls we hold this environment to and the proposed hardening roadmap.`
 
     // Presenter and review boundaries for the CyberSOC pages.
     if (cs.unmeasured.length) note('CyberSOC measures not gathered', `${cs.unmeasured.map(u => `${u.label} (${u.id}: ${u.reason})`).join('. ')}. These pages say the reading is completed in the review, never a zero.`)
-    note('Threat intelligence boundaries', 'A threat intelligence match confirms an indicator was observed in telemetry, not that exploitation or compromise occurred. A CISA KEV listing means CISA has reported exploitation in the wild, not exploitation in this environment. Tactics are detection-time labels on the alerts, not investigation findings.')
+    note('Threat intelligence boundaries', 'A threat intelligence match confirms an indicator was observed in telemetry and is not an investigation finding. A CISA KEV listing means CISA has reported exploitation in the wild, not exploitation in this environment. Tactics are detection-time labels on the alerts, not investigation findings.')
     note('Vulnerability change wording', 'A finding the earlier assessment reported and the later one did not is no longer reported (pending validation). The report never calls it remediated or resolved.')
     return cs
   }

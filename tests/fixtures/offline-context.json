@@ -48,18 +48,11 @@
       "WindowEnd": "2026-06-30"
     }
   ],
-  "Impact": {
-    "Confirmed": 0,
-    "Reviewed": "2026-10-10",
-    "Reference": "Review c4a7e1d9-8b2f-4c6a-9e3d-5b7f1a2c4e68",
-    "WindowStart": "2026-07-01",
-    "WindowEnd": "2026-09-30"
-  },
   "OpenAlertNote": {
     "AwaitingClient": 12,
     "InProgress": 8,
     "Reviewed": "2026-10-10",
-    "Reference": "ZD 9900200",
+    "Reference": "Review c4a7e1d9-8b2f-4c6a-9e3d-5b7f1a2c4e68",
     "WindowStart": "2026-07-01",
     "WindowEnd": "2026-09-30"
   },

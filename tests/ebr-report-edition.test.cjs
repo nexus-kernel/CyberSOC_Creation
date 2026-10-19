@@ -109,11 +109,22 @@ test('the client edition holds no GUID or workspace resource ID anywhere in the 
   assert.ok(internal.report.includes('law-ae2d4c6b8-a0f1-4e3d-9c5b-7a9f1e3d5c7bf'), 'the internal page shows a GUID between hexadecimal characters')
   assert.match(client.report, /<td>law-a\[id \d+\]f<\/td>/)
   assert.match(client.report, /<td>DefaultWorkspace-\[id \d+\]-EUS<\/td>/)
-  assert.match(client.report, /Reviewed impact determination Review \[id \d+\]/, 'a GUID in a context Reference is masked')
+  assert.match(client.report, /Reviewed open alert status Review \[id \d+\]/, 'a GUID in a context Reference is masked')
   // Evidence IDs and read dates stay in the source lines, and the subscription count stays in the scope line.
   assert.match(client.report, /DR\.9\. Read Oct 8, 2026\./)
   assert.match(client.report, /POS\.1\. Read Oct 8, 2026\./)
   assert.match(client.report, /2 subscriptions · 2 Sentinel workspaces/)
+})
+
+test('neither edition reports a data exfiltration, data exposure or compromise determination', () => {
+  const { internal, client } = editions
+  const claim = /exfiltration or impact|impact tactic|data exposure|data loss|investigation evidence|impact determination|confirmed compromise|compromise occurred|not a compromise|Confirmed impact/i
+  for (const [name, text] of [['internal pages', internal.report], ['presenter notes', internal.review], ['client file', client.html]]) {
+    assert.ok(!claim.test(text), `${name}: ${text.match(new RegExp(`.{0,60}(${claim.source}).{0,60}`, 'i'))?.[0]}`)
+  }
+  assert.ok(!/ExfilOrImpactTactic|"Impact":/.test(internal.json), 'the embedded data carries no data loss flag and no impact record')
+  // The ATT&CK tactics on the detections stay, Exfiltration included: they label what was detected.
+  assert.ok(client.report.includes('Exfiltration'))
 })
 
 test("the client edition's pages equal the internal edition's on the offline fixture", () => {
@@ -122,7 +133,7 @@ test("the client edition's pages equal the internal edition's on the offline fix
   // The fixture reaches the model paths that join on identifiers and the context records it reads.
   assert.equal(m.controls.find(c => c.id === 'DR.9').mark, 'N', 'one workspace has no enabled analytics rule')
   assert.ok(m.presenter.some(n => n.title === 'Workspace coverage' && n.text.startsWith('1 workspace holds')))
-  assert.ok(m.alerts.openSplit && m.impact && m.delivered.length === 1 && m.actions.length === 1)
+  assert.ok(m.alerts.openSplit && m.delivered.length === 1 && m.actions.length === 1)
   assert.equal(fold(client.report), fold(internal.report))
   assert.equal(client.title, internal.title)
   assert.match(client.html, /<option value="detailed" selected>/)

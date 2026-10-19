@@ -114,7 +114,7 @@
       workspaces: [...new Map(array(p.Workspaces).map(w => [String(w.CustomerId || w.ResourceId || w.Name).toLowerCase(), w])).values()],
       depth: ['brief', 'balanced', 'detailed'].includes(data.depth) ? data.depth : 'balanced',
       service: null, headline: [], tiers: { outcomes: [], controls: [], hardening: [], benchmark: [] }, tierSummary: null, whatNext: '',
-      response: null, alerts: null, threats: null, impact: null, threatMeasures: null, impactStatement: '', detections: null, trend: [], pillars: [], controls: [], priorities: [], delivered: [], actions: [], mfaMethods: null,
+      response: null, alerts: null, threats: null, detections: null, trend: [], pillars: [], controls: [], priorities: [], delivered: [], actions: [], mfaMethods: null,
       cloudScore: null, tenantScore: null, posture: {}, review: [], presenter: [], unmeasured: [], notApplicable: [], issues: array(data.issues).map(clean),
       manifest: manifest.map(r => ({ id: clean(r.ResultId), status: clean(r.Status), rows: count(r.Rows), date: date(r.ReadTimeUtc) })),
       tenantWorkspace: clean(p.TenantWideTables?.SigninLogs || 'Not recorded'),
@@ -185,31 +185,20 @@
     if (incValid) {
       const automation = analystMode ? allRow.AutoClosed : 0
       const triaged = inc.Raised - automation, closed = inc.Closed - automation
-      const tp = count(inc.TruePositive)
-      // The collector's ExfilOrImpactTactic flag also fires on a Collection tactic. The builder embeds each row's
-      // tactics, so the count the report presents is the narrower one, alerts whose tactics include Exfiltration or
-      // Impact, and every surface names that scope. A pack whose rows carry no tactics (an older builder, or a
-      // flagged row whose tactics could not be read) keeps the flag count and names the wider scope (Oct 14, 2026).
-      const flags = has('OUT.4') ? rows('OUT.4') : null
-      const tacticsOf = r => String(r.Tactics ?? '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
-      const tacticsKnown = !!flags && flags.every(r => 'Tactics' in r && (!bool(r.ExfilOrImpactTactic) || tacticsOf(r).length > 0))
-      const flagged = flags ? (tacticsKnown ? flags.filter(r => tacticsOf(r).some(t => t === 'exfiltration' || t === 'impact')) : flags.filter(r => bool(r.ExfilOrImpactTactic))).length : null
-      const flaggedScope = tacticsKnown ? 'exfiltration or impact' : 'collection, exfiltration or impact'
-      // The phrase every surface uses for the count: a tactic recorded on the alert, never an outcome verb such
-      // as reached. A true positive is a closure classification, so the surfaces say classified, never
-      // investigated, and the impact statement comes only from the reviewed record below (Oct 15, 2026).
-      const tacticPhrase = `${/^[aeiou]/.test(flaggedScope) ? 'an' : 'a'} ${flaggedScope} tactic`
+      // A true positive is a closure classification, so the surfaces say classified, never investigated. The
+      // CyberSOC report counts confirmed threats only: it carries no data exfiltration, data exposure or
+      // compromise determination, which stays with the EBR (Oct 19, 2026).
       m.alerts = {
         triaged, closed, open: inc.Open, raised: inc.Raised, automation: autoValid ? allRow.AutoClosed : null, analystMode, autoShare: autoValid ? pct(allRow.AutoClosed, allRow.Incidents) : null,
-        resolvedPct: pct(closed, triaged), truePositives: tp, benign: count(inc.BenignPositive), falsePositives: count(inc.FalsePositive),
-        flagged, flaggedKnown: flagged !== null && tp !== null, flaggedScope, tacticPhrase, unclassified: count(inc.ClosedUnclassified),
+        resolvedPct: pct(closed, triaged), truePositives: count(inc.TruePositive), benign: count(inc.BenignPositive), falsePositives: count(inc.FalsePositive),
+        unclassified: count(inc.ClosedUnclassified),
         source: source('OUT.1', m.ticketed ? 'Alerts that opened an Atmosera ticket, informational severity excluded.' : ''), partial: partial('OUT.1')
       }
       // Open alerts at collection split into those awaiting the client and those still with Atmosera only from a
       // reviewed OpenAlertNote record in the context file: OUT.1 holds the open count, never who holds each alert.
-      // Like the Impact record, the split is bound to the alert period it covers and must account for every open
-      // alert, so a context file reused from an earlier period never splits a later count. Without it every surface
-      // names both possibilities in one sentence (Oct 16, 2026).
+      // The split is bound to the alert period it covers and must account for every open alert, so a context file
+      // reused from an earlier period never splits a later count. Without it every surface names both
+      // possibilities in one sentence (Oct 16, 2026).
       const openRecord = context.OpenAlertNote
       if (openRecord !== undefined && openRecord !== null && inc.Open > 0) {
         const record = typeof openRecord === 'object' ? openRecord : {}
@@ -263,47 +252,12 @@
         m.threats = { examples: shown.map(({ latest, ...g }) => g), more: more.length, moreAlerts: alertsIn(more), alerts: examples.length, severities, source: source('OUT.4', 'Confirmed threats with an attack stage, grouped by alert title.') }
         presenter('Confirmed threat examples', `The examples use alert titles as Sentinel recorded them, with incident written as alert. Titles that carry an email address, IP address, host or domain name, path, GUID, ticket reference or machine-style name are withheld automatically. Check that no title shown names a person, account or machine, or implies containment, before the review. The table shows ${plural(alertsIn(shown), 'confirmed alert', 'confirmed alerts')} in ${plural(shown.length, 'group', 'groups')}.${more.length ? ` ${fmt(m.threats.moreAlerts)} more ${m.threats.moreAlerts === 1 ? 'sits' : 'sit'} in ${plural(more.length, 'further group', 'further groups')}.` : ''}`)
         // An indicator match (a Log4Shell IP or domain indicator, for example) classified as a true positive confirms
-        // the indicator was seen, not that exploitation or compromise occurred. The report draws no distinction.
+        // the indicator was seen in telemetry. The report counts it as a confirmed threat like any other.
         const indicators = examples.filter(r => /\b(IOC|IOCs|indicator|indicators|Log4Shell|Log4j|threat intel|threat intelligence)\b/i.test(clean(r.Threat))).length
-        presenter('Indicator-based true positives', `A true-positive classification on an indicator detection, such as a Log4Shell IP or domain indicator match, confirms that the indicator was observed, not that exploitation or compromise occurred. The report draws no distinction between an indicator detection and a confirmed exploitation.${indicators ? ` ${fmt(indicators)} of the ${plural(examples.length, 'confirmed alert', 'confirmed alerts')} with an attack stage ${indicators === 1 ? 'carries' : 'carry'} an indicator in the title.` : ''} Have the investigation outcome from each ticket ready if asked.`)
+        presenter('Indicator-based true positives', `A true-positive classification on an indicator detection, such as a Log4Shell IP or domain indicator match, confirms that the indicator was observed in telemetry. The report counts it as a confirmed threat like any other true positive.${indicators ? ` ${fmt(indicators)} of the ${plural(examples.length, 'confirmed alert', 'confirmed alerts')} with an attack stage ${indicators === 1 ? 'carries' : 'carry'} an indicator in the title.` : ''} Have each ticket ready if asked.`)
       }
       if (withheld) presenter('Confirmed threat titles withheld', `${plural(withheld, 'confirmed alert is', 'confirmed alerts are')} left out of the examples because ${withheld === 1 ? 'its title may identify' : 'their titles may identify'} an account, address, host or other internal detail, could not be screened, or ${withheld === 1 ? 'carries' : 'carry'} no title or date. The tickets and the pack's OUT.4 result carry the detail.`)
       if (operational) presenter('Operational true positives', `${plural(operational, 'confirmed alert carries', 'confirmed alerts carry')} no attack stage, for example a service limit warning, and ${operational === 1 ? 'is' : 'are'} left out of the confirmed threat examples. The confirmed threat count still includes ${operational === 1 ? 'it' : 'them'}.`)
-    }
-
-    // Three measures the surfaces keep apart. Confirmed malicious activity is the true-positive classification
-    // count (OUT.1). Confirmed security incidents have no collected or reviewed source, so that measure stays null
-    // and no surface prints one. Confirmed business impact comes only from a reviewed determination in the context
-    // file (Impact with Confirmed, Reviewed and Reference), never from the tactics Sentinel recorded on an alert:
-    // the collector's own OUT.4 note holds that a zero data loss statement needs each flagged closing comment
-    // reviewed. Without the record every surface prints the tactic count and asks for additional investigation
-    // evidence, and no surface prints reached, no impact or did not reach (Oct 15, 2026).
-    // The record is bound to the alert period it covers: it names the period's WindowStart and WindowEnd, its review
-    // is dated on or after the period's end, and its count never exceeds the true positives. A context file reused
-    // from an earlier period therefore never carries a determination forward to later true positives.
-    const impactRecord = context.Impact && typeof context.Impact === 'object' ? context.Impact : null
-    if (impactRecord) {
-      const confirmed = count(impactRecord.Confirmed)
-      const reviewed = iso(impactRecord.Reviewed), recordStart = iso(impactRecord.WindowStart), recordEnd = iso(impactRecord.WindowEnd)
-      const omitted = reason => note('Impact determination needs review', `The context Impact record was omitted because ${reason} Correct it before presenting, or remove it to keep the request for additional investigation evidence.`)
-      if (confirmed === null || !validDate(reviewed) || !clean(impactRecord.Reference) || !validDate(recordStart) || !validDate(recordEnd)) omitted('it lacks a Confirmed count, a Reviewed date, a Reference, or the WindowStart and WindowEnd of the alert period it covers.')
-      else if (!windowValid || recordStart !== p.WindowStart || recordEnd !== p.WindowEnd) omitted(`it covers ${span(recordStart, recordEnd)} and this pack's alert period is ${m.period.label}.`)
-      else if (reviewed < p.WindowEnd) omitted(`its review is dated ${date(reviewed)}, before the alert period ended on ${date(p.WindowEnd)}, so it cannot cover every true positive in the period.`)
-      else if (m.alerts && m.alerts.truePositives !== null && confirmed > m.alerts.truePositives) omitted(`it confirms impact from ${fmt(confirmed)} alerts against ${fmt(m.alerts.truePositives)} true positives.`)
-      else m.impact = { confirmed, reviewed: date(reviewed), reference: clean(impactRecord.Reference), source: `Reviewed impact determination ${clean(impactRecord.Reference)}, ${date(reviewed)}, covering ${m.period.label}, from the reviewed context file.` }
-    }
-    const tpKnown = !!m.alerts && m.alerts.truePositives !== null
-    m.threatMeasures = {
-      malicious: tpKnown ? { value: m.alerts.truePositives, label: 'Confirmed threats', detail: 'Alerts the SOC classified as true positives', source: m.alerts.source } : null,
-      incidents: null,
-      impact: m.impact ? { value: m.impact.confirmed, label: 'Confirmed business impact', detail: `Reviewed ${m.impact.reviewed}, ${m.impact.reference}`, source: m.impact.source } : null
-    }
-    if (tpKnown && m.alerts.truePositives > 0) {
-      const a = m.alerts, tpText = a.truePositives === 1 ? 'the confirmed threat' : `the ${fmt(a.truePositives)} confirmed threats`
-      m.impactStatement = clean(m.impact
-        ? (m.impact.confirmed === 0 ? `The reviewed investigation records confirm no data exposure or business impact from ${tpText} (${m.impact.reference}, reviewed ${m.impact.reviewed}).` : `The reviewed investigation records confirm data exposure or business impact from ${a.truePositives === 1 ? tpText : `${fmt(m.impact.confirmed)} of ${tpText}`} (${m.impact.reference}, reviewed ${m.impact.reviewed}).`)
-        : `${a.flaggedKnown ? `Based on the tactics Sentinel recorded on the alerts, ${a.flagged === 0 ? (a.truePositives === 1 ? 'the confirmed threat did not carry' : 'none of the confirmed threats carried') : `${fmt(a.flagged)} of ${tpText} carried`} ${a.tacticPhrase}. ` : ''}Additional investigation evidence is required to confirm whether any data exposure or business impact occurred.`)
-      if (!m.impact) note('Impact determination', 'The context file carries no reviewed Impact record, so the report prints the tactic count with a request for additional investigation evidence and never a data exposure or business impact statement. Review the closing comment and ticket of each true positive, then add Impact with Confirmed, Reviewed, Reference, WindowStart and WindowEnd to the context file to print the determination.')
     }
 
     // Response timing from one fixed cohort: every eligible high severity alert created in the alert period and closed
@@ -1168,7 +1122,7 @@
     }
     if (!m.delivered.length) note('Delivered work', 'Add completed change references through the context file to show verified delivery on the roadmap page. Planned work is never labeled as delivered.')
 
-    // Action status from the reviewed context file. Like Impact and OpenAlertNote, a record is bound to the alert
+    // Action status from the reviewed context file. Like OpenAlertNote, a record is bound to the alert
     // period it covers and reviewed on or after the posture read date, so a record from an earlier review never
     // carries a status forward to this collection's findings. Scheduled needs a target date, and Verified needs a
     // Delivered record in this period with the same reference. A record that fails a check is omitted with a note.
@@ -1308,10 +1262,8 @@
     // completion or resolution quality, which the evidence does not hold.
     // A median under 20 minutes or a 90th percentile over one hour carries its note on the tile as well.
     if (m.response) tile(m.response.median.label, m.response.median.value, [m.response.p90 ? `Nine in ten triaged and closed within ${m.response.p90.value}` : 'High severity alerts', ...m.response.notes.map(t => t.replace(/\.$/, ''))].join('. '), m.response.median.source)
-    // The tile never claims an outcome: the sub-line is the reviewed impact determination when the context file
-    // carries one, otherwise the tactic reading or the classification itself. When the determination drives the
-    // sub-line the source line cites the reviewed record beside OUT.1, so the impact claim traces to its evidence.
-    else if (m.alerts && m.alerts.truePositives !== null) tile('Confirmed threats', fmt(m.alerts.truePositives), m.impact && m.alerts.truePositives > 0 ? (m.impact.confirmed === 0 ? `No data exposure or business impact confirmed, reviewed ${m.impact.reviewed}` : `${fmt(m.impact.confirmed)} with confirmed data exposure or business impact`) : m.alerts.flaggedKnown && m.alerts.truePositives > 0 ? (m.alerts.flagged === 0 ? `None carried ${m.alerts.tacticPhrase}` : `${fmt(m.alerts.flagged)} carried ${m.alerts.tacticPhrase}`) : 'Alerts the SOC classified as true positives', m.impact && m.alerts.truePositives > 0 ? `${m.alerts.source} ${m.impact.source}` : m.alerts.source)
+    // The tile never claims an outcome: the sub-line is the classification itself.
+    else if (m.alerts && m.alerts.truePositives !== null) tile('Confirmed threats', fmt(m.alerts.truePositives), 'Alerts the SOC classified as true positives', m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
     if (m.tenantScore) tile('Microsoft tenant Secure Score', pctText(m.tenantScore.value), m.tenantScore.delta ? `Up ${fmt(m.tenantScore.delta.points)} points since ${m.tenantScore.delta.since}, from ${pctText(m.tenantScore.delta.from)}` : `Read ${m.tenantScore.read}`, m.tenantScore.source, m.tenantScore.delta ? 'up' : '')
     else if (m.cloudScore) tile('Defender for Cloud secure score', pctText(m.cloudScore.value), m.cloudScore.delta && m.cloudScore.delta.points > 0 ? `Up ${fmt(m.cloudScore.delta.points)} points since ${m.cloudScore.delta.since}, from ${pctText(m.cloudScore.delta.from)}` : 'Classic Defender for Cloud score', m.cloudScore.source, m.cloudScore.delta && m.cloudScore.delta.points > 0 ? 'up' : '')
@@ -1319,15 +1271,11 @@
 
     const row = (tier, label, value, id) => { if (value !== null && value !== undefined && value !== '' && value !== 'Not available') m.tiers[tier].push({ label: clean(label), value: clean(String(value)), id }) }
     if (m.alerts) {
-      // The deck band shows the first three rows, so the tier leads with what "Did the program hold" names: alerts,
-      // confirmed threats and the reviewed impact determination when the context file holds one. The closed
-      // share and the tactic reading follow. Tactic-qualified: the count is of tactics recorded on the alert,
-      // never a verified outcome.
+      // The deck band shows the first three rows, so the tier leads with what "Did the program hold" names: alerts
+      // and confirmed threats, then the closed share.
       row('outcomes', 'Alerts triaged', fmt(m.alerts.triaged), 'OUT.1')
       if (m.alerts.truePositives !== null) row('outcomes', 'Confirmed threats', fmt(m.alerts.truePositives), 'OUT.1')
-      if (m.impact && m.alerts.truePositives > 0) row('outcomes', 'Confirmed data exposure or business impact', fmt(m.impact.confirmed), 'CONTEXT')
       if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
-      if (m.alerts.flaggedKnown) row('outcomes', `True positives whose alerts carried ${m.alerts.tacticPhrase}`, `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
     }
     if (m.response) {
       row('outcomes', m.response.median.label, m.response.median.value, 'OUT.2')
@@ -1368,7 +1316,7 @@
     if (m.notApplicable.length) note('Controls without evidence either way', `${m.notApplicable.map(u => `${u.label} (${u.id})`).join('. ')}. These read N/A on the controls page because the collection holds no activity or configuration to judge them by. They are excluded from every count.`)
     if (m.unmeasured.length) note('Controls not measured in this collection', `${m.unmeasured.map(u => `${u.label} (${u.id}: ${u.reason})`).join('. ')}. These appear as (null) on the controls page rather than as measured gaps, and they are excluded from the executive summary tiers.`)
     if (String(p.DefenderApi || '').toLowerCase() !== 'available' && p.DefenderApi) presenter('Defender API', `Defender Advanced Hunting was not reachable: ${clean(p.DefenderApi)}. Endpoint readings come from the portal for this review.`)
-    note('Presentation boundaries', 'Alert closure does not confirm containment. Detections do not prove triage. No claim of zero data loss, SLA attainment, a control grade or completed hardening is generated from these aggregates.')
+    note('Presentation boundaries', 'Alert closure does not confirm containment. Detections do not prove triage. No claim of SLA attainment, a control grade or completed hardening is generated from these aggregates.')
     note('Scope and time', `Alert activity covers ${m.period.label}. Identity and endpoint readings use the source lookback, generally the last 30 days. Azure configuration and score readings reflect ${readDate}.`)
     for (const issue of m.issues) note('Evidence file', issue)
     m.coverage = {
