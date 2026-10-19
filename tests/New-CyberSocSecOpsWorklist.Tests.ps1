@@ -245,6 +245,12 @@ Describe 'Onboarding reasons and patch exclusions (collector 1.14.0)' {
         $ex[0].Detail | Should -Be 'Tag "patching":"client owned", resource group app'
         $ex[0].Source | Should -Be 'EW.10-EXCLUDED'
     }
+    It 'reads an empty reason list as none found, with no empty item' {
+        Add-WorklistResult $pack 'EW.1-GAPS' '[]' 'EMPTY'
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $pack '04-secops-worklist.md') -Raw | Should -Match '\| Azure virtual machines not reporting to Defender for Endpoint, by reason \| EW\.1 \| 0 \| None found \|'
+        @(Import-Csv (Join-Path $pack '04-secops-worklist.csv') | Where-Object Category -eq 'Azure virtual machines not reporting to Defender for Endpoint, by reason').Count | Should -Be 0
+    }
     It 'reads needs recollection on an older pack' {
         $old = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-WorklistFixture $old

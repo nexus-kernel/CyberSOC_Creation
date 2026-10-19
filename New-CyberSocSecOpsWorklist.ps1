@@ -276,7 +276,9 @@ $sections = foreach ($c in $categories) {
             if (Test-Unreadable $c.Id) { $state = Get-UnreadableState $c.Id; break }
             $all = @(Get-Rows $c.Id)
             if ($c.Prepare) { $all = @(& $c.Prepare $all) }
-            $rows = if ($c.Filter) { @($all | Where-Object { & $c.Filter $_ }) } else { $all }
+            # Kept an array, since an empty one assigned from the if would turn into $null, which a Map that
+            # pipes $rows straight into ForEach-Object reads as one empty item.
+            $rows = @(if ($c.Filter) { $all | Where-Object { & $c.Filter $_ } } else { $all })
             $items = @(& $c.Map $rows)
             $state = if ($items.Count) { ('{0} item{1}{2}' -f $items.Count, $(if ($items.Count -eq 1) { '' } else { 's' }), $(if ($status -eq 'PARTIAL') { ', partial collection scope' } else { '' })) } else { 'None found' }
             if ($c.Note) { $extra = Get-Text (& $c.Note $all); if ($extra) { $state = "$state, $extra" } }
