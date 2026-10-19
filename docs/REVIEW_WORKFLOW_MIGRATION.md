@@ -81,9 +81,9 @@ reject BOTH CyberSOC-Evidence and EBR-Evidence directories to protect client dat
 
 README's EBR source link/comparison/upstream-fetch instructions, historical EBR
 runbook and packaging reference, design lineage, ATMO-MXDR controls and historical
-validation notes are truthful provenance, not target routing. MANIFEST.sha256 is
-the inherited EBR release manifest (as SETUP.md explains); it is not regenerated
-as a release by this workflow port. No EBR repository reads/writes were needed for
+validation notes are truthful provenance, not target routing. The inherited EBR
+release manifest was later removed from the repository root: MANIFEST.sha256 exists
+only in a release zip, written by Export-CyberSocToolkit.ps1 (as SETUP.md explains). No EBR repository reads/writes were needed for
 the application, and no source repository was mutated.
 
 ## Validation and deployment boundary
