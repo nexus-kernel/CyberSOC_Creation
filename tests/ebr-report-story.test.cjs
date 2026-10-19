@@ -297,7 +297,7 @@ test('a win, headline or narrative at E that leaves resources out never says eve
   const shown = [...s.drift.map(c => c.detail), ...s.roadmap.flatMap(h => h.items.flatMap(i => [i.evidence, ...i.controls.map(c => c.detail)]))]
   assert.ok(shown.length && shown.every(t => !/\bexceptions?\b/.test(t)), shown.find(t => /\bexceptions?\b/.test(t)))
 })
-test('Conditional Access controls in force carry the excluded accounts that signed in on the register (issue #27)', () => {
+test('Conditional Access controls in force carry the accounts with excluded sign-ins on the register (issue #27)', () => {
   const p = quarterPack()
   const set = (id, rows) => { p.manifest = p.manifest.filter(r => r.ResultId !== id); p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-12T10:00:00Z' }); p.results[id] = rows }
   const ca = (Flow, o = {}) => ({ Flow, PolicyRead: true, PolicyState: 'Enforced', EnforcedPolicies: 1, ExcludedIdentities: 3, DetailRead: true, SignIns: 0, SucceededExcluded: 0, AccountsExcluded: 0, SucceededUngoverned: 0, AccountsUngoverned: 0, ...o })
@@ -308,7 +308,7 @@ test('Conditional Access controls in force carry the excluded accounts that sign
   const rows = s.register.flatMap(r => [...r.foundational, ...r.defense])
   const row = re => rows.find(c => re.test(c.label))
   assert.deepEqual([/^Multifactor authentication required/, /^Legacy authentication/, /^Device code/, /^Multifactor authentication at admin portal/].map(re => [row(re).valueText, row(re).exceptionText]),
-    [['In force', ''], ['In force', '1 excluded account signed in'], ['In force', '2 excluded accounts signed in'], ['In force', '']], 'MFA at sign-in has no per-account detail')
+    [['In force', ''], ['In force', '1 account with excluded sign-ins'], ['In force', '2 accounts with excluded sign-ins'], ['In force', '']], 'MFA at sign-in has no per-account detail')
 })
 test('the identity win names the evaluated population in a federated tenant', () => {
   const p = quarterPack()

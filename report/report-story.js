@@ -311,7 +311,7 @@
 
     // The register: every control, with a value that is never null. A control at E that leaves resources out
     // carries its exception count, so E with exceptions never reads as E with none (Oct 15, 2026), and a device code
-    // or legacy authentication block in force carries the excluded accounts seen signing in (issue #27). A control on a
+    // or legacy authentication block in force carries the accounts whose sign-ins fell under its exclusions (issue #27). A control on a
     // small sample carries the flag, and the patch cadence row names its assessed and excluded populations (issue #24).
     s.register = GROUPS.map(g => {
       const inG = m.controls.filter(c => c.group === g)

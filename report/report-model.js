@@ -52,8 +52,10 @@
   const MIN_SAMPLE = 10
   const smallSampleText = n => `${fmt(n)} on a small sample`
   // What a control at E leaves out, for the register. A ratio control names its exceptions, and a Conditional Access
-  // control in force names the excluded accounts seen signing in (issue #27), so neither reads as covering everyone.
-  const exceptionsText = c => c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : c.excludedAccounts > 0 ? plural(c.excludedAccounts, 'excluded account signed in', 'excluded accounts signed in') : ''
+  // block in force names the accounts whose sign-ins fell under its exclusions (issue #27), so neither reads as covering
+  // everyone. The evaluator counts a sign-in as excluded when a policy for all users did not apply to it, which can be a
+  // user, group, role or application exclusion, so the text never says the account itself is excluded.
+  const exceptionsText = c => c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : c.excludedAccounts > 0 ? plural(c.excludedAccounts, 'account with excluded sign-ins', 'accounts with excluded sign-ins') : ''
   const bool = value => value === true || String(value ?? '').toLowerCase() === 'true'
   const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`
   // Microsoft retires its own text message and voice delivery in two populations: most users on Feb 1, 2027, and
@@ -569,15 +571,15 @@
     const exceptionText = f => {
       if (!f || !bool(f.DetailRead)) return ''
       const parts = []
-      if (count(f.SucceededExcluded) > 0) parts.push(`${plural(f.SucceededExcluded, 'successful sign-in', 'successful sign-ins')} came from ${plural(f.AccountsExcluded, 'account', 'accounts')} excluded from the policy. Atmosera reviews these exclusions with your team at each business review.`)
+      if (count(f.SucceededExcluded) > 0) parts.push(`${plural(f.SucceededExcluded, 'successful sign-in', 'successful sign-ins')} by ${plural(f.AccountsExcluded, 'account', 'accounts')} fell under exclusions in the policy, which can name users, groups, roles or applications. Atmosera reviews these exclusions with your team at each business review.`)
       if (count(f.SucceededUngoverned) > 0) parts.push(`${plural(f.SucceededUngoverned, 'successful sign-in', 'successful sign-ins')} from ${plural(f.AccountsUngoverned, 'account was', 'accounts were')} not covered by the policy.`)
       return parts.join(' ')
     }
-    // A control in force whose excluded accounts signed in carries the account count, which the register shows beside
+    // A control in force whose exclusions let sign-ins through carries the count of accounts that made them, which the register shows beside
     // In force so the policy never reads as covering everyone. Every such exclusion is also listed, pending validation
     // with the client, for the proposed exceptions section (issue #27, section in issue #30). Only the flows with
     // per-account sign-in detail (device code and legacy authentication, IA.8-SIGNINS) can carry one. The count is the
-    // excluded accounts seen signing in, not every account the policy excludes.
+    // accounts seen signing in under an exclusion, not every identity the policy excludes.
     m.caExclusions = []
     const withExclusions = (item, f) => {
       const signIns = f && bool(f.DetailRead) ? count(f.SucceededExcluded) : null
@@ -1208,8 +1210,8 @@
       if (mfaSplit && mfa.pct !== null) parts.push(mfaSplitNarrative)
       if (isInForce(locControl)) parts.push('Conditional Access restricts sign-ins by location for every user.')
       const legacyBlockedInForce = isInForce(legacyControl)
-      // The narrative names the excluded accounts seen signing in, so the block never reads as covering every user.
-      if (legacyBlockedInForce) parts.push(`Legacy authentication is blocked${legacyControl.excludedAccounts > 0 ? `. ${plural(legacyControl.excludedAccounts, 'account excluded from the policy', 'accounts excluded from the policy')} signed in with a legacy protocol in the last 30 days` : ''}.`)
+      // The narrative names the accounts seen signing in under an exclusion, so the block never reads as covering every user.
+      if (legacyBlockedInForce) parts.push(`Legacy authentication is blocked${legacyControl.excludedAccounts > 0 ? `. ${plural(legacyControl.excludedAccounts, 'account', 'accounts')} signed in with a legacy protocol under exclusions in the policy in the last 30 days` : ''}.`)
       if (advancedPhish) parts.push('An advanced anti-phishing policy protects every mailbox.')
       else if (basicPhish) parts.push('The Microsoft default anti-phishing policy covers every mailbox.')
       const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', `Multifactor authentication covers ${measureText(mfa)} ${unevaluated !== null ? 'evaluated members' : 'members'} at sign-in, ${remaining(mfa)}${legacyBlockedInForce ? ', and legacy protocols are blocked' : ''}`, 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')

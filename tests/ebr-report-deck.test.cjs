@@ -367,7 +367,7 @@ test('the control register counts the exceptions of a control at E on its label 
   const { notes } = await read(out)
   assert.ok(notes.some(n => n.includes('Azure virtual machines reporting to endpoint detection: 88 of 89, 1 exception.')), 'the speaker notes say the count')
 })
-test('Conditional Access controls in force carry the excluded accounts that signed in on the register label line, and every column still fits (issue #27)', async () => {
+test('Conditional Access controls in force carry the accounts with excluded sign-ins on the register label line, and every column still fits (issue #27)', async () => {
   const p = pack('balanced')
   const set = (id, rows) => { p.manifest = p.manifest.filter(r => r.ResultId !== id); p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-08T10:00:00Z' }); p.results[id] = rows }
   const ca = (Flow, o = {}) => ({ Flow, PolicyRead: true, PolicyState: 'Enforced', EnforcedPolicies: 1, ExcludedIdentities: 12, DetailRead: true, SignIns: 0, SucceededExcluded: 0, AccountsExcluded: 0, SucceededUngoverned: 0, AccountsUngoverned: 0, ...o })
@@ -386,14 +386,14 @@ test('Conditional Access controls in force carry the excluded accounts that sign
   const zip = await JSZip.loadAsync(fs.readFileSync(out))
   const xmls = (await Promise.all(Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n)).map(n => zip.file(n).async('string')))).filter(x => x.includes('register rule'))
   const text = xmls.map(x => (x.match(/<a:t>[^<]*<\/a:t>/g) || []).map(t => t.slice(5, -6)).join(' ')).join(' ').replace(/\u00A0/g, ' ')
-  for (const [label, count] of [['Legacy authentication blocked', '2 excluded accounts signed in'], ['Device code flow sign-ins blocked', '2 excluded accounts signed in']]) {
+  for (const [label, count] of [['Legacy authentication blocked', '2 accounts with excluded sign-ins'], ['Device code flow sign-ins blocked', '2 accounts with excluded sign-ins']]) {
     assert.match(text, new RegExp(`${label}\\s+· ${count}\\b`), `${label} carries ${count}`)
   }
   assert.match(text, /Azure virtual machines reporting to endpoint detection\s+· 1 exception\b/, 'ratio exceptions read beside them')
   assert.ok(!/approved/i.test(text), 'no approved wording on the register')
   for (const xml of xmls) for (const r of xml.matchAll(/name="([^"]*) register rule"[\s\S]*?<a:off x="\d+" y="(\d+)"\/>/g)) assert.ok(Number(r[2]) <= 7.2 * EMU, `"${r[1]}" ends at ${(Number(r[2]) / EMU).toFixed(2)} in`)
   const { notes } = await read(out)
-  assert.ok(notes.some(n => n.includes('Device code flow sign-ins blocked: In force, 2 excluded accounts signed in. ') && n.includes('3 successful sign-ins came from 2 accounts excluded from the policy. Atmosera reviews these exclusions with your team at each business review.')), 'the speaker notes say the count and the review sentence')
+  assert.ok(notes.some(n => n.includes('Device code flow sign-ins blocked: In force, 2 accounts with excluded sign-ins. ') && n.includes('3 successful sign-ins by 2 accounts fell under exclusions in the policy, which can name users, groups, roles or applications. Atmosera reviews these exclusions with your team at each business review.')), 'the speaker notes say the count and the review sentence')
 })
 test('in a federated tenant the register detail line and the pillar slide carry the MFA split, and every row still fits', async () => {
   const p = pack('balanced')
