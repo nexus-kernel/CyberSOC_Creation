@@ -40,7 +40,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 06 | Purge protection on key vaults, with the soft delete retention period of each vault. Purge protection cannot be disabled once enabled, so the client approves it in writing first | DP.2-DETAIL | Yes, asking for written approval, unless `-PurgeProtectionApproved` records that the client approved it at build kickoff |
 | 07 | Anonymous blob access disabled on storage accounts, naming the containers open to anonymous read today | DP.1-DETAIL, DP.1-CONTAINERS | Yes |
 | 08 | HTTPS Only on App Service and Function apps | NB.4-DETAIL | Yes |
-| 09 | Encryption at host on the virtual machines that can take it. Each is stopped for the change, and started again only if it was running when the change began, during the change and on rollback. The machines of a Flexible scale set with a model are left to CR-15 | DP.4-ELIGIBILITY, DP.4-VMSS-ELIGIBILITY | Yes, asking for a maintenance window |
+| 09 | Encryption at host on the virtual machines that can take it. Each is stopped for the change, and started again only if it was running when the change began, during the change and on rollback. The machines of a Flexible scale set that CR-15 changes are left to it | DP.4-ELIGIBILITY, DP.4-VMSS-ELIGIBILITY | Yes, asking for a maintenance window |
 | 10 | Diagnostic logging remediated on the resources not compliant with the initiative: one remediation task for each assignment and policy, each resource listed once | DR.6-INITIATIVE, DR.6-NONCOMPLIANT | No |
 | 11 | Minimum TLS 1.2 on Azure Cache for Redis. Every cache has refused TLS 1.0 and 1.1 since April 1, 2025, and no minimum below 1.2 can be set since March 1, 2024, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
 | 12 | Minimum TLS 1.2 on Service Bus namespaces. Service Bus accepts only TLS 1.2 and later, and a namespace takes only 1.2 or 1.3 as its minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
@@ -64,8 +64,9 @@ Resources a change leaves out are named in the index notes:
   with an Ultra Disk or Premium SSD v2 that uses 512e sectors and was created before May 13, 2023, one on a size without
   encryption at host support in its region, and one whose size support could not be read. The steps
   deallocate each machine before Azure checks the setting, so an ineligible machine would go down for nothing.
-- CR-09 leaves out the machines of a Flexible scale set with a model (DP.4-ELIGIBILITY names the scale set of each
-  machine from collector 1.3.0), since CR-15 handles them with their scale set. A pack from an earlier collector, or
+- CR-09 leaves out the machines of a Flexible scale set that CR-15 changes (DP.4-ELIGIBILITY names the scale set of
+  each machine from collector 1.3.0), since CR-15 handles them with their scale set. The machines of a scale set
+  that CR-15 leaves out stay in CR-09, where an eligible one is changed as a virtual machine. A pack from an earlier collector, or
   one whose DP.4-VMSS-ELIGIBILITY was not read, keeps them in CR-09, where they take the setting as virtual machines.
 - CR-15 leaves out every scale set that is not proven eligible, on the same rules as CR-09: Azure Disk Encryption
   on the model, an Ultra Disk or Premium SSD v2 in the model of a scale set created before May 13, 2023, a size

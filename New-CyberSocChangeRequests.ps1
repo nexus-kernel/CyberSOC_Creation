@@ -404,16 +404,39 @@ function Get-PaasTlsResource([string]$Type) {
 
 # DP.4-VMSS-ELIGIBILITY lists the scale sets whose model lacks encryption at host. The machines of a
 # Flexible scale set are virtual machines, so DP.4-ELIGIBILITY lists them too (with their scale set since
-# collector 1.3.0). Those of a scale set with a model are changed with it in CR-15, not in CR-09.
+# collector 1.3.0). Those of a Flexible scale set that CR-15 takes are changed with it there, and the
+# machines of every other scale set stay in CR-09.
 function Test-ResultRead([string]$Id) { (Get-Status $Id) -in 'OK', 'PARTIAL', 'EMPTY' -and -not (Test-Unreadable $Id) }
-function Get-ScaleSetModels {
-    $models = @{}
-    if (Test-ResultRead 'DP.4-VMSS-ELIGIBILITY') {
-        foreach ($r in @(Get-Rows 'DP.4-VMSS-ELIGIBILITY' | Where-Object { (Test-True $_.HasModel) -and -not (Test-True $_.Aks) })) { $models[(Get-Text $r.ResourceId).ToLowerInvariant()] = ConvertTo-CopyText $r.Name }
-    }
-    $models
-}
 function Get-ScaleSetText($value) { (Get-Text $value).ToLowerInvariant() }
+# The scale sets CR-15 can take on their model alone: not AKS, with a model, and eligible.
+function Get-EligibleScaleSetModels {
+    @(if (Test-ResultRead 'DP.4-VMSS-ELIGIBILITY') { Get-Rows 'DP.4-VMSS-ELIGIBILITY' | Where-Object { -not (Test-True $_.Aks) -and (Test-True $_.HasModel) -and (Test-True $_.Eligible) } })
+}
+# Checks the machines of eligible Flexible scale sets against DP.4-ELIGIBILITY. A list that does not name
+# the scale set of each machine cannot prove them eligible, and neither can a PARTIAL list, which may have
+# lost machines to a truncated read or an unread size list. Only a complete list (OK or EMPTY) proves that
+# a machine missing from it already has encryption at host. Qualified maps each scale set that passes, by
+# lowercase ID, to its machines without the setting. Unchecked says why none could be checked, and Blocked
+# names each scale set with a machine that cannot take the setting.
+function Test-FlexibleScaleSets($flexible) {
+    $check = @{ Qualified = @{}; Unchecked = ''; Blocked = [System.Collections.Generic.List[string]]::new() }
+    if (-not @($flexible).Count) { return $check }
+    $complete = (Get-Status 'DP.4-ELIGIBILITY') -in 'OK', 'EMPTY' -and -not (Test-Unreadable 'DP.4-ELIGIBILITY')
+    $vms = @(if ($complete) { Get-Rows 'DP.4-ELIGIBILITY' })
+    $named = (Get-Status 'DP.4-ELIGIBILITY') -eq 'EMPTY' -or ($vms.Count -and $vms[0].PSObject.Properties.Name -contains 'ScaleSet')
+    if (-not $complete -or -not $named) {
+        $check.Unchecked = if ($complete) { 'does not name the scale set of each machine' } elseif ((Get-Status 'DP.4-ELIGIBILITY') -eq 'MISSING') { 'was not collected' } elseif (Test-Unreadable 'DP.4-ELIGIBILITY') { 'is unreadable' } else { 'reads ' + (Get-Status 'DP.4-ELIGIBILITY') }
+        return $check
+    }
+    foreach ($f in @($flexible)) {
+        $key = (Get-Text $f.ResourceId).ToLowerInvariant()
+        $members = @($vms | Where-Object { (Get-ScaleSetText $_.ScaleSet) -eq $key })
+        $bad = @($members | Where-Object { -not (Test-True $_.Eligible) })
+        if ($bad.Count) { $check.Blocked.Add(('{0} ({1})' -f (ConvertTo-CopyText $f.Name), (@($bad | Sort-Object Name | ForEach-Object { '{0} {1}' -f (ConvertTo-CopyText $_.Name), ((ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1') }) -join ', '))) }
+        else { $check.Qualified[$key] = $members }
+    }
+    $check
+}
 # The first two steps of CR-09 and CR-15. Each command names its subscription, so neither step depends on
 # the subscription Cloud Shell was left on and step 2 checks every one, not only the last registered.
 function New-EncryptionAtHostRegistration($resources) {
@@ -761,16 +784,20 @@ $catalog = @(
             # size support was not read would be deallocated for a change Azure then rejects, so only the
             # eligible ones are listed.
             $rows = @(Get-Rows 'DP.4-ELIGIBILITY')
-            # A pack from collector 1.3.0 names the scale set of each machine, and the instances of a scale set
-            # with a model are changed with it in CR-15. An older pack keeps them here, as before.
+            # A pack from collector 1.3.0 names the scale set of each machine, and the instances of a Flexible
+            # scale set that CR-15 takes are changed with it there. Those of a scale set CR-15 leaves out stay
+            # here, and an older pack keeps every machine here, as before.
             $notes = [System.Collections.Generic.List[string]]::new()
             $used = @()
             if ($rows.Count -and $rows[0].PSObject.Properties.Name -contains 'ScaleSet') {
                 $used = @('DP.4-VMSS-ELIGIBILITY')
-                $models = Get-ScaleSetModels
-                $members = @($rows | Where-Object { $models.ContainsKey((Get-ScaleSetText $_.ScaleSet)) })
+                $flexible = @(Get-EligibleScaleSetModels | Where-Object { (Get-Text $_.OrchestrationMode) -ieq 'Flexible' })
+                $models = @{}
+                foreach ($f in $flexible) { $models[(Get-Text $f.ResourceId).ToLowerInvariant()] = ConvertTo-CopyText $f.Name }
+                $taken = (Test-FlexibleScaleSets $flexible).Qualified
+                $members = @($rows | Where-Object { $taken.ContainsKey((Get-ScaleSetText $_.ScaleSet)) })
                 if ($members.Count) {
-                    $notes.Add(('{0} left out of CR-09 because {1} to a Flexible scale set with a model, so CR-15 handles {2} with {3} scale set: {4}.' -f (Get-Count $members.Count 'virtual machine' 'virtual machines'), (Get-Pick $members.Count 'it belongs' 'they belong'), (Get-Pick $members.Count 'it' 'them'), (Get-Pick $members.Count 'its' 'their'),
+                    $notes.Add(('{0} left out of CR-09 because {1} to a Flexible scale set that CR-15 changes, so CR-15 handles {2} with {3} scale set: {4}.' -f (Get-Count $members.Count 'virtual machine' 'virtual machines'), (Get-Pick $members.Count 'it belongs' 'they belong'), (Get-Pick $members.Count 'it' 'them'), (Get-Pick $members.Count 'its' 'their'),
                             (@($members | Sort-Object Name | ForEach-Object { '{0} ({1})' -f (ConvertTo-CopyText $_.Name), $models[(Get-ScaleSetText $_.ScaleSet)] }) -join ', ')))
                     $rows = @($rows | Where-Object { $_ -notin $members })
                 }
@@ -1009,38 +1036,17 @@ $catalog = @(
                         (@($ineligible | Sort-Object Name | ForEach-Object { '{0} ({1}, {2})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.Size), ((ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1') }) -join ', ')))
             }
             $eligible = @($models | Where-Object { Test-True $_.Eligible })
-            # The machines of each Flexible scale set, from DP.4-ELIGIBILITY. A pack whose list does not name
-            # the scale set of each machine cannot prove them eligible, and neither can a PARTIAL list, which may
-            # have lost machines to a truncated read or an unread size list. Only a complete list (OK or EMPTY)
-            # proves that a machine missing from it already has encryption at host.
-            $instances = @{}
+            # The machines of each Flexible scale set must all be proven eligible too (Test-FlexibleScaleSets).
             $flexible = @($eligible | Where-Object { (Get-Text $_.OrchestrationMode) -ieq 'Flexible' })
-            if ($flexible.Count) {
-                $complete = (Get-Status 'DP.4-ELIGIBILITY') -in 'OK', 'EMPTY' -and -not (Test-Unreadable 'DP.4-ELIGIBILITY')
-                $vms = @(if ($complete) { Get-Rows 'DP.4-ELIGIBILITY' })
-                $named = (Get-Status 'DP.4-ELIGIBILITY') -eq 'EMPTY' -or ($vms.Count -and $vms[0].PSObject.Properties.Name -contains 'ScaleSet')
-                if (-not $complete -or -not $named) {
-                    $why = if ($complete) { 'does not name the scale set of each machine' } elseif ((Get-Status 'DP.4-ELIGIBILITY') -eq 'MISSING') { 'was not collected' } elseif (Test-Unreadable 'DP.4-ELIGIBILITY') { 'is unreadable' } else { 'reads ' + (Get-Status 'DP.4-ELIGIBILITY') }
-                    $notes.Add(('{0} left out of CR-15 because DP.4-ELIGIBILITY {1}, so {2} could not be checked: {3}.' -f (Get-Count $flexible.Count 'Flexible scale set' 'Flexible scale sets'), $why, (Get-Pick $flexible.Count 'its machines' 'their machines'), (@($flexible | Sort-Object Name | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', ')))
-                    $eligible = @($eligible | Where-Object { $_ -notin $flexible })
-                }
-                else {
-                    $blocked = [System.Collections.Generic.List[string]]::new()
-                    foreach ($f in $flexible) {
-                        $key = (Get-Text $f.ResourceId).ToLowerInvariant()
-                        $members = @($vms | Where-Object { (Get-ScaleSetText $_.ScaleSet) -eq $key })
-                        $bad = @($members | Where-Object { -not (Test-True $_.Eligible) })
-                        if ($bad.Count) {
-                            $blocked.Add(('{0} ({1})' -f (ConvertTo-CopyText $f.Name), (@($bad | Sort-Object Name | ForEach-Object { '{0} {1}' -f (ConvertTo-CopyText $_.Name), ((ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1') }) -join ', ')))
-                            $eligible = @($eligible | Where-Object { $_ -ne $f })
-                        }
-                        else { $instances[$key] = $members }
-                    }
-                    if ($blocked.Count) {
-                        $notes.Add(('{0} left out of CR-15 because {1} that cannot take encryption at host as it stands: {2}.' -f (Get-Count $blocked.Count 'Flexible scale set' 'Flexible scale sets'), (Get-Pick $blocked.Count 'it has a machine' 'each has a machine'), ($blocked -join ', ')))
-                    }
-                }
+            $check = Test-FlexibleScaleSets $flexible
+            $instances = $check.Qualified
+            if ($check.Unchecked) {
+                $notes.Add(('{0} left out of CR-15 because DP.4-ELIGIBILITY {1}, so {2} could not be checked: {3}.' -f (Get-Count $flexible.Count 'Flexible scale set' 'Flexible scale sets'), $check.Unchecked, (Get-Pick $flexible.Count 'its machines' 'their machines'), (@($flexible | Sort-Object Name | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', ')))
             }
+            if ($check.Blocked.Count) {
+                $notes.Add(('{0} left out of CR-15 because {1} that cannot take encryption at host as it stands: {2}.' -f (Get-Count $check.Blocked.Count 'Flexible scale set' 'Flexible scale sets'), (Get-Pick $check.Blocked.Count 'it has a machine' 'each has a machine'), ($check.Blocked -join ', ')))
+            }
+            $eligible = @($eligible | Where-Object { (Get-Text $_.OrchestrationMode) -ine 'Flexible' -or $instances.ContainsKey((Get-Text $_.ResourceId).ToLowerInvariant()) })
             $resources = @($eligible | ForEach-Object {
                     $mode = if ((Get-Text $_.OrchestrationMode) -ieq 'Flexible') { 'Flexible' } else { 'Uniform' }
                     $setting = '{0}, {1}, {2}, size {3}' -f $mode, (Format-UpgradePolicy $_.UpgradePolicy), (Get-Count (Get-Number $_.Instances) 'instance' 'instances'), (ConvertTo-CopyText $_.Size)
