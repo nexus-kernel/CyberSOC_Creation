@@ -42,7 +42,7 @@ Each run writes an evidence pack with the report in two HTML editions and a deck
 
 ## Raise the hardening change requests
 
-The collection run writes `05-change-requests` into the pack: one change request for each low-impact hardening item that still has resources to fix, and a ready-to-send client email for each one. A change that needs the client first asks for an approval, a confirmation or a maintenance window, and every other change gets a notice of planned change. Pass `-ClientContact` and `-SenderName` to the collection run for the emails, or write them again on their own:
+The collection run writes `05-change-requests` into the pack: one change request for each low-impact hardening item that still has resources to fix, and a ready-to-send client email for each one. Every email asks for the client's approval, of a proposed date or, where the change restarts machines, of a maintenance window, and no change is scheduled without it. Pass `-ClientContact` and `-SenderName` to the collection run for the emails, or write them again on their own:
 
 ```powershell
 pwsh ./New-CyberSocChangeRequests.ps1 -EvidencePath <pack> -ClientContact <name> -SenderName <name>

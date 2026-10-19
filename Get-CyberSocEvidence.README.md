@@ -92,13 +92,13 @@ These options are passed to it and recorded under `ChangeRequests` in `00-parame
 | `-ManagementGroup <name>` | Assigns the diagnostic logging initiative once at this management group |
 | `-ClientContact <name>` | The name the client emails open with. Without it they open with Hello |
 | `-SenderName <name>` | The name under the sign-off of the client emails |
-| `-PurgeProtectionApproved` | The client approved purge protection at build kickoff, so its email is a notice of planned change instead of an approval request |
+| `-PurgeProtectionApproved` | The client approved purge protection at build kickoff, so its approval request refers to that approval and asks the client to confirm it still stands |
 
 A failure there is logged and warned about, and the collection stays complete (exit code 2). A dry run writes no
 change requests, like the report and the worklist. Run `New-CyberSocChangeRequests.ps1 -EvidencePath <pack>` on
-its own to write them again, for example with another contact or sender. The notices plan each change two weeks
-after the collection, and the collector does not take `-ChangeDate`: to plan an agreed date, run the generator again
-with `-ChangeDate <date>`. See
+its own to write them again, for example with another contact or sender. Every client email asks for the client's
+approval of a proposed date two weeks after the collection, or of a maintenance window, and the collector does not take
+`-ChangeDate`: to propose another date, run the generator again with `-ChangeDate <date>`. See
 [Hardening change requests](New-CyberSocChangeRequests.README.md).
 
 ## What it decides for you

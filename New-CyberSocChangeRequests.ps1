@@ -9,15 +9,15 @@
     secure transfer and minimum TLS 1.2 on storage accounts, minimum TLS 1.2 on App Service, Azure SQL,
     Azure Cache for Redis, Service Bus, Event Hubs and Azure Cosmos DB, Key Vault purge protection, and
     encryption at host on virtual machines and scale sets. Every change request also gets a client email,
-    drafted and ready to send. The changes that need the client first (purge protection, which cannot be
-    undone, anonymous blob access, HTTPS only on App Service, encryption at host and minimum TLS 1.2 on
-    Event Hubs) ask for an approval, a confirmation or a maintenance window. Every other change gets a
-    notice of planned change, which gives the planned date and a date a week before it to raise any
-    concern by. AKS node pools take encryption at host only when a node pool is created, so the index
-    routes them to a planned project instead of a change request.
+    drafted and ready to send, that asks for the client's approval. Every email has the same parts in the
+    same order: what is to change, why it is recommended, what it means for the client, the resources by
+    subscription, how it can be reversed, and the request, which asks for approval of the proposed date, or
+    for a maintenance window where the change needs a restart, by a reply-by date a week before it. Nothing
+    is scheduled without the client's approval. AKS node pools take encryption at host only when a node
+    pool is created, so the index routes them to a planned project instead of a change request.
 
     Get-CyberSocEvidence.ps1 runs it at the end of each collection. Run it on its own to write the files
-    again, for example with another contact, sender or planned date.
+    again, for example with another contact, sender or proposed date.
 
     Every testing plan is a check in the Azure portal, every reference is a Microsoft Learn page and the
     notification list is left empty to fill in. The files name client resources, so they stay internal
@@ -41,12 +41,11 @@
 .PARAMETER SenderName
     The name under the sign-off of the client emails.
 .PARAMETER PurgeProtectionApproved
-    The client approved purge protection at build kickoff. CR-06 then gets a notice of planned change that
-    refers to that approval instead of an approval request, and the index records the approval.
+    The client approved purge protection at build kickoff. The CR-06 email then refers to that approval and
+    asks the client to confirm it still stands and to approve the proposed date, and the index records it.
 .PARAMETER ChangeDate
-    The day the changes with a notice of planned change are planned for. The notices ask the client to raise
-    any concern a week before it. Defaults to two weeks after the build date, and must be at least eight
-    days after it.
+    The proposed date the client emails ask the client to approve. Every email asks for a reply by a week
+    before it. Defaults to two weeks after the build date, and must be at least eight days after it.
 .EXAMPLE
     ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000
 .EXAMPLE
@@ -106,23 +105,25 @@ Initialize-CyberSocPackReader -Pack $pack -Manifest $manifest
 function Get-Number($value) { $n = 0; if ([int]::TryParse((Get-Text $value), [ref]$n)) { $n } else { 0 } }
 
 # Copy rules: no semicolons, arrows, emoji or angle brackets, and the greater-than sign only in a
-# navigation step such as Settings > Configuration. Values read from the pack are cleaned first, and
-# every file is checked before it is written, so a rule broken by the text below stops the run.
+# navigation step such as Settings > Configuration. A client email has no navigation step, so it has no
+# greater-than sign at all. Values read from the pack are cleaned first, and every file is checked before
+# it is written, so a rule broken by the text below stops the run.
 # The cleaner removes every character the check rejects, so a value read from the pack never stops the run.
 $arrowCharacters = '\u2190-\u21FF\u27F0-\u27FF\u2900-\u297F\u2B00-\u2BFF\u25B6\u25BA'
-$emojiCharacters = '\u2600-\u27BF\uD800-\uDFFF'
+$emojiCharacters = '\u2300-\u23FF\u2600-\u27BF\uFE0F\uD800-\uDFFF'
 function ConvertTo-CopyText($value) {
     $v = (Get-Text $value) -replace ';', ',' -replace '[<>]', ' '
     $v = $v -replace ('[' + $arrowCharacters + $emojiCharacters + ']'), ''
     ($v -replace '\s+', ' ').Trim()
 }
-function Assert-CopyRules([string]$Text, [string]$Label) {
+function Assert-CopyRules([string]$Text, [string]$Label, [switch]$Email) {
     $broken = @(
         if ($Text -match ';') { 'a semicolon' }
-        if ($Text -match ('[' + $arrowCharacters + ']|->|=>')) { 'an arrow' }
+        if ($Text -match ('[' + $arrowCharacters + ']|->|<-|=>')) { 'an arrow' }
         if ($Text -match ('[' + $emojiCharacters + ']')) { 'an emoji' }
         if ($Text -match '<') { 'an angle bracket' }
-        if (($Text -replace '[A-Za-z0-9)] > [A-Za-z]', '') -match '>') { 'a greater-than sign outside a navigation step' }
+        if ($Email -and $Text -match '>') { 'a greater-than sign, which a client email never needs' }
+        elseif (($Text -replace '[A-Za-z0-9)] > [A-Za-z]', '') -match '>') { 'a greater-than sign outside a navigation step' }
     )
     if ($broken.Count) { throw "$Label breaks the copy rules with $($broken -join ', ')." }
 }
@@ -188,11 +189,12 @@ $managementGroup = ConvertTo-CopyText $ManagementGroup
 $standardMitigation = 'If changes need to be reverted, follow the rollback plan.'
 $drImpact = if ($DrClient) { 'N/A - No DR impact' } else { 'Not a DR Client' }
 $drPlan = if ($DrClient) { 'No updates to the DR Playbook are required.' } else { 'Not a DR Client. No updates to the DR Playbook are required.' }
-# A notice of planned change names the planned date and gives the client a week before it to raise a concern.
+# Every client email asks the client to approve the proposed date, or to suggest a maintenance window, and to
+# reply a week before the proposed date.
 $buildDate = (Get-Date).ToUniversalTime().Date
-$plannedDate = if ($PSBoundParameters.ContainsKey('ChangeDate')) { $ChangeDate.Date } else { $buildDate.AddDays(14) }
-$replyDate = $plannedDate.AddDays(-7)
-if ($replyDate -le $buildDate) { throw ('ChangeDate {0} leaves the client less than a week to raise a concern. Pick a day at least eight days after {1}.' -f $plannedDate.ToString('yyyy-MM-dd', $inv), $buildDate.ToString('yyyy-MM-dd', $inv)) }
+$proposedDate = if ($PSBoundParameters.ContainsKey('ChangeDate')) { $ChangeDate.Date } else { $buildDate.AddDays(14) }
+$replyDate = $proposedDate.AddDays(-7)
+if ($replyDate -le $buildDate) { throw ('ChangeDate {0} leaves the client less than a week to reply to the approval requests. Pick a day at least eight days after {1}.' -f $proposedDate.ToString('yyyy-MM-dd', $inv), $buildDate.ToString('yyyy-MM-dd', $inv)) }
 function Format-Day([datetime]$Day) { $Day.ToString('dddd, MMMM d, yyyy', $inv) }
 $emailWorkspace = if ($workspaceName) { "your Sentinel workspace $workspaceName" } else { 'your Sentinel workspace' }
 
@@ -203,9 +205,8 @@ function New-ChangeRequest([hashtable]$Spec) {
     foreach ($field in 'Availability', 'UserExperience', 'Dependencies') {
         if ($Spec[$field] -match '[\r\n]' -or (Get-SentenceCount $Spec[$field]) -ne 1) { throw "CR-$($Spec.Number) $field must be one line." }
     }
-    # Every change request writes a client email: an approval, confirmation or maintenance window request
-    # when the change needs the client first, otherwise a notice of planned change (New-NoticeEmail).
-    if (-not $Spec.Email) { throw "CR-$($Spec.Number) has no client email. Every change request writes one." }
+    # Every change request writes a client email that asks for the client's approval (New-ApprovalEmail).
+    if (-not $Spec.Email -or -not $Spec.Email.Approval) { throw "CR-$($Spec.Number) has no client approval request. Every change request writes one with New-ApprovalEmail." }
     $defaults = @{ Mitigation = $standardMitigation; DrImpact = $drImpact; DrPlan = $drPlan; Csv = $null }
     foreach ($k in $defaults.Keys) { if (-not $Spec.ContainsKey($k)) { $Spec[$k] = $defaults[$k] } }
     [pscustomobject]$Spec
@@ -252,14 +253,18 @@ function Format-ChangeRequest($cr) {
     foreach ($line in @('', 'B) NOTIFICATION LIST', '')) { $l.Add($line) }
     $l.ToArray()
 }
-# Paragraphs separated by a blank line. A paragraph given as an array is a bulleted list.
+# The email: subject, greeting, then each part under its heading, its paragraphs separated by a blank line.
+# A paragraph given as an array is a bulleted list.
 function Format-Email($email) {
     $l = [System.Collections.Generic.List[string]]::new()
     $l.Add("Subject: $($email.Subject)"); $l.Add('')
     $l.Add($(if ($ClientContact) { 'Hello {0},' -f (ConvertTo-CopyText $ClientContact) } else { 'Hello,' })); $l.Add('')
-    foreach ($p in $email.Body) {
-        if ($p -is [array]) { foreach ($item in $p) { $l.Add("- $item") } } else { $l.Add($p) }
-        $l.Add('')
+    foreach ($part in $email.Parts) {
+        $l.Add($part.Heading)
+        foreach ($p in $part.Body) {
+            if ($p -is [array]) { foreach ($item in $p) { $l.Add("- $item") } } else { $l.Add($p) }
+            $l.Add('')
+        }
     }
     $l.Add('Thank you,')
     if ($SenderName) { $l.Add((ConvertTo-CopyText $SenderName)) }
@@ -278,22 +283,45 @@ function Get-EmailResourceList($resources, [scriptblock]$Label) {
 $groupLabel = { '{0} (resource group {1})' -f $_.Name, $_.ResourceGroup }
 $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $_.Setting }
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
-# A notice of planned change, for a change that does not need the client first: what changes and why, the
-# resources by subscription, what the client should expect and why, then the planned date and the date to
-# raise a concern by.
-function New-NoticeEmail([string]$Subject, [string]$Intro, [string]$Listed, [object[]]$Resources, [string[]]$Expect) {
-    $body = [System.Collections.Generic.List[object]]::new()
-    $body.Add($Intro); $body.Add($Listed)
-    foreach ($p in $Resources) { $body.Add($p) }
-    foreach ($p in $Expect) { $body.Add($p) }
-    $body.Add(('I plan to make this change on or after {0}. If you have a concern about it, or anything listed above should stay out of it, please let me know by {1} and I will hold the change until your concern is resolved.' -f (Format-Day $plannedDate), (Format-Day $replyDate)))
-    @{ Subject = "Notice of planned change: $Subject"; Body = $body.ToArray(); Notice = $true }
+$proposedDay = Format-Day $proposedDate
+$replyDay = Format-Day $replyDate
+$explainTls = 'TLS is the protocol that encrypts connections to a service, and versions 1.0 and 1.1 are its older versions.'
+# Every client email is an approval request built here, so every change request asks the client the same way
+# and nothing reads as already decided. The parts always come in this order: what I am asking to change (one
+# or two sentences, given as an array of them), why, what it means for the client, the resources by subscription, how the change can be
+# reversed, and the request. The request asks for approval of the proposed date, or with -Window for a
+# maintenance window where the change needs a restart, then gives the reply-by date, any Options the client
+# has, and the promise not to schedule the change without approval. Ask replaces the standard question when
+# a change needs an answer from the client first.
+function New-ApprovalEmail {
+    param([string]$Subject, [string[]]$Change, [string]$Why, [object[]]$Effect, [string]$Listed, [object[]]$Resources, [string]$Reversal, [string]$Ask, [string]$Options, [switch]$Window)
+    # Change is given as its authored sentences, so a name filled into one, such as a management group named
+    # Contoso Inc. Production, cannot change the count.
+    $Change = @($Change | Where-Object { $_ })
+    if ($Change.Count -lt 1 -or $Change.Count -gt 2) { throw "The email for $Subject must ask for the change in one or two sentences." }
+    foreach ($field in 'Why', 'Effect', 'Resources', 'Reversal') { if (-not (Get-Variable $field -ValueOnly)) { throw "The email for $Subject has no $field part." } }
+    if (-not $Ask) { $Ask = if ($Window) { 'Could you approve this change and suggest a maintenance window that works for you?' } else { 'Could you approve this change for {0}?' -f $proposedDay } }
+    if (-not $Options -and -not $Window) { $Options = 'If another date suits you better, or anything listed above should stay out of the change, please let me know.' }
+    $request = (@($Ask, ('Please reply by {0}.' -f $replyDay), $Options, 'I will not schedule this change until I have your approval.') | Where-Object { $_ }) -join ' '
+    $resourcePart = @(, $Listed) + @($Resources)
+    @{
+        Subject = "Approval requested: $Subject"; Approval = $true; Window = [bool]$Window
+        Parts = @(
+            @{ Heading = 'What I am asking to change'; Body = @(, ($Change -join ' ')) }
+            @{ Heading = 'Why I recommend it'; Body = @(, $Why) }
+            @{ Heading = 'What it means for you'; Body = @($Effect) }
+            @{ Heading = 'The resources'; Body = $resourcePart }
+            @{ Heading = 'How it can be reversed'; Body = @(, $Reversal) }
+            @{ Heading = $(if ($Window) { 'Your approval and a maintenance window' } else { 'Your approval' }); Body = @(, $request) })
+    }
 }
 # CR-01 and CR-10 send resource logs to the client's Sentinel workspace, which the client pays to ingest.
-function Get-IngestionNotice([bool]$ActivityLog) {
+function Get-IngestionCost([bool]$ActivityLog) {
     'This change adds Log Analytics ingestion to {0}. The resource logs are billed as data ingested into the workspace, and their volume depends on how busy each resource is.{1}' -f $emailWorkspace, $(if ($ActivityLog) { ' The Azure Activity log of each subscription is ingested at no charge.' } else { '' })
 }
-$noEffectOfLogging = 'I do not expect any visible effect on these resources or the people who use them. A diagnostic setting only sends the logs a resource already produces to the workspace, and does not change how the resource runs.'
+function Get-LoggingEffect([int]$n) {
+    'I do not expect any visible effect on {0} or the people who use {1}. A diagnostic setting only sends the logs a resource already produces to the workspace, and does not change how the resource runs.' -f (Get-Pick $n 'the resource' 'these resources'), (Get-Pick $n 'it' 'them')
+}
 
 #region Change requests
 # Each Build returns the change request, or a State when there is nothing to change, plus Notes for
@@ -376,11 +404,13 @@ function New-DiagnosticAssignment([string[]]$Subscriptions, [bool]$Covered) {
             })
         $listed.Add([string[]]@($types + 'Subscription Activity Log'))
     }
-    $email = New-NoticeEmail -Subject 'diagnostic logging for Azure resources' `
-        -Intro ('I plan to turn on diagnostic logging for your Azure resources by assigning the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative {0}. The initiative adds diagnostic settings that send the audit logs of the supported resources to {1}, including resources created later, so the SOC can detect and investigate activity on them.' -f $(if ($atGroup) { "once at the management group $managementGroup, which holds the subscriptions below" } else { Get-Pick $n 'on the subscription below' 'on each subscription below' }), $emailWorkspace) `
+    $email = New-ApprovalEmail -Subject 'diagnostic logging for Azure resources' `
+        -Change @(('I would like to turn on diagnostic logging for your Azure resources by assigning the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative {0}.' -f $(if ($atGroup) { "once at the management group $managementGroup, which holds the subscriptions below" } else { Get-Pick $n 'on the subscription below' 'on each subscription below' }), $emailWorkspace), ('An Azure Policy initiative is a set of rules that Azure keeps applied, and this one adds diagnostic settings that send the audit logs of the supported resources to {1}, including resources created later.' -f $(if ($atGroup) { "once at the management group $managementGroup, which holds the subscriptions below" } else { Get-Pick $n 'on the subscription below' 'on each subscription below' }), $emailWorkspace)) `
+        -Why 'Without these audit logs, the SOC cannot detect or investigate activity on these resources, such as an unexpected change to a key vault or an automation account. The initiative keeps the logging in place on every supported resource, including resources created later, so no resource is missed as your environment grows.' `
+        -Effect @((Get-LoggingEffect 2), (Get-IngestionCost $true)) `
+        -Reversal 'The initiative assignment can be removed and the diagnostic settings it added can be deleted at any time, which stops the logs and the ingestion they add.' `
         -Listed ('{0} with the resources the initiative covers{1}:' -f (Get-Pick $n 'The subscription is listed below' 'Each subscription is listed below'), $(if ($counted) { (Get-Pick $n ' and how many it holds today' ' and how many each holds today') } else { '' })) `
-        -Resources $listed.ToArray() `
-        -Expect @($noEffectOfLogging, (Get-IngestionNotice $true))
+        -Resources $listed.ToArray()
     @{ Used = @('P0.5'); Cr = New-ChangeRequest @{
             Number = 1; Key = 'diagnostic-logging'; Title = 'Deploy the ATMO-MXDR diagnostic logging initiative'
             Description = "Assign the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative and run its remediation tasks, so the audit logs of supported Azure resources are sent to $workspace."
@@ -459,11 +489,13 @@ function New-DiagnosticRemediation($rows) {
         $rollback.Add('For the Subscription Activity Log, go to Monitor > Activity log > Export Activity Logs, select the subscription, select Edit setting on the ATMO-MXDR setting and select Delete.')
     }
     $n = $resources.Count
-    $email = New-NoticeEmail -Subject 'diagnostic logging remediation for Azure resources' `
-        -Intro ('I plan to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on {0}, which {1} not send {2} audit logs to {3} today. The remediation adds the missing diagnostic settings, so the SOC can detect and investigate activity on {4}.' -f (Get-Yours $n 'Azure resources'), (Get-Pick $n 'does' 'do'), (Get-Pick $n 'its' 'their'), $emailWorkspace, (Get-Pick $n 'it' 'them')) `
+    $email = New-ApprovalEmail -Subject 'diagnostic logging remediation for Azure resources' `
+        -Change @(('I would like to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on {0}.' -f (Get-Yours $n 'Azure resources'), (Get-Pick $n 'the resource sends' 'the resources send'), (Get-Pick $n 'its' 'their'), $emailWorkspace), ('A remediation task adds the diagnostic settings the initiative expects, so {1} {2} audit logs to {3}.' -f (Get-Yours $n 'Azure resources'), (Get-Pick $n 'the resource sends' 'the resources send'), (Get-Pick $n 'its' 'their'), $emailWorkspace)) `
+        -Why ('{0} not send {1} audit logs to {2} today, so the SOC cannot detect or investigate activity on {3}. The remediation brings {3} in line with the rest of your environment.' -f (Get-Pick $n 'The resource below does' 'The resources below do'), (Get-Pick $n 'its' 'their'), $emailWorkspace, (Get-Pick $n 'it' 'them')) `
+        -Effect @((Get-LoggingEffect $n), (Get-IngestionCost ([bool]$activity))) `
         -Listed (Get-Pick $n 'The resource is listed below with its type:' 'The resources are listed below by subscription, each with its type:') `
         -Resources (Get-EmailResourceList $resources { if ($_.ResourceGroup) { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $_.Label } else { $_.Name } }) `
-        -Expect @($noEffectOfLogging, (Get-IngestionNotice ([bool]$activity)))
+        -Reversal 'The diagnostic settings the remediation adds can be deleted at any time, which stops the logs and the ingestion they add.'
     @{ Used = @('DR.6-NONCOMPLIANT'); Cr = New-ChangeRequest @{
             Number = 10; Key = 'diagnostic-remediation'; Title = 'Remediate resources missing ATMO-MXDR diagnostic logging'
             Description = ('Run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on {0}, so their audit logs reach {1}.' -f (Get-Listed $n 'resource' 'resources'), $workspace)
@@ -602,11 +634,13 @@ $catalog = @(
                         'Set Secure transfer required to Disabled and select Save.')
                     References = @(, @('Require secure transfer to ensure secure connections', 'https://learn.microsoft.com/azure/storage/common/storage-require-secure-transfer'))
                     Csv = $resources
-                    Email = New-NoticeEmail -Subject 'secure transfer for Azure storage accounts' `
-                        -Intro ('I plan to turn on Secure transfer required on {0}, so {1} encrypted connections only. Requests over plain HTTP and SMB connections without encryption expose data and credentials in transit.' -f (Get-Yours $n 'storage accounts'), (Get-Pick $n 'it accepts' 'they accept')) `
+                    Email = New-ApprovalEmail -Subject 'secure transfer for Azure storage accounts' `
+                        -Change @(('I would like to turn on Secure transfer required on {0}, so {1} encrypted connections only.' -f (Get-Yours $n 'storage accounts'), (Get-Pick $n 'it accepts' 'they accept')), 'Secure transfer means HTTPS for web requests and encrypted SMB, the protocol Windows uses for file shares.') `
+                        -Why ('Requests over plain HTTP and SMB connections without encryption expose data and credentials in transit, where they can be read or altered. Requiring secure transfer refuses those connections, so all traffic to {0} is encrypted.' -f (Get-Pick $n 'the account' 'these accounts')) `
                         -Listed (Get-Pick $n 'The account is listed below:' 'The accounts are listed below by subscription:') `
                         -Resources (Get-EmailResourceList $resources $groupLabel) `
-                        -Expect ('Applications and people that already connect over HTTPS, or over SMB with encryption, will see no change. Once the setting is on, Azure Storage rejects any request made over HTTP and any SMB connection without encryption, such as SMB 2.1, so a system that still connects to {0} that way would stop working until it moves to HTTPS or encrypted SMB.' -f (Get-Pick $n 'the account' 'these accounts'))
+                        -Reversal 'Secure transfer required can be turned off again on any account, and the change takes effect straight away.' `
+                        -Effect ('Applications and people that already connect over HTTPS, or over SMB with encryption, will see no change. Once the setting is on, Azure Storage rejects any request made over HTTP and any SMB connection without encryption, such as SMB 2.1, so a system that still connects to {0} that way would stop working until it moves to HTTPS or encrypted SMB.' -f (Get-Pick $n 'the account' 'these accounts'))
                 } } } }
 
     @{ Number = 3; Key = 'storage-minimum-tls'; Change = 'Minimum TLS 1.2 on storage accounts'; Sources = @('DP.1-DETAIL')
@@ -640,11 +674,13 @@ $catalog = @(
                         , @('Enforce a minimum required version of TLS for requests to a storage account', 'https://learn.microsoft.com/azure/storage/common/transport-layer-security-configure-minimum-version')
                         , @('Migrate to TLS 1.2 for Azure Storage', 'https://learn.microsoft.com/azure/storage/common/transport-layer-security-configure-migrate-to-tls2'))
                     Csv = $resources
-                    Email = New-NoticeEmail -Subject 'minimum TLS 1.2 for Azure storage accounts' `
-                        -Intro ('I plan to set the minimum TLS version to 1.2 on {0}. Azure Storage stopped accepting TLS 1.0 and 1.1 on February 3, 2026, but {1} an older version in {2} configuration, so this change brings the configuration in line with the platform.' -f (Get-Yours $n 'storage accounts'), (Get-Pick $n 'this account still allows' 'these accounts still allow'), (Get-Pick $n 'its' 'their')) `
+                    Email = New-ApprovalEmail -Subject 'minimum TLS 1.2 for Azure storage accounts' `
+                        -Change @(('I would like to set the minimum TLS version to 1.2 on {0}.' -f (Get-Yours $n 'storage accounts')), $explainTls) `
+                        -Why ('TLS 1.0 and 1.1 have known weaknesses. Azure Storage stopped accepting them on February 3, 2026, but {0} an older version in {1} configuration, so this change brings the configuration in line with the platform and the security baseline.' -f (Get-Pick $n 'this account still allows' 'these accounts still allow'), (Get-Pick $n 'its' 'their')) `
                         -Listed (Get-Pick $n 'The account is listed below with its minimum TLS version today:' 'The accounts are listed below by subscription, each with its minimum TLS version today:') `
                         -Resources (Get-EmailResourceList $resources $settingLabel) `
-                        -Expect 'I do not expect any visible effect, because Azure Storage already refuses TLS 1.0 and 1.1, so every connection that works today keeps working.'
+                        -Reversal ('The minimum TLS version can be set back to the version {0} today, shown above.' -f (Get-Pick $n 'the account has' 'each account has')) `
+                        -Effect 'I do not expect any visible effect, because Azure Storage already refuses TLS 1.0 and 1.1, so every connection that works today keeps working.'
                 } } } }
 
     @{ Number = 4; Key = 'app-service-minimum-tls'; Change = 'Minimum TLS 1.2 on App Service apps'; Sources = @('NB.5-DETAIL')
@@ -682,11 +718,13 @@ $catalog = @(
                         , @('Set the minimum TLS version for App Service', 'https://learn.microsoft.com/azure/app-service/tls-minimum-version')
                         , @('Transport Layer Security in Azure App Service', 'https://learn.microsoft.com/azure/app-service/overview-tls'))
                     Csv = $resources
-                    Email = New-NoticeEmail -Subject 'minimum TLS 1.2 for Azure App Service applications' `
-                        -Intro ('I plan to set the minimum inbound TLS version to 1.2 on {0}. TLS 1.0 and 1.1 have known weaknesses, and App Service stops accepting them on May 31, 2027, so this change makes {1} refuse them now.' -f (Get-Yours $n 'App Service and Function applications'), (Get-Pick $n 'the application' 'these applications')) `
+                    Email = New-ApprovalEmail -Subject 'minimum TLS 1.2 for Azure App Service applications' `
+                        -Change @(('I would like to set the minimum inbound TLS version to 1.2 on {0}.' -f (Get-Yours $n 'App Service and Function applications')), $explainTls) `
+                        -Why ('TLS 1.0 and 1.1 have known weaknesses, and App Service stops accepting them on May 31, 2027. This change makes {0} refuse them now, and matches the default for new applications.' -f (Get-Pick $n 'the application' 'these applications')) `
                         -Listed (Get-Pick $n 'The application is listed below with its minimum TLS version today:' 'The applications are listed below by subscription, each with its minimum TLS version today:') `
                         -Resources (Get-EmailResourceList $resources $settingLabel) `
-                        -Expect ('Browsers and applications that connect over TLS 1.2 or later will see no change. A client that can only use TLS 1.0 or 1.1, for example one on an old operating system or runtime, will no longer be able to connect to {0} once the change is applied.' -f (Get-Pick $n 'the application' 'these applications'))
+                        -Reversal ('The minimum TLS version can be set back to the version {0} today, shown above.' -f (Get-Pick $n 'the application has' 'each application has')) `
+                        -Effect ('Browsers and applications that connect over TLS 1.2 or later will see no change. A client that can only use TLS 1.0 or 1.1, for example one on an old operating system or runtime, will no longer be able to connect to {0} once the change is applied.' -f (Get-Pick $n 'the application' 'these applications'))
                 } } } }
 
     @{ Number = 5; Key = 'sql-minimum-tls'; Change = 'Minimum TLS 1.2 on Azure SQL servers'; Sources = @('NB.6-DETAIL')
@@ -717,11 +755,13 @@ $catalog = @(
                         'TLS 1.0 and 1.1 were retired across Azure SQL on August 31, 2025, so every client that connected before the change can still connect.')
                     References = @(, @('Connectivity settings for Azure SQL Database, minimum TLS version', 'https://learn.microsoft.com/azure/azure-sql/database/connectivity-settings#minimum-tls-version'))
                     Csv = $resources
-                    Email = New-NoticeEmail -Subject 'minimum TLS 1.2 for Azure SQL servers' `
-                        -Intro ('I plan to set the minimum TLS version to 1.2 on {0}. Azure SQL retired TLS 1.0 and 1.1 on August 31, 2025, but {1} not enforce a minimum of 1.2 in {2} configuration, so this change brings the configuration in line with the platform.' -f (Get-Yours $n 'Azure SQL logical servers'), (Get-Pick $n 'this server does' 'these servers do'), (Get-Pick $n 'its' 'their')) `
+                    Email = New-ApprovalEmail -Subject 'minimum TLS 1.2 for Azure SQL servers' `
+                        -Change @(('I would like to set the minimum TLS version to 1.2 on {0}.' -f (Get-Yours $n 'Azure SQL logical servers')), $explainTls) `
+                        -Why ('TLS 1.0 and 1.1 have known weaknesses. Azure SQL retired them on August 31, 2025, but {0} not enforce a minimum of 1.2 in {1} configuration, so this change brings the configuration in line with the platform and the security baseline.' -f (Get-Pick $n 'this server does' 'these servers do'), (Get-Pick $n 'its' 'their')) `
                         -Listed (Get-Pick $n 'The server is listed below with its minimum TLS version today:' 'The servers are listed below by subscription, each with its minimum TLS version today:') `
                         -Resources (Get-EmailResourceList $resources $settingLabel) `
-                        -Expect 'I do not expect any visible effect, because Azure SQL no longer accepts TLS 1.0 and 1.1, so every connection that works today keeps working. Once a minimum is set, Azure SQL does not allow a return to the unset default, which is why I am letting you know before I make the change.'
+                        -Reversal 'Once a minimum is set, Azure SQL does not allow a return to the unset default or a minimum below 1.2, so this change cannot be reversed. I do not expect a reversal to be needed, because every client that connects today already uses TLS 1.2 or later.' `
+                        -Effect 'I do not expect any visible effect, because Azure SQL no longer accepts TLS 1.0 and 1.1, so every connection that works today keeps working.'
                 } } } }
 
     @{ Number = 6; Key = 'key-vault-purge-protection'; Change = 'Purge protection on key vaults'; Sources = @('DP.2-DETAIL')
@@ -737,30 +777,24 @@ $catalog = @(
             $impl.Add('Under Purge protection, select Enable purge protection and select Save.')
             Add-RepeatStep $impl $n 1 'key vault'
             # Purge protection cannot be undone, so the client approves it in writing first. When the approval
-            # was given at build kickoff, the email is a notice of planned change that refers to it.
+            # was given at build kickoff, the email refers to it and asks the client to confirm it still stands.
             $notes = @()
-            $vaults = Get-EmailResourceList $resources $settingLabel
-            $listed = Get-Pick $n 'The vault is listed below with its soft delete retention period, which purge protection will enforce:' 'The vaults are listed below by subscription, each with its soft delete retention period, which purge protection will enforce:'
+            $theVaults = Get-Pick $n 'the vault' 'these vaults'
+            $ask = ('Because this change cannot be undone, I need your written approval before I schedule it. Could you approve purge protection on {0} for {1}?' -f (Get-Pick $n 'this vault' 'these vaults'), $proposedDay)
             if ($PurgeProtectionApproved) {
-                $notes = @('CR-06 sends a notice of planned change instead of an approval request because the client approved purge protection at build kickoff (-PurgeProtectionApproved). Attach that approval to the change request.')
-                $email = New-NoticeEmail -Subject 'purge protection for Azure key vaults' `
-                    -Intro ('As you approved at the build kickoff, I plan to turn on purge protection for {0}. With it on, a deleted vault, key, secret or certificate cannot be purged for good before its retention period ends, so it stays recoverable after an accidental or malicious deletion.' -f (Get-Yours $n 'Azure key vaults')) `
-                    -Listed $listed -Resources $vaults `
-                    -Expect @(
-                        ('Nothing changes for the applications and people that read or write {0} today.' -f (Get-Pick $n 'the vault' 'these vaults'))
-                        ('As a reminder, purge protection cannot be turned off once it is enabled, by anyone including Microsoft. A deleted vault, key, secret or certificate is kept for the retention period of its vault and cannot be purged early, and a deleted vault keeps its name until then, so the name cannot be reused, for example by automation that deletes and recreates a vault.'))
+                $notes = @('CR-06 refers to the purge protection approval the client gave at build kickoff (-PurgeProtectionApproved), and asks the client to confirm that it still stands and to approve the proposed date. Attach that approval and the reply to the change request.')
+                $ask = ('You approved purge protection at the build kickoff. Because this change cannot be undone, could you confirm that your approval still stands for {0}, and approve the change for {1}?' -f (Get-Pick $n 'this vault' 'these vaults'), $proposedDay)
             }
-            else {
-                $body = [System.Collections.Generic.List[object]]::new()
-                $body.Add(('I am planning a security hardening change that turns on purge protection for {0}. With it on, a deleted vault, key, secret or certificate cannot be purged for good before its retention period ends, so it stays recoverable after an accidental or malicious deletion.' -f $(if ($n -eq 1) { 'one of your Azure key vaults' } else { "$n of your Azure key vaults" })))
-                $body.Add($listed)
-                foreach ($p in $vaults) { $body.Add($p) }
-                $body.Add('Purge protection cannot be turned off once it is enabled, by anyone including Microsoft, so this change cannot be reverted. The retention period of a vault is set when the vault is created and cannot be changed afterwards either.')
-                $body.Add(('Once it is on, a deleted vault, key, secret or certificate is kept for the retention period of its vault and cannot be purged early. It can be recovered at any time during that period, and Azure purges it automatically when the period ends. A deleted vault keeps its name until then, so the name cannot be reused, for example by automation that deletes and recreates a vault, and a deleted key, secret or certificate keeps its name in {0} in the same way.' -f (Get-Pick $n 'the vault' 'its vault')))
-                $body.Add(('Nothing changes for the applications and people that read or write {0} today.' -f (Get-Pick $n 'the vault' 'these vaults')))
-                $body.Add(('Because this change cannot be undone, I need your written approval before I schedule it. Could you reply to confirm that I can enable purge protection on {0}? If a vault should stay out of the change, please tell me which one and I will leave it out.' -f (Get-Pick $n 'this vault' 'these vaults')))
-                $email = @{ Subject = 'Approval request: purge protection for Azure key vaults'; Body = $body.ToArray() }
-            }
+            $email = New-ApprovalEmail -Subject 'purge protection for Azure key vaults' `
+                -Change @(('I would like to turn on purge protection for {0}.' -f (Get-Yours $n 'Azure key vaults')), 'With it on, a deleted vault, key, secret or certificate cannot be purged, that is erased for good, before the retention period of its vault ends.') `
+                -Why 'Without purge protection, anyone with enough access, including an attacker who takes over an account, can delete a vault or its keys, secrets and certificates and purge them straight away, so they cannot be recovered. Purge protection keeps them recoverable for the retention period after an accidental or malicious deletion.' `
+                -Effect @(
+                    ('Nothing changes for the applications and people that read or write {0} today.' -f $theVaults)
+                    ('Once it is on, a deleted vault, key, secret or certificate is kept for the retention period of its vault and cannot be purged early. It can be recovered at any time during that period, and Azure purges it automatically when the period ends. A deleted vault keeps its name until then, so the name cannot be reused, for example by automation that deletes and recreates a vault, and a deleted key, secret or certificate keeps its name in {0} in the same way.' -f (Get-Pick $n 'the vault' 'its vault'))) `
+                -Listed (Get-Pick $n 'The vault is listed below with its soft delete retention period, which purge protection will enforce:' 'The vaults are listed below by subscription, each with its soft delete retention period, which purge protection will enforce:') `
+                -Resources (Get-EmailResourceList $resources $settingLabel) `
+                -Reversal 'This change cannot be undone. Purge protection cannot be turned off once it is enabled, by anyone including Microsoft, and the retention period of a vault is set when the vault is created and cannot be changed afterwards either.' `
+                -Ask $ask -Options 'If a vault should stay out of the change, or another date suits you better, please let me know.'
             @{ Notes = $notes; Cr = New-ChangeRequest @{
                     Number = 6; Key = 'key-vault-purge-protection'; Title = 'Enable purge protection on key vaults'
                     Description = 'Enable purge protection on {0}.' -f (Get-Listed $n 'key vault' 'key vaults')
@@ -834,21 +868,19 @@ $catalog = @(
             $impl.Add('Go to Settings > Configuration.')
             $impl.Add('Set Allow Blob anonymous access to Disabled and select Save.')
             Add-RepeatStep $impl $n 1 'storage account'
-            $body = [System.Collections.Generic.List[object]]::new()
-            $body.Add(('I am planning a security hardening change that turns off anonymous access to Azure Blob Storage at the account level on {0}. Today the account setting still allows a container to be made public, and turning it off means no container in {1} can be opened to anonymous access later, by mistake or by a misconfigured deployment.' -f $(if ($n -eq 1) { 'one of your storage accounts' } else { "$n of your storage accounts" }), (Get-Pick $n 'it' 'them')))
-            $body.Add((Get-Pick $n 'The account is listed below:' 'The accounts are listed below by subscription:'))
-            foreach ($g in @($resources | Group-Object SubscriptionId | Sort-Object { Format-Subscription $_.Name })) {
-                $body.Add(('Subscription {0}:' -f (Format-Subscription $g.Name)))
-                $body.Add(@($g.Group | Sort-Object ResourceGroup, Name | ForEach-Object { '{0} (resource group {1})' -f $_.Name, $_.ResourceGroup }))
-            }
-            $body.Add(('I do not expect this change to affect anything that uses {0} today, for these reasons:' -f (Get-Pick $n 'the account' 'these accounts')))
-            $body.Add(@(
-                    ('Every container in {0} is private today, so no one reads {1} blob data without signing in.' -f (Get-Pick $n 'the account' 'these accounts'), (Get-Pick $n 'its' 'their'))
-                    'Applications and people that sign in, or that use a shared access signature or an account key, keep working as they do now. The setting only affects requests made without any credentials.'
-                    'A static website hosted in a storage account keeps serving as it does now, since the setting does not apply to it.'
-                    (Get-Pick $n 'Just before the change, I will check the containers of the account again, and leave it unchanged if a container has been made public since my review.' 'Just before the change, I will check the containers of each account again, and skip any account where a container has been made public since my review.')))
-            $body.Add('If anything unexpected comes up, I can turn the setting back on straight away. It takes up to 30 seconds to apply, and the containers stay as they are.')
-            $body.Add('Could you confirm that I can go ahead and schedule the change?')
+            $email = New-ApprovalEmail -Subject 'turning off anonymous access to Azure Blob Storage' `
+                -Change @(('I would like to turn off anonymous access to Azure Blob Storage at the account level on {0}.' -f (Get-Yours $n 'storage accounts')), 'Anonymous access lets anyone read a container over the internet without signing in.') `
+                -Why ('Today the account setting still allows a container to be made public. Turning it off means no container in {0} can be opened to anonymous access later, by mistake or by a misconfigured deployment.' -f (Get-Pick $n 'it' 'them')) `
+                -Effect @(
+                    ('I do not expect this change to affect anything that uses {0} today, for these reasons:' -f (Get-Pick $n 'the account' 'these accounts'))
+                    , @(
+                        ('Every container in {0} is private today, so no one reads {1} blob data without signing in.' -f (Get-Pick $n 'the account' 'these accounts'), (Get-Pick $n 'its' 'their'))
+                        'Applications and people that sign in, or that use a shared access signature or an account key, keep working as they do now. The setting only affects requests made without any credentials.'
+                        'A static website hosted in a storage account keeps serving as it does now, since the setting does not apply to it.'
+                        (Get-Pick $n 'Just before the change, I will check the containers of the account again, and leave it unchanged if a container has been made public since my review.' 'Just before the change, I will check the containers of each account again, and skip any account where a container has been made public since my review.'))) `
+                -Listed (Get-Pick $n 'The account is listed below:' 'The accounts are listed below by subscription:') `
+                -Resources (Get-EmailResourceList $resources $groupLabel) `
+                -Reversal 'If anything unexpected comes up, I can turn the setting back on straight away. It takes up to 30 seconds to apply, and the containers stay as they are.'
             @{ Used = @('DP.1-CONTAINERS'); Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
                     Number = 7; Key = 'storage-anonymous-access'; Title = 'Disable anonymous blob access on storage accounts'
                     Description = 'Set Allow Blob anonymous access to Disabled on {0}, none of which has a container open to anonymous access.' -f (Get-Listed $n 'storage account' 'storage accounts')
@@ -869,7 +901,7 @@ $catalog = @(
                         , @('Remediate anonymous read access to blob data', 'https://learn.microsoft.com/azure/storage/blobs/anonymous-read-access-prevent')
                         , @('Configure anonymous read access for containers and blobs', 'https://learn.microsoft.com/azure/storage/blobs/anonymous-read-access-configure'))
                     Csv = $resources
-                    Email = @{ Subject = 'Planned change: turning off anonymous access to Azure Blob Storage'; Body = $body.ToArray() }
+                    Email = $email
                 } } } }
 
     @{ Number = 8; Key = 'app-service-https-only'; Change = 'HTTPS Only on App Service apps'; Sources = @('NB.4-DETAIL')
@@ -883,7 +915,6 @@ $catalog = @(
             $impl.Add('Go to Settings > Configuration and select the General settings tab.')
             $impl.Add('Under Platform settings, set HTTPS Only to On, select Apply and confirm.')
             Add-RepeatStep $impl $n 1 'app'
-            $apps = @($resources | Sort-Object Name | ForEach-Object { if ($_.Setting) { '{0} ({1})' -f $_.Name, $_.Setting } else { $_.Name } })
             @{ Cr = New-ChangeRequest @{
                     Number = 8; Key = 'app-service-https-only'; Title = 'Enable HTTPS Only on App Service apps'
                     Description = 'Turn on HTTPS Only for {0}, so requests over HTTP are redirected to HTTPS.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps')
@@ -904,11 +935,15 @@ $catalog = @(
                         , @('Configure an App Service app, general settings', 'https://learn.microsoft.com/azure/app-service/configure-common#configure-general-settings')
                         , @('Secure your Azure App Service deployment, data protection', 'https://learn.microsoft.com/azure/app-service/overview-security#data-protection'))
                     Csv = $resources
-                    Email = @{ Subject = 'Planned change: HTTPS only for Azure App Service applications'; Body = @(
-                            ('I am planning to turn on the HTTPS Only setting for {0}. With it on, requests made over plain HTTP are redirected to HTTPS, so all traffic to {1} is encrypted in transit.' -f $(if ($n -eq 1) { 'the App Service application below' } else { "the $n App Service applications below" }), $(if ($n -eq 1) { 'it' } else { 'them' }))
-                            , $apps
-                            ('Browsers follow the redirect automatically, so people using {0} should not notice a difference. An integration that calls {1} over http:// and does not follow redirects, such as an older API client or a webhook, may fail until it is updated to use https://.' -f (Get-Pick $n 'the application' 'these applications'), (Get-Pick $n 'it' 'one of them'))
-                            ('Could you let me know whether any of your systems or partners still call {0} over HTTP? Once I have your confirmation, I will schedule the change.' -f (Get-Pick $n 'the application' 'these applications'))) }
+                    Email = New-ApprovalEmail -Subject 'HTTPS only for Azure App Service applications' `
+                        -Change @(('I would like to turn on the HTTPS Only setting for {0}.' -f (Get-Yours $n 'App Service and Function applications')), 'With it on, requests made over plain HTTP are redirected to HTTPS, the encrypted form of HTTP.') `
+                        -Why ('Traffic over plain HTTP travels unencrypted and can be read or altered on the way. HTTPS Only makes sure every request to {0} is encrypted in transit.' -f (Get-Pick $n 'the application' 'these applications')) `
+                        -Effect ('Browsers follow the redirect automatically, so people using {0} should not notice a difference. An integration that calls {1} over http:// and does not follow redirects, such as an older API client or a webhook, may fail until it is updated to use https://.' -f (Get-Pick $n 'the application' 'these applications'), (Get-Pick $n 'it' 'one of them')) `
+                        -Listed (Get-Pick $n 'The application is listed below with its default host name:' 'The applications are listed below by subscription, each with its default host name:') `
+                        -Resources (Get-EmailResourceList $resources { if ($_.Setting) { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $_.Setting } else { '{0} (resource group {1})' -f $_.Name, $_.ResourceGroup } }) `
+                        -Reversal ('HTTPS Only can be turned off again on {0}, and it takes effect without a redeployment.' -f (Get-Pick $n 'the application' 'any application')) `
+                        -Ask ('Could you let me know whether any of your systems or partners still call {0} over HTTP? If none do, could you approve this change for {1}?' -f (Get-Pick $n 'the application' 'these applications'), $proposedDay) `
+                        -Options 'If one does, I will hold the change until it uses HTTPS. If another date suits you better, or anything listed above should stay out of the change, please let me know.'
                 } } } }
 
     @{ Number = 9; Key = 'encryption-at-host'; Change = 'Encryption at host on virtual machines'; Sources = @('DP.4-ELIGIBILITY')
@@ -984,13 +1019,19 @@ $catalog = @(
                     'Go back to Overview and select Start only if the status read Running before the stop.')
                 References = $references
                 Csv = $resources
-                Email = @{ Subject = 'Maintenance window request: encryption at host for Azure virtual machines'; Body = @(
-                        ('I am planning to enable encryption at host on {0}. This setting encrypts the temporary disk and the disk caches on the Azure host, so the data on {1} stays encrypted from the virtual machine all the way to Azure Storage.' -f $(if ($n -eq 1) { 'the virtual machine below' } else { "the $n virtual machines below" }), $(if ($n -eq 1) { 'this server' } else { 'these servers' }))
-                        , @($resources | Sort-Object Name | ForEach-Object {
-                                $state = switch -Regex ($_.Setting) { ', running,' { ', running at my last review' } ', (deallocated|stopped),' { ', stopped at my last review' } default { '' } }
-                                '{0} (resource group {1}{2})' -f $_.Name, $_.ResourceGroup, $state })
+                Email = New-ApprovalEmail -Window -Subject 'encryption at host for Azure virtual machines' `
+                    -Change @(('I would like to enable encryption at host on {0}.' -f (Get-Yours $n 'virtual machines')), 'Encryption at host encrypts the temporary disk and the disk caches on the Azure host, the physical server a virtual machine runs on.') `
+                    -Why ('Azure already encrypts the managed disks of {0} at rest, but not the temporary disk or the disk caches. Encryption at host closes that gap, so the data on {0} stays encrypted from the virtual machine all the way to Azure Storage.' -f (Get-Pick $n 'this server' 'these servers')) `
+                    -Effect @(
                         (Get-Pick $n 'To apply it, the virtual machine has to be stopped first. If it is running at the time, it will be unavailable for a few minutes until I start it again, and if it is already stopped, it will be left stopped. Nothing changes inside the operating system or the applications.' 'To apply it, each virtual machine has to be stopped first. A server that is running at the time will be unavailable for a few minutes until I start it again, and a server that is already stopped will be left stopped. Nothing changes inside the operating system or the applications.')
-                        (Get-Pick $n 'Could you suggest a maintenance window that works for this server? I will schedule the change once I have your confirmation.' 'Could you suggest a maintenance window that works for these servers, and let me know if any of them need to be handled separately or in a particular order? I will schedule the change once I have your confirmation.')) }
+                        'Because of that restart, I am asking for a maintenance window rather than proposing a date.') `
+                    -Listed (Get-Pick $n 'The virtual machine is listed below:' 'The virtual machines are listed below by subscription:') `
+                    -Resources (Get-EmailResourceList $resources {
+                            $state = switch -Regex ($_.Setting) { ', running,' { ', running at my last review' } ', (deallocated|stopped),' { ', stopped at my last review' } default { '' } }
+                            '{0} (resource group {1}{2})' -f $_.Name, $_.ResourceGroup, $state }) `
+                    -Reversal ('Encryption at host can be turned off again, which needs the same stop and start of {0} inside a maintenance window.' -f (Get-Pick $n 'the virtual machine' 'each virtual machine')) `
+                    -Ask (Get-Pick $n 'Could you approve this change and suggest a maintenance window that works for this server?' 'Could you approve this change and suggest a maintenance window that works for these servers?') `
+                    -Options (Get-Pick $n '' 'If any of them need to be handled separately or in a particular order, please let me know.')
             }
             if ($DrClient) {
                 $spec.DrImpact = 'This is a DR client. Azure Site Recovery does not carry encryption at host to test failover or failover virtual machines, so the DR Playbook needs an update.'
@@ -1047,11 +1088,13 @@ $catalog = @(
                         , @('Remove TLS 1.0 and 1.1 from use with Azure Cache for Redis', 'https://learn.microsoft.com/azure/azure-cache-for-redis/cache-remove-tls-10-11')
                         , @('How to configure Azure Cache for Redis, advanced settings', 'https://learn.microsoft.com/azure/azure-cache-for-redis/cache-configure#advanced-settings'))
                     Csv = $resources
-                    Email = New-NoticeEmail -Subject 'minimum TLS 1.2 for Azure Cache for Redis' `
-                        -Intro ('I plan to set the minimum TLS version to 1.2 on {0}. Azure Cache for Redis has refused TLS 1.0 and 1.1 on every cache since April 1, 2025, but {1} an older minimum in {2} configuration, so this change brings the configuration in line with the platform.' -f (Get-Yours $n 'Azure Cache for Redis caches'), (Get-Pick $n 'this cache still records' 'these caches still record'), (Get-Pick $n 'its' 'their')) `
+                    Email = New-ApprovalEmail -Subject 'minimum TLS 1.2 for Azure Cache for Redis' `
+                        -Change @(('I would like to set the minimum TLS version to 1.2 on {0}.' -f (Get-Yours $n 'Azure Cache for Redis caches')), $explainTls) `
+                        -Why ('TLS 1.0 and 1.1 have known weaknesses. Azure Cache for Redis has refused them on every cache since April 1, 2025, but {0} an older minimum in {1} configuration, so this change brings the configuration in line with the platform and the security baseline.' -f (Get-Pick $n 'this cache still records' 'these caches still record'), (Get-Pick $n 'its' 'their')) `
                         -Listed (Get-Pick $n 'The cache is listed below with its minimum TLS version today:' 'The caches are listed below by subscription, each with its minimum TLS version today:') `
                         -Resources (Get-EmailResourceList $resources $settingLabel) `
-                        -Expect 'I do not expect any visible effect, because Azure Cache for Redis already refuses TLS 1.0 and 1.1, so every connection that works today keeps working.'
+                        -Reversal 'Azure Cache for Redis has not allowed a minimum below 1.2 since March 1, 2024, so this change cannot be reversed. I do not expect a reversal to be needed, because every cache has refused TLS 1.0 and 1.1 since April 1, 2025.' `
+                        -Effect 'I do not expect any visible effect, because Azure Cache for Redis already refuses TLS 1.0 and 1.1, so every connection that works today keeps working.'
                 } } } }
 
     @{ Number = 12; Key = 'service-bus-minimum-tls'; Change = 'Minimum TLS 1.2 on Service Bus namespaces'; Sources = @('NB.6-PAAS-DETAIL')
@@ -1084,11 +1127,13 @@ $catalog = @(
                         , @('Enforce a minimum required version of TLS for requests to a Service Bus namespace', 'https://learn.microsoft.com/azure/service-bus-messaging/transport-layer-security-enforce-minimum-version')
                         , @('Configure the minimum TLS version for a Service Bus namespace', 'https://learn.microsoft.com/azure/service-bus-messaging/transport-layer-security-configure-minimum-version'))
                     Csv = $resources
-                    Email = New-NoticeEmail -Subject 'minimum TLS 1.2 for Azure Service Bus namespaces' `
-                        -Intro ('I plan to set the minimum TLS version to 1.2 on {0}. Service Bus accepts only TLS 1.2 and later, but {1} an older minimum in {2} configuration, so this change brings the configuration in line with the platform.' -f (Get-Yours $n 'Service Bus namespaces'), (Get-Pick $n 'this namespace still records' 'these namespaces still record'), (Get-Pick $n 'its' 'their')) `
+                    Email = New-ApprovalEmail -Subject 'minimum TLS 1.2 for Azure Service Bus namespaces' `
+                        -Change @(('I would like to set the minimum TLS version to 1.2 on {0}.' -f (Get-Yours $n 'Service Bus namespaces')), $explainTls) `
+                        -Why ('TLS 1.0 and 1.1 have known weaknesses. Service Bus accepts only TLS 1.2 and later, but {0} an older minimum in {1} configuration, so this change brings the configuration in line with the platform and the security baseline.' -f (Get-Pick $n 'this namespace still records' 'these namespaces still record'), (Get-Pick $n 'its' 'their')) `
                         -Listed (Get-Pick $n 'The namespace is listed below with its minimum TLS version today:' 'The namespaces are listed below by subscription, each with its minimum TLS version today:') `
                         -Resources (Get-EmailResourceList $resources $settingLabel) `
-                        -Expect 'I do not expect any visible effect, because Service Bus already refuses TLS 1.0 and 1.1, so every connection that works today keeps working.'
+                        -Reversal 'A Service Bus namespace takes only 1.2 or 1.3 as its minimum TLS version, so this change cannot be reversed. I do not expect a reversal to be needed, because Service Bus accepts only TLS 1.2 and later.' `
+                        -Effect 'I do not expect any visible effect, because Service Bus already refuses TLS 1.0 and 1.1, so every connection that works today keeps working.'
                 } } } }
 
     @{ Number = 13; Key = 'event-hubs-minimum-tls'; Change = 'Minimum TLS 1.2 on Event Hubs namespaces'; Sources = @('NB.6-PAAS-DETAIL')
@@ -1103,7 +1148,6 @@ $catalog = @(
             $impl.Add('Go to Settings > Configuration.')
             $impl.Add('Set Minimum TLS version to 1.2 and select Save.')
             Add-RepeatStep $impl $n 1 'namespace'
-            $namespaces = @($resources | Sort-Object Name | ForEach-Object { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $_.Setting })
             @{ Cr = New-ChangeRequest @{
                     Number = 13; Key = 'event-hubs-minimum-tls'; Title = 'Set minimum TLS version 1.2 on Event Hubs namespaces'
                     Description = 'Set the minimum TLS version to 1.2 on {0}.' -f (Get-Listed $n 'Event Hubs namespace' 'Event Hubs namespaces')
@@ -1125,11 +1169,15 @@ $catalog = @(
                         , @('Enforce a minimum required version of TLS for requests to an Event Hubs namespace', 'https://learn.microsoft.com/azure/event-hubs/transport-layer-security-enforce-minimum-version')
                         , @('Configure the minimum TLS version for an Event Hubs namespace', 'https://learn.microsoft.com/azure/event-hubs/transport-layer-security-configure-minimum-version'))
                     Csv = $resources
-                    Email = @{ Subject = 'Planned change: minimum TLS 1.2 for Azure Event Hubs namespaces'; Body = @(
-                            ('I am planning a security hardening change that sets the minimum TLS version to 1.2 on {0}. TLS 1.0 and 1.1 have known weaknesses, and once the change is applied {1} will refuse requests made over them.' -f $(if ($n -eq 1) { 'the Event Hubs namespace below' } else { "the $n Event Hubs namespaces below" }), (Get-Pick $n 'the namespace' 'these namespaces'))
-                            , $namespaces
-                            'Applications that send or receive events over TLS 1.2 or later see no change. An application, device or partner system that can only use TLS 1.0 or 1.1, for example one on an old operating system or runtime, will have its requests refused until it is updated.'
-                            ('Could you let me know whether anything that connects to {0} may still use TLS 1.0 or 1.1? Once I have your confirmation, I will schedule the change.' -f (Get-Pick $n 'the namespace' 'these namespaces'))) }
+                    Email = New-ApprovalEmail -Subject 'minimum TLS 1.2 for Azure Event Hubs namespaces' `
+                        -Change @(('I would like to set the minimum TLS version to 1.2 on {0}.' -f (Get-Yours $n 'Event Hubs namespaces')), $explainTls) `
+                        -Why ('TLS 1.0 and 1.1 have known weaknesses, and an Event Hubs namespace with a minimum below 1.2 still accepts requests over them. Setting 1.2 makes {0} refuse these older versions, and matches the default for new namespaces.' -f (Get-Pick $n 'the namespace' 'these namespaces')) `
+                        -Effect 'Applications that send or receive events over TLS 1.2 or later will see no change. An application, device or partner system that can only use TLS 1.0 or 1.1, for example one on an old operating system or runtime, will have its requests refused until it is updated.' `
+                        -Listed (Get-Pick $n 'The namespace is listed below with its minimum TLS version today:' 'The namespaces are listed below by subscription, each with its minimum TLS version today:') `
+                        -Resources (Get-EmailResourceList $resources $settingLabel) `
+                        -Reversal ('The minimum TLS version can be set back to the version {0} today, shown above, for as long as Event Hubs still offers it.' -f (Get-Pick $n 'the namespace has' 'each namespace has')) `
+                        -Ask ('Could you let me know whether anything that connects to {0} may still use TLS 1.0 or 1.1? If nothing does, could you approve this change for {1}?' -f (Get-Pick $n 'the namespace' 'these namespaces'), $proposedDay) `
+                        -Options 'If something does, I will hold the change until it uses TLS 1.2. If another date suits you better, or anything listed above should stay out of the change, please let me know.'
                 } } } }
 
     @{ Number = 14; Key = 'cosmos-db-minimum-tls'; Change = 'Minimum TLS 1.2 on Azure Cosmos DB accounts'; Sources = @('NB.6-PAAS-DETAIL')
@@ -1160,11 +1208,13 @@ $catalog = @(
                         'TLS 1.0 and 1.1 were retired across Azure Cosmos DB on August 31, 2025, so every client that connected before the change can still connect.')
                     References = @(, @('Self-serve minimum TLS version enforcement in Azure Cosmos DB', 'https://learn.microsoft.com/azure/cosmos-db/self-serve-minimum-tls-enforcement'))
                     Csv = $resources
-                    Email = New-NoticeEmail -Subject 'minimum TLS 1.2 for Azure Cosmos DB accounts' `
-                        -Intro ('I plan to set the minimum TLS version to 1.2 on {0}. Azure Cosmos DB retired TLS 1.0 and 1.1 on August 31, 2025, but {1} not record a minimum of 1.2 in {2} configuration, so this change brings the configuration in line with the platform.' -f (Get-Yours $n 'Azure Cosmos DB accounts'), (Get-Pick $n 'this account does' 'these accounts do'), (Get-Pick $n 'its' 'their')) `
+                    Email = New-ApprovalEmail -Subject 'minimum TLS 1.2 for Azure Cosmos DB accounts' `
+                        -Change @(('I would like to set the minimum TLS version to 1.2 on {0}.' -f (Get-Yours $n 'Azure Cosmos DB accounts')), $explainTls) `
+                        -Why ('TLS 1.0 and 1.1 have known weaknesses. Azure Cosmos DB retired them on August 31, 2025, but {0} not record a minimum of 1.2 in {1} configuration, so this change brings the configuration in line with the platform and the security baseline.' -f (Get-Pick $n 'this account does' 'these accounts do'), (Get-Pick $n 'its' 'their')) `
                         -Listed (Get-Pick $n 'The account is listed below with its minimum TLS version today:' 'The accounts are listed below by subscription, each with its minimum TLS version today:') `
                         -Resources (Get-EmailResourceList $resources $settingLabel) `
-                        -Expect 'I do not expect any visible effect, because Azure Cosmos DB already refuses TLS 1.0 and 1.1, so every connection that works today keeps working.'
+                        -Reversal 'Azure Cosmos DB accepts only TLS 1.2 as the minimum for an account, so this change cannot be reversed. I do not expect a reversal to be needed, because Azure Cosmos DB retired TLS 1.0 and 1.1 on August 31, 2025.' `
+                        -Effect 'I do not expect any visible effect, because Azure Cosmos DB already refuses TLS 1.0 and 1.1, so every connection that works today keeps working.'
                 } } } }
 
     @{ Number = 15; Key = 'scale-set-encryption-at-host'; Change = 'Encryption at host on virtual machine scale sets'; Sources = @('DP.4-VMSS-ELIGIBILITY')
@@ -1279,14 +1329,21 @@ $catalog = @(
                 , @('Use the Azure CLI to enable end-to-end encryption using encryption at host, Virtual Machine Scale Sets', 'https://learn.microsoft.com/azure/virtual-machines/linux/disks-enable-host-based-encryption-cli#update-a-virtual-machine-scale-set-to-enable-encryption-at-host')
                 , @('Upgrade policy modes for Virtual Machine Scale Sets', 'https://learn.microsoft.com/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-upgrade-policy')
                 , @('Performing manual upgrades on Virtual Machine Scale Sets', 'https://learn.microsoft.com/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-perform-manual-upgrades'))
-            $body = [System.Collections.Generic.List[object]]::new()
-            $body.Add(('I am planning to enable encryption at host on {0}. This setting encrypts the temporary disk and the disk caches on the Azure host, so the data of {1} stays encrypted all the way to Azure Storage.' -f $(if ($n -eq 1) { 'the virtual machine scale set below' } else { "the $n virtual machine scale sets below" }), (Get-Pick $n 'its instances' 'their instances')))
-            $body.Add(@($resources | Sort-Object Name | ForEach-Object { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, (Get-Count $_.Instances 'instance' 'instances') }))
-            $body.Add(('The setting goes on the configuration of {0}, so new instances are encrypted from the start. Each existing instance has to be stopped and started again to pick it up, which I will do one instance at a time. An instance that is running at the time will be unavailable for a few minutes until I start it again, and an instance that is already stopped will be left stopped. Nothing changes inside the operating system or the applications.' -f (Get-Pick $n 'the scale set' 'each scale set')))
+            $effect = [System.Collections.Generic.List[object]]::new()
+            $effect.Add(('The setting goes on the configuration of {0}, so new instances are encrypted from the start. Each existing instance has to be stopped and started again to pick it up, which I will do one instance at a time. An instance that is running at the time will be unavailable for a few minutes until I start it again, and an instance that is already stopped will be left stopped. Nothing changes inside the operating system or the applications.' -f (Get-Pick $n 'the scale set' 'each scale set')))
             if ($automatic.Count) {
-                $body.Add(('{0} set to update {1} instances automatically, so once the setting is applied it may also restart them on its own, all at the same time under the Automatic policy and in batches under the Rolling policy. I will plan the window as if every instance could be unavailable at once: {2}.' -f $(if ($automatic.Count -eq 1) { 'One scale set is' } else { "$($automatic.Count) scale sets are" }), (Get-Pick $automatic.Count 'its' 'their'), (@($automatic | Sort-Object Name | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Policy }) -join ', ')))
+                $effect.Add(('{0} set to update {1} instances automatically, so once the setting is applied it may also restart them on its own, all at the same time under the Automatic policy and in batches under the Rolling policy. I will plan the window as if every instance could be unavailable at once: {2}.' -f $(if ($automatic.Count -eq 1) { 'One scale set is' } else { "$($automatic.Count) scale sets are" }), (Get-Pick $automatic.Count 'its' 'their'), (@($automatic | Sort-Object Name | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Policy }) -join ', ')))
             }
-            $body.Add((Get-Pick $n 'Could you suggest a maintenance window that works for this scale set? I will schedule the change once I have your confirmation.' 'Could you suggest a maintenance window that works for these scale sets, and let me know if any of them need to be handled separately or in a particular order? I will schedule the change once I have your confirmation.'))
+            $effect.Add('Because of those restarts, I am asking for a maintenance window rather than proposing a date.')
+            $email = New-ApprovalEmail -Window -Subject 'encryption at host for Azure virtual machine scale sets' `
+                -Change @(('I would like to enable encryption at host on {0}.' -f (Get-Yours $n 'virtual machine scale sets')), 'Encryption at host encrypts the temporary disk and the disk caches on the Azure host, the physical server each instance runs on.') `
+                -Why ('Azure already encrypts the managed disks of {0} at rest, but not the temporary disk or the disk caches. Encryption at host closes that gap, so the data of {0} stays encrypted all the way to Azure Storage.' -f (Get-Pick $n 'its instances' 'their instances')) `
+                -Effect $effect.ToArray() `
+                -Listed (Get-Pick $n 'The scale set is listed below with its number of instances:' 'The scale sets are listed below by subscription, each with its number of instances:') `
+                -Resources (Get-EmailResourceList $resources { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, (Get-Count $_.Instances 'instance' 'instances') }) `
+                -Reversal ('Encryption at host can be turned off again on {0}, which needs the same stop and start of each instance inside a maintenance window.' -f (Get-Pick $n 'the scale set' 'each scale set')) `
+                -Ask (Get-Pick $n 'Could you approve this change and suggest a maintenance window that works for this scale set?' 'Could you approve this change and suggest a maintenance window that works for these scale sets?') `
+                -Options (Get-Pick $n '' 'If any of them need to be handled separately or in a particular order, please let me know.')
             # Instances are restarted one at a time, unless the upgrade policy applies the model on its own.
             $auto = @($automatic | Where-Object Policy -eq 'Automatic').Count
             $rolling = @($automatic | Where-Object Policy -eq 'Rolling').Count
@@ -1307,7 +1364,7 @@ $catalog = @(
                 Implementation = $impl.ToArray(); Testing = $testing.ToArray(); Rollback = $rollback.ToArray()
                 References = $references
                 Csv = $resources
-                Email = @{ Subject = 'Maintenance window request: encryption at host for Azure virtual machine scale sets'; Body = $body.ToArray() }
+                Email = $email
             }
             # Azure Site Recovery replicates the machines of a Flexible scale set, never a Uniform one.
             if ($DrClient -and $flex.Count) {
@@ -1357,22 +1414,22 @@ $results = foreach ($item in $catalog) {
 $folder = if ($OutputPath) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath) } else { Join-Path $pack '05-change-requests' }
 $fileBase = { param($item) 'CR-{0:00}-{1}' -f $item.Number, $item.Key }
 $outputs = [System.Collections.Generic.List[object]]::new()
-function Add-Output([string]$Name, [string[]]$Lines, [string]$NewLine = "`r`n", [bool]$Bom = $false, [bool]$Prose = $true) {
+function Add-Output([string]$Name, [string[]]$Lines, [string]$NewLine = "`r`n", [bool]$Bom = $false, [bool]$Prose = $true, [bool]$Email = $false) {
     $text = ($Lines -join $NewLine) + $NewLine
-    if ($Prose) { Assert-CopyRules $text $Name }
+    if ($Prose) { Assert-CopyRules $text $Name -Email:$Email }
     $outputs.Add([pscustomobject]@{ Path = Join-Path $folder $Name; Text = $text; Bom = $Bom })
 }
 foreach ($r in $results | Where-Object Cr) {
     $base = & $fileBase $r.Item
     Add-Output "$base.txt" (Format-ChangeRequest $r.Cr)
-    Add-Output "$base.email.txt" (Format-Email $r.Cr.Email)
+    Add-Output "$base.email.txt" (Format-Email $r.Cr.Email) -Email $true
 }
 
 # The index: what was written, what was not and why, and the resources each change left out.
 $packName = Split-Path -Leaf $pack
 $md = [System.Collections.Generic.List[string]]::new()
 $md.Add(('# Change requests: {0}' -f $client)); $md.Add('')
-$md.Add(('Internal. Built {0} from evidence pack {1} (collector {2}). The change requests and client emails name client resources. Fill in the notification list of each change request and send its client email. A change whose email asks for an approval, a confirmation or a maintenance window waits for the reply, and a change with a notice of planned change goes ahead on its planned date unless the client raises a concern.' -f (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd', $inv), (ConvertTo-CopyText $packName), (Get-Text $parameters.ScriptVersion)))
+$md.Add(('Internal. Built {0} from evidence pack {1} (collector {2}). The change requests and client emails name client resources. Fill in the notification list of each change request and send its client email. Every client email asks for the client''s approval, and no change is scheduled until the client approves it.' -f (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd', $inv), (ConvertTo-CopyText $packName), (Get-Text $parameters.ScriptVersion)))
 $md.Add('')
 $md.Add('| CR | Change | Resources | Status | Files |'); $md.Add('| --- | --- | --- | --- | --- |')
 foreach ($r in $results) {
@@ -1381,8 +1438,15 @@ foreach ($r in $results) {
     $md.Add(('| {0:00} | {1} | {2} | {3} | {4} |' -f $r.Item.Number, $r.Item.Change, $(if ($r.Cr) { @($r.Cr.Csv).Count } else { '' }), $r.State, $files))
 }
 $notes = @($results | ForEach-Object { $_.Notes })
-$notices = @($results | Where-Object { $_.Cr -and $_.Cr.Email.Notice } | ForEach-Object { 'CR-{0:00}' -f $_.Item.Number })
-if ($notices.Count) { $notes += '{0} {1} a notice of planned change that plans the change for {2} and asks the client to raise any concern by {3}. Run again with -ChangeDate to plan another day, or on the day the emails are sent to move both dates.' -f ($notices -join ', '), (Get-Pick $notices.Count 'sends' 'send'), (Format-Day $plannedDate), (Format-Day $replyDate) }
+$written = @($results | Where-Object Cr)
+if ($written.Count) {
+    $dated = @($written | Where-Object { -not $_.Cr.Email.Window } | ForEach-Object { 'CR-{0:00}' -f $_.Item.Number })
+    $windows = @($written | Where-Object { $_.Cr.Email.Window } | ForEach-Object { 'CR-{0:00}' -f $_.Item.Number })
+    $asks = @(
+        if ($dated.Count) { '{0} {1} the client to approve the proposed date, {2}' -f ($dated -join ', '), (Get-Pick $dated.Count 'asks' 'ask'), $proposedDay }
+        if ($windows.Count) { '{0} {1} the client to approve the change and suggest a maintenance window' -f ($windows -join ', '), (Get-Pick $windows.Count 'asks' 'ask') })
+    $notes += '{0}. Every email asks for a reply by {1}. Run again with -ChangeDate to propose another day, or on the day the emails are sent to move both dates.' -f ($asks -join ', and '), $replyDay
+}
 if (-not $DrClient) { $notes += 'DR Impact reads Not a DR Client. Run again with -DrClient for a DR client.' }
 if (-not $workspaceName -and @($results | Where-Object { $_.Cr -and $_.Item.Number -eq 1 }).Count) { $notes += 'The pack lists {0}, so CR-01 names the client Sentinel workspace without its name. Run again with -SentinelWorkspace to name it.' -f (Get-Count $workspaces.Count 'workspace' 'workspaces') }
 if ((Get-Status 'P0.7') -notin 'OK', 'PARTIAL' -or (Test-Unreadable 'P0.7')) { $notes += 'Subscription names were not read (P0.7), so the change requests show subscription IDs only.' }
