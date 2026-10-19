@@ -4,6 +4,12 @@
 
 BeforeAll {
     $generator = Join-Path $PSScriptRoot '../New-CyberSocChangeRequests.ps1'
+    # Windows PowerShell 5.1 writes the array ConvertFrom-Json parses to the pipeline as one object.
+    # PowerShell 7 does the same with -NoEnumerate, so this runs a script block as 5.1 reads JSON.
+    function Invoke-WithWindowsPowerShellJson([scriptblock]$Script) {
+        function ConvertFrom-Json { param([Parameter(ValueFromPipeline, Position = 0)]$InputObject) process { Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject -NoEnumerate } }
+        & $Script
+    }
     $s1 = '5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11'
     $s2 = 'a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d'
     function Set-PackResult {
@@ -459,5 +465,18 @@ Describe 'Change request variants' {
         $pack = Join-Path $TestDrive 'unfinished'
         New-Item -ItemType Directory -Path $pack | Out-Null
         { & $generator -EvidencePath $pack } | Should -Throw '*missing 00-parameters.json*'
+    }
+}
+Describe 'Windows PowerShell 5.1, where ConvertFrom-Json writes a JSON array as one object' {
+    It 'reads JSON as Windows PowerShell 5.1 does, so the test below cannot pass by accident' {
+        (Invoke-WithWindowsPowerShellJson { , @('[{"a":1},{"a":2}]' | ConvertFrom-Json | Where-Object { $null -ne $_ }) }).Count | Should -Be 1
+    }
+    It 'lists every resource of a result in its change request' {
+        $pack = Join-Path $TestDrive 'windows-powershell'
+        New-ChangeFixture $pack
+        Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack }
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-03-storage-minimum-tls.txt') -Raw
+        $text | Should -Match "Subscription: Example Production \($s1\)\r?\n- stdata, resource group rg-data, minimum TLS 1\.0\r?\n- stweb, resource group rg-web, minimum TLS not set"
+        $text | Should -Match 'Set the minimum TLS version to 1\.2 on the 2 storage accounts listed below\.'
     }
 }

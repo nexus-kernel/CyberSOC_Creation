@@ -1,6 +1,6 @@
 <#
-    Evidence pack reading shared by the generators that read row-level results, today
-    New-CyberSocSecOpsWorklist.ps1. Offline. Dot-source this file, then call Initialize-CyberSocPackReader
+    Evidence pack reading shared by the generators that read row-level results, New-CyberSocSecOpsWorklist.ps1
+    and New-CyberSocChangeRequests.ps1. Offline. Dot-source this file, then call Initialize-CyberSocPackReader
     once with the pack folder and its manifest before reading a result.
 
     Every result file holds a JSON array. Windows PowerShell 5.1 writes the array ConvertFrom-Json returns
