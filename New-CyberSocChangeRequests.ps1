@@ -7,8 +7,9 @@
     out on the change request template: diagnostic logging through the ATMO-MXDR-DIAG-TOSENT initiative
     (assigned where it is missing, and remediated where resources are not compliant),
     secure transfer and minimum TLS 1.2 on storage accounts, minimum TLS 1.2 on App Service and Azure
-    SQL, and Key Vault purge protection. The changes that need the client first (anonymous blob access,
-    HTTPS only on App Service and encryption at host) also get a client email, drafted and ready to send.
+    SQL, and Key Vault purge protection. The changes that need the client first (purge protection, which
+    cannot be undone, anonymous blob access, HTTPS only on App Service and encryption at host) also get a
+    client email, drafted and ready to send.
 
     Every testing plan is a check in the Azure portal, every reference is a Microsoft Learn page and the
     notification list is left empty to fill in. The files name client resources, so they stay internal
@@ -31,6 +32,9 @@
     The name the client emails open with. Without it they open with Hello.
 .PARAMETER SenderName
     The name under the sign-off of the client emails.
+.PARAMETER PurgeProtectionApproved
+    The client approved purge protection at build kickoff. CR-06 is then written without its client email,
+    and the index records the approval.
 .EXAMPLE
     ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000
 .EXAMPLE
@@ -49,7 +53,8 @@ param(
     [string]$SentinelWorkspace,
     [string]$ManagementGroup,
     [string]$ClientContact,
-    [string]$SenderName
+    [string]$SenderName,
+    [switch]$PurgeProtectionApproved
 )
 
 $ErrorActionPreference = 'Stop'
@@ -550,7 +555,25 @@ $catalog = @(
             $impl.Add('Go to Settings > Properties.')
             $impl.Add('Under Purge protection, select Enable purge protection and select Save.')
             Add-RepeatStep $impl $n 1 'key vault'
-            @{ Cr = New-ChangeRequest @{
+            # Purge protection cannot be undone, so the client approves it in writing first, unless the
+            # approval was given at build kickoff.
+            $email = $null; $notes = @()
+            if ($PurgeProtectionApproved) { $notes = @('CR-06 has no client email because the client approved purge protection at build kickoff (-PurgeProtectionApproved). Attach that approval to the change request.') }
+            else {
+                $body = [System.Collections.Generic.List[object]]::new()
+                $body.Add(('I am planning a security hardening change that turns on purge protection for {0}. With it on, a deleted vault, key, secret or certificate cannot be purged for good before its retention period ends, so it stays recoverable after an accidental or malicious deletion.' -f $(if ($n -eq 1) { 'one of your Azure key vaults' } else { "$n of your Azure key vaults" })))
+                $body.Add((Get-Pick $n 'The vault is listed below with its soft delete retention period, which purge protection will enforce:' 'The vaults are listed below by subscription, each with its soft delete retention period, which purge protection will enforce:'))
+                foreach ($g in @($resources | Group-Object SubscriptionId | Sort-Object { Format-Subscription $_.Name })) {
+                    $body.Add(('Subscription {0}:' -f (Format-Subscription $g.Name)))
+                    $body.Add(@($g.Group | Sort-Object ResourceGroup, Name | ForEach-Object { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $_.Setting }))
+                }
+                $body.Add('Purge protection cannot be turned off once it is enabled, by anyone including Microsoft, so this change cannot be reverted. The retention period of a vault is set when the vault is created and cannot be changed afterwards either.')
+                $body.Add(('Once it is on, a deleted vault, key, secret or certificate is kept for the retention period of its vault and cannot be purged early. It can be recovered at any time during that period, and Azure purges it automatically when the period ends. A deleted vault keeps its name until then, so the name cannot be reused, for example by automation that deletes and recreates a vault, and a deleted key, secret or certificate keeps its name in {0} in the same way.' -f (Get-Pick $n 'the vault' 'its vault')))
+                $body.Add(('Nothing changes for the applications and people that read or write {0} today.' -f (Get-Pick $n 'the vault' 'these vaults')))
+                $body.Add(('Because this change cannot be undone, I need your written approval before I schedule it. Could you reply to confirm that I can enable purge protection on {0}? If a vault should stay out of the change, please tell me which one and I will leave it out.' -f (Get-Pick $n 'this vault' 'these vaults')))
+                $email = @{ Subject = 'Approval request: purge protection for Azure key vaults'; Body = $body.ToArray() }
+            }
+            @{ Notes = $notes; Cr = New-ChangeRequest @{
                     Number = 6; Key = 'key-vault-purge-protection'; Title = 'Enable purge protection on key vaults'
                     Description = 'Enable purge protection on {0}.' -f (Get-Listed $n 'key vault' 'key vaults')
                     Purpose = 'Without purge protection, a deleted vault, key, secret or certificate can be purged for good before its retention period ends. Purge protection enforces that period, so deleted items stay recoverable after an accidental or malicious deletion.'
@@ -571,6 +594,7 @@ $catalog = @(
                         , @('Azure Key Vault soft-delete overview, purge protection', 'https://learn.microsoft.com/azure/key-vault/general/soft-delete-overview#purge-protection')
                         , @('Azure Key Vault recovery management with soft delete and purge protection', 'https://learn.microsoft.com/azure/key-vault/general/key-vault-recovery'))
                     Csv = $resources
+                    Email = $email
                 } } } }
 
     @{ Number = 7; Key = 'storage-anonymous-access'; Change = 'Anonymous blob access disabled on storage accounts'; Sources = @('DP.1-DETAIL')

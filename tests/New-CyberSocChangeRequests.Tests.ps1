@@ -97,9 +97,10 @@ Describe 'Change request generation' {
         @($crFiles.Name | Sort-Object) | Should -Be @(
             'CR-01-diagnostic-logging.txt', 'CR-02-storage-secure-transfer.txt', 'CR-03-storage-minimum-tls.txt', 'CR-04-app-service-minimum-tls.txt',
             'CR-06-key-vault-purge-protection.txt', 'CR-07-storage-anonymous-access.txt', 'CR-08-app-service-https-only.txt', 'CR-09-encryption-at-host.txt')
-        @($emailFiles.Name | Sort-Object) | Should -Be @('CR-07-storage-anonymous-access.email.txt', 'CR-08-app-service-https-only.email.txt', 'CR-09-encryption-at-host.email.txt')
+        @($emailFiles.Name | Sort-Object) | Should -Be @('CR-06-key-vault-purge-protection.email.txt', 'CR-07-storage-anonymous-access.email.txt', 'CR-08-app-service-https-only.email.txt', 'CR-09-encryption-at-host.email.txt')
         $files.Count | Should -Be ($crFiles.Count + $emailFiles.Count + 2)
         $index | Should -Match '\| 05 \| Minimum TLS 1\.2 on Azure SQL servers \|  \| No gaps found \|'
+        $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request and client email \| CR-06-key-vault-purge-protection\.txt, CR-06-key-vault-purge-protection\.email\.txt \|'
         $index | Should -Match '\| 07 \| Anonymous blob access disabled on storage accounts \| 2 \| Change request and client email \|'
         $index | Should -Match 'Internal\. Built .* from evidence pack full \(collector 1\.1\.0\)'
     }
@@ -203,6 +204,20 @@ Describe 'Change request generation' {
         $email | Should -Match '- stweb \(resource group rg-web\): images \(Blob\), downloads \(Container\)'
         $email | Should -Match 'This account has no container open to anonymous access, so I do not expect the change to affect it:\r?\n\r?\n- stdata \(resource group rg-data\)'
         $email | Should -Match 'Thank you,\r?\nScott Example\r?\n$'
+    }
+
+    It 'asks for written approval of purge protection, with the vaults by subscription and their retention' {
+        $email = & $read 'CR-06-key-vault-purge-protection.email.txt'
+        $email | Should -Match '^Subject: Approval request: purge protection for Azure key vaults\r?\n\r?\nHello Dana,'
+        $email | Should -Match '\bI am planning\b' -Because 'the email is written in the first person singular'
+        $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- kv-app \(resource group rg-app, soft delete retention 90 days\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- kv-dev \(resource group rg-dev, soft delete retention 7 days\)"
+        $email | Should -Match 'Purge protection cannot be turned off once it is enabled, by anyone including Microsoft, so this change cannot be reverted\.'
+        $email | Should -Match 'a deleted vault, key, secret or certificate is kept for the retention period of its vault and cannot be purged early\.'
+        $email | Should -Match 'A deleted vault keeps its name until then, so the name cannot be reused'
+        $email | Should -Match 'I need your written approval before I schedule it\. Could you reply to confirm that I can enable purge protection on these vaults\?'
+        $email | Should -Match 'Thank you,\r?\nScott Example\r?\n$'
+        $index | Should -Not -Match 'approved purge protection at build kickoff'
+        @(Get-Section (& $read 'CR-06-key-vault-purge-protection.txt') 'E) MITIGATION')[0] | Should -Match '^Purge protection cannot be disabled once it is enabled' -Because 'the change request keeps its own mitigation'
     }
 
     It 'drafts the HTTPS Only email with the host names and asks about HTTP callers' {
@@ -323,6 +338,23 @@ Describe 'Change request generation' {
 }
 
 Describe 'Change request variants' {
+    It 'skips the purge protection email when the client approved it at build kickoff, and records the approval' {
+        $pack = Join-Path $TestDrive 'approved'
+        New-ChangeFixture $pack
+        $out = Join-Path $pack '05-change-requests'
+        $null = & $generator -EvidencePath $pack
+        Test-Path (Join-Path $out 'CR-06-key-vault-purge-protection.email.txt') | Should -BeTrue
+        $files = @(& $generator -EvidencePath $pack -PurgeProtectionApproved)
+        Test-Path (Join-Path $out 'CR-06-key-vault-purge-protection.email.txt') | Should -BeFalse -Because 'the email from the earlier run is removed'
+        @($files | Where-Object { $_ -like '*CR-06*' } | ForEach-Object { Split-Path -Leaf $_ }) | Should -Be @('CR-06-key-vault-purge-protection.txt')
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request \| CR-06-key-vault-purge-protection\.txt \|'
+        $index | Should -Match '- CR-06 has no client email because the client approved purge protection at build kickoff \(-PurgeProtectionApproved\)\. Attach that approval to the change request\.'
+        $kv = Get-Content (Join-Path $out 'CR-06-key-vault-purge-protection.txt') -Raw
+        @(Get-Section $kv 'E) MITIGATION')[0] | Should -Match '^Purge protection cannot be disabled once it is enabled, so this change cannot be reverted\.'
+        Test-Path (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') | Should -BeTrue -Because 'the switch covers purge protection only'
+    }
+
     It 'writes the DR Playbook step for encryption at host on a DR client' {
         $pack = Join-Path $TestDrive 'dr'
         New-ChangeFixture $pack
@@ -408,6 +440,11 @@ Describe 'Change request variants' {
         $kv | Should -Match 'go to Key vaults and open the key vault listed in the RESOURCES section\.'
         $kv | Should -Match 'kv-only, resource group rg-app, soft delete retention 90 days' -Because 'a missing retention reads as the 90 day default'
         $kv | Should -Not -Match 'Repeat steps'
+        $kvEmail = Get-Content (Join-Path $folder 'CR-06-key-vault-purge-protection.email.txt') -Raw
+        $kvEmail | Should -Match 'turns on purge protection for one of your Azure key vaults\.'
+        $kvEmail | Should -Match 'The vault is listed below with its soft delete retention period'
+        $kvEmail | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- kv-only \(resource group rg-app, soft delete retention 90 days\)" -Because 'a missing retention reads as the 90 day default in the email too'
+        $kvEmail | Should -Match 'enable purge protection on this vault\?'
         $email = Get-Content (Join-Path $folder 'CR-08-app-service-https-only.email.txt') -Raw
         $email | Should -Match 'for the App Service application below\. With it on, requests made over plain HTTP are redirected to HTTPS, so all traffic to it is encrypted in transit\.'
         $email | Should -Match '^Subject: .*\r?\n\r?\nHello,\r?\n' -Because 'without a contact the email opens with Hello'
