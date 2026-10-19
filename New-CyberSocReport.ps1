@@ -247,21 +247,21 @@ $aggregates = [ordered]@{
             Accounts = @($rows).Count; AccountsUnread = @($rows).Count - $read.Count
             Containers = & $total 'Containers'; PrivateContainers = (& $total 'Containers') - (& $total 'PublicContainers')
             ExposedContainers = & $total 'ExposedContainers'; AccountsExposed = @($read | Where-Object { [int]$_.ExposedContainers -gt 0 }).Count } }
-    # Confirmed true positives, one row each. Severity, the data loss flag, the screened title, tactics and day only, never the comments.
-    # A row that cannot be converted is kept with its title withheld, so one bad row never empties OUT.4 and reads as zero data loss.
+    # Confirmed true positives, one row each. Severity, the screened title, tactics and day only, never the comments.
+    # A row that cannot be converted is kept with its title withheld, so one bad row never empties OUT.4.
     'OUT.4' = { param($rows)
         $unscreened = $false
         foreach ($r in $rows) {
             try {
                 $tactics = ConvertTo-EbrTactics $r.Tactics
                 [pscustomobject]@{
-                    Severity = $r.Severity; ExfilOrImpactTactic = $r.ExfilOrImpactTactic
+                    Severity = $r.Severity
                     Threat = $(if ($tactics) { Get-EbrScreenedTitle ([string]$r.Title) ([string]$parameters.TicketPattern) } else { '' })
                     Tactics = $tactics; Created = ConvertTo-EbrDay $r.CreatedTime }
             }
             catch {
                 $unscreened = $true
-                [pscustomobject]@{ Severity = $r.Severity; ExfilOrImpactTactic = $r.ExfilOrImpactTactic; Threat = 'Title withheld'; Tactics = ''; Created = '' }
+                [pscustomobject]@{ Severity = $r.Severity; Threat = 'Title withheld'; Tactics = ''; Created = '' }
             }
         }
         if ($unscreened) { $issues.Add('An OUT.4 row could not be screened, so its title was withheld.') } }
@@ -328,8 +328,9 @@ if ($ContextPath) {
     if ($context.ClientName -cne $parameters.ClientName -or $context.TenantId -ne $parameters.TenantId) {
         throw 'The context client and tenant must match the evidence pack.'
     }
-    # Allow only the documented editorial inputs.
-    $context = $context | Select-Object ClientName, TenantId, ServiceStartDate, TenantScore, Delivered, Actions, OpenAlertNote, Impact, ResponseTargetMinutes, MonthHighlights
+    # Allow only the documented editorial inputs. An Impact record from an EBR context file is dropped: the CyberSOC
+    # report carries no data exposure or compromise determination.
+    $context = $context | Select-Object ClientName, TenantId, ServiceStartDate, TenantScore, Delivered, Actions, OpenAlertNote, ResponseTargetMinutes, MonthHighlights
 }
 $data = [ordered]@{
     version = '2.0.0'

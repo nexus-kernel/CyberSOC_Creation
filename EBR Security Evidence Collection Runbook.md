@@ -119,7 +119,7 @@ The sum is the estate count. Never caption it as assessed resources, which is PO
 
 ## Phase 1: Outcomes and SOC performance
 
-Every Tier 1 figure and every response tile on the measured outcomes slide comes from eight queries run against one fixed window. Replace `datetime(2026-01-01)` and `datetime(2026-07-31)` with the window start and end in each query.
+Every Tier 1 figure and every response tile on the measured outcomes slide comes from seven queries run against one fixed window. Replace `datetime(2026-01-01)` and `datetime(2026-07-31)` with the window start and end in each query.
 
 **Lock the definitions before collecting.** The two decks used "alerts investigated and resolved" and "alerts triaged" for counts drawn from different tables. Pick one row below per tile and keep the slide label word for word.
 
@@ -130,9 +130,7 @@ Every Tier 1 figure and every response tile on the measured outcomes slide comes
 | Median time to close | All closed incidents, creation to close | OUT.2, row All |
 | 90th percentile close, high severity | High severity closed incidents only | OUT.2, row High |
 | High severity reduction | First full month against last full month | OUT.3 |
-| True positives contained | True positive incidents with a containment comment | OUT.4 |
-| Confirmed data loss | True positives with confirmed data access, zero rows expected | OUT.4 |
-| Malicious sign-in to containment | Account disable time minus malicious sign-in time | OUT.7, OUT.8 |
+| True positives detected and managed | True positive incidents | OUT.4 |
 
 **Scope rule for OUT.1 to OUT.7.** Only incidents that reached the managed service are counted. An incident counts when its comments or closing comment reference an Atmosera ticket (the Zendesk ticket URL, or "per ZD ticket NNNN" appended by the ticket integration). Informational severity is excluded everywhere. The script expands `{{TICKET}}` to the clause below and accepts `-TicketPattern` to change the expression for a client whose ticket integration writes a different comment. Detections (OUT.5, OUT.6) are limited to the alerts linked to those incidents.
 
@@ -212,7 +210,7 @@ SecurityIncident
 
 Compare full months only. A partial final month understates volume and overstates the reduction. If retention does not reach the first month, cite the CyberSOC report by name as the source.
 
-**OUT.4 True positives and the data loss check** (Log Analytics)
+**OUT.4 True positives** (Log Analytics)
 
 ```kusto
 SecurityIncident
@@ -224,12 +222,11 @@ SecurityIncident
 | where Classification == "TruePositive"
 | extend Tactics = tostring(AdditionalData.tactics)
 | project IncidentNumber, Title, Severity, CreatedTime, ClosedTime,
-          ClassificationReason, ClassificationComment, Tactics,
-          ExfilOrImpactTactic = Tactics has_any ("Exfiltration", "Collection", "Impact")
+          ClassificationReason, ClassificationComment, Tactics
 | order by CreatedTime asc
 ```
 
-The "3 of 3 contained" tile is the row count, with a containment statement in each `ClassificationComment`. The zero data loss tile holds only when no row is flagged `ExfilOrImpactTactic`, or each flagged row's comment records no data access. Tactic tags are detection-time labels, so the comment and the incident report are the evidence.
+The true positives tile is the row count. The CyberSOC copy runs no data loss, exfiltration or identity compromise check on these rows: those stay with the EBR (Oct 19, 2026). Tactic tags are detection-time labels.
 
 **OUT.5 Alerts triaged by product and severity** (Log Analytics)
 
@@ -290,20 +287,7 @@ SecurityIncident
 | order by CreatedTime asc
 ```
 
-**OUT.8 Account disable events for containment timing** (Log Analytics)
-
-```kusto
-AuditLogs
-| where TimeGenerated between (datetime(2026-01-01) .. endofday(datetime(2026-07-31)))
-| where OperationName =~ "Disable account"
-| extend TargetUser = tostring(TargetResources[0].userPrincipalName),
-         Initiator  = coalesce(tostring(InitiatedBy.app.displayName),
-                               tostring(InitiatedBy.user.userPrincipalName))
-| project TimeGenerated, TargetUser, Initiator, Result
-| order by TimeGenerated asc
-```
-
-Containment minutes are the OUT.8 disable time minus the malicious sign-in time for the same user in `SigninLogs`. Confirm the disruption tag text and the initiator name on the first run, and keep the incident timeline from Defender portal > Investigation & response > Incidents & alerts > Incidents as the source of record.
+Confirm the disruption tag text on the first run. The CyberSOC copy does not collect the EBR's OUT.8 account disable events or the malicious sign-in to containment timing they feed (Oct 19, 2026).
 
 ## Phase 2: Control evidence by pillar
 
@@ -2120,11 +2104,9 @@ Every figure the template carries maps to a query ID below. Fill Value and Read 
 | Executive summary | 90th percentile close, high severity | OUT.2, row High |  |  |
 | Executive summary | Microsoft tenant Secure Score | POS.6 |  |  |
 | Executive summary | Defender for Cloud score | POS.1 |  |  |
-| Tier 1 | Confirmed data loss or exfiltration | OUT.4 |  |  |
 | Tier 1 | High severity incident reduction | OUT.3 |  |  |
 | Tier 1 | Monthly incident volume | OUT.3 |  |  |
 | Tier 1 | True positives detected and managed | OUT.4 |  |  |
-| Tier 1 | Malicious sign-in to containment | OUT.7, OUT.8 |  |  |
 | Tier 2 | Overall program control grade | Phase 2 matrix |  |  |
 | Tier 2 | Foundational controls enforced | Phase 2 matrix |  |  |
 | Tier 2 | Defense in depth in force | Phase 2 matrix |  |  |
@@ -2142,7 +2124,6 @@ Every figure the template carries maps to a query ID below. Fill Value and Read 
 | Tier 4 | Benchmark controls passed | Portal, POS.5 |  |  |
 | Tier 4 | Category scores against peer median | POS.6, portal comparison |  |  |
 | Controls | Pillar grades and every E, P, N mark | Phase 2 tables |  |  |
-| Measured outcomes | Identity compromises contained | OUT.4, OUT.7 |  |  |
 | Measured outcomes | Exploitable findings closed in the patch cycle | BKL.1, CyberSOC report |  |  |
 | Measured outcomes | Malicious mail removed after delivery | DP.7 |  |  |
 | Measured outcomes | Boundary detections investigated | OUT.6 |  |  |
