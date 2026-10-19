@@ -16,7 +16,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
 - **Vulnerability assessment.** `-VulnAssessmentPath` imports the Atmosera.VulnAssessment runs dated inside the
   window (VA.RUNS, VA.CHANGE, VA.TOP, VA.KEV). See the runbook, section 4.
 - **Pack name.** `CyberSOC-Evidence_<client>_<report month>_<yyyyMMdd-HHmmss>/`.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.3.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.4.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -259,6 +259,13 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.4.0 (October 19, 2026): `DP.4-ELIGIBILITY` gains `VmId` (`properties.vmId`), the unique ID
+  Azure gives each virtual machine, standalone or a Flexible scale set instance, and `DP.4-VMSS-ELIGIBILITY` gains
+  `UniqueId` (`properties.uniqueId`), the unique ID of each scale set. A machine or scale set deleted and created again
+  under the same name gets a new ID, so change requests CR-09 and CR-15 list the ID beside each name and change only
+  the one whose ID still matches under Overview > JSON View when the change runs. On an earlier pack they read "Needs
+  recollection with CyberSOC collector 1.4.0 or later". The queries are in section 6 of the CyberSOC Monthly Report
+  Runbook.
 - CyberSOC collector 1.3.0 (October 19, 2026): `DP.4-VMSS-ELIGIBILITY` (engine COMPUTE-SKUS) lists the scale sets
   whose model does not have encryption at host, one row each with the orchestration mode, upgrade policy, instance
   count and size, and whether the model can take it: Azure Disk Encryption from the extensions on the model, an Ultra

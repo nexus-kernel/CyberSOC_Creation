@@ -128,13 +128,15 @@ Describe 'Query catalog' {
         $eah.Query | Should -Match 'where not\(coalesce\(tobool\(properties\.securityProfile\.encryptionAtHost\), false\)\)'
         $eah.Query | Should -Match 'isnotnull\(properties\.encryptionSettingsCollection\)' -Because 'a disk that ever carried Azure Disk Encryption keeps its settings'
         $eah.Query | Should -Match '"AzureDiskEncryption", "AzureDiskEncryptionForLinux"'
-        $eah.Query | Should -Match 'project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, ScaleSet, AdeUsed, OldSectorDisk'
+        $eah.Query | Should -Match 'project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, ScaleSet, VmId, AdeUsed, OldSectorDisk'
+        $eah.Query | Should -Match 'VmId = tostring\(properties\.vmId\)' -Because 'CR-09 and CR-15 match each machine by its VM ID, never by its name alone'
+        $eah.Notes | Should -Match 'Since CyberSOC 1\.4\.0 each row carries VmId \(properties\.vmId\)'
         $eah.Query | Should -Match 'ScaleSet = tolower\(tostring\(properties\.virtualMachineScaleSet\.id\)\)' -Because 'a Flexible scale set instance is a virtual machine that CR-15 handles with its scale set'
         $eah.Notes | Should -Match 'Since CyberSOC 1\.3\.0 each row carries ScaleSet'
         $eah.Query | Should -Match 'where todatetime\(properties\.timeCreated\) < datetime\(2023-05-13\)' -Because 'a 512e Ultra or Premium SSD v2 disk created before then rules out encryption at host'
     }
 
-    It 'lists the scale sets without encryption at host with what decides whether the model can take it (1.3.0)' {
+    It 'lists the scale sets without encryption at host with what decides whether the model can take it (1.3.0, unique ID 1.4.0)' {
         $ss = $catalog | Where-Object Id -eq 'DP.4-VMSS-ELIGIBILITY'
         $ss.Engine | Should -Be 'COMPUTE-SKUS'
         $ss.Notes | Should -Match '^Added in CyberSOC 1\.3\.0\.'
@@ -150,7 +152,9 @@ Describe 'Query catalog' {
         $ss.Query | Should -Match 'tolower\(tostring\(properties\.nodeResourceGroup\)\)' -Because 'an AKS node pool lives in the node resource group of its cluster'
         $ss.Query | Should -Match 'AksNodePool\s+= tostring\(tags\["aks-managed-poolName"\]\)'
         $ss.Query | Should -Match 'Aks\s+= isnotempty\(AksCluster\) or tostring\(bag_keys\(tags\)\) contains "aks-managed-"'
-        $ss.Query | Should -Match 'project Name = name, ResourceId = id, resourceGroup, subscriptionId, Location = tolower\(location\), OrchestrationMode,\s+UpgradePolicy, Instances, Size, HasModel, AdeUsed, OldSectorDisk, Aks, AksCluster, AksClusterResourceGroup, AksNodePool'
+        $ss.Query | Should -Match 'UniqueId\s+= tostring\(properties\.uniqueId\)' -Because 'CR-15 matches each scale set by its unique ID, never by its name alone'
+        $ss.Notes | Should -Match 'Since CyberSOC 1\.4\.0 each row carries UniqueId \(properties\.uniqueId\)'
+        $ss.Query | Should -Match 'project Name = name, ResourceId = id, resourceGroup, subscriptionId, Location = tolower\(location\), OrchestrationMode,\s+UpgradePolicy, Instances, Size, UniqueId, HasModel, AdeUsed, OldSectorDisk, Aks, AksCluster, AksClusterResourceGroup, AksNodePool'
         ([regex]::Matches($ss.Query, 'join kind=')).Count | Should -BeLessOrEqual 3 -Because 'Resource Graph allows three joins per query'
     }
 
@@ -528,10 +532,11 @@ Describe 'Network devices and blob containers (1.11.0)' {
                     [pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_D4s_v5'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'True' }) }
                     [pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_A1'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'False' }) }) }
         }
-        $vm = { param($name, $sub, $size, $ade, $region = 'eastus') [pscustomobject]@{ Name = $name; ResourceId = "/subscriptions/$sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/$name"; resourceGroup = 'rg'; subscriptionId = $sub; Location = $region; Size = $size; PowerState = 'PowerState/running'; AdeUsed = $ade } }
+        $vm = { param($name, $sub, $size, $ade, $region = 'eastus') [pscustomobject]@{ Name = $name; ResourceId = "/subscriptions/$sub/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/$name"; resourceGroup = 'rg'; subscriptionId = $sub; Location = $region; Size = $size; PowerState = 'PowerState/running'; VmId = "id-$name"; AdeUsed = $ade } }
         $rows = @(Get-EbrEncryptionAtHostRows -Vms @((& $vm 'shared' 's2' 'Standard_D4s_v5' $false), (& $vm 'ok' 's1' 'Standard_D4s_v5' $false), (& $vm 'ade' 's1' 'Standard_D4s_v5' 'True'), (& $vm 'old' 's1' 'Standard_A1' $false), (& $vm 'new' 's1' 'Standard_Z9' $false), (& $vm 'denied' 's2' 'Standard_D4s_v5' $false 'westus')) -Tenant 't')
         $by = @{}; foreach ($r in $rows) { $by[$r.Name] = $r }
         @($by.ok.Eligible, $by.ok.SizeSupported, $by.ok.Reason) | Should -Be @($true, 'Yes', '')
+        @($rows | ForEach-Object VmId) | Should -Be @('id-shared', 'id-ok', 'id-ade', 'id-old', 'id-new', 'id-denied') -Because 'each row keeps the VM ID of its machine'
         @($by.shared.Eligible, $by.shared.SizeRead) | Should -Be @($true, 'OK') -Because 'the size belongs to the region, so the list read through another subscription answers for it'
         @($by.ade.Eligible, $by.ade.AdeUsed, $by.ade.Reason) | Should -Be @($false, $true, 'Azure Disk Encryption used')
         @($by.old.Eligible, $by.old.SizeSupported, $by.old.Reason) | Should -Be @($false, 'No', 'size not supported')
@@ -556,14 +561,14 @@ Describe 'Network devices and blob containers (1.11.0)' {
                     [pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_D4s_v5'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'True' }) }
                     [pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_A1'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'False' }) }) }
         }
-        $ss = { param($name, $size, [hashtable]$extra = @{}) $o = [ordered]@{ Name = $name; ResourceId = "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachineScaleSets/$name"; resourceGroup = 'rg'; subscriptionId = 's1'; Location = 'eastus'; OrchestrationMode = 'Uniform'; UpgradePolicy = 'Manual'; Instances = 3; Size = $size; HasModel = 'true'; AdeUsed = $false; OldSectorDisk = $false; Aks = $false; AksCluster = ''; AksClusterResourceGroup = ''; AksNodePool = '' }; foreach ($k in $extra.Keys) { $o[$k] = $extra[$k] }; [pscustomobject]$o }
+        $ss = { param($name, $size, [hashtable]$extra = @{}) $o = [ordered]@{ Name = $name; ResourceId = "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachineScaleSets/$name"; resourceGroup = 'rg'; subscriptionId = 's1'; Location = 'eastus'; OrchestrationMode = 'Uniform'; UpgradePolicy = 'Manual'; Instances = 3; Size = $size; HasModel = 'true'; AdeUsed = $false; OldSectorDisk = $false; Aks = $false; AksCluster = ''; AksClusterResourceGroup = ''; AksNodePool = ''; UniqueId = "uid-$name" }; foreach ($k in $extra.Keys) { $o[$k] = $extra[$k] }; [pscustomobject]$o }
         $rows = @(Get-EbrScaleSetEncryptionAtHostRows -ScaleSets @(
                 (& $ss 'web' 'Standard_D4s_v5'), (& $ss 'ade' 'Standard_D4s_v5' @{ AdeUsed = 'True' }), (& $ss 'a1' 'Standard_A1'), (& $ss 'ultra' 'Standard_D4s_v5' @{ OldSectorDisk = $true }),
                 (& $ss 'flex' 'Standard_D4s_v5' @{ OrchestrationMode = 'Flexible'; UpgradePolicy = '' }), (& $ss 'bare' '' @{ OrchestrationMode = 'Flexible'; HasModel = $false }),
                 (& $ss 'aks-system-12345678-vmss' 'Standard_D2s_v5' @{ Aks = $true; AksCluster = 'aks-prod'; AksClusterResourceGroup = 'rg-aks'; AksNodePool = 'system'; Location = 'westus' }),
                 (& $ss 'denied' 'Standard_D4s_v5' @{ Location = 'westus' })) -Tenant 't')
         $by = @{}; foreach ($r in $rows) { $by[$r.Name] = $r }
-        @($by.web.Eligible, $by.web.SizeSupported, $by.web.SizeRead, $by.web.Reason, $by.web.Instances, $by.web.UpgradePolicy) | Should -Be @($true, 'Yes', 'OK', '', '3', 'Manual')
+        @($by.web.Eligible, $by.web.SizeSupported, $by.web.SizeRead, $by.web.Reason, $by.web.Instances, $by.web.UpgradePolicy, $by.web.UniqueId) | Should -Be @($true, 'Yes', 'OK', '', '3', 'Manual', 'uid-web')
         @($by.flex.Eligible, $by.flex.OrchestrationMode) | Should -Be @($true, 'Flexible') -Because 'the model of a Flexible scale set takes the setting too, and the generator checks its machines'
         @($by.ade.Eligible, $by.ade.Reason) | Should -Be @($false, 'Azure Disk Encryption used')
         @($by.a1.Eligible, $by.a1.Reason) | Should -Be @($false, 'size not supported')

@@ -40,13 +40,13 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 06 | Purge protection on key vaults, with the soft delete retention period of each vault. Purge protection cannot be disabled once enabled, so the client approves it in writing first | DP.2-DETAIL | Yes, asking for written approval, unless `-PurgeProtectionApproved` records that the client approved it at build kickoff |
 | 07 | Anonymous blob access disabled on storage accounts, naming the containers open to anonymous read today | DP.1-DETAIL, DP.1-CONTAINERS | Yes |
 | 08 | HTTPS Only on App Service and Function apps | NB.4-DETAIL | Yes |
-| 09 | Encryption at host on the virtual machines that can take it. Each is stopped for the change, and started again only if it was running when the change began, during the change and on rollback. The machines of a Flexible scale set that CR-15 changes are left to it | DP.4-ELIGIBILITY, DP.4-VMSS-ELIGIBILITY | Yes, asking for a maintenance window |
+| 09 | Encryption at host on the virtual machines that can take it. RESOURCES lists the VM ID of each machine, and before stopping a machine the steps check under Overview > JSON View that `properties.vmId` still reads that ID. A machine whose ID differs was deleted and created again under the same name after collection, so it is skipped and left for the next pack. Each machine changed is stopped for the change, and started again only if it was running when the change began, during the change and on rollback. The machines of a Flexible scale set that CR-15 changes are left to it | DP.4-ELIGIBILITY, DP.4-VMSS-ELIGIBILITY | Yes, asking for a maintenance window |
 | 10 | Diagnostic logging remediated on the resources not compliant with the initiative: one remediation task for each assignment and policy, each resource listed once | DR.6-INITIATIVE, DR.6-NONCOMPLIANT | No |
 | 11 | Minimum TLS 1.2 on Azure Cache for Redis. Every cache has refused TLS 1.0 and 1.1 since April 1, 2025, and no minimum below 1.2 can be set since March 1, 2024, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
 | 12 | Minimum TLS 1.2 on Service Bus namespaces. Service Bus accepts only TLS 1.2 and later, and a namespace takes only 1.2 or 1.3 as its minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
 | 13 | Minimum TLS 1.2 on Event Hubs namespaces. Event Hubs still documents namespaces that accept TLS 1.0 and 1.1 below a minimum of 1.2, so a client on an older version would be refused. The rollback sets the recorded version back | NB.6-PAAS-DETAIL | Yes, asking whether anything still connects with TLS 1.0 or 1.1 |
 | 14 | Minimum TLS 1.2 on Azure Cosmos DB accounts. Azure Cosmos DB retired TLS 1.0 and 1.1 on August 31, 2025 and accepts only TLS 1.2 as an account minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
-| 15 | Encryption at host on the virtual machine scale sets whose model can take it. The model is set from Cloud Shell, then each existing instance is stopped (deallocated), brought to the model (Upgrade on a Uniform instance, Settings > Disks > Additional settings on a Flexible one) and started again only if it was running. A scale set with an Automatic or Rolling upgrade policy may apply the model on its own, all at once or in batches, so the change runs inside the maintenance window and the availability impact says so. The Flexible steps work through the instances the scale set holds when the change is made, skipping any that joined after collection and so were never checked (they are left for a follow-up change), and the rollback covers any created after the model was changed. AKS node pools are routed to a planned project in the index | DP.4-VMSS-ELIGIBILITY, DP.4-ELIGIBILITY | Yes, asking for a maintenance window |
+| 15 | Encryption at host on the virtual machine scale sets whose model can take it. The model is set from Cloud Shell, then each existing instance is stopped (deallocated), brought to the model (Upgrade on a Uniform instance, Settings > Disks > Additional settings on a Flexible one) and started again only if it was running. A scale set with an Automatic or Rolling upgrade policy may apply the model on its own, all at once or in batches, so the change runs inside the maintenance window and the availability impact says so. RESOURCES lists the unique ID of each scale set and the VM ID of each Flexible instance to change. Before the model is set, the steps check under Overview > JSON View that `properties.uniqueId` still reads the listed ID, and a scale set whose ID differs is left out of every step. The Flexible steps work through the instances the scale set holds when the change is made and change only an instance whose `properties.vmId` is listed for that scale set, so an instance that joined after collection, or one created again under a listed name, is skipped and left for the next pack. The rollback covers any instance created after the model was changed. AKS node pools are routed to a planned project in the index | DP.4-VMSS-ELIGIBILITY, DP.4-ELIGIBILITY | Yes, asking for a maintenance window |
 
 Resources a change leaves out are named in the index notes:
 
@@ -68,6 +68,16 @@ Resources a change leaves out are named in the index notes:
   each machine from collector 1.3.0), since CR-15 handles them with their scale set. The machines of a scale set
   that CR-15 leaves out stay in CR-09, where an eligible one is changed as a virtual machine. A pack from an earlier collector, or
   one whose DP.4-VMSS-ELIGIBILITY was not read, keeps them in CR-09, where they take the setting as virtual machines.
+- CR-09 and CR-15 match each machine and scale set by the ID Azure gives it, never by its name alone (VmId in
+  DP.4-ELIGIBILITY and UniqueId in DP.4-VMSS-ELIGIBILITY, from collector 1.4.0). A machine deleted and created again
+  under the same name between collection and the change was never checked, and stopping it for a setting Azure then
+  rejects is the downtime these changes avoid. The index explains that a machine or scale set whose ID differs when the
+  change runs is skipped and left for the next pack. One whose ID was not read is left out of the change request with
+  a note, and a Flexible scale set with such a machine is left out of CR-15. A Flexible scale set that CR-15 leaves out
+  for its own missing unique ID keeps its checked machines in CR-09. On a pack from before collector 1.4.0, CR-09
+  and CR-15 read "Needs recollection with CyberSOC collector 1.4.0 or later" whenever they have a machine or scale set
+  to change. A rerun of the read-only collector is the only way to get the IDs, and a name-only fallback would bring
+  back the gap the IDs close. The notes on machines and scale sets that are not eligible, and the AKS note, are kept.
 - CR-15 leaves out every scale set that is not proven eligible, on the same rules as CR-09: Azure Disk Encryption
   on the model, an Ultra Disk or Premium SSD v2 in the model of a scale set created before May 13, 2023, a size
   without support or whose support could not be read. A Flexible scale set is left out too when one of its machines
@@ -135,7 +145,8 @@ rejects, and a file that still breaks a rule stops the run before any file is wr
 
 Each change reports one of these statuses in the index: a change request (and client email), no gaps found, not
 collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
-later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
+later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15, and 1.4.0 or later for CR-09 and CR-15 when they
+have a machine or scale set to change). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
 read as no gaps. A change request that also reads a result beyond its sources (DR.6-COVERAGE and P0.5 for CR-01,
 DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack) reads "partial
 collection scope" when that result
@@ -147,7 +158,8 @@ results (P0.7, NB.4-DETAIL, NB.5-DETAIL, NB.6-DETAIL, DP.1-DETAIL, DP.2-DETAIL, 
 DR.6-COVERAGE, DR.6-NONCOMPLIANT) were added in collector 1.1.0, and NB.6-PAAS-DETAIL, which lists the Redis caches,
 Service Bus and Event Hubs namespaces and Cosmos DB accounts below TLS 1.2 for CR-11 to CR-14, in 1.2.0.
 DP.4-VMSS-ELIGIBILITY, which lists the scale sets without encryption at host for CR-15, and the ScaleSet column of
-DP.4-ELIGIBILITY were added in 1.3.0. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
+DP.4-ELIGIBILITY were added in 1.3.0, and the VmId column of DP.4-ELIGIBILITY and the UniqueId column of
+DP.4-VMSS-ELIGIBILITY in 1.4.0. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
 
 ## Validation
 
