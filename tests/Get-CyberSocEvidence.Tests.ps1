@@ -75,6 +75,29 @@ Describe 'Query catalog' {
         }
     }
 
+    It 'adds the per-resource hardening lists the change requests read, each with the gap its parent count reads' {
+        foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DR.6-NONCOMPLIANT') {
+            $item = $catalog | Where-Object Id -eq $id
+            $item.Engine | Should -Be 'ARG' -Because $id
+            $item.Notes | Should -Match '^Added in CyberSOC 1\.1\.0\.' -Because $id
+        }
+        ($catalog | Where-Object Id -eq 'P0.7').Query | Should -Match 'resourcecontainers'
+        ($catalog | Where-Object Id -eq 'NB.4-DETAIL').Query | Should -Match 'where not\(coalesce\(tobool\(properties\.httpsOnly\), false\)\)'
+        ($catalog | Where-Object Id -eq 'NB.5-DETAIL').Query | Should -Match 'coalesce\(properties\.MinTlsVersion, properties\.minTlsVersion\)' -Because 'appserviceresources returns the config keys in PascalCase'
+        ($catalog | Where-Object Id -eq 'NB.5-DETAIL').Query | Should -Match 'where not\(MinTlsVersion in \("1\.2", "1\.3"\)\)'
+        ($catalog | Where-Object Id -eq 'NB.6-DETAIL').Query | Should -Match 'where not\(MinimalTlsVersion in \("1\.2", "1\.3"\)\)'
+        $dp1 = ($catalog | Where-Object Id -eq 'DP.1-DETAIL').Query
+        $dp1 | Should -Match 'AllowBlobPublicAccess = coalesce\(tobool\(properties\.allowBlobPublicAccess\), true\)' -Because 'a missing setting means anonymous access is allowed, as in DP.1'
+        $dp1 | Should -Match 'NfsV3\s+= coalesce\(tobool\(properties\.isNfsV3Enabled\), false\)'
+        $dp1 | Should -Match 'where not\(SecureTransfer\) or not\(MinimumTlsVersion in \("TLS1_2", "TLS1_3"\)\) or AllowBlobPublicAccess'
+        ($catalog | Where-Object Id -eq 'DP.2-DETAIL').Query | Should -Match 'where not\(coalesce\(tobool\(properties\.enablePurgeProtection\), false\)\)'
+        ($catalog | Where-Object Id -eq 'DP.2-DETAIL').Query | Should -Match 'RetentionDays = coalesce\(toint\(properties\.softDeleteRetentionInDays\), 90\)'
+        $dr6 = ($catalog | Where-Object Id -eq 'DR.6-NONCOMPLIANT').Query
+        $dr6 | Should -Match 'Compliance =~ "NonCompliant"'
+        $dr6 | Should -Match 'where AssignmentName contains "ATMO-MXDR" or InitiativeName contains "ATMO-MXDR" or DefinitionName contains "ATMO-MXDR"' -Because 'it lists exactly the resources DR.6-INITIATIVE counts'
+        $dr6 | Should -Match 'ResourceId !contains "\{\{MRG\}\}"'
+    }
+
     It 'scopes the SecOps worklist incident lists like OUT.1 and DR.10 and extracts the ticket with the raw pattern' {
         foreach ($id in 'OUT.1-OPEN', 'DR.10-GAPS') {
             $item = $catalog | Where-Object Id -eq $id
@@ -285,13 +308,13 @@ Describe 'Query catalog' {
     }
 
     It 'never filters the workspace inventory or subscription-level results by managed resource group' {
-        foreach ($id in 'P0.2', 'P0.3', 'POS.1', 'POS.3', 'POS.5', 'POS.7') {
+        foreach ($id in 'P0.2', 'P0.3', 'P0.7', 'POS.1', 'POS.3', 'POS.5', 'POS.7') {
             ($catalog | Where-Object Id -eq $id).Query | Should -Not -Match '\{\{MRG\}\}'
         }
     }
 
     It 'excludes the managed resource group from every other ARG query' {
-        $exempt = 'P0.2', 'P0.3', 'POS.1', 'POS.3', 'POS.5'
+        $exempt = 'P0.2', 'P0.3', 'P0.7', 'POS.1', 'POS.3', 'POS.5'
         $missing = @($catalog | Where-Object { $_.Engine -eq 'ARG' -and $_.Id -notin $exempt -and $_.Query -notmatch '\{\{MRG\}\}' } | ForEach-Object Id)
         $missing | Should -BeNullOrEmpty
     }

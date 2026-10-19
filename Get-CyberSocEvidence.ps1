@@ -242,7 +242,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.0.0'
+$script:EbrVersion = '1.1.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -1012,6 +1012,13 @@ resources
           PowerState    = tostring(properties.extended.instanceView.powerState.code),
           ResourceId    = tolower(id)
 | order by resourceGroup asc, Name asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'P0.7' -Phase 'P0 Pre-flight' -Engine 'ARG' -Title 'Subscription names' -Notes 'Added in CyberSOC 1.1.0. The display name of each subscription in scope, so the change requests name the subscription beside its ID. Subscription-level, so no managed resource group exclusion.' -Query @'
+resourcecontainers
+| where type =~ "microsoft.resources/subscriptions"
+| project subscriptionId, SubscriptionName = name
+| order by SubscriptionName asc
 '@))
     #endregion
 
@@ -2009,6 +2016,16 @@ resources
             HttpsOnly = countif(tobool(properties.httpsOnly) == true)
 '@))
 
+    $q.Add((New-EbrQuery -Id 'NB.4-DETAIL' -Phase 'P2 Network' -Engine 'ARG' -Title 'Web and Function Apps without HTTPS only' -Notes 'Added in CyberSOC 1.1.0. The sites NB.4 counts as not HTTPS only, one row each, for the change requests. Internal: names sites, the report embeds counts only.' -Query @'
+resources
+| where type =~ "microsoft.web/sites"
+| where id !contains "{{MRG}}"
+| where not(coalesce(tobool(properties.httpsOnly), false))
+| project Name = name, ResourceId = id, Kind = kind, resourceGroup, subscriptionId,
+          DefaultHostName = tostring(properties.defaultHostName)
+| order by subscriptionId asc, resourceGroup asc, Name asc
+'@))
+
     $q.Add((New-EbrQuery -Id 'NB.5' -Phase 'P2 Network' -Engine 'ARG' -Title 'App Service FTPS and minimum TLS' -Notes 'If this returns no rows, grade from the FTPS and TLS rows in DFC.1.' -Query @'
 appserviceresources
 | where type =~ "microsoft.web/sites/config"
@@ -2021,6 +2038,19 @@ appserviceresources
             MinTls12     = countif(MinTls in ("1.2", "1.3"))
 '@))
 
+    $q.Add((New-EbrQuery -Id 'NB.5-DETAIL' -Phase 'P2 Network' -Engine 'ARG' -Title 'App Service sites below minimum TLS 1.2' -Notes 'Added in CyberSOC 1.1.0. The site configurations NB.5 counts as below TLS 1.2, one row per site, for the change requests. The site name and resource group are read from the configuration ID. Internal: names sites, the report embeds counts only.' -Query @'
+appserviceresources
+| where type =~ "microsoft.web/sites/config"
+| where id !contains "{{MRG}}"
+// appserviceresources returns site config keys in PascalCase and dynamic access is case-sensitive.
+| extend MinTlsVersion = tostring(coalesce(properties.MinTlsVersion, properties.minTlsVersion))
+| where not(MinTlsVersion in ("1.2", "1.3"))
+| extend Parts = split(id, "/")
+| project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
+          resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), MinTlsVersion
+| order by subscriptionId asc, resourceGroup asc, Name asc
+'@))
+
     $q.Add((New-EbrQuery -Id 'NB.6' -Phase 'P2 Network' -Engine 'ARG' -Title 'Azure SQL minimum TLS and public access' -Query @'
 resources
 | where type =~ "microsoft.sql/servers"
@@ -2028,6 +2058,16 @@ resources
 | summarize Servers        = count(),
             MinTls12       = countif(tostring(properties.minimalTlsVersion) in ("1.2", "1.3")),
             PublicDisabled = countif(tostring(properties.publicNetworkAccess) =~ "Disabled")
+'@))
+
+    $q.Add((New-EbrQuery -Id 'NB.6-DETAIL' -Phase 'P2 Network' -Engine 'ARG' -Title 'Azure SQL servers below minimum TLS 1.2' -Notes 'Added in CyberSOC 1.1.0. The servers NB.6 counts as below TLS 1.2, one row each, for the change requests. Internal: names servers, the report embeds counts only.' -Query @'
+resources
+| where type =~ "microsoft.sql/servers"
+| where id !contains "{{MRG}}"
+| extend MinimalTlsVersion = tostring(properties.minimalTlsVersion)
+| where not(MinimalTlsVersion in ("1.2", "1.3"))
+| project Name = name, ResourceId = id, resourceGroup, subscriptionId, MinimalTlsVersion
+| order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
     $q.Add((New-EbrQuery -Id 'NB.7' -Phase 'P2 Network' -Engine 'LA' -Title 'DNS and egress telemetry present' -Query @'
@@ -2059,6 +2099,20 @@ resources
             SharedKeyOff     = countif(tobool(properties.allowSharedKeyAccess) == false)
 '@))
 
+    $q.Add((New-EbrQuery -Id 'DP.1-DETAIL' -Phase 'P2 Data protection' -Engine 'ARG' -Title 'Storage accounts without secure transfer, minimum TLS 1.2 or anonymous access off' -Notes 'Added in CyberSOC 1.1.0. One row per account DP.1 counts against secure transfer, minimum TLS 1.2 or anonymous blob access, read the same way, for the change requests. A missing allowBlobPublicAccess means anonymous access is allowed. NfsV3 and the FileStorage kind mark accounts that may serve NFS, which the secure transfer change leaves out. Internal: names accounts, the report embeds counts only.' -Query @'
+resources
+| where type =~ "microsoft.storage/storageaccounts"
+| where id !contains "{{MRG}}"
+| extend SecureTransfer        = coalesce(tobool(properties.supportsHttpsTrafficOnly), false),
+         MinimumTlsVersion     = tostring(properties.minimumTlsVersion),
+         AllowBlobPublicAccess = coalesce(tobool(properties.allowBlobPublicAccess), true),
+         NfsV3                 = coalesce(tobool(properties.isNfsV3Enabled), false)
+| where not(SecureTransfer) or not(MinimumTlsVersion in ("TLS1_2", "TLS1_3")) or AllowBlobPublicAccess
+| project Name = name, ResourceId = id, Kind = kind, resourceGroup, subscriptionId,
+          SecureTransfer, MinimumTlsVersion, AllowBlobPublicAccess, NfsV3
+| order by subscriptionId asc, resourceGroup asc, Name asc
+'@))
+
     $q.Add((New-EbrQuery -Id 'DP.1-CONTAINERS' -Phase 'P2 Data protection' -Engine 'STORAGE-CONTAINERS' -Title 'Blob container anonymous access levels' -Notes 'Added in 1.11.0. Resource Graph does not index blob containers, so the collector lists them per storage account with a GET on the blobServices/default/containers path of each account (Reader is enough). One row per account: the account-level anonymous access setting, the containers, the containers whose own access level is Blob or Container, and how many of those are readable anonymously today because the account setting allows it. Containers are read in every account, so a public container under an account that blocks anonymous access still counts against the defense in depth control. Internal: names accounts and containers, the report embeds counts only.' -Query @'
 resources
 | where type =~ "microsoft.storage/storageaccounts"
@@ -2079,6 +2133,16 @@ resources
             PurgeProtection = countif(tobool(properties.enablePurgeProtection) == true),
             RbacAuth        = countif(tobool(properties.enableRbacAuthorization) == true),
             PublicDisabled  = countif(tostring(properties.publicNetworkAccess) =~ "Disabled")
+'@))
+
+    $q.Add((New-EbrQuery -Id 'DP.2-DETAIL' -Phase 'P2 Data protection' -Engine 'ARG' -Title 'Key vaults without purge protection' -Notes 'Added in CyberSOC 1.1.0. The vaults DP.2 counts as without purge protection, one row each, with the soft delete retention that purge protection will hold deleted vaults and objects for (90 days when the property is missing). Internal: names vaults, the report embeds counts only.' -Query @'
+resources
+| where type =~ "microsoft.keyvault/vaults"
+| where id !contains "{{MRG}}"
+| where not(coalesce(tobool(properties.enablePurgeProtection), false))
+| project Name = name, ResourceId = id, resourceGroup, subscriptionId,
+          RetentionDays = coalesce(toint(properties.softDeleteRetentionInDays), 90)
+| order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
     $q.Add((New-EbrQuery -Id 'DP.3' -Phase 'P2 Data protection' -Engine 'ARG' -Title 'Managed disk encryption type' -Query @'
@@ -2424,6 +2488,24 @@ policyresources
             NonCompliant = dcountif(ResourceId, Compliance =~ "NonCompliant")
           by DefinitionName
 | order by NonCompliant desc, DefinitionName asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'DR.6-NONCOMPLIANT' -Phase 'P2 Detection and response' -Engine 'ARG' -Title 'Resources not compliant with the ATMO-MXDR diagnostic logging initiative' -Notes 'Added in CyberSOC 1.1.0. The resources DR.6-INITIATIVE counts as NonCompliant, one row per resource and assignment, with the policies each one fails (the reference ID inside the initiative, or the definition name). The change requests run a remediation task for each policy. Internal: names resources, the report embeds counts only.' -Query @'
+policyresources
+| where type =~ "microsoft.policyinsights/policystates"
+| extend AssignmentName = tostring(properties.policyAssignmentName),
+         InitiativeName = tostring(properties.policySetDefinitionName),
+         DefinitionName = tostring(properties.policyDefinitionName),
+         ReferenceId    = tostring(properties.policyDefinitionReferenceId),
+         Compliance     = tostring(properties.complianceState),
+         ResourceId     = tolower(tostring(properties.resourceId)),
+         ResourceType   = tolower(tostring(properties.resourceType))
+| where AssignmentName contains "ATMO-MXDR" or InitiativeName contains "ATMO-MXDR" or DefinitionName contains "ATMO-MXDR"
+| where ResourceId !contains "{{MRG}}"
+| where Compliance =~ "NonCompliant"
+| extend Policy = iff(isnotempty(ReferenceId), ReferenceId, DefinitionName)
+| summarize Policies = strcat_array(make_set(Policy), ", ") by ResourceId, ResourceType, AssignmentName
+| order by ResourceType asc, ResourceId asc
 '@))
     #endregion
 

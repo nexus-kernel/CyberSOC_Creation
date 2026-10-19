@@ -2,8 +2,8 @@
 
 Oct 19, 2026. The evidence the monthly CyberSOC report adds to the *EBR Security Evidence Collection Runbook*.
 Every query of that runbook still runs, word for word, over the window below. This runbook defines the window,
-the queries added for the 90-day trend, threat intelligence and vulnerability exposure, and the vulnerability
-assessment import. `Get-CyberSocEvidence.ps1` runs it. Change a query here first, then in the catalog.
+the queries added for the 90-day trend, threat intelligence and vulnerability exposure, the vulnerability
+assessment import, and the per-resource lists the change requests read. `Get-CyberSocEvidence.ps1` runs it. Change a query here first, then in the catalog.
 
 ## 1. The reporting window
 
@@ -473,4 +473,120 @@ DeviceTvmSoftwareVulnerabilities
             ExploitableCves = dcountif(CveId, tobool(IsExploitAvailable), 4)
           by Month = startofmonth(PublishedDate)
 | order by Month asc
+```
+
+## 6. Change request inputs
+
+CyberSOC collector 1.1.0. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+to name the resources in each change request (see `New-CyberSocChangeRequests.README.md`). The report embeds counts
+only. These lists name client resources and stay internal.
+
+### P0.7 Subscription names
+
+Engine ARG. Subscription level, so no managed resource group exclusion. The display name of each subscription in scope, so a change request names the subscription beside its ID.
+
+```kql
+resourcecontainers
+| where type =~ "microsoft.resources/subscriptions"
+| project subscriptionId, SubscriptionName = name
+| order by SubscriptionName asc
+```
+
+### NB.4-DETAIL Web and Function Apps without HTTPS only
+
+Engine ARG. The sites NB.4 counts as not HTTPS only, one row each, with the default host name. Feeds CR-08 and its client email.
+
+```kql
+resources
+| where type =~ "microsoft.web/sites"
+| where id !contains "{{MRG}}"
+| where not(coalesce(tobool(properties.httpsOnly), false))
+| project Name = name, ResourceId = id, Kind = kind, resourceGroup, subscriptionId,
+          DefaultHostName = tostring(properties.defaultHostName)
+| order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### NB.5-DETAIL App Service sites below minimum TLS 1.2
+
+Engine ARG. The site configurations NB.5 counts as below TLS 1.2, one row per site. The site name, resource group and subscription are read from the configuration ID, because the config record is not the site. Feeds CR-04.
+
+```kql
+appserviceresources
+| where type =~ "microsoft.web/sites/config"
+| where id !contains "{{MRG}}"
+// appserviceresources returns site config keys in PascalCase and dynamic access is case-sensitive.
+| extend MinTlsVersion = tostring(coalesce(properties.MinTlsVersion, properties.minTlsVersion))
+| where not(MinTlsVersion in ("1.2", "1.3"))
+| extend Parts = split(id, "/")
+| project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
+          resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), MinTlsVersion
+| order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### NB.6-DETAIL Azure SQL servers below minimum TLS 1.2
+
+Engine ARG. The servers NB.6 counts as below TLS 1.2, one row each. An empty value or None means no minimum is set. Feeds CR-05.
+
+```kql
+resources
+| where type =~ "microsoft.sql/servers"
+| where id !contains "{{MRG}}"
+| extend MinimalTlsVersion = tostring(properties.minimalTlsVersion)
+| where not(MinimalTlsVersion in ("1.2", "1.3"))
+| project Name = name, ResourceId = id, resourceGroup, subscriptionId, MinimalTlsVersion
+| order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### DP.1-DETAIL Storage accounts without secure transfer, minimum TLS 1.2 or anonymous access off
+
+Engine ARG. One row per storage account DP.1 counts against secure transfer, minimum TLS 1.2 or anonymous blob access, read the same way: a missing allowBlobPublicAccess means anonymous access is allowed. NfsV3 and the FileStorage kind mark accounts that may serve NFS, which CR-02 leaves out because NFS mounts are refused once secure transfer is required. Feeds CR-02, CR-03 and CR-07, with DP.1-CONTAINERS naming the public containers.
+
+```kql
+resources
+| where type =~ "microsoft.storage/storageaccounts"
+| where id !contains "{{MRG}}"
+| extend SecureTransfer        = coalesce(tobool(properties.supportsHttpsTrafficOnly), false),
+         MinimumTlsVersion     = tostring(properties.minimumTlsVersion),
+         AllowBlobPublicAccess = coalesce(tobool(properties.allowBlobPublicAccess), true),
+         NfsV3                 = coalesce(tobool(properties.isNfsV3Enabled), false)
+| where not(SecureTransfer) or not(MinimumTlsVersion in ("TLS1_2", "TLS1_3")) or AllowBlobPublicAccess
+| project Name = name, ResourceId = id, Kind = kind, resourceGroup, subscriptionId,
+          SecureTransfer, MinimumTlsVersion, AllowBlobPublicAccess, NfsV3
+| order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### DP.2-DETAIL Key vaults without purge protection
+
+Engine ARG. The vaults DP.2 counts as without purge protection, one row each, with the soft delete retention that purge protection will enforce, 90 days when the property is missing. Feeds CR-06.
+
+```kql
+resources
+| where type =~ "microsoft.keyvault/vaults"
+| where id !contains "{{MRG}}"
+| where not(coalesce(tobool(properties.enablePurgeProtection), false))
+| project Name = name, ResourceId = id, resourceGroup, subscriptionId,
+          RetentionDays = coalesce(toint(properties.softDeleteRetentionInDays), 90)
+| order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### DR.6-NONCOMPLIANT Resources not compliant with the ATMO-MXDR diagnostic logging initiative
+
+Engine ARG. The resources DR.6-INITIATIVE counts as NonCompliant, one row per resource and assignment, with the policies each one fails: the reference ID inside the initiative, or the definition name. Feeds CR-01 when the initiative is assigned. When DR.6-INITIATIVE is EMPTY, CR-01 assigns the initiative instead and counts the covered resource types from P0.5.
+
+```kql
+policyresources
+| where type =~ "microsoft.policyinsights/policystates"
+| extend AssignmentName = tostring(properties.policyAssignmentName),
+         InitiativeName = tostring(properties.policySetDefinitionName),
+         DefinitionName = tostring(properties.policyDefinitionName),
+         ReferenceId    = tostring(properties.policyDefinitionReferenceId),
+         Compliance     = tostring(properties.complianceState),
+         ResourceId     = tolower(tostring(properties.resourceId)),
+         ResourceType   = tolower(tostring(properties.resourceType))
+| where AssignmentName contains "ATMO-MXDR" or InitiativeName contains "ATMO-MXDR" or DefinitionName contains "ATMO-MXDR"
+| where ResourceId !contains "{{MRG}}"
+| where Compliance =~ "NonCompliant"
+| extend Policy = iff(isnotempty(ReferenceId), ReferenceId, DefinitionName)
+| summarize Policies = strcat_array(make_set(Policy), ", ") by ResourceId, ResourceType, AssignmentName
+| order by ResourceType asc, ResourceId asc
 ```
