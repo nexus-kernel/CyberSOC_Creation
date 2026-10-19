@@ -1083,9 +1083,10 @@ $catalog = @(
             if ($flex.Count) {
                 $from = $impl.Count + 1
                 # The steps work through the instances the scale set holds when the change is made, since it may
-                # have gained some since collection. A newer one created from the model has its size.
+                # have gained some since collection. Only the instances named were checked for Azure Disk
+                # Encryption, old 512e disks and size support, so any other one is left for a follow-up change.
                 $impl.Add(('In the Azure portal, go to Virtual machine scale sets, open the {0}Flexible scale set listed in the RESOURCES section, go to Settings > Instances and open the first instance listed there, since the scale set may have gained instances since collection.' -f $(if ($flex.Count -gt 1) { 'first ' } else { '' })))
-                $impl.Add('Go to Settings > Disks > Additional settings and go on to the next instance if Encryption at host already shows Yes, or if the instance is not named in the RESOURCES section and its size differs from the size of the scale set, which leaves it for a follow-up change.')
+                $impl.Add('Go to Settings > Disks > Additional settings and go on to the next instance if Encryption at host already shows Yes, or if the instance is not named in the RESOURCES section, since it joined after collection and was not checked, which leaves it for a follow-up change.')
                 $impl.Add('On Overview, note whether the status reads Running, then select Stop and wait for the status to read Stopped (deallocated).')
                 $impl.Add('Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.')
                 $impl.Add('Go back to Overview and select Start only if the status read Running before the stop, so an instance that was not running stays stopped.')
