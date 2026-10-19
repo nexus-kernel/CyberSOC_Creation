@@ -43,6 +43,26 @@ Describe 'Reading the tool output' {
         $oct.Metadata | Should -Match '2026-10[\\/]run_metadata_20261001_090000\.json$'
         (Find-CyberSocVaRunFiles -Path (Join-Path $script:fixture 'missing')).Warnings | Should -Match 'was not found'
     }
+    It 'finds the runs beneath a folder of monthly run folders, one file set per run' {
+        $found = Find-CyberSocVaRunFiles -Path $script:fixture
+        @($found.Runs.Timestamp) | Should -Be @($(Find-CyberSocVaRunFiles -Path $script:allRuns).Runs.Timestamp)
+        $sep = $found.Runs | Where-Object Timestamp -eq '20260901_090000'
+        @($sep.Files).Count | Should -Be 1
+        $sep.Files[0].Name | Should -Be 'vuln_assessment_20260901_090000.csv'
+        ($found.Runs | Where-Object Timestamp -eq '20261001_090000').Metadata | Should -Match '2026-10[\\/]run_metadata_20261001_090000\.json$'
+        $found.Warnings | Should -BeNullOrEmpty
+        (Get-R (Get-Import -Path $script:fixture) 'VA.RUNS').Rows.RunDate | Should -Be @('2026-07-01', '2026-08-01', '2026-09-01', '2026-10-01')
+    }
+    It 'prefers the run-wide CSV over the per_client CSVs of the same run in the output folder beneath it' {
+        $out = Join-Path $TestDrive 'VULN_ASSESSMENT'
+        New-Item -ItemType Directory -Path (Join-Path $out 'per_client') -Force | Out-Null
+        Copy-Item (Join-Path $script:fixture '2026-09/*') $out
+        Copy-Item (Join-Path $script:fixture '2026-09/vuln_assessment_20260901_090000.csv') (Join-Path $out 'per_client/Synthetic_20260901_090000.csv')
+        $run = @((Find-CyberSocVaRunFiles -Path $out).Runs)
+        $run.Count | Should -Be 1
+        @($run[0].Files).Name | Should -Be 'vuln_assessment_20260901_090000.csv'
+        $run[0].Metadata | Should -Match 'run_metadata_20260901_090000\.json$'
+    }
 }
 
 Describe 'Choosing the runs' {

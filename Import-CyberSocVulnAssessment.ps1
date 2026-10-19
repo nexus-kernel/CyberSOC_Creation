@@ -34,9 +34,10 @@
     posture read date, and its 00-manifest.csv and results folder receive the four results.
 
 .PARAMETER VulnAssessmentPath
-    One or more run folders, per_client or per_subscription folders, or vuln_assessment CSV files.
-    A folder is read without recursion: its vuln_assessment_<timestamp>.csv files, else every
-    <name>_<timestamp>.csv in it. The run metadata is looked up beside each CSV, then one folder up.
+    One or more folders or run CSV files: the tool's output folder, a run folder, a per_client or
+    per_subscription folder, or a folder of monthly run folders. A folder is searched with its
+    subfolders for every <name>_<timestamp>.csv, and a run's vuln_assessment_<timestamp>.csv wins over its
+    per_client and per_subscription CSVs. The run metadata is looked up beside each CSV, then one folder up.
 
 .PARAMETER LoadFunctionsOnly
     Load the functions and stop. Used by the collector and the Pester tests.
@@ -131,15 +132,16 @@ function Get-CyberSocVaRunTimestamp {
 
 function Find-CyberSocVaRunFiles {
     # The CSVs to read, grouped by run timestamp. A run-wide vuln_assessment CSV wins over the per_client
-    # and per_subscription CSVs of the same run, which repeat its rows.
+    # and per_subscription CSVs of the same run, which repeat its rows. A folder is searched with its
+    # subfolders, so the tool's output folder, one run folder, a per_client folder and a folder of monthly
+    # run folders all work.
     param([string[]]$Path)
     $csvs = [System.Collections.Generic.List[object]]::new()
     $warnings = [System.Collections.Generic.List[string]]::new()
     foreach ($p in @($Path | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
         if (Test-Path -LiteralPath $p -PathType Container) {
-            $runWide = @(Get-ChildItem -LiteralPath $p -File -Filter 'vuln_assessment_*.csv' | Where-Object { Get-CyberSocVaRunTimestamp $_.Name })
-            $found = if ($runWide.Count) { $runWide } else { @(Get-ChildItem -LiteralPath $p -File -Filter '*.csv' | Where-Object { Get-CyberSocVaRunTimestamp $_.Name }) }
-            if ($found.Count -eq 0) { $warnings.Add("Vulnerability assessment: no run CSV found in $p.") }
+            $found = @(Get-ChildItem -LiteralPath $p -File -Filter '*.csv' -Recurse | Where-Object { Get-CyberSocVaRunTimestamp $_.Name })
+            if ($found.Count -eq 0) { $warnings.Add("Vulnerability assessment: no run CSV found in or beneath $p.") }
             foreach ($f in $found) { $csvs.Add($f) }
         }
         elseif (Test-Path -LiteralPath $p -PathType Leaf) {

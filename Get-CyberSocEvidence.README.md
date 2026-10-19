@@ -80,7 +80,7 @@ as not onboarded. `-PatchExclusionTagPattern ''` turns off the tag-based patch e
 | Alert scope | Only incidents whose comments or closing comment reference an Atmosera ticket (Zendesk ticket URL, or `per ZD ticket NNNN`). Informational severity is excluded. Applies to OUT.1 to OUT.7, and detections (OUT.5, OUT.6) are limited to the alerts linked to those incidents | `-TicketPattern` (an RE2 regular expression, no double quotes) |
 | Report month | The last full month | `-ReportMonth` (yyyy-MM). A month that has not ended is refused |
 | Incident reporting window | The report month and the two full months before it, the 90-day trend. A client whose `SecurityIncident` data (P0.1), or workspace retention, starts later gets a shorter window from its first full month of data | `-WindowStart` / `-WindowEnd` (yyyy-MM-dd). The report month is then the month of `WindowEnd` |
-| Vulnerability assessment runs | None. Phase 5 then reads the Defender current state (VA.1 to VA.3) only | `-VulnAssessmentPath` (run folders, per_client folders or run CSVs) |
+| Vulnerability assessment runs | None. Phase 5 then reads the Defender current state (VA.1 to VA.3) only | `-VulnAssessmentPath` (the tool's output folder, a folder of run folders, run folders, per_client folders or run CSVs) |
 | Posture read date | The run date | n/a |
 | Service start date | Not available from any API. The worksheet marks it MANUAL | n/a |
 | Device scope | Every Defender device query (EW.1, EW.1-DEVICES, EW.1-VMS, EW.3, EW.4, EW.5, EW.12, EW.14, EW.15, EW.16, NB.8, NB.10, NB.11, DR.5, DR.12, BKL.1) reads Azure virtual machines only, `isnotempty(AzureResourceId)`. Workstations, laptops and other endpoints that are not Azure resources are never counted (1.14.0) | n/a |

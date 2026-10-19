@@ -101,9 +101,10 @@
     the month of WindowEnd.
 
 .PARAMETER VulnAssessmentPath
-    Atmosera.VulnAssessment output to import into the pack: a run folder, a per_client folder, or
-    vuln_assessment CSV files with their run_metadata JSON beside them (or one folder up, for
-    per_client and per_subscription files). Findings are kept only for this pack's subscriptions,
+    Atmosera.VulnAssessment output to import into the pack: the tool's output folder, a folder of
+    monthly run folders, a run folder, a per_client folder, or vuln_assessment CSV files with their
+    run_metadata JSON beside them (or one folder up, for per_client and per_subscription files). A
+    folder is searched with its subfolders. Findings are kept only for this pack's subscriptions,
     and only runs dated inside the window, up to the posture read date, are used. Repeat the
     parameter or pass a comma-separated list for the three monthly runs of the trend. Without it
     the vulnerability section reads the Defender queries VA.1 to VA.3 only.
@@ -2639,14 +2640,14 @@ SecurityAlert
 | order by Month asc, Alerts desc
 '@)))
 
-    $q.Add((New-EbrQuery -Id 'TI.4' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Attack techniques observed' -Notes 'CyberSOC. The MITRE ATT&CK techniques on the same detections as TI.3, over the whole window, top 25 by alert count.' -Query ($ticketedDetections + @'
+    $q.Add((New-EbrQuery -Id 'TI.4' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Attack techniques observed' -Notes 'CyberSOC. The MITRE ATT&CK techniques on the same detections as TI.3, over the whole window, top 25 by alert count. Sentinel writes the techniques as a JSON list or a comma-separated list, and both are read.' -Query ($ticketedDetections + @'
 
 SecurityAlert
 | where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
 | summarize arg_max(TimeGenerated, Techniques) by SystemAlertId
 | join kind=inner (Ticketed) on $left.SystemAlertId == $right.AlertId
-| mv-expand Technique = todynamic(Techniques) to typeof(string)
-| extend Technique = toupper(trim(@"\s+", Technique))
+| mv-expand Technique = split(replace_regex(tostring(Techniques), @'[\[\]"\s]', ""), ",") to typeof(string)
+| extend Technique = toupper(Technique)
 | where Technique matches regex @"^T\d{4}(\.\d{3})?$"
 | summarize Detections         = dcount(SystemAlertId),
             Alerts             = dcount(IncidentKey),

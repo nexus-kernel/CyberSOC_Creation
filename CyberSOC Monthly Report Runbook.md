@@ -82,9 +82,10 @@ Rules:
 - A run without its `run_metadata_<timestamp>.json` (beside the CSV, or one folder up for per_client and
   per_subscription CSVs), an `-UrgentOnly` run, a run written before `data_completeness`, and a run dated outside
   the window are skipped and named in the VA.RUNS detail and `00-parameters.json` (`VulnAssessment.Skipped`).
-- A folder is read without recursion: its run-wide `vuln_assessment_<timestamp>.csv`, else every
-  `<name>_<timestamp>.csv` in it. A run-wide CSV wins over the per_client CSVs of the same run. Exact duplicate rows
-  (a subscription listed under two roster titles) count once.
+- A folder is searched with its subfolders for every `<name>_<timestamp>.csv`, so the tool's output folder, a
+  folder of monthly run folders, one run folder and a per_client folder all work. A run's run-wide
+  `vuln_assessment_<timestamp>.csv` wins over its per_client and per_subscription CSVs. Exact duplicate rows (a
+  subscription listed under two roster titles) count once.
 - A run that did not check the CISA KEV catalog leaves the KEV counts empty, never zero. A run without Defender for
   Endpoint data for every subscription leaves the public exploit count empty.
 - A finding the earlier run reported and the later one did not is no longer reported (pending validation), never
@@ -274,7 +275,7 @@ SecurityAlert
 
 ### TI.4 Attack techniques observed
 
-Engine LA, combined only. CyberSOC. The MITRE ATT&CK techniques on the same detections as TI.3, over the whole window, top 25 by alert count.
+Engine LA, combined only. CyberSOC. The MITRE ATT&CK techniques on the same detections as TI.3, over the whole window, top 25 by alert count. Sentinel writes the techniques as a JSON list or a comma-separated list, and both are read.
 
 ```kql
 let Ticketed = SecurityIncident
@@ -290,8 +291,8 @@ SecurityAlert
 | where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
 | summarize arg_max(TimeGenerated, Techniques) by SystemAlertId
 | join kind=inner (Ticketed) on $left.SystemAlertId == $right.AlertId
-| mv-expand Technique = todynamic(Techniques) to typeof(string)
-| extend Technique = toupper(trim(@"\s+", Technique))
+| mv-expand Technique = split(replace_regex(tostring(Techniques), @'[\[\]"\s]', ""), ",") to typeof(string)
+| extend Technique = toupper(Technique)
 | where Technique matches regex @"^T\d{4}(\.\d{3})?$"
 | summarize Detections         = dcount(SystemAlertId),
             Alerts             = dcount(IncidentKey),
