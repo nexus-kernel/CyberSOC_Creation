@@ -1,0 +1,44 @@
+[
+  {
+    "Month": "2026-07-01",
+    "SignIns": 40000,
+    "FailedPassword": 820,
+    "TargetedUsers": 140,
+    "Lockouts": 35,
+    "BlockedByCa": 210,
+    "RiskySignIns": 6,
+    "RiskyUsers": 4,
+    "SuccessfulRisky": 1,
+    "RiskHidden": 0,
+    "SprayIps": 2,
+    "SprayDays": 2
+  },
+  {
+    "Month": "2026-08-01",
+    "SignIns": 41000,
+    "FailedPassword": 910,
+    "TargetedUsers": 150,
+    "Lockouts": 40,
+    "BlockedByCa": 230,
+    "RiskySignIns": 9,
+    "RiskyUsers": 5,
+    "SuccessfulRisky": 2,
+    "RiskHidden": 0,
+    "SprayIps": 3,
+    "SprayDays": 3
+  },
+  {
+    "Month": "2026-09-01",
+    "SignIns": 42000,
+    "FailedPassword": 1200,
+    "TargetedUsers": 190,
+    "Lockouts": 52,
+    "BlockedByCa": 260,
+    "RiskySignIns": 12,
+    "RiskyUsers": 7,
+    "SuccessfulRisky": 2,
+    "RiskHidden": 0,
+    "SprayIps": 5,
+    "SprayDays": 4
+  }
+]

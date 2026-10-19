@@ -1,5 +1,5 @@
 BeforeAll {
-    $generator = Join-Path $PSScriptRoot '../New-EbrSecurityReport.ps1'
+    $generator = Join-Path $PSScriptRoot '../New-CyberSocReport.ps1'
     function New-ReportFixture {
         param([string]$Path)
         New-Item -ItemType Directory -Path (Join-Path $Path 'results') -Force | Out-Null
@@ -123,11 +123,16 @@ Describe 'Offline HTML report generation' {
         $html | Should -Match '"Severity":"Medium","ExfilOrImpactTactic":false,"Threat":"Title withheld","Tactics":"","Created":""'
         $html | Should -Match '"Severity":"High","ExfilOrImpactTactic":true,"Threat":"Title withheld","Tactics":"","Created":""' -Because 'the data loss flag survives a row that could not be screened'
         ([regex]::Matches($html, 'An OUT\.4 row could not be screened, so its title was withheld')).Count | Should -Be 1 -Because 'the review note is added once per report, not once per row'
-        $html | Should -Not -Match 'Entra ID application|inbox manipulation|Unrecognized grouping'
+        # The embedded data, not the report code: the CyberSOC model names Entra ID Protection detection types such as
+        # Suspicious inbox manipulation rules.
+        $data = [regex]::Match($html, '<script id="report-data" type="application/json">(.*?)</script>', 'Singleline').Groups[1].Value
+        $data | Should -Not -BeNullOrEmpty
+        $data | Should -Not -Match 'Entra ID application|inbox manipulation|Unrecognized grouping'
+        $html | Should -Not -Match 'Entra ID application|Unrecognized grouping'
     }
     It "screens titles with the collector's default ticket pattern, character for character" {
         $literal = "(?m)^\`$script:EbrTicketPattern\s*=\s*'([^']+)'"
-        $collector = [regex]::Match((Get-Content (Join-Path $PSScriptRoot '../Get-EbrSecurityEvidence.ps1') -Raw), $literal).Groups[1].Value
+        $collector = [regex]::Match((Get-Content (Join-Path $PSScriptRoot '../Get-CyberSocEvidence.ps1') -Raw), $literal).Groups[1].Value
         $report = [regex]::Match((Get-Content $generator -Raw), $literal).Groups[1].Value
         $collector | Should -Not -BeNullOrEmpty
         $report | Should -BeExactly $collector
@@ -314,9 +319,10 @@ Describe 'Client and internal editions of the HTML' -Skip:(-not (Get-Command nod
         $client | Should -Not -MatchExactly 'Presenter notes'
         $client | Should -Not -Match 'review-toggle|id="review"|Collection register|Response timing cohort|Prepare the conversation|report-data|EbrReport|__[A-Z_]+__'
         ([regex]::Matches($client, '<script\b')).Count | Should -Be 1 -Because 'only the toolbar script remains'
-        $client | Should -Match '<title>Synthetic validation only \| Security business review</title>'
+        $client | Should -Match '<title>Synthetic validation only \| CyberSOC monthly security report, September 2026</title>'
         $client | Should -Match '<option value="detailed" selected>'
-        $client | Should -Match '<h1>Security: Executive Summary</h1>' -Because 'the pages are already rendered'
+        $client | Should -Match '<h1>CyberSOC monthly security report</h1>' -Because 'the pages are already rendered'
+        foreach ($page in 'summary', 'outcomes', 'threat', 'vulnerability', 'measured', 'controls', 'roadmap', 'posture') { $client | Should -Match ('<section class="page[^"]*" id="{0}">' -f $page) -Because $page }
     }
     It 'shows no GUID, subscription ID or workspace resource ID anywhere in the client file, and masks a GUID between hexadecimal characters' {
         $files = @(& $generator -SkipDeck -EvidencePath $pack -ContextPath $context -Depth Detailed)

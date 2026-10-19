@@ -1,0 +1,26 @@
+[
+  {
+    "Threat": "Trojan:Win32/Wacatac.B!ml",
+    "Detections": 3,
+    "Devices": 2,
+    "Remediated": 3,
+    "WasExecuting": 0,
+    "DeviceName": "private-vm-01"
+  },
+  {
+    "Threat": "PUA:Win32/Presenoker",
+    "Detections": 2,
+    "Devices": 1,
+    "Remediated": 2,
+    "WasExecuting": 0,
+    "DeviceName": "private-vm-01"
+  },
+  {
+    "Threat": "HackTool:Win32/Mimikatz.D",
+    "Detections": 1,
+    "Devices": 1,
+    "Remediated": 1,
+    "WasExecuting": 1,
+    "DeviceName": "private-vm-01"
+  }
+]

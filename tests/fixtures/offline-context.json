@@ -63,5 +63,21 @@
     "WindowStart": "2026-07-01",
     "WindowEnd": "2026-09-30"
   },
-  "ResponseTargetMinutes": 60
+  "ResponseTargetMinutes": 60,
+  "MonthHighlights": [
+    {
+      "Title": "Credential phishing wave quarantined",
+      "Summary": "A phishing campaign aimed at finance mailboxes was detected and the messages quarantined. No account sign-in followed.",
+      "Reference": "ZD 9900300",
+      "Month": "2026-09",
+      "Reviewed": "2026-10-02"
+    },
+    {
+      "Title": "Synthetic highlight from another month",
+      "Summary": "Reviewed for August, so it never reaches the September report.",
+      "Reference": "ZD 9900299",
+      "Month": "2026-08",
+      "Reviewed": "2026-09-02"
+    }
+  ]
 }

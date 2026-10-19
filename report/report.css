@@ -229,6 +229,32 @@ thead th { background:var(--wash); color:var(--navy); }
 .review-notes p,#review > p { font-size:13px; color:var(--muted); }
 .review-notes h3 { font-size:15px; }
 .empty-state { padding:30px 0; color:var(--muted); font-size:14px; }
+/* CyberSOC monthly report */
+.month-brief { margin:0 0 24px; padding:16px 22px; background:var(--wash); border-left:4px solid var(--blue); }
+.month-brief .eyebrow { color:var(--blue); margin:0 0 4px; }
+.month-brief p { font-size:14px; }
+.glance { margin:0 0 26px; }
+.glance h2 { font-size:24px; color:var(--navy); }
+.glance td,.glance th { white-space:nowrap; }
+.glance .num { text-align:right; }
+.glance tbody th { font-weight:600; color:var(--navy); white-space:normal; }
+.highlights { margin:0 0 26px; }
+.highlight-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:12px; }
+.highlight-grid article { border-top:3px solid var(--cyan); padding-top:10px; }
+.highlight-grid p { font-size:13px; }
+.weekly { margin-top:26px; }
+.stages-observed { margin:6px 0 26px; }
+.stage-row { display:grid; grid-template-columns:190px minmax(0,1fr) 48px 150px; align-items:center; gap:12px; font-size:12px; margin:6px 0; }
+.stage-row strong { text-align:right; }
+.stage-row .small { margin:0; }
+.two-col.even > div,.two-col > div { min-width:0; }
+#threat table .num,#vulnerability table .num,.score-trend .num { text-align:right; }
+#threat tbody th,#vulnerability tbody th,.score-trend tbody th { font-weight:600; color:var(--navy); }
+.not-gathered { margin-top:18px; }
+#threat .two-col,#vulnerability .two-col { margin-top:26px; }
+#vulnerability .panel,#vulnerability .panel h3 { text-align:left; }
+.score-trend { margin:24px 0; }
+.score-trend h4 { margin-top:14px; font-size:14px; }
 [hidden],body[data-depth="brief"] .balanced-only,body:not([data-depth="detailed"]) .detailed-only { display:none; }
 @media screen and (max-width:900px) {
   body { font-size:15px; }
@@ -246,6 +272,9 @@ thead th { background:var(--wash); color:var(--navy); }
   .tiers { grid-template-columns:1fr 1fr; gap:18px; }
   .tier { padding:0; border-left:0; }
   .two-col,.two-col.even,.meters,.mfa-methods { grid-template-columns:1fr; }
+  .highlight-grid { grid-template-columns:1fr; }
+  .stage-row { grid-template-columns:120px minmax(0,1fr) 40px; }
+  .stage-row .small { grid-column:1 / -1; }
   .pillar-row { grid-template-columns:1fr; gap:10px; }
   .pillar-callout { border-left:0; padding-left:0; text-align:left; }
   .pillar { grid-template-columns:1fr; }
@@ -317,6 +346,13 @@ thead th { background:var(--wash); color:var(--navy); }
   .threats th,.threats td { padding:3px 8px; }
   .threats tbody th { overflow-wrap:anywhere; }
   .threats .small + .source { margin-top:2px; }
+  .month-brief { padding:10px 14px; margin-bottom:12px; }
+  .month-brief p,.highlight-grid p { font-size:10px; }
+  .glance { margin-bottom:12px; }
+  .glance h2 { font-size:16px; }
+  .glance table,#threat table,#vulnerability table,.score-trend table { font-size:9px; margin:4px 0; }
+  .glance th,.glance td,#threat th,#threat td,#vulnerability th,#vulnerability td { padding:3px 8px; }
+  .stage-row { grid-template-columns:130px minmax(0,1fr) 36px 110px; font-size:9px; margin:2px 0; }
   #outcomes .page-body { padding:12px 22px; }
   #outcomes .section-scope { margin-bottom:10px; }
   #outcomes .strip { padding:10px 16px 12px; margin-bottom:10px; }

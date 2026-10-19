@@ -1,0 +1,476 @@
+# CyberSOC Monthly Report Runbook
+
+Oct 19, 2026. The evidence the monthly CyberSOC report adds to the *EBR Security Evidence Collection Runbook*.
+Every query of that runbook still runs, word for word, over the window below. This runbook defines the window,
+the queries added for the 90-day trend, threat intelligence and vulnerability exposure, and the vulnerability
+assessment import. `Get-CyberSocEvidence.ps1` runs it. Change a query here first, then in the catalog.
+
+## 1. The reporting window
+
+The report is for one month, the **report month**, with the **90-day trend** beside it.
+
+| Parameter | Rule |
+|---|---|
+| Report month | `-ReportMonth yyyy-MM`, the last full month by default. A month that has not ended is refused |
+| Window | The first day of the month two months before the report month to the last day of the report month. The September 2026 report reads Jul 1 to Sep 30, 2026 |
+| Late data | A client whose SecurityIncident data (P0.1), or workspace retention, starts inside the trend gets a shorter window from its first full month of data, so monthly figures compare full months. Data that starts inside the report month starts the window on its first day, a partial report month, and the basis says so. A report month that ends before the data starts is refused, never reported as zeros |
+| Overrides | `-WindowStart` and `-WindowEnd` as before. The report month is then the month of `WindowEnd`. `-ReportMonth` and `-WindowEnd` together are refused |
+| Recorded | `00-parameters.json` carries `ReportType` (CyberSOC monthly), `ReportMonth`, `TrendMonths` (3), `WindowStart`, `WindowEnd` and `WindowBasis` |
+
+The EBR collector reads the maximum reach instead. Every EBR query keeps its own lookback: identity and endpoint
+readings use the last 30 days, configuration and scores are read at collection.
+
+The alert population is the EBR one throughout: Sentinel incidents whose comments reference an Atmosera ticket,
+informational severity excluded, keyed by `TenantId, IncidentNumber` so equal incident numbers in two workspaces
+stay apart. Client copy says alerts, never incidents, and detections for SecurityAlert records.
+
+## 2. The 90-day trend
+
+OUT.2-MONTH splits the OUT.2 cohort (every alert created in the window and closed by collection) by the month each
+alert was created. OUT.3-WEEK counts OUT.3 in 7-day bins from the window start, so a 92-day window ends with a
+1-day bin, which the report labels. OUT.9 counts alerts by title and month. Titles can name accounts, hosts or
+addresses, so the report embeds only titles that pass the OUT.4 screen and counts the rest as withheld.
+
+How the report reads them:
+
+- A month with fewer than 5 closed alerts in a scope reports no timing for it. A median under 20 minutes or a 90th
+  percentile over one hour keeps its note, as on the full period.
+- The month at a glance puts the report month beside the months before it with a neutral change ("6 more", "4 min
+  shorter"), never better or worse. A high severity increase is a presenter note.
+- Duplicate Defender XDR alerts across workspaces (P0.1-XDRDUP) withhold every monthly figure, as they withhold the
+  period figures.
+
+## 3. Threat intelligence
+
+| ID | What it reads | Report rule |
+|---|---|---|
+| TI.0 | Which threat intelligence and threat telemetry tables Sentinel holds in the window, per workspace | A table missing here is not collected, so the measure that reads it has no figure, never a zero. TI.0-BY-WORKSPACE picks the workspace TI.6 reads |
+| TI.1 | Threat intelligence indicators by feed and type, from the STIX `ThreatIntelIndicators` and the legacy `ThreatIntelligenceIndicator` table | Each indicator at its latest record up to the window end, over the 365 days before it. Active means not expired, revoked or deleted at the end of the window |
+| TI.2 | Detections from the threat intelligence analytics rules (TI map rules, Microsoft Threat Intelligence Analytics) by month and indicator type, and how many sit in ticketed alerts | A match confirms an indicator was observed in telemetry, not that exploitation or compromise occurred |
+| TI.3 | MITRE ATT&CK tactics on the detections in ticketed alerts, by month | A tactic is a detection-time label, not an investigation finding. Shown in attack chain order |
+| TI.4 | MITRE ATT&CK techniques on the same detections, top 25 | Named from the ATT&CK Enterprise matrix, an unknown ID reads as the ID |
+| TI.5 | Identity threat activity in interactive sign-ins by month: failed passwords (50126), smart lockouts and blocked addresses (50053), Conditional Access blocks (53003), password spraying sources, risky sign-ins | A password spraying source is an address that failed a password against 10 or more accounts in one day, a signal and not a confirmed attack. Risk levels need Entra ID P2: when most sign-ins carry the hidden level the risky sign-in row is left out |
+| TI.5-RISK | Microsoft Entra ID Protection risk detections by month and type | Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace that holds the most of them, else the one that holds the sign-ins |
+| TI.6 | Inbound email threats by month from `EmailEvents` | Needs the Defender XDR connector to stream EmailEvents into Sentinel. Read once from the workspace holding the most, since a tenant-wide table streamed into several workspaces would otherwise double count |
+| TI.7 | Microsoft Defender Antivirus detections on Azure virtual machines, last 30 days | Advanced Hunting holds 30 days, so this reads the last 30 days whatever the window. Azure virtual machines only, as every device measure since EBR collector 1.14.0 |
+
+Every TI query returns counts only. Names, addresses and machines stay out of the results the report embeds.
+
+## 4. Vulnerability exposure
+
+VA.1 to VA.3 read Defender for Endpoint vulnerability management on Azure virtual machines at collection: open
+CVEs by severity, the most exposed software, and the CVEs published in each month of the window that are open now.
+They are the fallback when no assessment run is imported, and the cross-check when one is.
+
+### Vulnerability assessment runs (Import-CyberSocVulnAssessment.ps1)
+
+The monthly Atmosera.VulnAssessment runs are the record of vulnerability management: they carry the CISA KEV
+listing, remediation status, ownership and the change between runs. `-VulnAssessmentPath` on the collector, or
+`Import-CyberSocVulnAssessment.ps1` on an existing pack, reads them offline and writes four results.
+
+| ID | Contents |
+|---|---|
+| VA.RUNS | One row per run dated inside the window, up to the posture read date: open findings (ACTIONABLE) by report severity, CISA KEV listed, public exploit, VMs, CVEs, end-of-support VMs, no vendor fix, owner and the remediation status counts. `Complete` when the run assessed every pack subscription with complete data, else `Partial` |
+| VA.CHANGE | The change between each run and the one before it, counted as the tool counts its trend: a finding is one VM x vuln_id, earlier plus new minus no longer reported is current. Compared only between Complete runs with the same severity filter |
+| VA.TOP | The latest run's open findings by product, ranked by CISA KEV listing, public exploit code, maximum CVSS, VMs, fix availability and severity |
+| VA.KEV | The latest run's open findings with a CISA KEV-listed CVE, by product, with the date CISA added it and whether that was in the report month |
+
+Rules:
+
+- Only the pack's subscriptions are kept. A run that assessed none of them is skipped. Findings of other
+  subscriptions are counted in the VA.RUNS detail, never read.
+- A run without its `run_metadata_<timestamp>.json` (beside the CSV, or one folder up for per_client and
+  per_subscription CSVs), an `-UrgentOnly` run, a run written before `data_completeness`, and a run dated outside
+  the window are skipped and named in the VA.RUNS detail and `00-parameters.json` (`VulnAssessment.Skipped`).
+- A folder is searched with its subfolders for every `<name>_<timestamp>.csv`, so the tool's output folder, a
+  folder of monthly run folders, one run folder and a per_client folder all work. A run's run-wide
+  `vuln_assessment_<timestamp>.csv` wins over its per_client and per_subscription CSVs. Exact duplicate rows (a
+  subscription listed under two roster titles) count once.
+- A run that did not check the CISA KEV catalog leaves the KEV counts empty, never zero. A run without Defender for
+  Endpoint data for every subscription leaves the public exploit count empty.
+- A finding the earlier run reported and the later one did not is no longer reported (pending validation), never
+  remediated or resolved. A CISA KEV listing means CISA has reported exploitation in the wild, not exploitation in
+  the client environment.
+- Only counts and product names reach the results. VM names, resource ids and paths stay in the assessment output.
+
+## 5. Query blocks
+
+The query text the collector runs, with the tokens of the EBR runbook (`{{WINDOW_START}}`, `{{WINDOW_END}}`,
+`{{TICKET}}`, `{{MRG}}`). A dry run writes every query expanded to `queries/<ID>.kql`.
+
+### OUT.2-MONTH Triage and close time by month of creation and severity
+
+Engine LA, combined only. CyberSOC trend. The OUT.2 cohort split by the month each alert was created. A month with fewer than 5 closed high severity alerts has no reportable timing. Quote the median, never the mean.
+
+```kql
+SecurityIncident
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, Status, Severity, CreatedTime, ClosedTime, ModifiedBy, Comments, ClassificationComment),
+            FirstTriaged = minif(TimeGenerated, Status != "New")
+          by TenantId, IncidentNumber
+| where CreatedTime between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where Severity != "Informational"
+| where {{TICKET}}
+| where Status == "Closed" and isnotempty(ClosedTime)
+| extend MinutesToTriage = datetime_diff("minute", FirstTriaged, CreatedTime),
+         MinutesToClose  = datetime_diff("minute", ClosedTime, CreatedTime),
+         IsAutoClosed    = ModifiedBy has "Automation rule"
+| extend Scope = pack_array(Severity, "All")
+| mv-expand Scope to typeof(string)
+| summarize Incidents       = count(),
+            AutoClosed      = countif(IsAutoClosed),
+            MedianTriageMin = percentile(MinutesToTriage, 50),
+            MedianCloseMin  = percentile(MinutesToClose, 50),
+            P90CloseMin     = percentile(MinutesToClose, 90)
+          by Month = startofmonth(CreatedTime), Scope
+| order by Month asc, Scope asc
+```
+
+### OUT.3-WEEK Weekly alert volume by severity and classification
+
+Engine LA, combined only. CyberSOC trend. 7-day bins from the window start, so the last bin can be shorter (Days). A week with no alert has no row.
+
+```kql
+SecurityIncident
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, Severity, CreatedTime, Classification, Comments, ClassificationComment) by TenantId, IncidentNumber
+| where CreatedTime between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where Severity != "Informational"
+| where {{TICKET}}
+| summarize Total         = count(),
+            High          = countif(Severity == "High"),
+            Medium        = countif(Severity == "Medium"),
+            Low           = countif(Severity == "Low"),
+            TruePositive  = countif(Classification == "TruePositive"),
+            FalsePositive = countif(Classification == "FalsePositive")
+          by Week = bin_at(CreatedTime, 7d, {{WINDOW_START}})
+| extend WeekEnd = iff(Week + 6d > {{WINDOW_END}}, {{WINDOW_END}}, Week + 6d)
+| extend Days = datetime_diff("day", WeekEnd, Week) + 1
+| order by Week asc
+```
+
+### OUT.9 Alert types by title and month
+
+Engine LA, combined only. CyberSOC trend. Titles can name accounts, hosts or addresses, so the report embeds only titles that pass the same screen as the OUT.4 threat titles. Internal: the raw titles stay in the pack.
+
+```kql
+SecurityIncident
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, Title, Severity, CreatedTime, Classification, Comments, ClassificationComment) by TenantId, IncidentNumber
+| where CreatedTime between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where Severity != "Informational"
+| where {{TICKET}}
+| summarize Alerts         = count(),
+            High           = countif(Severity == "High"),
+            TruePositive   = countif(Classification == "TruePositive"),
+            BenignPositive = countif(Classification == "BenignPositive"),
+            FalsePositive  = countif(Classification == "FalsePositive")
+          by Month = startofmonth(CreatedTime), Title
+| order by Month asc, Alerts desc
+```
+
+### TI.0 Threat intelligence and threat telemetry reach
+
+Engine LA, always broken down per workspace. CyberSOC. Records inside the window only, the same window the measures that read the tables use. A table missing from the output has no records in the window, so the measures that read it have no figure, not a zero. TI.0-BY-WORKSPACE picks the workspaces EmailEvents and AADUserRiskEvents are read from.
+
+```kql
+union withsource = SourceTable isfuzzy = true
+    ThreatIntelIndicators, ThreatIntelligenceIndicator, SecurityAlert, SigninLogs, AADUserRiskEvents, EmailEvents
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| summarize EarliestRecord = min(TimeGenerated),
+            LatestRecord   = max(TimeGenerated),
+            Records        = count()
+          by SourceTable
+| order by SourceTable asc
+```
+
+### TI.1 Threat intelligence indicators by source and type
+
+Engine LA, combined only. CyberSOC. Each indicator at its latest record up to the end of the window, over the 365 days before it, so an indicator ingested before the window and still valid at its end is counted. Keyed by table and indicator ID, so an indicator held in several workspaces counts once when the IDs match. Active means not expired, revoked or deleted at the end of the window. Both the STIX ThreatIntelIndicators table and the legacy ThreatIntelligenceIndicator table are read.
+
+```kql
+union withsource = SourceTable isfuzzy = true ThreatIntelIndicators, ThreatIntelligenceIndicator
+| where TimeGenerated between (endofday({{WINDOW_END}}) - 365d .. endofday({{WINDOW_END}}))
+| extend IndicatorKey = coalesce(tostring(column_ifexists("Id", "")), tostring(column_ifexists("IndicatorId", ""))),
+         Stix         = SourceTable endswith "ThreatIntelIndicators"
+| where isnotempty(IndicatorKey)
+| extend Observable = tolower(tostring(column_ifexists("ObservableKey", "")))
+| extend Kind = case(
+    Observable startswith "ipv4" or Observable startswith "ipv6" or isnotempty(tostring(column_ifexists("NetworkIP", ""))) or isnotempty(tostring(column_ifexists("NetworkSourceIP", ""))) or isnotempty(tostring(column_ifexists("NetworkDestinationIP", ""))) or isnotempty(tostring(column_ifexists("EmailSourceIpAddress", ""))), "IP address",
+    Observable startswith "domain" or isnotempty(tostring(column_ifexists("DomainName", ""))), "Domain",
+    Observable startswith "url" or isnotempty(tostring(column_ifexists("Url", ""))), "URL",
+    Observable startswith "file" or isnotempty(tostring(column_ifexists("FileHashValue", ""))), "File hash",
+    Observable startswith "email" or isnotempty(tostring(column_ifexists("EmailSenderAddress", ""))), "Email address",
+    "Other")
+| extend Source = coalesce(tostring(column_ifexists("SourceSystem", "")), "Not recorded")
+| extend Until = iff(Stix, todatetime(column_ifexists("ValidUntil", datetime(null))), todatetime(column_ifexists("ExpirationDateTime", datetime(null))))
+| extend IsActive = iff(Stix,
+    coalesce(tobool(column_ifexists("IsActive", bool(null))), true) and not(coalesce(tobool(column_ifexists("IsDeleted", bool(null))), false)),
+    coalesce(tobool(column_ifexists("Active", bool(null))), false))
+    and (isnull(Until) or Until > endofday({{WINDOW_END}}))
+| summarize arg_max(TimeGenerated, Kind, Source, IsActive) by Stix, IndicatorKey
+| summarize Indicators = count(), Active = countif(IsActive), LastIngested = max(TimeGenerated) by Source, Kind
+| order by Indicators desc
+```
+
+### TI.2 Threat intelligence matches by month and indicator type
+
+Engine LA, combined only. CyberSOC. Detections from the threat intelligence analytics rules (TI map rules and Microsoft Threat Intelligence Analytics), informational severity excluded. Ticketed counts the ones correlated into an alert that opened an Atmosera ticket. A match means the indicator was observed in telemetry, not that compromise occurred.
+
+```kql
+let Ticketed = SecurityIncident
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, *) by TenantId, IncidentNumber
+| where CreatedTime between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where Severity != "Informational"
+| where {{TICKET}}
+| extend IncidentKey = strcat(TenantId, "|", IncidentNumber), Month = startofmonth(CreatedTime)
+| mv-expand AlertId = AlertIds to typeof(string)
+| project AlertId, IncidentKey, Classification, Month;
+SecurityAlert
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| summarize arg_max(TimeGenerated, AlertName, AlertSeverity, ProductName, ProviderName) by SystemAlertId
+| where AlertSeverity != "Informational"
+| where AlertName has_any ("TI map", "Threat Intelligence", "ThreatIntelligence") or ProviderName has "Threat Intelligence"
+| extend Indicator = case(
+    AlertName has "IP" or AlertName has "IPAddress", "IP address",
+    AlertName has "Domain" or AlertName has "DNS", "Domain",
+    AlertName has "URL", "URL",
+    AlertName has "File" or AlertName has "Hash", "File hash",
+    AlertName has "Email", "Email address",
+    "Other")
+| join kind=leftouter (Ticketed | distinct AlertId | extend IsTicketed = true) on $left.SystemAlertId == $right.AlertId
+| summarize Detections = count(), Ticketed = countif(IsTicketed == true)
+          by Month = startofmonth(TimeGenerated), Indicator, AlertSeverity
+| order by Month asc, Indicator asc
+```
+
+### TI.3 Attack stages observed, by month
+
+Engine LA, combined only. CyberSOC. The MITRE ATT&CK tactics Sentinel recorded on the detections correlated into the alerts OUT.1 counts, by the month the alert was created. A tactic is a detection-time label, not an investigation finding.
+
+```kql
+let Ticketed = SecurityIncident
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, *) by TenantId, IncidentNumber
+| where CreatedTime between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where Severity != "Informational"
+| where {{TICKET}}
+| extend IncidentKey = strcat(TenantId, "|", IncidentNumber), Month = startofmonth(CreatedTime)
+| mv-expand AlertId = AlertIds to typeof(string)
+| project AlertId, IncidentKey, Classification, Month;
+SecurityAlert
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| summarize arg_max(TimeGenerated, Tactics) by SystemAlertId
+| join kind=inner (Ticketed) on $left.SystemAlertId == $right.AlertId
+| mv-expand Tactic = split(Tactics, ",") to typeof(string)
+| extend Tactic = trim(@"\s+", Tactic)
+| where isnotempty(Tactic) and Tactic != "Unknown"
+| summarize Detections         = dcount(SystemAlertId),
+            Alerts             = dcount(IncidentKey),
+            TruePositiveAlerts = dcountif(IncidentKey, Classification == "TruePositive")
+          by Month, Tactic
+| order by Month asc, Alerts desc
+```
+
+### TI.4 Attack techniques observed
+
+Engine LA, combined only. CyberSOC. The MITRE ATT&CK techniques on the same detections as TI.3, over the whole window, top 25 by alert count. Sentinel writes the techniques as a JSON list or a comma-separated list, and both are read.
+
+```kql
+let Ticketed = SecurityIncident
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, *) by TenantId, IncidentNumber
+| where CreatedTime between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where Severity != "Informational"
+| where {{TICKET}}
+| extend IncidentKey = strcat(TenantId, "|", IncidentNumber), Month = startofmonth(CreatedTime)
+| mv-expand AlertId = AlertIds to typeof(string)
+| project AlertId, IncidentKey, Classification, Month;
+SecurityAlert
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| summarize arg_max(TimeGenerated, Techniques) by SystemAlertId
+| join kind=inner (Ticketed) on $left.SystemAlertId == $right.AlertId
+| mv-expand Technique = split(replace_regex(tostring(Techniques), @'[\[\]"\s]', ""), ",") to typeof(string)
+| extend Technique = toupper(Technique)
+| where Technique matches regex @"^T\d{4}(\.\d{3})?$"
+| summarize Detections         = dcount(SystemAlertId),
+            Alerts             = dcount(IncidentKey),
+            TruePositiveAlerts = dcountif(IncidentKey, Classification == "TruePositive")
+          by Technique
+| order by Alerts desc, Detections desc, Technique asc
+| take 25
+```
+
+### TI.5 Identity threat activity by month
+
+Engine LA, read once from the workspace holding the most SigninLogs. CyberSOC. Interactive sign-ins. FailedPassword is error 50126, Lockouts 50053 (smart lockout or a blocked address), BlockedByCa 53003. SprayIps counts addresses that failed a password against 10 or more accounts in one day, a password spraying signal, not a confirmed attack. Risk levels need Entra ID P2: RiskHidden counts sign-ins whose risk the tenant cannot see. Counts only, no account names.
+
+```kql
+let Base = SigninLogs
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}));
+let Spray = Base
+| where ResultType == "50126"
+| summarize Targets = dcount(UserPrincipalName) by IPAddress, Day = startofday(TimeGenerated)
+| where Targets >= 10
+| summarize SprayIps = dcount(IPAddress), SprayDays = dcount(Day) by Month = startofmonth(Day);
+Base
+| summarize SignIns         = count(),
+            FailedPassword  = countif(ResultType == "50126"),
+            TargetedUsers   = dcountif(UserPrincipalName, ResultType == "50126"),
+            Lockouts        = countif(ResultType == "50053"),
+            BlockedByCa     = countif(ResultType == "53003"),
+            RiskySignIns    = countif(RiskLevelDuringSignIn in~ ("medium", "high")),
+            RiskyUsers      = dcountif(UserPrincipalName, RiskLevelDuringSignIn in~ ("medium", "high")),
+            SuccessfulRisky = countif(ResultType == "0" and RiskLevelDuringSignIn in~ ("medium", "high")),
+            RiskHidden      = countif(RiskLevelDuringSignIn =~ "hidden")
+          by Month = startofmonth(TimeGenerated)
+| join kind=leftouter (Spray) on Month
+| project Month, SignIns, FailedPassword, TargetedUsers, Lockouts, BlockedByCa, RiskySignIns, RiskyUsers,
+          SuccessfulRisky, RiskHidden, SprayIps = coalesce(SprayIps, 0), SprayDays = coalesce(SprayDays, 0)
+| order by Month asc
+```
+
+### TI.5-RISK Entra ID Protection risk detections by month and type
+
+Engine LA, read once from the workspace holding the most AADUserRiskEvents. CyberSOC. Each risk detection at its latest record. Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace holding the most AADUserRiskEvents in TI.0, else the one that holds the sign-ins. Counts only, no account names.
+
+```kql
+AADUserRiskEvents
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, RiskEventType, RiskLevel, DetectedDateTime, UserId) by Id
+| extend Detected = coalesce(todatetime(DetectedDateTime), TimeGenerated)
+| where Detected between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| summarize Detections = count(),
+            Users      = dcount(UserId),
+            High       = countif(RiskLevel =~ "high"),
+            Medium     = countif(RiskLevel =~ "medium")
+          by Month = startofmonth(Detected), RiskEventType
+| order by Month asc, Detections desc
+```
+
+### TI.6 Inbound email threats by month
+
+Engine LA, read once from the workspace holding the most EmailEvents. CyberSOC. Needs the Microsoft Defender XDR connector to stream EmailEvents into Sentinel, and TI.0 says whether it does. Read once, from the workspace holding the most EmailEvents, because a tenant-wide table streamed into several workspaces would otherwise be counted more than once. ThreatsBlocked is phishing or malware not delivered to the inbox at first delivery. Post-delivery removal is DP.7.
+
+```kql
+EmailEvents
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where EmailDirection == "Inbound"
+| extend Phish = ThreatTypes has "Phish", Malware = ThreatTypes has "Malware", Spam = ThreatTypes has "Spam"
+| summarize Messages         = count(),
+            Phish            = countif(Phish),
+            Malware          = countif(Malware),
+            Spam             = countif(Spam),
+            ThreatsBlocked   = countif((Phish or Malware) and DeliveryAction in ("Blocked", "Junked", "Replaced")),
+            ThreatsDelivered = countif((Phish or Malware) and DeliveryAction == "Delivered")
+          by Month = startofmonth(TimeGenerated)
+| order by Month asc
+```
+
+### TI.7 Malware detected on Azure virtual machines, last 30 days
+
+Engine AH. CyberSOC. Microsoft Defender Antivirus detections, Azure virtual machines only as every device measure since 1.14.0. Advanced Hunting holds 30 days, so this reads the last 30 days whatever the window. Threat names only, no device names.
+
+```kql
+DeviceEvents
+| where Timestamp between (ago(30d) .. now())
+| where ActionType == "AntivirusDetection"
+| join kind=inner (
+    DeviceInfo
+    | where Timestamp between (ago(30d) .. now())
+    | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
+    | where AzureResourceId !contains "{{MRG}}"
+  ) on DeviceId
+| extend Fields = parse_json(AdditionalFields)
+| extend Threat        = tostring(Fields.ThreatName),
+         WasRemediated = tobool(Fields.WasRemediated),
+         WasExecuting  = tobool(Fields.WasExecutingWhileDetected)
+| extend Threat = iff(isempty(Threat), "Not named", Threat)
+| summarize Detections   = count(),
+            Devices      = dcount(DeviceId),
+            Remediated   = countif(WasRemediated),
+            WasExecuting = countif(WasExecuting)
+          by Threat
+| order by Detections desc
+| take 25
+```
+
+### VA.1 Open vulnerabilities on Azure virtual machines by severity
+
+Engine AH. CyberSOC. Current state only. Exposures counts each vulnerable software on each machine. ExploitableCves are CVEs with public exploit code per Defender, not a CISA KEV listing.
+
+```kql
+DeviceTvmSoftwareVulnerabilities
+| join kind=inner (
+    DeviceInfo
+    | where Timestamp between (ago(7d) .. now())
+    | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
+    | where AzureResourceId !contains "{{MRG}}"
+  ) on DeviceId| join kind=leftouter (
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | project CveId, IsExploitAvailable
+  ) on CveId
+| extend Exploitable = tobool(IsExploitAvailable)
+| summarize Cves               = dcount(CveId, 4),
+            Devices            = dcount(DeviceId, 4),
+            Exposures          = count(),
+            ExploitableCves    = dcountif(CveId, Exploitable, 4),
+            ExploitableDevices = dcountif(DeviceId, Exploitable, 4)
+          by VulnerabilitySeverityLevel
+| order by VulnerabilitySeverityLevel asc
+```
+
+### VA.2 Most exposed software on Azure virtual machines
+
+Engine AH. CyberSOC. Current state only, top 15 ranked by exploitable, critical and high CVEs, then machines. Software names only, no machine names.
+
+```kql
+DeviceTvmSoftwareVulnerabilities
+| join kind=inner (
+    DeviceInfo
+    | where Timestamp between (ago(7d) .. now())
+    | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
+    | where AzureResourceId !contains "{{MRG}}"
+  ) on DeviceId| join kind=leftouter (
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | project CveId, IsExploitAvailable
+  ) on CveId
+| summarize Devices         = dcount(DeviceId, 4),
+            Cves            = dcount(CveId, 4),
+            Critical        = dcountif(CveId, VulnerabilitySeverityLevel == "Critical", 4),
+            High            = dcountif(CveId, VulnerabilitySeverityLevel == "High", 4),
+            ExploitableCves = dcountif(CveId, tobool(IsExploitAvailable), 4)
+          by SoftwareVendor, SoftwareName
+| order by ExploitableCves desc, Critical desc, High desc, Devices desc
+| take 15
+```
+
+### VA.3 Vulnerabilities published in the window and open now, by month
+
+Engine AH. CyberSOC. CVEs published in each month of the window that are open on Azure virtual machines at collection: the new exposure each month added.
+
+```kql
+DeviceTvmSoftwareVulnerabilities
+| join kind=inner (
+    DeviceInfo
+    | where Timestamp between (ago(7d) .. now())
+    | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
+    | where AzureResourceId !contains "{{MRG}}"
+  ) on DeviceId| join kind=inner (
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | where PublishedDate between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+    | project CveId, PublishedDate, IsExploitAvailable
+  ) on CveId
+| summarize Cves            = dcount(CveId, 4),
+            Devices         = dcount(DeviceId, 4),
+            Critical        = dcountif(CveId, VulnerabilitySeverityLevel == "Critical", 4),
+            High            = dcountif(CveId, VulnerabilitySeverityLevel == "High", 4),
+            ExploitableCves = dcountif(CveId, tobool(IsExploitAvailable), 4)
+          by Month = startofmonth(PublishedDate)
+| order by Month asc
+```

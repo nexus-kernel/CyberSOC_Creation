@@ -1,0 +1,47 @@
+[
+  {
+    "SoftwareVendor": "apache",
+    "SoftwareName": "log4j",
+    "Devices": 2,
+    "Cves": 2,
+    "Critical": 1,
+    "High": 1,
+    "ExploitableCves": 2
+  },
+  {
+    "SoftwareVendor": "microsoft",
+    "SoftwareName": "windows_server_2019",
+    "Devices": 3,
+    "Cves": 9,
+    "Critical": 2,
+    "High": 5,
+    "ExploitableCves": 2
+  },
+  {
+    "SoftwareVendor": "openssl",
+    "SoftwareName": "openssl",
+    "Devices": 4,
+    "Cves": 5,
+    "Critical": 0,
+    "High": 3,
+    "ExploitableCves": 1
+  },
+  {
+    "SoftwareVendor": "google",
+    "SoftwareName": "chrome",
+    "Devices": 1,
+    "Cves": 6,
+    "Critical": 1,
+    "High": 2,
+    "ExploitableCves": 0
+  },
+  {
+    "SoftwareVendor": "linux",
+    "SoftwareName": "kernel",
+    "Devices": 2,
+    "Cves": 7,
+    "Critical": 0,
+    "High": 2,
+    "ExploitableCves": 0
+  }
+]

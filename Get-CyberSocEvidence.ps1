@@ -1,10 +1,25 @@
 <#
 .SYNOPSIS
-    Runs every query in the EBR Security Evidence Collection Runbook for one client and
-    writes a traceable evidence pack.
+    Collects the evidence for the monthly CyberSOC security report of one client: every query in
+    the EBR Security Evidence Collection Runbook over a 90-day trend window, plus the threat
+    intelligence and vulnerability exposure queries of the CyberSOC Monthly Report Runbook.
 
 .DESCRIPTION
     READ-ONLY SCRIPT - NO MODIFICATIONS
+
+    A copy of the EBR collector (Get-EbrSecurityEvidence.ps1 1.14.0) geared to the monthly CyberSOC
+    report. The differences:
+      - The reporting window is the report month and the two full months before it (the 90-day
+        trend), not the maximum reach. -ReportMonth picks the month, the last full month by default.
+      - Weekly alert volume, response timing by month and alert types by title give the trend.
+      - TI.0 to TI.7 read threat intelligence: indicators, indicator matches, attack stages and
+        techniques, identity threats and Entra ID Protection risk detections, email threats and
+        malware detected on Azure virtual machines.
+      - VA.1 to VA.3 read the vulnerabilities Defender reports on Azure virtual machines. With
+        -VulnAssessmentPath the monthly Atmosera.VulnAssessment runs are imported as well
+        (Import-CyberSocVulnAssessment.ps1), which carry the CISA KEV listing, remediation status,
+        ownership and the change between runs.
+    Internal function names keep the Ebr prefix of the EBR collector, so fixes port between the two.
 
     Give it the client's tenant and subscription IDs. It then:
       1. Signs in with the Azure CLI and refuses any subscription that is not homed in the
@@ -72,12 +87,27 @@
     Skip the per-workspace run of each workspace-level query (the <ID>-BY-WORKSPACE files).
     Combined client figures are still produced.
 
+.PARAMETER ReportMonth
+    The month the report is for, yyyy-MM. Defaults to the last full month. The reporting window
+    runs from the first day of the month two months before it to the last day of the report month,
+    the 90-day trend. A client whose SecurityIncident data starts later gets a shorter window from
+    its first full month of data. A report month that has not ended is refused.
+
 .PARAMETER WindowStart
-    Incident reporting window start, yyyy-MM-dd. Defaults to the first full month of
-    SecurityIncident data (maximum reach).
+    Incident reporting window start, yyyy-MM-dd. Overrides the 90-day window start.
 
 .PARAMETER WindowEnd
-    Incident reporting window end, yyyy-MM-dd. Defaults to the last day of the last full month.
+    Incident reporting window end, yyyy-MM-dd. Overrides the window end. The report month is then
+    the month of WindowEnd.
+
+.PARAMETER VulnAssessmentPath
+    Atmosera.VulnAssessment output to import into the pack: the tool's output folder, a folder of
+    monthly run folders, a run folder, a per_client folder, or vuln_assessment CSV files with their
+    run_metadata JSON beside them (or one folder up, for per_client and per_subscription files). A
+    folder is searched with its subfolders. Findings are kept only for this pack's subscriptions,
+    and only runs dated inside the window, up to the posture read date, are used. Repeat the
+    parameter or pass a comma-separated list for the three monthly runs of the trend. Without it
+    the vulnerability section reads the Defender queries VA.1 to VA.3 only.
 
 .PARAMETER ManagedRgPattern
     Managed resource group pattern. Default aznativesol0, the same on every client subscription.
@@ -144,30 +174,34 @@
 
 .PARAMETER SkipSecOpsWorklist
     Skip the internal SecOps worklist (04-secops-worklist.md and .csv). By default it is written
-    after collection by New-EbrSecOpsWorklist.ps1. It names incidents, devices and resources and
+    after collection by New-CyberSocSecOpsWorklist.ps1. It names incidents, devices and resources and
     is never part of the client report.
 
 .PARAMETER LoadFunctionsOnly
     Load the functions and stop. Used by the Pester tests.
 
 .EXAMPLE
-    ./Get-EbrSecurityEvidence.ps1
+    ./Get-CyberSocEvidence.ps1
     Prompts for the tenant and subscriptions, then collects everything.
 
 .EXAMPLE
-    ./Get-EbrSecurityEvidence.ps1 -TenantId contoso.onmicrosoft.com -SubscriptionId a0c307ad-f1c3-4a7d-96c3-10a6eb7c9c62
+    ./Get-CyberSocEvidence.ps1 -TenantId contoso.onmicrosoft.com -SubscriptionId a0c307ad-f1c3-4a7d-96c3-10a6eb7c9c62
 
 .EXAMPLE
-    ./Get-EbrSecurityEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1>,<sub2> -WindowStart 2026-01-01 -WindowEnd 2026-07-31
+    ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1>,<sub2> -ReportMonth 2026-09 -VulnAssessmentPath ./output/VULN_ASSESSMENT
+    The September 2026 report: July 1 to September 30, with the vulnerability assessment runs in that folder.
 
 .EXAMPLE
-    ./Get-EbrSecurityEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -DryRun
+    ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1>,<sub2> -WindowStart 2026-01-01 -WindowEnd 2026-07-31
+
+.EXAMPLE
+    ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -DryRun
     Writes every expanded query to disk so you can paste them by hand. No sign-in.
 
 .NOTES
     Author: Atmosera Automation
-    Created: 2026-10-07
-    Version: 1.14.0
+    Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
+    Version: 1.0.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -182,8 +216,10 @@ param(
     [string]$TenantId,
     [string[]]$SubscriptionId,
     [string[]]$WorkspaceResourceId,
+    [string]$ReportMonth,
     [string]$WindowStart,
     [string]$WindowEnd,
+    [string[]]$VulnAssessmentPath,
     [AllowEmptyString()]
     [string]$ManagedRgPattern = 'aznativesol0',
     [string]$TicketPattern,
@@ -206,7 +242,11 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.14.0'
+$script:EbrVersion = '1.0.0'
+# The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
+$script:EbrBaseVersion = '1.14.0'
+# Full months in the trend window: the report month and the two before it, about 90 days.
+$script:CyberSocTrendMonths = 3
 # Atmosera ticket reference in a Sentinel incident comment or closing comment. Incidents without
 # one never reached the managed service and are not counted as alerts. The optional subdomain keeps
 # the full host in the extracted reference (atmosera.zendesk.com, not zendesk.com).
@@ -418,17 +458,45 @@ function Format-EbrUtc {
     $u.ToString($fmt, [cultureinfo]::InvariantCulture)
 }
 
+function ConvertTo-EbrMonth {
+    # A report month, yyyy-MM, as the first day of that month.
+    param([string]$Value)
+    $out = [datetime]::MinValue
+    $ok = [datetime]::TryParseExact($Value, 'yyyy-MM', [cultureinfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::None, [ref]$out)
+    if (-not $ok) { throw "Report month '$Value' is not in yyyy-MM format." }
+    $out
+}
+
 function Get-EbrDefaultReportingWindow {
+    # The CyberSOC window is the report month and the full months before it that make up the trend,
+    # three in all, about 90 days (the EBR collector reads the maximum reach instead). The report
+    # month defaults to the last full month and can never be a month that has not ended. A client
+    # whose SecurityIncident data, or workspace retention, starts later gets a shorter window that
+    # starts at its first full month of data, so OUT.3 only compares full months. Data that starts
+    # inside the report month starts the window on its first day, a partial month, and a report
+    # month that ends before the data starts is refused rather than reported as zeros.
     param(
         [Nullable[datetime]]$EarliestIncident,
         [Nullable[int]]$RetentionDays,
-        [datetime]$Now = (Get-Date).ToUniversalTime()
+        [datetime]$Now = (Get-Date).ToUniversalTime(),
+        [Nullable[datetime]]$ReportMonth,
+        [ValidateRange(1, 12)][int]$TrendMonths = $script:CyberSocTrendMonths
     )
+    $inv = [cultureinfo]::InvariantCulture
     $thisMonth = [datetime]::new($Now.Year, $Now.Month, 1)
-    $end = $thisMonth.AddDays(-1)
-    $lastFullMonthStart = [datetime]::new($end.Year, $end.Month, 1)
+    $lastFullMonthStart = $thisMonth.AddMonths(-1)
+    $reportStart = if ($ReportMonth) { [datetime]::new(([datetime]$ReportMonth).Year, ([datetime]$ReportMonth).Month, 1) } else { $lastFullMonthStart }
+    if ($reportStart -gt $lastFullMonthStart) {
+        throw ("Report month {0} has not ended yet. The latest month that can be reported is {1}." -f $reportStart.ToString('yyyy-MM', $inv), $lastFullMonthStart.ToString('yyyy-MM', $inv))
+    }
+    $end = $reportStart.AddMonths(1).AddDays(-1)
+    $trendStart = $reportStart.AddMonths(1 - $TrendMonths)
+    $monthName = $reportStart.ToString('MMMM yyyy', $inv)
+    $start = $trendStart
+    $basis = 'report month {0} and the {1} full months before it, the 90-day trend' -f $monthName, ($TrendMonths - 1)
 
-    # First month that the data covers from day one, so OUT.3 only compares full months
+    # First month that the data covers from day one
     $firstFull = {
         param([datetime]$d)
         $monthStart = [datetime]::new($d.Year, $d.Month, 1)
@@ -436,29 +504,33 @@ function Get-EbrDefaultReportingWindow {
     }
 
     $source = $null
+    $why = $null
     if ($EarliestIncident) {
         $source = [datetime]$EarliestIncident
-        $start = & $firstFull $source
-        $basis = 'first full month of SecurityIncident data (earliest record {0})' -f $source.ToString('yyyy-MM-dd', [cultureinfo]::InvariantCulture)
+        $why = 'SecurityIncident data starts {0}' -f $source.ToString('yyyy-MM-dd', $inv)
     }
     elseif ($RetentionDays) {
         $source = $Now.AddDays(-[int]$RetentionDays)
-        $start = & $firstFull $source
-        $basis = 'first full month inside the {0}-day workspace retention (no SecurityIncident data found)' -f [int]$RetentionDays
+        $why = 'no SecurityIncident data found, and the {0}-day workspace retention starts {1}' -f [int]$RetentionDays, $source.ToString('yyyy-MM-dd', $inv)
     }
-    else {
-        $start = $lastFullMonthStart.AddMonths(-5)
-        $basis = 'default of six full months (no incident data or retention reading)'
+    if ($source) {
+        $dataStart = & $firstFull $source
+        if ($dataStart -gt $start) {
+            $start = $dataStart
+            $basis += ', shortened to the first full month of data because {0}' -f $why
+        }
+        if ($start -gt $end) {
+            # Data begins after the report month started. The days before it were not observed, so the
+            # window starts on the first day of data and the report reads the month as partial.
+            if ($source.Date -gt $end) {
+                throw ("Report month {0} ends before the data starts: {1}. The first month that can be reported is {2}." -f $reportStart.ToString('yyyy-MM', $inv), $why, $source.ToString('yyyy-MM', $inv))
+            }
+            $start = $source.Date
+            $basis += ', a partial report month from {0} because the data starts after the month began' -f $start.ToString('yyyy-MM-dd', $inv)
+        }
     }
 
-    if ($start -gt $end) {
-        # Data begins after the last full month started, so the only option is a partial month
-        $start = [datetime]::new($source.Year, $source.Month, 1)
-        if ($start -gt $end) { $start = $lastFullMonthStart }
-        $basis += ', partial first month because the data starts after the last full month began'
-    }
-
-    [pscustomobject]@{ Start = $start; End = $end; Basis = $basis }
+    [pscustomobject]@{ Start = $start; End = $end; Basis = $basis; ReportMonth = $reportStart; TrendStart = $trendStart }
 }
 
 function Test-EbrSubscriptionTenant {
@@ -766,7 +838,7 @@ function New-EbrQuery {
 function Get-EbrRecentStart {
     # The trailing three full months of the window: the first day of the month two months before
     # the window end month, never earlier than the window start. The HTML report uses this shorter
-    # range when the full-window response timing does not qualify (see New-EbrSecurityReport.README.md).
+    # range when the full-window response timing does not qualify (see New-CyberSocReport.README.md).
     param([datetime]$WindowStart, [datetime]$WindowEnd)
     $recent = (New-Object datetime $WindowEnd.Year, $WindowEnd.Month, 1).AddMonths(-2)
     if ($recent -lt $WindowStart) { $WindowStart } else { $recent }
@@ -1098,6 +1170,47 @@ AuditLogs
                                tostring(InitiatedBy.user.userPrincipalName))
 | project TimeGenerated, TargetUser, Initiator, Result
 | order by TimeGenerated asc
+'@))
+
+    # CyberSOC trend queries (CyberSOC Monthly Report Runbook, section 2). The same alert population as
+    # OUT.1 to OUT.3, split finer: the OUT.2 cohort by the month each alert was created, OUT.3 in 7-day
+    # bins from the window start, and the alerts by title.
+    $out2Month = ($out2 -replace '(?m)^(\s+)by Scope(\r?)$', '$1by Month = startofmonth(CreatedTime), Scope$2').TrimEnd() + "`n| order by Month asc, Scope asc"
+    $q.Add((New-EbrQuery -Id 'OUT.2-MONTH' -Phase 'P1 Outcomes' -Engine 'LA' -CombinedOnly -Title 'Triage and close time by month of creation and severity' -Notes 'CyberSOC trend. The OUT.2 cohort split by the month each alert was created. A month with fewer than 5 closed high severity alerts has no reportable timing. Quote the median, never the mean.' -Query $out2Month))
+
+    $q.Add((New-EbrQuery -Id 'OUT.3-WEEK' -Phase 'P1 Outcomes' -Engine 'LA' -CombinedOnly -Title 'Weekly alert volume by severity and classification' -Notes 'CyberSOC trend. 7-day bins from the window start, so the last bin can be shorter (Days). A week with no alert has no row.' -Query @'
+SecurityIncident
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, Severity, CreatedTime, Classification, Comments, ClassificationComment) by TenantId, IncidentNumber
+| where CreatedTime between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where Severity != "Informational"
+| where {{TICKET}}
+| summarize Total         = count(),
+            High          = countif(Severity == "High"),
+            Medium        = countif(Severity == "Medium"),
+            Low           = countif(Severity == "Low"),
+            TruePositive  = countif(Classification == "TruePositive"),
+            FalsePositive = countif(Classification == "FalsePositive")
+          by Week = bin_at(CreatedTime, 7d, {{WINDOW_START}})
+| extend WeekEnd = iff(Week + 6d > {{WINDOW_END}}, {{WINDOW_END}}, Week + 6d)
+| extend Days = datetime_diff("day", WeekEnd, Week) + 1
+| order by Week asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'OUT.9' -Phase 'P1 Outcomes' -Engine 'LA' -CombinedOnly -Title 'Alert types by title and month' -Notes 'CyberSOC trend. Titles can name accounts, hosts or addresses, so the report embeds only titles that pass the same screen as the OUT.4 threat titles. Internal: the raw titles stay in the pack.' -Query @'
+SecurityIncident
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, Title, Severity, CreatedTime, Classification, Comments, ClassificationComment) by TenantId, IncidentNumber
+| where CreatedTime between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where Severity != "Informational"
+| where {{TICKET}}
+| summarize Alerts         = count(),
+            High           = countif(Severity == "High"),
+            TruePositive   = countif(Classification == "TruePositive"),
+            BenignPositive = countif(Classification == "BenignPositive"),
+            FalsePositive  = countif(Classification == "FalsePositive")
+          by Month = startofmonth(CreatedTime), Title
+| order by Month asc, Alerts desc
 '@))
     #endregion
 
@@ -2398,9 +2511,9 @@ SecureScores
 | order by Month asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'POS.8' -Phase 'P3 Posture' -Engine 'LA' -Title 'Recommendation health trend from weekly snapshots' -Notes 'Needs continuous export with snapshots enabled.' -Query @'
+    $q.Add((New-EbrQuery -Id 'POS.8' -Phase 'P3 Posture' -Engine 'LA' -Title 'Recommendation health trend from weekly snapshots' -Notes 'Needs continuous export with snapshots enabled. Snapshots inside the window only, so the last week is the posture at the end of the window, not at collection.' -Query @'
 SecurityRecommendation
-| where TimeGenerated between ({{WINDOW_START}} .. now())
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
 | where tobool(IsSnapshot)
 | where AssessedResourceId !contains "{{MRG}}"
 | summarize arg_max(TimeGenerated, RecommendationState)
@@ -2443,6 +2556,247 @@ securityresources
 | where tostring(properties.status) == "Active"
 | summarize OpenAlerts = count() by Severity = tostring(properties.severity)
 '@))
+    #endregion
+
+    #region Phase 5: threat intelligence and vulnerability exposure (CyberSOC Monthly Report Runbook, sections 3 and 4)
+    # The alerts OUT.1 counts, one row per detection correlated into them, for the queries that report
+    # what the SOC handled. TI.2 reads every threat intelligence detection and marks the ticketed ones.
+    $ticketedDetections = @'
+let Ticketed = SecurityIncident
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, *) by TenantId, IncidentNumber
+| where CreatedTime between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where Severity != "Informational"
+| where {{TICKET}}
+| extend IncidentKey = strcat(TenantId, "|", IncidentNumber), Month = startofmonth(CreatedTime)
+| mv-expand AlertId = AlertIds to typeof(string)
+| project AlertId, IncidentKey, Classification, Month;
+'@
+
+    $q.Add((New-EbrQuery -Id 'TI.0' -Phase 'P5 Threat intelligence' -Engine 'LA' -AlwaysBreakdown -Title 'Threat intelligence and threat telemetry reach' -Notes 'CyberSOC. Records inside the window only, the same window the measures that read the tables use. A table missing from the output has no records in the window, so the measures that read it have no figure, not a zero. TI.0-BY-WORKSPACE picks the workspaces EmailEvents and AADUserRiskEvents are read from.' -Query @'
+union withsource = SourceTable isfuzzy = true
+    ThreatIntelIndicators, ThreatIntelligenceIndicator, SecurityAlert, SigninLogs, AADUserRiskEvents, EmailEvents
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| summarize EarliestRecord = min(TimeGenerated),
+            LatestRecord   = max(TimeGenerated),
+            Records        = count()
+          by SourceTable
+| order by SourceTable asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'TI.1' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Threat intelligence indicators by source and type' -Notes 'CyberSOC. Each indicator at its latest record up to the end of the window, over the 365 days before it, so an indicator ingested before the window and still valid at its end is counted. Keyed by table and indicator ID, so an indicator held in several workspaces counts once when the IDs match. Active means not expired, revoked or deleted at the end of the window. Both the STIX ThreatIntelIndicators table and the legacy ThreatIntelligenceIndicator table are read.' -Query @'
+union withsource = SourceTable isfuzzy = true ThreatIntelIndicators, ThreatIntelligenceIndicator
+| where TimeGenerated between (endofday({{WINDOW_END}}) - 365d .. endofday({{WINDOW_END}}))
+| extend IndicatorKey = coalesce(tostring(column_ifexists("Id", "")), tostring(column_ifexists("IndicatorId", ""))),
+         Stix         = SourceTable endswith "ThreatIntelIndicators"
+| where isnotempty(IndicatorKey)
+| extend Observable = tolower(tostring(column_ifexists("ObservableKey", "")))
+| extend Kind = case(
+    Observable startswith "ipv4" or Observable startswith "ipv6" or isnotempty(tostring(column_ifexists("NetworkIP", ""))) or isnotempty(tostring(column_ifexists("NetworkSourceIP", ""))) or isnotempty(tostring(column_ifexists("NetworkDestinationIP", ""))) or isnotempty(tostring(column_ifexists("EmailSourceIpAddress", ""))), "IP address",
+    Observable startswith "domain" or isnotempty(tostring(column_ifexists("DomainName", ""))), "Domain",
+    Observable startswith "url" or isnotempty(tostring(column_ifexists("Url", ""))), "URL",
+    Observable startswith "file" or isnotempty(tostring(column_ifexists("FileHashValue", ""))), "File hash",
+    Observable startswith "email" or isnotempty(tostring(column_ifexists("EmailSenderAddress", ""))), "Email address",
+    "Other")
+| extend Source = coalesce(tostring(column_ifexists("SourceSystem", "")), "Not recorded")
+| extend Until = iff(Stix, todatetime(column_ifexists("ValidUntil", datetime(null))), todatetime(column_ifexists("ExpirationDateTime", datetime(null))))
+| extend IsActive = iff(Stix,
+    coalesce(tobool(column_ifexists("IsActive", bool(null))), true) and not(coalesce(tobool(column_ifexists("IsDeleted", bool(null))), false)),
+    coalesce(tobool(column_ifexists("Active", bool(null))), false))
+    and (isnull(Until) or Until > endofday({{WINDOW_END}}))
+| summarize arg_max(TimeGenerated, Kind, Source, IsActive) by Stix, IndicatorKey
+| summarize Indicators = count(), Active = countif(IsActive), LastIngested = max(TimeGenerated) by Source, Kind
+| order by Indicators desc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'TI.2' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Threat intelligence matches by month and indicator type' -Notes 'CyberSOC. Detections from the threat intelligence analytics rules (TI map rules and Microsoft Threat Intelligence Analytics), informational severity excluded. Ticketed counts the ones correlated into an alert that opened an Atmosera ticket. A match means the indicator was observed in telemetry, not that compromise occurred.' -Query ($ticketedDetections + @'
+
+SecurityAlert
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| summarize arg_max(TimeGenerated, AlertName, AlertSeverity, ProductName, ProviderName) by SystemAlertId
+| where AlertSeverity != "Informational"
+| where AlertName has_any ("TI map", "Threat Intelligence", "ThreatIntelligence") or ProviderName has "Threat Intelligence"
+| extend Indicator = case(
+    AlertName has "IP" or AlertName has "IPAddress", "IP address",
+    AlertName has "Domain" or AlertName has "DNS", "Domain",
+    AlertName has "URL", "URL",
+    AlertName has "File" or AlertName has "Hash", "File hash",
+    AlertName has "Email", "Email address",
+    "Other")
+| join kind=leftouter (Ticketed | distinct AlertId | extend IsTicketed = true) on $left.SystemAlertId == $right.AlertId
+| summarize Detections = count(), Ticketed = countif(IsTicketed == true)
+          by Month = startofmonth(TimeGenerated), Indicator, AlertSeverity
+| order by Month asc, Indicator asc
+'@)))
+
+    $q.Add((New-EbrQuery -Id 'TI.3' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Attack stages observed, by month' -Notes 'CyberSOC. The MITRE ATT&CK tactics Sentinel recorded on the detections correlated into the alerts OUT.1 counts, by the month the alert was created. A tactic is a detection-time label, not an investigation finding.' -Query ($ticketedDetections + @'
+
+SecurityAlert
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| summarize arg_max(TimeGenerated, Tactics) by SystemAlertId
+| join kind=inner (Ticketed) on $left.SystemAlertId == $right.AlertId
+| mv-expand Tactic = split(Tactics, ",") to typeof(string)
+| extend Tactic = trim(@"\s+", Tactic)
+| where isnotempty(Tactic) and Tactic != "Unknown"
+| summarize Detections         = dcount(SystemAlertId),
+            Alerts             = dcount(IncidentKey),
+            TruePositiveAlerts = dcountif(IncidentKey, Classification == "TruePositive")
+          by Month, Tactic
+| order by Month asc, Alerts desc
+'@)))
+
+    $q.Add((New-EbrQuery -Id 'TI.4' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Attack techniques observed' -Notes 'CyberSOC. The MITRE ATT&CK techniques on the same detections as TI.3, over the whole window, top 25 by alert count. Sentinel writes the techniques as a JSON list or a comma-separated list, and both are read.' -Query ($ticketedDetections + @'
+
+SecurityAlert
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| summarize arg_max(TimeGenerated, Techniques) by SystemAlertId
+| join kind=inner (Ticketed) on $left.SystemAlertId == $right.AlertId
+| mv-expand Technique = split(replace_regex(tostring(Techniques), @'[\[\]"\s]', ""), ",") to typeof(string)
+| extend Technique = toupper(Technique)
+| where Technique matches regex @"^T\d{4}(\.\d{3})?$"
+| summarize Detections         = dcount(SystemAlertId),
+            Alerts             = dcount(IncidentKey),
+            TruePositiveAlerts = dcountif(IncidentKey, Classification == "TruePositive")
+          by Technique
+| order by Alerts desc, Detections desc, Technique asc
+| take 25
+'@)))
+
+    $q.Add((New-EbrQuery -Id 'TI.5' -Phase 'P5 Threat intelligence' -Engine 'LA' -TenantTable 'SigninLogs' -Title 'Identity threat activity by month' -Notes 'CyberSOC. Interactive sign-ins. FailedPassword is error 50126, Lockouts 50053 (smart lockout or a blocked address), BlockedByCa 53003. SprayIps counts addresses that failed a password against 10 or more accounts in one day, a password spraying signal, not a confirmed attack. Risk levels need Entra ID P2: RiskHidden counts sign-ins whose risk the tenant cannot see. Counts only, no account names.' -Query @'
+let Base = SigninLogs
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}));
+let Spray = Base
+| where ResultType == "50126"
+| summarize Targets = dcount(UserPrincipalName) by IPAddress, Day = startofday(TimeGenerated)
+| where Targets >= 10
+| summarize SprayIps = dcount(IPAddress), SprayDays = dcount(Day) by Month = startofmonth(Day);
+Base
+| summarize SignIns         = count(),
+            FailedPassword  = countif(ResultType == "50126"),
+            TargetedUsers   = dcountif(UserPrincipalName, ResultType == "50126"),
+            Lockouts        = countif(ResultType == "50053"),
+            BlockedByCa     = countif(ResultType == "53003"),
+            RiskySignIns    = countif(RiskLevelDuringSignIn in~ ("medium", "high")),
+            RiskyUsers      = dcountif(UserPrincipalName, RiskLevelDuringSignIn in~ ("medium", "high")),
+            SuccessfulRisky = countif(ResultType == "0" and RiskLevelDuringSignIn in~ ("medium", "high")),
+            RiskHidden      = countif(RiskLevelDuringSignIn =~ "hidden")
+          by Month = startofmonth(TimeGenerated)
+| join kind=leftouter (Spray) on Month
+| project Month, SignIns, FailedPassword, TargetedUsers, Lockouts, BlockedByCa, RiskySignIns, RiskyUsers,
+          SuccessfulRisky, RiskHidden, SprayIps = coalesce(SprayIps, 0), SprayDays = coalesce(SprayDays, 0)
+| order by Month asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'TI.5-RISK' -Phase 'P5 Threat intelligence' -Engine 'LA' -TenantTable 'AADUserRiskEvents' -Title 'Entra ID Protection risk detections by month and type' -Notes 'CyberSOC. Each risk detection at its latest record. Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace holding the most AADUserRiskEvents in TI.0, else the one that holds the sign-ins. Counts only, no account names.' -Query @'
+AADUserRiskEvents
+| where TimeGenerated between ({{WINDOW_START}} .. now())
+| summarize arg_max(TimeGenerated, RiskEventType, RiskLevel, DetectedDateTime, UserId) by Id
+| extend Detected = coalesce(todatetime(DetectedDateTime), TimeGenerated)
+| where Detected between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| summarize Detections = count(),
+            Users      = dcount(UserId),
+            High       = countif(RiskLevel =~ "high"),
+            Medium     = countif(RiskLevel =~ "medium")
+          by Month = startofmonth(Detected), RiskEventType
+| order by Month asc, Detections desc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'TI.6' -Phase 'P5 Threat intelligence' -Engine 'LA' -TenantTable 'EmailEvents' -Title 'Inbound email threats by month' -Notes 'CyberSOC. Needs the Microsoft Defender XDR connector to stream EmailEvents into Sentinel, and TI.0 says whether it does. Read once, from the workspace holding the most EmailEvents, because a tenant-wide table streamed into several workspaces would otherwise be counted more than once. ThreatsBlocked is phishing or malware not delivered to the inbox at first delivery. Post-delivery removal is DP.7.' -Query @'
+EmailEvents
+| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where EmailDirection == "Inbound"
+| extend Phish = ThreatTypes has "Phish", Malware = ThreatTypes has "Malware", Spam = ThreatTypes has "Spam"
+| summarize Messages         = count(),
+            Phish            = countif(Phish),
+            Malware          = countif(Malware),
+            Spam             = countif(Spam),
+            ThreatsBlocked   = countif((Phish or Malware) and DeliveryAction in ("Blocked", "Junked", "Replaced")),
+            ThreatsDelivered = countif((Phish or Malware) and DeliveryAction == "Delivered")
+          by Month = startofmonth(TimeGenerated)
+| order by Month asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'TI.7' -Phase 'P5 Threat intelligence' -Engine 'AH' -Title 'Malware detected on Azure virtual machines, last 30 days' -Notes 'CyberSOC. Microsoft Defender Antivirus detections, Azure virtual machines only as every device measure since 1.14.0. Advanced Hunting holds 30 days, so this reads the last 30 days whatever the window. Threat names only, no device names.' -Query @'
+DeviceEvents
+| where Timestamp between (ago(30d) .. now())
+| where ActionType == "AntivirusDetection"
+| join kind=inner (
+    DeviceInfo
+    | where Timestamp between (ago(30d) .. now())
+    | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
+    | where AzureResourceId !contains "{{MRG}}"
+  ) on DeviceId
+| extend Fields = parse_json(AdditionalFields)
+| extend Threat        = tostring(Fields.ThreatName),
+         WasRemediated = tobool(Fields.WasRemediated),
+         WasExecuting  = tobool(Fields.WasExecutingWhileDetected)
+| extend Threat = iff(isempty(Threat), "Not named", Threat)
+| summarize Detections   = count(),
+            Devices      = dcount(DeviceId),
+            Remediated   = countif(WasRemediated),
+            WasExecuting = countif(WasExecuting)
+          by Threat
+| order by Detections desc
+| take 25
+'@))
+
+    # Current state from Defender for Endpoint vulnerability management, Azure virtual machines only. The
+    # imported Atmosera.VulnAssessment runs (VA.RUNS and the rest) carry the history, the CISA KEV listing
+    # and the remediation status, so these are the fallback and the cross-check.
+    $vaDevices = @'
+| join kind=inner (
+    DeviceInfo
+    | where Timestamp between (ago(7d) .. now())
+    | summarize arg_max(Timestamp, AzureResourceId) by DeviceId
+    | where isnotempty(AzureResourceId)   // Azure virtual machines only
+    | where AzureResourceId !contains "{{MRG}}"
+  ) on DeviceId
+'@
+    $q.Add((New-EbrQuery -Id 'VA.1' -Phase 'P5 Vulnerability exposure' -Engine 'AH' -Title 'Open vulnerabilities on Azure virtual machines by severity' -Notes 'CyberSOC. Current state only. Exposures counts each vulnerable software on each machine. ExploitableCves are CVEs with public exploit code per Defender, not a CISA KEV listing.' -Query ("DeviceTvmSoftwareVulnerabilities`n" + $vaDevices + @'
+| join kind=leftouter (
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | project CveId, IsExploitAvailable
+  ) on CveId
+| extend Exploitable = tobool(IsExploitAvailable)
+| summarize Cves               = dcount(CveId, 4),
+            Devices            = dcount(DeviceId, 4),
+            Exposures          = count(),
+            ExploitableCves    = dcountif(CveId, Exploitable, 4),
+            ExploitableDevices = dcountif(DeviceId, Exploitable, 4)
+          by VulnerabilitySeverityLevel
+| order by VulnerabilitySeverityLevel asc
+'@)))
+
+    $q.Add((New-EbrQuery -Id 'VA.2' -Phase 'P5 Vulnerability exposure' -Engine 'AH' -Title 'Most exposed software on Azure virtual machines' -Notes 'CyberSOC. Current state only, top 15 ranked by exploitable, critical and high CVEs, then machines. Software names only, no machine names.' -Query ("DeviceTvmSoftwareVulnerabilities`n" + $vaDevices + @'
+| join kind=leftouter (
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | project CveId, IsExploitAvailable
+  ) on CveId
+| summarize Devices         = dcount(DeviceId, 4),
+            Cves            = dcount(CveId, 4),
+            Critical        = dcountif(CveId, VulnerabilitySeverityLevel == "Critical", 4),
+            High            = dcountif(CveId, VulnerabilitySeverityLevel == "High", 4),
+            ExploitableCves = dcountif(CveId, tobool(IsExploitAvailable), 4)
+          by SoftwareVendor, SoftwareName
+| order by ExploitableCves desc, Critical desc, High desc, Devices desc
+| take 15
+'@)))
+
+    $q.Add((New-EbrQuery -Id 'VA.3' -Phase 'P5 Vulnerability exposure' -Engine 'AH' -Title 'Vulnerabilities published in the window and open now, by month' -Notes 'CyberSOC. CVEs published in each month of the window that are open on Azure virtual machines at collection: the new exposure each month added.' -Query ("DeviceTvmSoftwareVulnerabilities`n" + $vaDevices + @'
+| join kind=inner (
+    DeviceTvmSoftwareVulnerabilitiesKB
+    | where PublishedDate between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+    | project CveId, PublishedDate, IsExploitAvailable
+  ) on CveId
+| summarize Cves            = dcount(CveId, 4),
+            Devices         = dcount(DeviceId, 4),
+            Critical        = dcountif(CveId, VulnerabilitySeverityLevel == "Critical", 4),
+            High            = dcountif(CveId, VulnerabilitySeverityLevel == "High", 4),
+            ExploitableCves = dcountif(CveId, tobool(IsExploitAvailable), 4)
+          by Month = startofmonth(PublishedDate)
+| order by Month asc
+'@)))
     #endregion
 
     $q.ToArray()
@@ -4395,7 +4749,7 @@ function Write-EbrResultFiles {
 
 function Write-EbrQueryFile {
     param([string]$OutDir, $Item, [string]$Text, [string]$Target)
-    $header = "// EBR evidence query {0}: {1}`n// Engine: {2}. Target: {3}`n// Expanded {4} UTC by Get-EbrSecurityEvidence.ps1 v{5}`n" -f $Item.Id, $Item.Title, $Item.Engine, $Target, (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss', [cultureinfo]::InvariantCulture), $script:EbrVersion
+    $header = "// EBR evidence query {0}: {1}`n// Engine: {2}. Target: {3}`n// Expanded {4} UTC by Get-CyberSocEvidence.ps1 v{5}`n" -f $Item.Id, $Item.Title, $Item.Engine, $Target, (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss', [cultureinfo]::InvariantCulture), $script:EbrVersion
     # Graph items carry the endpoints they read rather than KQL, so they get their own extension.
     $ext = if ($Item.Engine -eq 'GRAPH') { '.graph.txt' } else { '.kql' }
     Write-EbrTextFile -Path (Join-Path (Join-Path $OutDir 'queries') "$($Item.Id)$ext") -Text ($header + $Text + "`n")
@@ -4805,7 +5159,7 @@ function New-EbrNotes {
     & $line '  TICKET NOTES - COPY BELOW THIS LINE'
     & $line $div
     & $line ''
-    & $line ("Script: Get-EbrSecurityEvidence.ps1 v{0}" -f $script:EbrVersion)
+    & $line ("Script: Get-CyberSocEvidence.ps1 v{0}" -f $script:EbrVersion)
     & $line ("Executed: {0} UTC" -f $Ctx.StartedUtc.ToString('yyyy-MM-dd HH:mm:ss', $inv))
     & $line ''
     & $line '--- Scope ---'
@@ -4824,6 +5178,11 @@ function New-EbrNotes {
     $mrg = if ($Ctx.ManagedRgPattern) { $Ctx.ManagedRgPattern } else { 'none (exclusion disabled)' }
     & $line ("  {0} Managed resource group excluded from posture queries: {1}" -f $sym.Dot, $mrg)
     & $line ("  {0} Incident reporting window: {1} to {2} ({3})" -f $sym.Dot, $Ctx.WindowStart.ToString('yyyy-MM-dd', $inv), $Ctx.WindowEnd.ToString('yyyy-MM-dd', $inv), $Ctx.WindowBasis)
+    if ($Ctx.PSObject.Properties['ReportMonth'] -and $Ctx.ReportMonth) { & $line ("  {0} CyberSOC report month: {1}, with the 90-day trend from the window start" -f $sym.Dot, $Ctx.ReportMonth.ToString('MMMM yyyy', $inv)) }
+    if ($Ctx.PSObject.Properties['VulnAssessment'] -and $Ctx.VulnAssessment) {
+        $runs = @($Ctx.VulnAssessment.Runs)
+        & $line ("  {0} Vulnerability assessment runs imported: {1}" -f $sym.Dot, $(if ($runs.Count) { (@($runs | ForEach-Object { '{0} ({1})' -f $_.RunDate, $_.Status }) -join ', ') } else { 'none usable' }))
+    }
     & $line ("  {0} Alert scope: incidents whose comments reference an Atmosera ticket (pattern {1}), informational severity excluded. OUT.1 to OUT.7 count only these." -f $sym.Dot, $(if ($Ctx.PSObject.Properties['TicketPattern'] -and $Ctx.TicketPattern) { $Ctx.TicketPattern } else { $script:EbrTicketPattern }))
     & $line ("  {0} Posture read date: {1}" -f $sym.Dot, $Ctx.StartedUtc.ToString('yyyy-MM-dd', $inv))
     & $line ''
@@ -4885,8 +5244,8 @@ function New-EbrNotes {
 
 function Invoke-EbrMain {
     param(
-        [string]$TenantId, [string[]]$SubscriptionId, [string[]]$WorkspaceResourceId,
-        [string]$WindowStart, [string]$WindowEnd, [AllowEmptyString()][string]$ManagedRgPattern, [string]$TicketPattern,
+        [string]$TenantId, [string[]]$SubscriptionId, [string[]]$WorkspaceResourceId, [string]$ReportMonth,
+        [string]$WindowStart, [string]$WindowEnd, [string[]]$VulnAssessmentPath, [AllowEmptyString()][string]$ManagedRgPattern, [string]$TicketPattern,
         [string]$ClientName, [string]$OutputPath, [switch]$SkipExchange, [switch]$SkipDefender,
         [switch]$SkipGraph, [int]$PatchCadenceDays = 30,
         [AllowEmptyString()][string]$PatchExclusionTagPattern, [AllowEmptyString()][string]$EdrVendorPattern = '',
@@ -4900,7 +5259,7 @@ function Invoke-EbrMain {
     $OutputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath)
 
     $inv = [cultureinfo]::InvariantCulture
-    $totalSteps = 10
+    $totalSteps = 11
     $ctx = [pscustomobject]@{
         StartedUtc = (Get-Date).ToUniversalTime(); TenantGuid = $null; ClientName = $null; Subscriptions = @()
         ArmTenant = $null; Workspaces = @(); TenantWorkspace = @{}; SkipBreakdown = [bool]$SkipWorkspaceBreakdown
@@ -4910,7 +5269,7 @@ function Invoke-EbrMain {
         PatchExclusionTagPattern = $(if ($PSBoundParameters.ContainsKey('PatchExclusionTagPattern')) { $PatchExclusionTagPattern } else { $script:EbrPatchExclusionTagPattern })
         EdrVendorPattern = $(if ([string]::IsNullOrWhiteSpace($EdrVendorPattern)) { $script:EbrEdrVendorPattern } else { $EdrVendorPattern })
         AccessPath = ''; AccessDescription = ''
-        WindowStart = $null; WindowEnd = $null; WindowBasis = ''; ManagedRgPattern = $ManagedRgPattern
+        WindowStart = $null; WindowEnd = $null; WindowBasis = ''; ReportMonth = $null; VulnAssessment = $null; ManagedRgPattern = $ManagedRgPattern
         TicketPattern = $(if ([string]::IsNullOrWhiteSpace($TicketPattern)) { $script:EbrTicketPattern } else { $TicketPattern })
         OutDir = $null; Results = @{}; Manifest = [System.Collections.Generic.List[object]]::new()
         Warnings = [System.Collections.Generic.List[string]]::new(); Pending = [System.Collections.Generic.List[object]]::new()
@@ -4919,7 +5278,7 @@ function Invoke-EbrMain {
 
     Write-Host ''
     Write-Host $script:EbrSym.Heavy -ForegroundColor Blue
-    Write-Host ("  EBR Security Evidence Collector v{0}" -f $script:EbrVersion) -ForegroundColor Blue
+    Write-Host ("  CyberSOC Monthly Evidence Collector v{0} (EBR collector {1})" -f $script:EbrVersion, $script:EbrBaseVersion) -ForegroundColor Blue
     Write-Host '  READ-ONLY. It looks, it counts, it judges. Silently. Mostly.' -ForegroundColor DarkGray
     Write-Host $script:EbrSym.Heavy -ForegroundColor Blue
 
@@ -4943,6 +5302,12 @@ function Invoke-EbrMain {
         $startOverride = if ($WindowStart) { ConvertTo-EbrDate $WindowStart } else { $null }
         $endOverride = if ($WindowEnd) { ConvertTo-EbrDate $WindowEnd } else { $null }
         if ($startOverride -and $endOverride -and $startOverride -gt $endOverride) { throw 'WindowStart is after WindowEnd. Time travel is out of scope.' }
+        if ($ReportMonth -and $endOverride) { throw 'Pass -ReportMonth or -WindowEnd, not both. The report month is the month of WindowEnd.' }
+        # The report month: the month of WindowEnd when it is given, else -ReportMonth, else the last full month.
+        # A month that has not ended is refused here, before anything is signed into.
+        $monthOverride = if ($endOverride) { [datetime]::new($endOverride.Year, $endOverride.Month, 1) } elseif ($ReportMonth) { ConvertTo-EbrMonth $ReportMonth } else { $null }
+        $ctx.ReportMonth = if ($endOverride) { $monthOverride } else { (Get-EbrDefaultReportingWindow -ReportMonth $monthOverride).ReportMonth }
+        Write-EbrInfo ("Report month {0}." -f $ctx.ReportMonth.ToString('MMMM yyyy', $inv))
         $null = Expand-EbrQuery -Query 'x' -WindowStart ([datetime]::Today) -WindowEnd ([datetime]::Today) -ManagedRgPattern $ManagedRgPattern -TicketPattern $TicketPattern
         Write-EbrOk ("Tenant {0}, {1} subscription(s)." -f $TenantId, $ctx.Subscriptions.Count)
         #endregion
@@ -4953,11 +5318,11 @@ function Invoke-EbrMain {
             Write-EbrStep 2 $totalSteps 'Dry run: expanding every query without touching anything'
             $ctx.TenantGuid = if (Test-EbrGuid $TenantId) { $TenantId.ToLowerInvariant() } else { $TenantId }
             $ctx.ClientName = if ($ClientName) { $ClientName } else { $ctx.TenantGuid }
-            $def = Get-EbrDefaultReportingWindow
+            $def = Get-EbrDefaultReportingWindow -ReportMonth $ctx.ReportMonth
             $ctx.WindowStart = if ($startOverride) { $startOverride } else { $def.Start }
             $ctx.WindowEnd = if ($endOverride) { $endOverride } else { $def.End }
             $ctx.WindowBasis = if ($startOverride) { 'set by parameter' } else { 'dry run default (the real run uses P0.1)' }
-            $ctx.OutDir = Join-Path $OutputPath ('EBR-Evidence_DRYRUN_{0}_{1}' -f (ConvertTo-EbrSafeFileName $ctx.ClientName), (Get-Date -Format 'yyyyMMdd-HHmmss'))
+            $ctx.OutDir = Join-Path $OutputPath ('CyberSOC-Evidence_DRYRUN_{0}_{1}_{2}' -f (ConvertTo-EbrSafeFileName $ctx.ClientName), $ctx.ReportMonth.ToString('yyyy-MM', $inv), (Get-Date -Format 'yyyyMMdd-HHmmss'))
             foreach ($sub in 'queries', 'results') { [void][IO.Directory]::CreateDirectory((Join-Path $ctx.OutDir $sub)) }
             Set-EbrLogPath (Join-Path $ctx.OutDir 'run.log')
             foreach ($item in $catalog) {
@@ -5109,7 +5474,7 @@ function Invoke-EbrMain {
         # Named only now, so the folder can use the organization name Exchange just told us
         $ctx.ClientName = Get-EbrClientName -Override $ClientName -TenantInfo $info -Accounts $accounts -TenantGuid $ctx.TenantGuid -TenantInput $TenantId -OrgName $orgName
         if ($ctx.ClientName -eq $ctx.TenantGuid) { Write-EbrQuip 'Could not find a name for this tenant. Pass -ClientName next time and the folder will thank you.' }
-        $ctx.OutDir = Join-Path $OutputPath ('EBR-Evidence_{0}_{1}' -f (ConvertTo-EbrSafeFileName $ctx.ClientName), (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        $ctx.OutDir = Join-Path $OutputPath ('CyberSOC-Evidence_{0}_{1}_{2}' -f (ConvertTo-EbrSafeFileName $ctx.ClientName), $ctx.ReportMonth.ToString('yyyy-MM', $inv), (Get-Date -Format 'yyyyMMdd-HHmmss'))
         foreach ($sub in 'queries', 'results') { [void][IO.Directory]::CreateDirectory((Join-Path $ctx.OutDir $sub)) }
         Set-EbrLogPath (Join-Path $ctx.OutDir 'run.log')
         Write-EbrInfo "Evidence pack: $($ctx.OutDir)"
@@ -5130,7 +5495,7 @@ function Invoke-EbrMain {
         Write-EbrStep 6 $totalSteps 'Phase 0: pre-flight, and deciding the reporting window'
         # Phase 0 queries carry no window tokens, but expansion still needs dates. Provisional
         # window now, real one after P0.1 says how far back the incidents go.
-        $provisional = Get-EbrDefaultReportingWindow
+        $provisional = Get-EbrDefaultReportingWindow -ReportMonth $ctx.ReportMonth
         $ctx.WindowStart = if ($startOverride) { $startOverride } else { $provisional.Start }
         $ctx.WindowEnd = if ($endOverride) { $endOverride } else { $provisional.End }
         Invoke-EbrPhase -Ctx $ctx -Items @($catalog | Where-Object { $_.Phase -like 'P0*' }) -Activity 'Phase 0 pre-flight'
@@ -5142,12 +5507,15 @@ function Invoke-EbrMain {
                 if ($ctx.Workspaces.Count -gt 1) { Write-EbrInfo ("Tenant-wide {0} will be read once, from {1} (it holds the most)." -f $table, $ctx.TenantWorkspace[$table].WorkspaceName) }
             }
         }
+        # Entra ID Protection risk detections (TI.5-RISK) start from the workspace of the sign-ins, the usual route.
+        # Step 10 moves them to the workspace TI.0 finds them in.
+        if ($ctx.TenantWorkspace['SigninLogs']) { $ctx.TenantWorkspace['AADUserRiskEvents'] = $ctx.TenantWorkspace['SigninLogs'] }
         $inc = Get-EbrEarliestIncident -ReachRows $reach
         $earliest = $inc.Earliest
         $retention = $null
         $retentions = @($ctx.Workspaces | Where-Object { $_.RetentionDays } | ForEach-Object { [int]$_.RetentionDays })
         if ($retentions.Count) { $retention = ($retentions | Measure-Object -Maximum).Maximum }
-        $def = Get-EbrDefaultReportingWindow -EarliestIncident $earliest -RetentionDays $retention
+        $def = Get-EbrDefaultReportingWindow -EarliestIncident $earliest -RetentionDays $retention -ReportMonth $ctx.ReportMonth
         $ctx.WindowStart = if ($startOverride) { $startOverride } else { $def.Start }
         $ctx.WindowEnd = if ($endOverride) { $endOverride } else { $def.End }
         $ctx.WindowBasis = if ($startOverride -or $endOverride) { 'set by parameter' } else { $def.Basis }
@@ -5189,13 +5557,57 @@ function Invoke-EbrMain {
         Invoke-EbrPhase -Ctx $ctx -Items @($catalog | Where-Object { $_.Phase -like 'P3*' -or $_.Phase -like 'P4*' }) -Activity 'Phases 3 and 4'
         #endregion
 
-        #region Step 10: worksheet, manifest, notes
-        Write-EbrStep 10 $totalSteps 'Writing the worksheet, manifest and notes'
+        #region Step 10: threat intelligence and vulnerability exposure
+        Write-EbrStep 10 $totalSteps 'Phase 5: threat intelligence and vulnerability exposure'
+        $phase5 = @($catalog | Where-Object { $_.Phase -like 'P5*' })
+        Invoke-EbrPhase -Ctx $ctx -Items @($phase5 | Where-Object Id -eq 'TI.0') -Activity 'Phase 5 reach'
+        # EmailEvents is a tenant-wide table that the Defender XDR connector can stream into several
+        # workspaces, so TI.6 reads the fullest copy once, like SigninLogs.
+        if ($ctx.Workspaces.Count) {
+            $tiReach = Get-EbrRows $ctx.Results 'TI.0-BY-WORKSPACE'
+            if ($null -eq $tiReach -or $tiReach.Count -eq 0) {
+                $single = Get-EbrRows $ctx.Results 'TI.0'
+                $tiReach = if ($null -ne $single -and @($ctx.Workspaces).Count -eq 1) { Add-EbrWorkspaceColumns -Rows $single -Workspace @($ctx.Workspaces)[0] } else { @() }
+            }
+            $ctx.TenantWorkspace['EmailEvents'] = Select-EbrTenantWorkspace -Workspaces $ctx.Workspaces -ReachRows $tiReach -Table 'EmailEvents'
+            # An Entra diagnostic setting can send the risk detections to another workspace than the sign-ins, so TI.5-RISK
+            # reads the fullest copy TI.0 found, and stays on the sign-in workspace when TI.0 found none.
+            if (@($tiReach | Where-Object { $null -ne $_ -and [string](Get-EbrProp $_ 'SourceTable') -eq 'AADUserRiskEvents' }).Count) {
+                $ctx.TenantWorkspace['AADUserRiskEvents'] = Select-EbrTenantWorkspace -Workspaces $ctx.Workspaces -ReachRows $tiReach -Table 'AADUserRiskEvents'
+            }
+        }
+        Invoke-EbrPhase -Ctx $ctx -Items @($phase5 | Where-Object Id -ne 'TI.0') -Activity 'Phase 5 threat intelligence and vulnerability exposure'
+        if ($VulnAssessmentPath) {
+            # The monthly Atmosera.VulnAssessment runs, cut to this pack's subscriptions and window. Offline: files only.
+            $importer = Join-Path $PSScriptRoot 'Import-CyberSocVulnAssessment.ps1'
+            if (-not (Test-Path -LiteralPath $importer)) { throw 'Import-CyberSocVulnAssessment.ps1 is missing from the collector folder.' }
+            # Dot-sourcing runs the importer's param block in this scope, which resets $VulnAssessmentPath, so keep it first.
+            $vaPaths = @($VulnAssessmentPath)
+            try {
+                . $importer -LoadFunctionsOnly
+                $va = Get-CyberSocVulnAssessmentResults -Path $vaPaths -Subscriptions $ctx.Subscriptions -WindowStart $ctx.WindowStart -ReadDate $ctx.StartedUtc -ReportMonth $ctx.ReportMonth
+                foreach ($r in $va.Results) { Add-EbrResult -Ctx $ctx -Item ($va.Items | Where-Object Id -eq $r.ResultId | Select-Object -First 1) -Result $r }
+                $ctx.VulnAssessment = $va.Parameters
+                foreach ($w in $va.Warnings) { $ctx.Warnings.Add($w); Write-EbrWarn $w }
+            }
+            catch {
+                # The queries are collected. A failed import leaves the vulnerability page on the Defender reading, and
+                # Import-CyberSocVulnAssessment.ps1 can add the runs to the pack afterwards.
+                $msg = "Vulnerability assessment import failed, so the pack has no VA.RUNS: $($_.Exception.Message) Add the runs later with Import-CyberSocVulnAssessment.ps1."
+                $ctx.Warnings.Add($msg); Write-EbrWarn $msg
+            }
+        }
+        #endregion
+
+        #region Step 11: worksheet, manifest, notes
+        Write-EbrStep 11 $totalSteps 'Writing the worksheet, manifest and notes'
         $worksheet = @(Get-EbrWorksheet -Results $ctx.Results -WindowStart $ctx.WindowStart -WindowEnd $ctx.WindowEnd)
         Write-EbrCsvFile -Path (Join-Path $ctx.OutDir '01-worksheet.csv') -Rows $worksheet
         Write-EbrCsvFile -Path (Join-Path $ctx.OutDir '00-manifest.csv') -Rows $ctx.Manifest
         $params = [ordered]@{
             ScriptVersion       = $script:EbrVersion
+            EbrBaseVersion      = $script:EbrBaseVersion
+            ReportType          = 'CyberSOC monthly'
             RunStartedUtc       = Format-EbrUtc $ctx.StartedUtc
             ClientName          = $ctx.ClientName
             TenantId            = $ctx.TenantGuid
@@ -5209,6 +5621,9 @@ function Invoke-EbrMain {
             WindowStart         = $ctx.WindowStart.ToString('yyyy-MM-dd', $inv)
             WindowEnd           = $ctx.WindowEnd.ToString('yyyy-MM-dd', $inv)
             WindowBasis         = $ctx.WindowBasis
+            ReportMonth         = $ctx.ReportMonth.ToString('yyyy-MM', $inv)
+            TrendMonths         = $script:CyberSocTrendMonths
+            VulnAssessment      = $ctx.VulnAssessment
             RecentStart         = (Get-EbrRecentStart -WindowStart $ctx.WindowStart -WindowEnd $ctx.WindowEnd).ToString('yyyy-MM-dd', $inv)
             TicketPattern       = $ctx.TicketPattern
             AlertScope          = 'Sentinel incidents with an Atmosera ticket reference in their comments or closing comment. Informational severity excluded. Applies to OUT.1 to OUT.7.'
@@ -5231,8 +5646,8 @@ function Invoke-EbrMain {
         $reportFailed = $false
         if (-not $SkipHtmlReport) {
             try {
-                $reportGenerator = Join-Path $PSScriptRoot 'New-EbrSecurityReport.ps1'
-                if (-not (Test-Path -LiteralPath $reportGenerator)) { throw 'New-EbrSecurityReport.ps1 is missing from the collector folder.' }
+                $reportGenerator = Join-Path $PSScriptRoot 'New-CyberSocReport.ps1'
+                if (-not (Test-Path -LiteralPath $reportGenerator)) { throw 'New-CyberSocReport.ps1 is missing from the collector folder.' }
                 $reportFiles = @(& $reportGenerator -EvidencePath $ctx.OutDir -Depth $ReportDepth)
                 Write-EbrLog -Level INFO -Component Report -Message ('Report created: {0}' -f ($reportFiles -join ', '))
             }
@@ -5245,8 +5660,8 @@ function Invoke-EbrMain {
 
         if (-not $SkipSecOpsWorklist) {
             try {
-                $worklistGenerator = Join-Path $PSScriptRoot 'New-EbrSecOpsWorklist.ps1'
-                if (-not (Test-Path -LiteralPath $worklistGenerator)) { throw 'New-EbrSecOpsWorklist.ps1 is missing from the collector folder.' }
+                $worklistGenerator = Join-Path $PSScriptRoot 'New-CyberSocSecOpsWorklist.ps1'
+                if (-not (Test-Path -LiteralPath $worklistGenerator)) { throw 'New-CyberSocSecOpsWorklist.ps1 is missing from the collector folder.' }
                 $worklistFiles = @(& $worklistGenerator -EvidencePath $ctx.OutDir)
                 Write-EbrLog -Level INFO -Component Report -Message ('SecOps worklist created: {0}' -f ($worklistFiles -join ', '))
             }
@@ -5299,7 +5714,7 @@ try {
     $patternArgs = @{ EdrVendorPattern = $EdrVendorPattern }
     if ($PSBoundParameters.ContainsKey('PatchExclusionTagPattern')) { $patternArgs.PatchExclusionTagPattern = $PatchExclusionTagPattern }
     $mainOutput = Invoke-EbrMain -TenantId $TenantId -SubscriptionId $SubscriptionId -WorkspaceResourceId $WorkspaceResourceId `
-        -WindowStart $WindowStart -WindowEnd $WindowEnd -ManagedRgPattern $ManagedRgPattern -TicketPattern $TicketPattern -ClientName $ClientName `
+        -ReportMonth $ReportMonth -WindowStart $WindowStart -WindowEnd $WindowEnd -VulnAssessmentPath $VulnAssessmentPath -ManagedRgPattern $ManagedRgPattern -TicketPattern $TicketPattern -ClientName $ClientName `
         -OutputPath $OutputPath -SkipExchange:$SkipExchange -SkipDefender:$SkipDefender `
         -SkipGraph:$SkipGraph -PatchCadenceDays $PatchCadenceDays @patternArgs `
         -SkipWorkspaceBreakdown:$SkipWorkspaceBreakdown -DryRun:$DryRun `

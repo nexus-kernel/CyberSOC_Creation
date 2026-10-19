@@ -5,7 +5,9 @@
     "High": 8,
     "Medium": 10,
     "Low": 12,
-    "Informational": 0
+    "Informational": 0,
+    "TruePositive": 1,
+    "FalsePositive": 2
   },
   {
     "Month": "2026-08-01",
@@ -13,7 +15,9 @@
     "High": 10,
     "Medium": 10,
     "Low": 12,
-    "Informational": 0
+    "Informational": 0,
+    "TruePositive": 0,
+    "FalsePositive": 3
   },
   {
     "Month": "2026-09-01",
@@ -21,6 +25,8 @@
     "High": 12,
     "Medium": 12,
     "Low": 14,
-    "Informational": 0
+    "Informational": 0,
+    "TruePositive": 2,
+    "FalsePositive": 4
   }
 ]

@@ -1,0 +1,50 @@
+[
+  {
+    "FromRun": "2026-07-01",
+    "ToRun": "2026-08-01",
+    "Compared": true,
+    "Reason": "",
+    "SeverityCompared": true,
+    "Earlier": 6,
+    "Current": 6,
+    "New": 1,
+    "NoLongerReported": 1,
+    "Persistent": 5,
+    "OpenEarlier": 6,
+    "OpenCurrent": 5,
+    "OpenNew": 1,
+    "OpenNoLonger": 2
+  },
+  {
+    "FromRun": "2026-08-01",
+    "ToRun": "2026-09-01",
+    "Compared": true,
+    "Reason": "",
+    "SeverityCompared": true,
+    "Earlier": 6,
+    "Current": 6,
+    "New": 1,
+    "NoLongerReported": 1,
+    "Persistent": 5,
+    "OpenEarlier": 5,
+    "OpenCurrent": 6,
+    "OpenNew": 1,
+    "OpenNoLonger": 0
+  },
+  {
+    "FromRun": "2026-09-01",
+    "ToRun": "2026-10-01",
+    "Compared": true,
+    "Reason": "",
+    "SeverityCompared": true,
+    "Earlier": 6,
+    "Current": 8,
+    "New": 3,
+    "NoLongerReported": 1,
+    "Persistent": 5,
+    "OpenEarlier": 6,
+    "OpenCurrent": 7,
+    "OpenNew": 3,
+    "OpenNoLonger": 2
+  }
+]

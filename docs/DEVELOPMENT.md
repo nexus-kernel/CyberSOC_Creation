@@ -1,5 +1,12 @@
 # Development and cloud environment
 
+CyberSOC note: this document was written for EBR_Creation and applies unchanged to this copy, with the scripts
+renamed (`Get-CyberSocEvidence.ps1`, `New-CyberSocReport.ps1` and the rest) and evidence packs named
+`CyberSOC-Evidence_*`. The suites now also hold `tests/Import-CyberSocVulnAssessment.Tests.ps1` and
+`tests/cybersoc-model.test.cjs`, with the synthetic vulnerability assessment runs in `tests/fixtures/vuln-assessment`.
+On Oct 19, 2026 the copy passed 278 Pester tests and 181 Node tests (one optional real-pack comparison skipped)
+and the 190 gate tests. The provenance and counts below are the EBR history.
+
 Use Linux, PowerShell 7, Pester 5.9.1, Node 24 LTS (application supports Node 18+),
 Python 3.10+ (3.12 recommended), npm, Git and GitHub CLI. The gate uses Python's
 standard library and gh; workflow regression tests additionally need
@@ -57,7 +64,7 @@ if ($result.TotalCount -eq 0 -or $result.Result -ne 'Passed' -or
 ```
 
 Optional safe smoke test (writes only local HTML/PPTX):
-`pwsh ./New-EbrControlsStandard.ps1 -OutputPath /tmp/ebr-install-check/standard.html`.
+`pwsh ./New-CyberSocControlsStandard.ps1 -OutputPath /tmp/ebr-install-check/standard.html`.
 The Node suite intentionally skips its real-evidence-pack comparison when no local
 packs exist. Do not add client data merely to remove that optional skip.
 
@@ -142,7 +149,7 @@ not validation against real customer packs. Reproduce without client data:
 # Require that this destination does not already exist.
 test ! -e EBR-Evidence_synthetic-validation
 cp -R tests/fixtures/offline-pack EBR-Evidence_synthetic-validation
-pwsh -NoProfile -File ./New-EbrSecurityReport.ps1 -EvidencePath ./EBR-Evidence_synthetic-validation -SkipDeck
+pwsh -NoProfile -File ./New-CyberSocReport.ps1 -EvidencePath ./EBR-Evidence_synthetic-validation -SkipDeck
 node --test tests/*.test.cjs
 # Remove only the temporary synthetic copy created above after inspecting results.
 rm -rf -- EBR-Evidence_synthetic-validation

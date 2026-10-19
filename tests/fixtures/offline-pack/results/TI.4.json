@@ -1,0 +1,44 @@
+[
+  {
+    "Technique": "T1078",
+    "Detections": 30,
+    "Alerts": 27,
+    "TruePositiveAlerts": 1
+  },
+  {
+    "Technique": "T1110",
+    "Detections": 22,
+    "Alerts": 20,
+    "TruePositiveAlerts": 0
+  },
+  {
+    "Technique": "T1566",
+    "Detections": 9,
+    "Alerts": 8,
+    "TruePositiveAlerts": 1
+  },
+  {
+    "Technique": "T1059.001",
+    "Detections": 8,
+    "Alerts": 7,
+    "TruePositiveAlerts": 2
+  },
+  {
+    "Technique": "T1567",
+    "Detections": 4,
+    "Alerts": 4,
+    "TruePositiveAlerts": 0
+  },
+  {
+    "Technique": "T1021",
+    "Detections": 2,
+    "Alerts": 2,
+    "TruePositiveAlerts": 1
+  },
+  {
+    "Technique": "T9999",
+    "Detections": 1,
+    "Alerts": 1,
+    "TruePositiveAlerts": 0
+  }
+]

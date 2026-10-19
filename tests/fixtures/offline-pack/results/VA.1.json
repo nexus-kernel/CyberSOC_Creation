@@ -1,0 +1,34 @@
+[
+  {
+    "VulnerabilitySeverityLevel": "Critical",
+    "Cves": 4,
+    "Devices": 3,
+    "Exposures": 9,
+    "ExploitableCves": 2,
+    "ExploitableDevices": 2
+  },
+  {
+    "VulnerabilitySeverityLevel": "High",
+    "Cves": 18,
+    "Devices": 5,
+    "Exposures": 40,
+    "ExploitableCves": 5,
+    "ExploitableDevices": 3
+  },
+  {
+    "VulnerabilitySeverityLevel": "Low",
+    "Cves": 12,
+    "Devices": 4,
+    "Exposures": 20,
+    "ExploitableCves": 0,
+    "ExploitableDevices": 0
+  },
+  {
+    "VulnerabilitySeverityLevel": "Medium",
+    "Cves": 40,
+    "Devices": 6,
+    "Exposures": 90,
+    "ExploitableCves": 3,
+    "ExploitableDevices": 2
+  }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "Month": "2026-07-01",
+    "Cves": 5,
+    "Devices": 3,
+    "Critical": 1,
+    "High": 2,
+    "ExploitableCves": 1
+  },
+  {
+    "Month": "2026-08-01",
+    "Cves": 7,
+    "Devices": 4,
+    "Critical": 0,
+    "High": 3,
+    "ExploitableCves": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Cves": 9,
+    "Devices": 5,
+    "Critical": 2,
+    "High": 4,
+    "ExploitableCves": 2
+  }
+]

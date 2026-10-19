@@ -10,9 +10,9 @@
     Also writes the PowerPoint edition beside it (report/build-controls-deck.cjs) when Node.js and
     pptxgenjs are available. -SkipDeck writes the HTML only. Regenerate after any change to a control, its tier or its measure.
 .EXAMPLE
-    ./New-EbrControlsStandard.ps1
+    ./New-CyberSocControlsStandard.ps1
 .EXAMPLE
-    ./New-EbrControlsStandard.ps1 -OutputPath ./out/controls-standard.html -SkipDeck
+    ./New-CyberSocControlsStandard.ps1 -OutputPath ./out/controls-standard.html -SkipDeck
 #>
 #Requires -Version 5.1
 [CmdletBinding()]

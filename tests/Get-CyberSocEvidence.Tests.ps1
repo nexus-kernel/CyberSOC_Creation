@@ -1,9 +1,9 @@
-# Pester 5 tests for Get-EbrSecurityEvidence.ps1
-# Run: Invoke-Pester ./tests/Get-EbrSecurityEvidence.Tests.ps1 -Output Detailed
+# Pester 5 tests for Get-CyberSocEvidence.ps1
+# Run: Invoke-Pester ./tests/Get-CyberSocEvidence.Tests.ps1 -Output Detailed
 # These cover the pure logic only. Nothing here signs in or calls Azure.
 
 BeforeAll {
-    . (Join-Path $PSScriptRoot '..' 'Get-EbrSecurityEvidence.ps1') -LoadFunctionsOnly
+    . (Join-Path $PSScriptRoot '..' 'Get-CyberSocEvidence.ps1') -LoadFunctionsOnly
 }
 
 Describe 'Query catalog' {
@@ -29,6 +29,42 @@ Describe 'Query catalog' {
         )
         $missing = $expected | Where-Object { $_ -notin $catalog.Id }
         $missing | Should -BeNullOrEmpty
+    }
+
+    It 'adds the CyberSOC trend, threat intelligence and vulnerability exposure queries' {
+        foreach ($id in 'OUT.2-MONTH', 'OUT.3-WEEK', 'OUT.9', 'TI.0', 'TI.1', 'TI.2', 'TI.3', 'TI.4', 'TI.5', 'TI.5-RISK', 'TI.6', 'TI.7', 'VA.1', 'VA.2', 'VA.3') { $catalog.Id | Should -Contain $id }
+        $out2 = ($catalog | Where-Object Id -eq 'OUT.2').Query
+        $month = ($catalog | Where-Object Id -eq 'OUT.2-MONTH').Query
+        $month.StartsWith($out2.Substring(0, $out2.IndexOf('          by Scope'))) | Should -BeTrue -Because 'OUT.2-MONTH is the OUT.2 cohort split by month'
+        $month | Should -Match 'by Month = startofmonth\(CreatedTime\), Scope\r?\n\| order by Month asc, Scope asc$'
+        ($catalog | Where-Object Id -eq 'OUT.3-WEEK').Query | Should -Match 'by Week = bin_at\(CreatedTime, 7d, \{\{WINDOW_START\}\}\)'
+        foreach ($id in 'OUT.2-MONTH', 'OUT.3-WEEK', 'OUT.9', 'TI.2', 'TI.3', 'TI.4') {
+            $q = ($catalog | Where-Object Id -eq $id).Query
+            $q | Should -Match '\{\{TICKET\}\}' -Because $id
+            $q | Should -Match 'Severity != "Informational"' -Because $id
+            $q | Should -Match 'by TenantId, IncidentNumber' -Because $id
+        }
+        foreach ($id in 'TI.3', 'TI.4') { ($catalog | Where-Object Id -eq $id).Query | Should -Match 'join kind=inner \(Ticketed\)' -Because 'stages and techniques read only the detections in ticketed alerts' }
+        ($catalog | Where-Object Id -eq 'TI.2').Query | Should -Match 'join kind=leftouter \(Ticketed \| distinct AlertId'
+        ($catalog | Where-Object Id -eq 'TI.0').AlwaysBreakdown | Should -BeTrue -Because 'the EmailEvents workspace is chosen from TI.0-BY-WORKSPACE'
+        ($catalog | Where-Object Id -eq 'TI.1').Query | Should -Match 'ThreatIntelIndicators, ThreatIntelligenceIndicator'
+        ($catalog | Where-Object Id -eq 'TI.1').Query | Should -Match 'TimeGenerated between \(endofday\(\{\{WINDOW_END\}\}\) - 365d \.\. endofday\(\{\{WINDOW_END\}\}\)\)' -Because 'an indicator ingested before the window and still valid at its end is monitored'
+        ($catalog | Where-Object Id -eq 'TI.1').Query | Should -Not -Match 'now\(\)'
+        foreach ($id in 'TI.0', 'POS.8') {
+            $q = ($catalog | Where-Object Id -eq $id).Query
+            $q | Should -Match 'TimeGenerated between \(\{\{WINDOW_START\}\} \.\. endofday\(\{\{WINDOW_END\}\}\)\)' -Because "$id reads the report window, not the days after it up to collection"
+            $q | Should -Not -Match 'now\(\)' -Because $id
+        }
+        ($catalog | Where-Object Id -eq 'TI.5').Query | Should -Match 'Targets >= 10'
+        ($catalog | Where-Object Id -eq 'TI.5').Query | Should -Not -Match 'project .*UserPrincipalName' -Because 'only counts leave the query'
+        ($catalog | Where-Object Id -eq 'TI.7').Query | Should -Match 'Timestamp between \(ago\(30d\) \.\. now\(\)\)'
+        foreach ($id in 'TI.7', 'VA.1', 'VA.2', 'VA.3') {
+            $item = $catalog | Where-Object Id -eq $id
+            $item.Engine | Should -Be 'AH' -Because $id
+            $item.Query | Should -Match 'where isnotempty\(AzureResourceId\)' -Because 'every device measure reads Azure virtual machines only'
+            $item.Query | Should -Match 'AzureResourceId !contains "\{\{MRG\}\}"' -Because $id
+        }
+        @($catalog | Where-Object { $_.Id -match '^(TI|VA)\.' } | Where-Object { $_.Phase -notlike 'P5*' }) | Should -BeNullOrEmpty
     }
 
     It 'includes the substitutes and runbook variants' {
@@ -234,7 +270,11 @@ Describe 'Query catalog' {
             ($tenant | Where-Object Id -eq $id).TenantTable | Should -Be 'SigninLogs' -Because $id
         }
         ($tenant | Where-Object Id -eq 'OUT.8').TenantTable | Should -Be 'AuditLogs'
-        @($tenant).Count | Should -Be 12
+        # CyberSOC: identity threat activity, Entra ID Protection risk detections and email threats.
+        ($tenant | Where-Object Id -eq 'TI.5').TenantTable | Should -Be 'SigninLogs'
+        ($tenant | Where-Object Id -eq 'TI.5-RISK').TenantTable | Should -Be 'AADUserRiskEvents'
+        ($tenant | Where-Object Id -eq 'TI.6').TenantTable | Should -Be 'EmailEvents'
+        @($tenant).Count | Should -Be 15
     }
 
     It 'checks for Defender XDR incidents synced into more than one workspace' {
@@ -524,39 +564,70 @@ Describe 'Response conversion' {
 }
 
 Describe 'Get-EbrDefaultReportingWindow' {
+    # CyberSOC: the report month and the two full months before it, not the maximum reach of the EBR collector.
     BeforeAll { $now = [datetime]::new(2026, 10, 7, 15, 0, 0) }
 
-    It 'ends on the last day of the previous full month' {
+    It 'reports the last full month by default, with the two full months before it' {
         $w = Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-01-14T09:00:00') -Now $now
+        $w.ReportMonth | Should -Be ([datetime]'2026-09-01')
+        $w.Start | Should -Be ([datetime]'2026-07-01')
         $w.End | Should -Be ([datetime]'2026-09-30')
+        $w.Basis | Should -Match 'report month September 2026 and the 2 full months before it, the 90-day trend'
+        $w.Basis | Should -Not -Match 'shortened'
     }
 
-    It 'starts at the next full month when data begins mid-month' {
-        $w = Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-01-14T09:00:00') -Now $now
-        $w.Start | Should -Be ([datetime]'2026-02-01')
+    It 'takes the report month it is given' {
+        $w = Get-EbrDefaultReportingWindow -ReportMonth ([datetime]'2026-01-20') -Now $now
+        $w.Start | Should -Be ([datetime]'2025-11-01')
+        $w.End | Should -Be ([datetime]'2026-01-31')
+        $w.ReportMonth | Should -Be ([datetime]'2026-01-01')
     }
 
-    It 'starts in the same month when data begins at midnight on the 1st' {
-        $w = Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-01-01T00:00:00') -Now $now
-        $w.Start | Should -Be ([datetime]'2026-01-01')
+    It 'refuses a report month that has not ended' {
+        { Get-EbrDefaultReportingWindow -ReportMonth ([datetime]'2026-10-01') -Now $now } | Should -Throw '*has not ended yet*2026-09*'
+    }
+
+    It 'starts at the next full month when the data begins mid-month inside the trend' {
+        $w = Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-07-14T09:00:00') -Now $now
+        $w.Start | Should -Be ([datetime]'2026-08-01')
+        $w.TrendStart | Should -Be ([datetime]'2026-07-01')
+        $w.Basis | Should -Match 'shortened to the first full month of data because SecurityIncident data starts 2026-07-14'
+    }
+
+    It 'keeps the trend start when the data begins at midnight on its 1st' {
+        $w = Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-07-01T00:00:00') -Now $now
+        $w.Start | Should -Be ([datetime]'2026-07-01')
     }
 
     It 'falls back to retention when there is no incident data' {
-        $w = Get-EbrDefaultReportingWindow -RetentionDays 90 -Now $now
-        $w.Start | Should -Be ([datetime]'2026-08-01')
+        $w = Get-EbrDefaultReportingWindow -RetentionDays 60 -Now $now
+        $w.Start | Should -Be ([datetime]'2026-09-01')
         $w.Basis | Should -Match 'retention'
     }
 
-    It 'falls back to six full months with nothing to go on' {
+    It 'uses the three full months with nothing to go on' {
         $w = Get-EbrDefaultReportingWindow -Now $now
-        $w.Start | Should -Be ([datetime]'2026-04-01')
+        $w.Start | Should -Be ([datetime]'2026-07-01')
         $w.End | Should -Be ([datetime]'2026-09-30')
     }
 
-    It 'uses the partial month when data only starts last month' {
-        $w = Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-09-15T00:00:00') -Now $now
-        $w.Start | Should -Be ([datetime]'2026-09-01')
-        $w.Basis | Should -Match 'partial'
+    It 'starts a partial report month on the first day of data, never on the 1st' {
+        $w = Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-09-15T08:30:00') -Now $now
+        $w.Start | Should -Be ([datetime]'2026-09-15')
+        $w.End | Should -Be ([datetime]'2026-09-30')
+        $w.Basis | Should -Match 'a partial report month from 2026-09-15'
+        (Get-EbrDefaultReportingWindow -RetentionDays 30 -Now $now).Start | Should -Be ([datetime]'2026-09-07') -Because 'without incident data the retention start is the first day of data'
+    }
+
+    It 'refuses a report month that ends before the data starts, rather than reporting zeros' {
+        { Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-09-15T00:00:00') -ReportMonth ([datetime]'2026-08-01') -Now $now } | Should -Throw '*2026-08 ends before the data starts*SecurityIncident data starts 2026-09-15*first month that can be reported is 2026-09*'
+        { Get-EbrDefaultReportingWindow -EarliestIncident ([datetime]'2026-10-02T00:00:00') -Now $now } | Should -Throw '*2026-09 ends before the data starts*'
+    }
+
+    It 'reads a report month as yyyy-MM only' {
+        ConvertTo-EbrMonth '2026-09' | Should -Be ([datetime]'2026-09-01')
+        { ConvertTo-EbrMonth '2026-9' } | Should -Throw
+        { ConvertTo-EbrMonth '2026-09-01' } | Should -Throw
     }
 }
 
@@ -1586,6 +1657,15 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         Mock Get-EbrSentinelRules { [pscustomobject]@{ RuleName = 'r1'; Kind = 'Scheduled'; Enabled = $true; Severity = 'High'; LastModifiedUtc = '2026-09-01T00:00:00Z'; Tactics = ''; TemplateName = ''; RuleId = 'id' } }
         Mock Test-EbrDirectAccess { [pscustomobject]@{ Ok = $false; Missing = @(); Error = 'no direct token' } }
         Mock Read-EbrInput { 'n' }
+        # One synthetic vulnerability assessment run naming the first subscription, dated the 1st of the report month
+        # so it always falls inside the window.
+        $vaDir = Join-Path $TestDrive 'va'
+        New-Item -ItemType Directory -Path $vaDir | Out-Null
+        $vaMonth = [datetime]::new(([datetime]::UtcNow).Year, ([datetime]::UtcNow).Month, 1).AddMonths(-1)
+        $vaStamp = $vaMonth.ToString('yyyyMMdd') + '_090000'
+        $vaSource = Join-Path $PSScriptRoot 'fixtures/vuln-assessment/2026-09'
+        (Get-Content (Join-Path $vaSource 'vuln_assessment_20260901_090000.csv') -Raw).Replace('5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11', $subs[0]) | Set-Content (Join-Path $vaDir "vuln_assessment_$vaStamp.csv") -NoNewline
+        (Get-Content (Join-Path $vaSource 'run_metadata_20260901_090000.json') -Raw).Replace('5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11', $subs[0]).Replace('2026-09-01T09:00:00', $vaMonth.ToString('yyyy-MM-dd') + 'T09:00:00') | Set-Content (Join-Path $vaDir "run_metadata_$vaStamp.json")
         Mock Get-EbrDefenderScores { [pscustomobject]@{ Rows = @([pscustomobject]@{ Metric = 'Exposure score'; Score = 30; Time = '' }); Detail = '' } }
         # Graph: the probe works, role assignments read without PIM, Conditional Access is not permitted, everything else is empty
         Mock Invoke-EbrGraphGet {
@@ -1607,6 +1687,12 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
                 $rows = foreach ($t in $reach[$WorkspaceCustomerId]) { [pscustomobject]@{ SourceTable = $t[0]; EarliestRecord = $t[1]; LatestRecord = '2026-10-07T00:00:00Z'; Records = $t[2] } }
                 return [pscustomobject]@{ Columns = @('SourceTable', 'EarliestRecord', 'LatestRecord', 'Records'); Rows = @($rows); Detail = '' }
             }
+            if ($Query -match '^union withsource = SourceTable isfuzzy = true\s+ThreatIntelIndicators, ThreatIntelligenceIndicator, SecurityAlert') {
+                # TI.0: a separate Entra diagnostic setting sends the risk detections to ws1, the sign-ins go to ws2, email to ws3
+                $tiReach = @{ ws1 = @{ AADUserRiskEvents = 30 }; ws2 = @{ SigninLogs = 900; AADUserRiskEvents = 3 }; ws3 = @{ EmailEvents = 50 } }
+                $rows = foreach ($k in $tiReach.Keys) { if ($combined -or $k -eq $WorkspaceCustomerId) { foreach ($t in $tiReach[$k].GetEnumerator()) { [pscustomobject]@{ SourceTable = $t.Key; EarliestRecord = '2026-07-01T00:00:00Z'; LatestRecord = '2026-09-30T00:00:00Z'; Records = $t.Value } } } }
+                return [pscustomobject]@{ Columns = @('SourceTable', 'EarliestRecord', 'LatestRecord', 'Records'); Rows = @($rows); Detail = '' }
+            }
             if ($Query -match '^union isfuzzy = true' -and $Query -match 'take 1 \| project SourceTable') {
                 # Like SHB: the Sentinel workspaces hold UEBA IdentityInfo but no Defender device or email tables
                 return [pscustomobject]@{ Columns = @('SourceTable'); Rows = @([pscustomobject]@{ SourceTable = 'IdentityInfo' }); Detail = '' }
@@ -1621,8 +1707,8 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
             [pscustomobject]@{ Columns = @('N'); Rows = @([pscustomobject]@{ N = 1 }); Detail = '' }
         }
 
-        $code = Invoke-EbrMain -TenantId $client -SubscriptionId $subs -OutputPath $TestDrive -SkipExchange -ManagedRgPattern 'aznativesol0'
-        $outDir = Get-ChildItem -Path $TestDrive -Directory -Filter 'EBR-Evidence_*' | Select-Object -First 1
+        $code = Invoke-EbrMain -TenantId $client -SubscriptionId $subs -OutputPath $TestDrive -SkipExchange -ManagedRgPattern 'aznativesol0' -VulnAssessmentPath $vaDir
+        $outDir = Get-ChildItem -Path $TestDrive -Directory -Filter 'CyberSOC-Evidence_*' | Select-Object -First 1
         $manifest = Import-Csv (Join-Path $outDir.FullName '00-manifest.csv')
         $params = Get-Content (Join-Path $outDir.FullName '00-parameters.json') -Raw | ConvertFrom-Json
         function Get-M([string]$Id) { $manifest | Where-Object ResultId -eq $Id }
@@ -1638,9 +1724,14 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         @(Import-Csv (Join-Path $outDir.FullName '01-worksheet.csv')).Count | Should -Be 48
     }
 
-    It 'sets the window from the earliest workspace, not the first one' {
-        $params.WindowStart | Should -Be '2026-03-01'
-        $params.WindowEnd | Should -Be '2026-09-30'
+    It 'sets the 90-day window ending with the last full month, since every workspace holds data before it' {
+        $thisMonth = [datetime]::new(([datetime]::UtcNow).Year, ([datetime]::UtcNow).Month, 1)
+        $params.WindowEnd | Should -Be $thisMonth.AddDays(-1).ToString('yyyy-MM-dd')
+        $params.WindowStart | Should -Be $thisMonth.AddMonths(-3).ToString('yyyy-MM-dd')
+        $params.ReportMonth | Should -Be $thisMonth.AddMonths(-1).ToString('yyyy-MM')
+        $params.TrendMonths | Should -Be 3
+        $params.ReportType | Should -Be 'CyberSOC monthly'
+        $params.EbrBaseVersion | Should -Be '1.14.0'
     }
 
     It 'reads tenant-wide tables once, from the workspace holding the most' {
@@ -1725,8 +1816,33 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         (Get-M 'DP.7-ZAP').Phase | Should -Be 'P2 Data protection'
     }
 
-    It 'names the pack after the client, not a subscription' {
-        $outDir.Name | Should -Match '^EBR-Evidence_Contoso-Test_'
+    It 'names the pack after the client and the report month, not a subscription' {
+        $outDir.Name | Should -Match ('^CyberSOC-Evidence_Contoso-Test_{0}_\d{{8}}-\d{{6}}$' -f [regex]::Escape($params.ReportMonth))
+    }
+
+    It 'runs Phase 5: tenant-wide tables once from their workspace, and the device queries as not a zero without Defender' {
+        foreach ($id in 'OUT.2-MONTH', 'OUT.3-WEEK', 'OUT.9', 'TI.0', 'TI.0-BY-WORKSPACE', 'TI.1', 'TI.2', 'TI.3', 'TI.4', 'TI.5', 'TI.5-RISK', 'TI.6', 'TI.7', 'VA.1', 'VA.2', 'VA.3') { Get-M $id | Should -Not -BeNullOrEmpty -Because $id }
+        (Get-M 'TI.0').Phase | Should -Be 'P5 Threat intelligence'
+        Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match 'SprayIps' } -Times 1 -Exactly -Scope Describe
+        Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match 'SprayIps' -and $WorkspaceCustomerId -eq 'ws2' } -Times 1 -Exactly -Scope Describe
+        Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match '^AADUserRiskEvents' } -Times 1 -Exactly -Scope Describe
+        Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match '^AADUserRiskEvents' -and $WorkspaceCustomerId -eq 'ws1' } -Times 1 -Exactly -Scope Describe -Because 'risk detections are read where TI.0 finds the most, not where the sign-ins are'
+        Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match '^EmailEvents' } -Times 1 -Exactly -Scope Describe
+        Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match '^EmailEvents' -and $WorkspaceCustomerId -eq 'ws3' } -Times 1 -Exactly -Scope Describe
+        foreach ($id in 'TI.7', 'VA.1', 'VA.2', 'VA.3') {
+            (Get-M $id).Status | Should -Be 'UNAVAILABLE' -Because $id
+            (Get-M $id).Detail | Should -Match 'Not a zero' -Because $id
+        }
+    }
+
+    It 'imports the vulnerability assessment run, partial because it covers one of the three subscriptions' {
+        (Get-M 'VA.RUNS').Status | Should -Be 'PARTIAL'
+        (Get-M 'VA.RUNS').Engine | Should -Be 'VULN-ASSESS'
+        (Get-M 'VA.CHANGE').Status | Should -Be 'EMPTY'
+        @($params.VulnAssessment.Runs).Count | Should -Be 1
+        $params.VulnAssessment.Runs[0].Status | Should -Be 'Partial'
+        (Get-Content (Join-Path $outDir.FullName 'results/VA.TOP.json') -Raw) | Should -Not -Match 'vm-app|rg-app|/subscriptions/'
+        (Get-Content (Join-Path $outDir.FullName '02-notes.txt') -Raw) | Should -Match 'Vulnerability assessment runs imported: \d{4}-\d{2}-01 \(Partial\)'
     }
 
     It 'collects Sentinel rules from every workspace' {

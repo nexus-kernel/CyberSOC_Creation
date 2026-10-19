@@ -1,0 +1,18 @@
+[
+  {
+    "Product": "Log4j Core",
+    "Severity": "Critical",
+    "Vms": 2,
+    "Findings": 2,
+    "KevDateAdded": "2026-09-10",
+    "AddedThisMonth": true
+  },
+  {
+    "Product": "Apache Tomcat",
+    "Severity": "High",
+    "Vms": 2,
+    "Findings": 2,
+    "KevDateAdded": "2025-12-01",
+    "AddedThisMonth": false
+  }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "Source": "Microsoft Defender Threat Intelligence",
+    "Kind": "IP address",
+    "Indicators": 6000,
+    "Active": 5200,
+    "LastIngested": "2026-10-08T06:00:00Z"
+  },
+  {
+    "Source": "Microsoft Defender Threat Intelligence",
+    "Kind": "Domain",
+    "Indicators": 4000,
+    "Active": 3500,
+    "LastIngested": "2026-10-08T06:00:00Z"
+  },
+  {
+    "Source": "Microsoft Defender Threat Intelligence",
+    "Kind": "URL",
+    "Indicators": 2500,
+    "Active": 2100,
+    "LastIngested": "2026-10-08T06:00:00Z"
+  },
+  {
+    "Source": "Microsoft Defender Threat Intelligence",
+    "Kind": "File hash",
+    "Indicators": 1800,
+    "Active": 1700,
+    "LastIngested": "2026-10-08T06:00:00Z"
+  },
+  {
+    "Source": "Atmosera TAXII feed",
+    "Kind": "IP address",
+    "Indicators": 500,
+    "Active": 450,
+    "LastIngested": "2026-10-08T06:00:00Z"
+  },
+  {
+    "Source": "Atmosera TAXII feed",
+    "Kind": "Domain",
+    "Indicators": 200,
+    "Active": 180,
+    "LastIngested": "2026-10-08T06:00:00Z"
+  }
+]

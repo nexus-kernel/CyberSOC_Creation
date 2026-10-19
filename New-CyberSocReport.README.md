@@ -1,4 +1,6 @@
-# EBR security HTML report
+# CyberSOC monthly security report
+
+The monthly CyberSOC report of one client: the report month with its 90-day trend, security operations, threat intelligence, vulnerability management and the control posture. It is the EBR security report with the CyberSOC pages and slides added, built from a CyberSOC evidence pack (`Get-CyberSocEvidence.ps1`). The CyberSOC sections come from `report/cybersoc-model.js`, which runs after the EBR model (`report/report-model.js`) and under the same evidence and copy rules. See [CyberSOC figures](#cybersoc-figures) for their rules.
 
 The collector creates the report in each completed evidence pack in two HTML editions, with its PowerPoint edition `03-security-report.pptx` beside them. Each HTML edition works offline as a single file with embedded data, styles and graphics. Open it in a browser to view the report, change its depth or print the selected view.
 
@@ -15,16 +17,22 @@ The report follows the navy, cyan and white theme of the EBR decks and the struc
 ## Generate from an existing evidence pack
 
 ```powershell
-./New-EbrSecurityReport.ps1 -EvidencePath './EBR-Evidence_Client_20261008-120000'
+./New-CyberSocReport.ps1 -EvidencePath './CyberSOC-Evidence_Client_2026-09_20261008-120000'
+```
+
+Add the vulnerability assessment runs to a pack first, if the collection ran without them:
+
+```powershell
+./Import-CyberSocVulnAssessment.ps1 -EvidencePath './CyberSOC-Evidence_Client_2026-09_20261008-120000' -VulnAssessmentPath './VULN_ASSESSMENT'
 ```
 
 ```powershell
-./New-EbrSecurityReport.ps1 -EvidencePath './EBR-Evidence_Client_20261008-120000' -Depth Detailed -ContextPath './client-review-context.json' -OutputPath './Client-Security-Review.html'
+./New-CyberSocReport.ps1 -EvidencePath './CyberSOC-Evidence_Client_20261008-120000' -Depth Detailed -ContextPath './client-review-context.json' -OutputPath './Client-Security-Review.html'
 ```
 
 Generation requires PowerShell 5.1 or later and the adjacent `report` folder. No Azure session, browser automation package, Node installation or Python installation is required to generate or view the internal HTML edition. The client edition needs Node.js, and the PowerPoint edition needs Node.js and pptxgenjs (`npm ci` in this folder, see [Windows setup](#windows-setup-for-the-powerpoint-edition)). Without them the internal HTML is still written and a warning says which editions were skipped. `-SkipDeck` writes the two HTML editions only. With `-OutputPath` the client edition takes the same name ending in `.client.html`, for example `Client-Security-Review.client.html`. `-OutputPath` names the internal edition, so a path that already ends in `.client.html` is refused. The browser must support JavaScript. The completed HTML has no dependency on the original evidence folder.
 
-To change the default for a new collection use `./Get-EbrSecurityEvidence.ps1 -ReportDepth Brief`. Use `-SkipHtmlReport` to collect evidence without generating HTML. A report generation error preserves the collected evidence and returns exit code 2. Re-run the standalone generator after correcting the error.
+To change the default for a new collection use `./Get-CyberSocEvidence.ps1 -ReportDepth Brief`. Use `-SkipHtmlReport` to collect evidence without generating HTML. A report generation error preserves the collected evidence and returns exit code 2. Re-run the standalone generator after correcting the error.
 
 ### Windows setup for the PowerPoint edition
 
@@ -56,12 +64,14 @@ PowerPoint, Python, LibreOffice and Chrome are not needed to build the deck. The
 
 | Page | Depth | Content |
 |---|---|---|
-| 01 Executive summary | all | Four headline tiles, the four tier posture block, what comes next |
-| 02 Security operations | Balanced, Detailed | Response performance, alerts created each month, disposition, detections by source, and the confirmed threats table when there are examples |
-| 03 Measured outcomes | Balanced, Detailed | One row per pillar with a headline statement, narrative, measure and callout |
-| 04 The controls that matter | Balanced, Detailed | E, P, N status marks by pillar |
-| 05 What comes next | all | Verified delivery, the top three sequenced priorities, the MFA method update |
-| 06 Tenant and cloud posture | Detailed | Score rings as percentages with their movement in percentage points and the model, source, scope and read date of each score, trend, where the next points are with the healthy resources of each control, the measurement model explainer |
+| 01 Executive summary | all | The month's four tiles, the month in brief, the month at a glance beside the two months before it with a neutral change, reviewed analyst highlights, the four tier posture block |
+| 02 Security operations | Balanced, Detailed | Response performance, alerts created each month and each week, response timing by month, the most common alert types, disposition, detections by source, and the confirmed threats table when there are examples |
+| 03 Threat intelligence | all | Indicator matches by month, indicators monitored, MITRE ATT&CK tactics and techniques on the alerts, identity threat activity, Entra ID Protection risk detections, email threats, malware on Azure virtual machines, the CISA KEV-listed vulnerabilities present |
+| 04 Vulnerability management | all | Open findings at each assessment, the change between assessments, top products to patch, remediation status and owner, or the Defender current state without assessment runs |
+| 05 Measured outcomes | Balanced, Detailed | One row per pillar with a headline statement, narrative, measure and callout |
+| 06 The controls that matter | Balanced, Detailed | E, P, N status marks by pillar |
+| 07 What comes next | all | Verified delivery, the top three sequenced priorities, the MFA method update |
+| 08 Tenant and cloud posture | Balanced, Detailed | Score rings as percentages with their movement in percentage points and the model, source, scope and read date of each score, the scores by month over the window, recommendation health by week, where the next points are with the healthy resources of each control, the measurement model explainer |
 | Presenter notes | screen only, internal edition | Prepared answers, timing selection, evidence review, collection register |
 
 The default is Balanced. The depth selector updates the view without modifying the embedded evidence. Printing follows the selected view and excludes the presenter notes.
@@ -105,6 +115,19 @@ Rules the deck follows:
 - The hardening count of members without MFA is written against the same members as the MFA at sign-in control, for example "14 of 194" beside a control reading "180 of 194", so the two reconcile at a glance.
 
 Charts are native PowerPoint charts, so they stay editable. Speaker notes are talking points built only from text the client already sees in the HTML, such as pillar narratives and control descriptions. The presenter notes are never copied in, so the deck can be sent to the client after the review.
+
+## CyberSOC figures
+
+| Measure | Rule |
+|---|---|
+| Report month | The month of the window end (`ReportMonth` in the pack). A window that starts after the 1st or ends before the last day leaves it partial, and a presenter note says so. A trend shorter than three months says why |
+| Monthly alerts | OUT.3 by month and OUT.3-WEEK in 7-day bins from the window start, the same alert population as OUT.1. A month or week inside the window with no row is a zero when the result was read. The last bin of a 92-day window is 1 day long, and the chart says so. Duplicate Defender XDR alerts across workspaces withhold every monthly figure |
+| Timing by month | OUT.2-MONTH, the OUT.2 cohort split by the month each alert was created. A month with fewer than 5 closed alerts in a scope reports no timing for it. A median under 20 minutes or a 90th percentile over one hour keeps its note |
+| Month at a glance | The report month beside the months before it. The change from the previous month is neutral: "6 more", "4 min shorter", "Up 2 points", never better or worse. A score change is printed only between readings against the same maximum, otherwise "Not compared, the maximum changed". A rise in high severity alerts is a presenter note |
+| Alert types | OUT.9 titles that pass the OUT.4 screen, worded as alerts. Withheld titles are counted, never named |
+| Threat intelligence | TI.0 decides which tables were collected. A measure whose table Sentinel does not hold is not gathered and reads "Completed in the review", never a zero. A match confirms an indicator was observed, not compromise. Tactics are detection-time labels on the alerts. Risky sign-ins are left out when the tenant cannot see risk levels (no Entra ID P2) |
+| Vulnerability management | VA.RUNS when the pack holds assessment runs, otherwise VA.1 to VA.3 from Defender. A run that did not check the CISA KEV catalog reads "Not checked", never zero. A finding the earlier assessment reported and the later did not is no longer open, pending validation, never remediated. A CISA KEV listing is exploitation in the wild, not in the client environment. Owners read Atmosera, Your team, Atmosera and your team, or To be confirmed |
+| Analyst highlights | Only from a reviewed `MonthHighlights` record for the report month (see below) |
 
 ## Vocabulary and copy rules
 
@@ -201,9 +224,20 @@ Copy `report/context.example.json`, enter the exact client and tenant from the p
     "WindowStart": "2026-07-01",
     "WindowEnd": "2026-09-30"
   },
-  "ResponseTargetMinutes": 60
+  "ResponseTargetMinutes": 60,
+  "MonthHighlights": [
+    {
+      "Title": "Credential phishing wave quarantined",
+      "Summary": "A phishing campaign aimed at finance mailboxes was detected and the messages quarantined. No account sign-in followed.",
+      "Reference": "ZD 9900300",
+      "Month": "2026-09",
+      "Reviewed": "2026-10-02"
+    }
+  ]
 }
 ```
+
+`MonthHighlights` holds up to four reviewed analyst highlights for the CyberSOC report month, shown on the executive summary and in the speaker notes of the month at a glance slide. Each needs a `Title`, a `Summary`, a `Reference`, the `Month` it covers (yyyy-MM, the pack's report month) and a `Reviewed` date on or after the last day of that month. A record from another month, or one reviewed before the month ended, is omitted with an evidence review note, so a highlight never carries into a later report. The generator cannot verify the referenced ticket. Write the summary as the client should read it: no semicolons, arrows or emoji.
 
 `ServiceStartDate` enables the "Months of managed security" tile. `Previous`, `PreviousMax` and `PreviousReadDate` add the tenant score movement line, in percentage points. Without `PreviousMax` the maximum comes from the POS.6-TREND snapshot dated `PreviousReadDate`, and without that the movement line is omitted and the evidence review says so. The line is printed only when the earlier maximum equals `Max`, since Microsoft widens the maximum over time and a wider maximum is a different evaluated scope. Optional `PreviousModel` names the scoring model of the earlier reading, Microsoft Secure Score when absent, and a reading from another model is never compared. A refused comparison reads as current state and the evidence review names both readings. `Categories` are percentages and add the category bars on the posture page. A delivered item needs a title, outcome, reference and a completion date inside the alert period. Incomplete entries appear in the evidence review instead of on the client page. `Impact` is the reviewed data exposure and business impact determination for the period's true positives: `Confirmed` is the number of true positives with confirmed data exposure or business impact (0 when the review found none), `Reviewed` is the date the closing comments and tickets were reviewed, `Reference` is the ticket or record that holds the review, and `WindowStart` and `WindowEnd` are the alert period the review covers, copied from the pack's `00-parameters.json`. All five are required. The window must match the pack's alert period, `Reviewed` must be on or after `WindowEnd`, and `Confirmed` cannot exceed the OUT.1 true positive count, so a context file reused from an earlier period never carries a determination forward to later true positives. A record that fails any check is omitted with an evidence review note naming the reason. With the record the threats caption, the HTML threats block, the executive tile and the outcomes tier print the determination with its reference and date, and a confirmed impact withdraws the tactic win from the summary. Without it the report prints the tactic count and asks for additional investigation evidence, and the evidence review says so. The generator checks structure and date scope but cannot verify the referenced ticket, portal capture or impact review. `OpenAlertNote` is the reviewed status of the alerts OUT.1 counts as open at collection: `AwaitingClient` is the number awaiting client action or confirmation, `InProgress` the number still in progress with Atmosera, and `Reviewed`, `Reference`, `WindowStart` and `WindowEnd` follow the `Impact` rules. All six are required, the window must match the pack's alert period, `Reviewed` must be on or after `WindowEnd`, and the two counts must add up to the OUT.1 open count, so a record reused from an earlier period never splits a later count. With the record the detection narrative, the operations page and the operations slide split the open alerts, and the pillar source line, the operations page and the operations slide's speaker notes cite the record. A record that fails any check is omitted with an evidence review note naming the reason, and the surfaces keep the combined sentence. `ResponseTargetMinutes` is the agreed time from alert creation to recorded close for high severity alerts, as a whole number of minutes above zero. With it the operations page, and the operations slide's speaker notes, compare the timing cohort's median and 90th percentile with the target. A value that is not a whole number above zero is omitted with an evidence review note, and without the field no target line is printed. The comparison counts no alerts against the target, so it is not an SLA attainment figure. `Actions` is the reviewed status of a roadmap item or an ask, one record per item. `Key` names the item: `drift` (the foundational gaps), `critical` (critical vulnerability remediation), `methods` (the MFA method update and its ask), `access` (the read access ask), `backupcheck` (the backup coverage validation in Now), or a roadmap catalog key from `report/report-story.js` (`idp`, `phish`, `consent`, `workload`, `logging`, `kvrbac`, `diskenc`, `containers`, `vulnassess`, `segment`, `windows`, `backup`, `vmplatform`, `pim`, `allowlist`, `sharing`, `mdi`), and the same key matches the roadmap item and its ask. The `detect` item was split on Oct 16, 2026: a record that tracked vulnerability assessment takes `vulnassess`, and one that tracked analytics rules or threat intelligence takes `drift`, since those are foundational gaps now. A record that still names `detect` is omitted with an evidence review note that says so. The `backup` item was split on Oct 18, 2026: `backup` keeps the Azure Backup extension in Later and its ask to agree which machines persist and approve backup cost, and `backupcheck` is the new validation step in Now. A reviewed `backup` record keeps its status on the extension and its ask only, and never on the validation. A record that tracked confirming which machines persist, with no backup cost approved, moves to `backupcheck`. `Status` is one of `Proposed`, `PendingValidation`, `AwaitingApproval`, `Approved`, `Scheduled`, `InProgress` or `Verified`. `Reference`, `Reviewed`, `WindowStart` and `WindowEnd` are required, the window must match the pack's alert period, and `Reviewed` must be on or after the posture read date, so a record from an earlier review never carries a status forward to this collection's findings. `Owner`, `TargetDate` and `Verification` (how completion is checked) are optional, except that `Scheduled` needs a `TargetDate`, and `Verified` needs a `Delivered` record in the same alert period with the same `Reference`. A second record for the same key, an unknown key or status, or a record that fails any check is omitted with an evidence review note naming the reason. With a record the roadmap item's evidence line carries the status, owner, target date, reference and review date, and the drift panel names the status of the foundational fixes. An approval ask, or the MFA method update ask, whose record reads `Approved`, `Scheduled`, `InProgress` or `Verified` is no longer a decision: it leaves the decisions slide and the executive summary before the four-ask limit and the count, so the next pending ask takes its place, and the decisions slide's speaker notes name it with its status. An ask whose record reads `Proposed`, `PendingValidation` or `AwaitingApproval` stays, with the status on a line under its body. The read access ask stays whatever its record says, with the status under it, because no status shows the permission was provisioned. It leaves only when a collection reads the evidence. The drift panel's status line is cut with three dots when its reference would run into the first gap, and the slide's speaker notes carry it in full. On the deck the card text steps down from 13 pt to 10 pt to hold that line, and an owner or reference too long even then is cut with three dots, owner first. The speaker notes keep the full attribution. A record whose key matches no item on this roadmap is not shown. The generator checks structure and dates but cannot verify the referenced change or ticket. The context file accepts no overrides for computed metrics.
 
@@ -224,7 +258,7 @@ Evidence IDs and read dates stay in the source lines, since they carry no identi
 ## Controls standard for executives
 
 ```powershell
-./New-EbrControlsStandard.ps1
+./New-CyberSocControlsStandard.ps1
 ```
 
 Writes `docs/The Controls That Matter.html` and `docs/The Controls That Matter.pptx`: page 04 on its own, as a standard rather than a client reading. Both are informational. They outline every control by pillar and tier with the reading that grades it, explain the tiers and the E, P and N marks, count the controls per pillar and close with an invitation for feedback. They do not ask for sign-off and carry no measure IDs, change list or page footers, and they hold no client data. The control list comes from `report/report-model.js` run on an empty pack in standards mode, so both always match the client report. Set the title and version in `report/controls-standard.json`, then regenerate after any change to a control, its tier or its measure.
@@ -234,7 +268,7 @@ The deck is built by `node report/build-controls-deck.cjs [output.pptx]` (pptxge
 ## Validation
 
 ```powershell
-Invoke-Pester ./tests/Get-EbrSecurityEvidence.Tests.ps1, ./tests/New-EbrSecurityReport.Tests.ps1 -Output Detailed
+Invoke-Pester ./tests/Get-CyberSocEvidence.Tests.ps1, ./tests/New-CyberSocReport.Tests.ps1 -Output Detailed
 ```
 
 ```bash

@@ -1,5 +1,5 @@
 BeforeAll {
-    $generator = Join-Path $PSScriptRoot '../New-EbrSecOpsWorklist.ps1'
+    $generator = Join-Path $PSScriptRoot '../New-CyberSocSecOpsWorklist.ps1'
     function New-WorklistFixture {
         param([string]$Path)
         New-Item -ItemType Directory -Path (Join-Path $Path 'results') -Force | Out-Null

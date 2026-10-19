@@ -1,0 +1,107 @@
+[
+  {
+    "Month": "2026-07-01",
+    "Tactic": "InitialAccess",
+    "Detections": 14,
+    "Alerts": 12,
+    "TruePositiveAlerts": 1
+  },
+  {
+    "Month": "2026-07-01",
+    "Tactic": "CredentialAccess",
+    "Detections": 9,
+    "Alerts": 8,
+    "TruePositiveAlerts": 0
+  },
+  {
+    "Month": "2026-07-01",
+    "Tactic": "Execution",
+    "Detections": 6,
+    "Alerts": 5,
+    "TruePositiveAlerts": 1
+  },
+  {
+    "Month": "2026-07-01",
+    "Tactic": "Persistence",
+    "Detections": 3,
+    "Alerts": 3,
+    "TruePositiveAlerts": 0
+  },
+  {
+    "Month": "2026-07-01",
+    "Tactic": "Collection",
+    "Detections": 3,
+    "Alerts": 3,
+    "TruePositiveAlerts": 0
+  },
+  {
+    "Month": "2026-08-01",
+    "Tactic": "InitialAccess",
+    "Detections": 15,
+    "Alerts": 13,
+    "TruePositiveAlerts": 0
+  },
+  {
+    "Month": "2026-08-01",
+    "Tactic": "CredentialAccess",
+    "Detections": 10,
+    "Alerts": 9,
+    "TruePositiveAlerts": 0
+  },
+  {
+    "Month": "2026-08-01",
+    "Tactic": "Discovery",
+    "Detections": 4,
+    "Alerts": 4,
+    "TruePositiveAlerts": 0
+  },
+  {
+    "Month": "2026-08-01",
+    "Tactic": "Exfiltration",
+    "Detections": 4,
+    "Alerts": 4,
+    "TruePositiveAlerts": 0
+  },
+  {
+    "Month": "2026-09-01",
+    "Tactic": "InitialAccess",
+    "Detections": 18,
+    "Alerts": 16,
+    "TruePositiveAlerts": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Tactic": "CredentialAccess",
+    "Detections": 12,
+    "Alerts": 11,
+    "TruePositiveAlerts": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Tactic": "Execution",
+    "Detections": 9,
+    "Alerts": 9,
+    "TruePositiveAlerts": 2
+  },
+  {
+    "Month": "2026-09-01",
+    "Tactic": "LateralMovement",
+    "Detections": 2,
+    "Alerts": 2,
+    "TruePositiveAlerts": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Tactic": "Exfiltration",
+    "Detections": 4,
+    "Alerts": 4,
+    "TruePositiveAlerts": 0
+  },
+  {
+    "Month": "2026-09-01",
+    "Tactic": "CommandAndControl",
+    "Detections": 1,
+    "Alerts": 1,
+    "TruePositiveAlerts": 0
+  }
+]
