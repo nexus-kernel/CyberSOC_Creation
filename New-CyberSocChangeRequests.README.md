@@ -77,7 +77,8 @@ The sections follow the template headings, in order, so each one pastes into the
   rollback plan says no rollback is possible and how to recover a deleted vault.
 - The implementation plan holds only the steps that make the change, in the Azure portal. Encryption at host also
   registers the EncryptionAtHost feature on each subscription from Cloud Shell, since the portal has no other path
-  for it.
+  for it. Each register and status command names its subscription, so the plan waits until the feature reads
+  Registered on every subscription, not only the one Cloud Shell was left on.
 - The testing plan checks the setting in the Azure portal and nothing else.
 - References are Microsoft Learn pages only.
 - The notification list is left empty to fill in.
