@@ -95,7 +95,9 @@ These options are passed to it and recorded under `ChangeRequests` in `00-parame
 
 A failure there is logged and warned about, and the collection stays complete (exit code 2). A dry run writes no
 change requests, like the report and the worklist. Run `New-CyberSocChangeRequests.ps1 -EvidencePath <pack>` on
-its own to write them again, for example with another contact, sender or planned date. See
+its own to write them again, for example with another contact or sender. The notices plan each change two weeks
+after the collection, and the collector does not take `-ChangeDate`: to plan an agreed date, run the generator again
+with `-ChangeDate <date>`. See
 [Hardening change requests](New-CyberSocChangeRequests.README.md).
 
 ## What it decides for you
@@ -293,7 +295,9 @@ in the pack (`results/<ID>.csv`).
   `-ClientContact`, `-SenderName` and `-PurgeProtectionApproved` are passed to it and recorded under
   `ChangeRequests` in `00-parameters.json`. The execution summary and `02-notes.txt` name the change request and
   email count, and say why none were written when they were skipped or failed. A failure is logged and warned
-  about and leaves the collection complete. No query changed.
+  about and leaves the collection complete. A failed report or SecOps worklist now does the same: their failure
+  handlers logged at a level `Write-EbrLog` rejects (`WARN` for `WARNING`), which ended the run as fatal (exit code
+  1) and skipped every generator after them. No query changed.
 - CyberSOC collector 1.4.0 (October 19, 2026): `DP.4-ELIGIBILITY` gains `VmId` (`properties.vmId`), the unique ID
   Azure gives each virtual machine, standalone or a Flexible scale set instance, and `DP.4-VMSS-ELIGIBILITY` gains
   `UniqueId` (`properties.uniqueId`), the unique ID of each scale set. A machine or scale set deleted and created again

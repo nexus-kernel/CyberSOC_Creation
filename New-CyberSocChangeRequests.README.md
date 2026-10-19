@@ -30,7 +30,10 @@ Writes `05-change-requests` into the pack. Offline only. Nothing in the pack is 
 | `-ChangeDate <date>` | The day the changes with a notice of planned change are planned for. The notices ask the client to raise any concern a week before it. Defaults to two weeks after the build date, and must be at least eight days after it |
 
 Run it again after a recollection, or on its own to write the files again with another contact, sender or planned
-date, or on the day the emails are sent so their dates start from that day. It replaces the change requests it wrote before, removes the ones the pack no
+date, or on the day the emails are sent so their dates start from that day. The collector does not take
+`-ChangeDate`, so a collection run always plans the notices two weeks after the build. To plan an agreed date, run
+the generator again on the pack with it, for example
+`./New-CyberSocChangeRequests.ps1 -EvidencePath <pack> -ClientContact 'Dana' -SenderName 'Scott' -ChangeDate 2026-11-16`. It replaces the change requests it wrote before, removes the ones the pack no
 longer supports, and leaves every other file in the folder alone.
 
 ## The changes

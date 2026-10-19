@@ -5586,8 +5586,22 @@ function New-EbrNotes {
     $sb.ToString()
 }
 
-# The hardening change requests and their client emails, written into the pack by the generator beside
-# this script. Returns the paths it wrote.
+# The generators that build on the finished pack, each beside this script. Each returns the paths it wrote.
+function Invoke-EbrReportGenerator {
+    param([string]$EvidencePath, [string]$Depth)
+    $generator = Join-Path $PSScriptRoot 'New-CyberSocReport.ps1'
+    if (-not (Test-Path -LiteralPath $generator)) { throw 'New-CyberSocReport.ps1 is missing from the collector folder.' }
+    & $generator -EvidencePath $EvidencePath -Depth $Depth
+}
+
+function Invoke-EbrWorklistGenerator {
+    param([string]$EvidencePath)
+    $generator = Join-Path $PSScriptRoot 'New-CyberSocSecOpsWorklist.ps1'
+    if (-not (Test-Path -LiteralPath $generator)) { throw 'New-CyberSocSecOpsWorklist.ps1 is missing from the collector folder.' }
+    & $generator -EvidencePath $EvidencePath
+}
+
+# The hardening change requests and their client emails.
 function Invoke-EbrChangeRequestGenerator {
     param([string]$EvidencePath, [hashtable]$Options = @{})
     $generator = Join-Path $PSScriptRoot 'New-CyberSocChangeRequests.ps1'
@@ -6008,29 +6022,25 @@ function Invoke-EbrMain {
         $reportFailed = $false
         if (-not $SkipHtmlReport) {
             try {
-                $reportGenerator = Join-Path $PSScriptRoot 'New-CyberSocReport.ps1'
-                if (-not (Test-Path -LiteralPath $reportGenerator)) { throw 'New-CyberSocReport.ps1 is missing from the collector folder.' }
-                $reportFiles = @(& $reportGenerator -EvidencePath $ctx.OutDir -Depth $ReportDepth)
+                $reportFiles = @(Invoke-EbrReportGenerator -EvidencePath $ctx.OutDir -Depth $ReportDepth)
                 Write-EbrLog -Level INFO -Component Report -Message ('Report created: {0}' -f ($reportFiles -join ', '))
             }
             catch {
                 $reportFailed = $true
                 Write-EbrWarn "Evidence collection completed. HTML report generation needs attention: $($_.Exception.Message)"
-                Write-EbrLog -Level WARN -Component Report -Message $_.Exception.Message
+                Write-EbrLog -Level WARNING -Component Report -Message $_.Exception.Message
             }
         }
 
         if (-not $SkipSecOpsWorklist) {
             try {
-                $worklistGenerator = Join-Path $PSScriptRoot 'New-CyberSocSecOpsWorklist.ps1'
-                if (-not (Test-Path -LiteralPath $worklistGenerator)) { throw 'New-CyberSocSecOpsWorklist.ps1 is missing from the collector folder.' }
-                $worklistFiles = @(& $worklistGenerator -EvidencePath $ctx.OutDir)
+                $worklistFiles = @(Invoke-EbrWorklistGenerator -EvidencePath $ctx.OutDir)
                 Write-EbrLog -Level INFO -Component Report -Message ('SecOps worklist created: {0}' -f ($worklistFiles -join ', '))
             }
             catch {
                 $reportFailed = $true
                 Write-EbrWarn "Evidence collection completed. SecOps worklist generation needs attention: $($_.Exception.Message)"
-                Write-EbrLog -Level WARN -Component Report -Message $_.Exception.Message
+                Write-EbrLog -Level WARNING -Component Report -Message $_.Exception.Message
             }
         }
 

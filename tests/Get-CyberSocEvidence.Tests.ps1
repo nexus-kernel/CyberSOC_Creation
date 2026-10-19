@@ -2138,6 +2138,28 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         Get-Content (Join-Path $pack.FullName '02-notes.txt') -Raw | Should -Match 'Not written: CR-03 has no client email\. Every change request writes one\. Run New-CyberSocChangeRequests\.ps1 -EvidencePath on this pack to write them\.'
     }
 
+    It 'warns and stays complete, not fatal, when the <Name> generator fails, and still runs the ones after it' -ForEach @(
+        @{ Name = 'report'; Failing = 'Invoke-EbrReportGenerator'; Warning = 'HTML report generation needs attention' }
+        @{ Name = 'SecOps worklist'; Failing = 'Invoke-EbrWorklistGenerator'; Warning = 'SecOps worklist generation needs attention' }
+        @{ Name = 'change request'; Failing = 'Invoke-EbrChangeRequestGenerator'; Warning = 'Change request generation needs attention' }
+    ) {
+        foreach ($g in 'Invoke-EbrReportGenerator', 'Invoke-EbrWorklistGenerator', 'Invoke-EbrChangeRequestGenerator') {
+            if ($g -eq $Failing) { Mock $g { throw 'generator failed on purpose' } } else { Mock $g { } }
+        }
+        $dest = Join-Path $TestDrive ('failing-' + $Failing)
+        $result = Invoke-EbrMain -TenantId $client -SubscriptionId $subs -OutputPath $dest -SkipExchange
+        $result | Should -Be 2 -Because "a $Name failure leaves the collection complete, which exit code 1 would deny"
+        foreach ($g in 'Invoke-EbrReportGenerator', 'Invoke-EbrWorklistGenerator', 'Invoke-EbrChangeRequestGenerator') {
+            Should -Invoke $g -Times 1 -Exactly -Because "the $Name failure does not stop the other generators"
+        }
+        $pack = Get-ChildItem -Path $dest -Directory -Filter 'CyberSOC-Evidence_*' | Select-Object -First 1
+        foreach ($f in '00-manifest.csv', '00-parameters.json', '01-worksheet.csv', '02-notes.txt') { Test-Path (Join-Path $pack.FullName $f) | Should -BeTrue -Because "$f is part of the completed collection" }
+        $log = Get-Content (Join-Path $pack.FullName 'run.log') -Raw
+        $log | Should -Match ('WARNING Console - Evidence collection completed\. {0}: generator failed on purpose' -f $Warning)
+        $log | Should -Match 'WARNING Report - generator failed on purpose'
+        $log | Should -Not -Match 'CRITICAL'
+    }
+
     It 'skips the change requests with -SkipChangeRequests and records it' {
         Mock Invoke-EbrChangeRequestGenerator { }
         $dest = Join-Path $TestDrive 'cr-skipped'
