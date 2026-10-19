@@ -66,37 +66,12 @@ $inv = [cultureinfo]::InvariantCulture
 $detailIds = 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DP.4-ELIGIBILITY', 'DR.6-COVERAGE', 'DR.6-NONCOMPLIANT'
 $needsRecollection = 'Needs recollection with CyberSOC collector 1.1.0 or later'
 
-function Get-Text($value) { if ($null -eq $value) { '' } else { ([string]$value).Trim() } }
-function Test-True($value) { $v = Get-Text $value; $v -eq '1' -or $v -ieq 'true' }
+# Get-Text, Test-True, Get-Status, Get-Rows, Test-Unreadable and Get-UnreadableState. Each result file is
+# parsed once. A result the manifest reads as OK or PARTIAL needs a file that parses, or a damaged pack would
+# read as no gaps found and leave a change out without saying so.
+. (Join-Path $PSScriptRoot 'report/Read-CyberSocPackResult.ps1')
+Initialize-CyberSocPackReader -Pack $pack -Manifest $manifest
 function Get-Number($value) { $n = 0; if ([int]::TryParse((Get-Text $value), [ref]$n)) { $n } else { 0 } }
-$statusById = @{}
-foreach ($row in $manifest) { $id = [string]$row.ResultId; if ($id -and -not $statusById.ContainsKey($id)) { $statusById[$id] = [string]$row.Status } }
-function Get-Status([string]$id) { if ($statusById.ContainsKey($id)) { $statusById[$id] } else { 'MISSING' } }
-# Each result file is parsed once. Parenthesised, so Windows PowerShell 5.1 enumerates the array that
-# ConvertFrom-Json returns as one object, as PowerShell 7 does.
-$resultCache = @{}
-function Read-Result([string]$id) {
-    if ($resultCache.ContainsKey($id)) { return $resultCache[$id] }
-    $entry = @{ Rows = @(); Unreadable = $false }
-    $file = Join-Path $pack "results/$id.json"
-    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { $entry.Unreadable = $true }
-    else {
-        try {
-            $raw = Get-Content -LiteralPath $file -Raw
-            if ([string]::IsNullOrWhiteSpace($raw)) { $entry.Unreadable = $true }
-            else { $entry.Rows = @(($raw | ConvertFrom-Json) | Where-Object { $null -ne $_ }) }
-        }
-        catch { $entry.Unreadable = $true }
-    }
-    if ($entry.Unreadable -and (Get-Status $id) -in 'OK', 'PARTIAL') { Write-Warning "$id could not be read. Recollect or restore this result." }
-    $resultCache[$id] = $entry
-    $entry
-}
-function Get-Rows([string]$id) { (Read-Result $id).Rows }
-# A result the manifest reads as OK or PARTIAL needs a file that parses, or a damaged pack would read
-# as no gaps found and leave a change out without saying so.
-function Test-Unreadable([string]$id) { (Get-Status $id) -in 'OK', 'PARTIAL' -and (Read-Result $id).Unreadable }
-function Get-UnreadableState([string[]]$ids) { 'Result file unreadable ({0}), recollect or restore the pack' -f ($ids -join ', ') }
 
 # Copy rules: no semicolons, arrows, emoji or angle brackets, and the greater-than sign only in a
 # navigation step such as Settings > Configuration. Values read from the pack are cleaned first, and

@@ -38,13 +38,16 @@ is passed. Offline only. Nothing in the pack is changed.
 
 Rows that name a resource in the managed resource group (`ManagedRgPattern` in `00-parameters.json`, default `aznativesol0`) are dropped before any category is built. Collector 1.9.0 already excludes them at query time. The check here covers packs collected earlier and reads the resource group, resource id, Azure resource id, source resource id and vault columns only, so an incident title is never matched.
 
-Each category reports one of four statuses: a count of items, none found, not collected with the
-manifest status, or needs recollection with the collector version that added the source (1.8 for
+Each category reports one of five statuses: a count of items, none found, not collected with the
+manifest status, needs recollection with the collector version that added the source (1.8 for
 `OUT.1-OPEN`, `DR.10-GAPS`, `EW.1-DEVICES` and `DP.5-STALE`, 1.10.0 for `IA.8-SIGNINS` and
-`P0.6-APPLIANCES`, 1.11.0 for `DP.1-CONTAINERS`, 1.14.0 for `EW.1-GAPS` and `EW.10-EXCLUDED`) when the pack predates it.
+`P0.6-APPLIANCES`, 1.11.0 for `DP.1-CONTAINERS`, 1.14.0 for `EW.1-GAPS` and `EW.10-EXCLUDED`) when the pack predates it,
+or result file unreadable when the manifest reads the result as OK or PARTIAL but its file is missing, empty or
+malformed. A damaged pack never reads as none found. Recollect or restore the pack.
 
 The Conditional Access classification is shared with the report builder through
-`report/Get-EbrCaEvaluation.ps1`, so the worklist names exactly the accounts the report counts.
+`report/Get-EbrCaEvaluation.ps1`, so the worklist names exactly the accounts the report counts. The pack
+reading (manifest status, row-level results and the unreadable check) is in `report/Read-CyberSocPackResult.ps1`.
 
 The CSV has one row per item: Category, ControlId, Resource, Detail, Reference, Source.
 

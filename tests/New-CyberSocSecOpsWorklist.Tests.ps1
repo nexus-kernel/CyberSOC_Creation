@@ -1,5 +1,11 @@
 BeforeAll {
     $generator = Join-Path $PSScriptRoot '../New-CyberSocSecOpsWorklist.ps1'
+    # Windows PowerShell 5.1 writes the array ConvertFrom-Json parses to the pipeline as one object.
+    # PowerShell 7 does the same with -NoEnumerate, so this runs a script block as 5.1 reads JSON.
+    function Invoke-WithWindowsPowerShellJson([scriptblock]$Script) {
+        function ConvertFrom-Json { param([Parameter(ValueFromPipeline, Position = 0)]$InputObject) process { Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject -NoEnumerate } }
+        & $Script
+    }
     function New-WorklistFixture {
         param([string]$Path)
         New-Item -ItemType Directory -Path (Join-Path $Path 'results') -Force | Out-Null
@@ -183,6 +189,16 @@ Describe 'SecOps worklist generation' {
         $md | Should -Match '\| Network virtual appliances excluded from VM measures \| P0\.6 \| 0 \| Needs recollection with collector 1\.10\.0 or later \|'
         @($csv | Where-Object Category -match 'Trusted Launch|encryption at host|segmentation|documented disposition').Count | Should -Be 0
     }
+    It 'reads a result whose file is malformed or missing as unreadable, never as none found' {
+        Add-WorklistResult $pack 'NB.1' '{invalid'
+        Remove-Item (Join-Path $pack 'results/DFC.1-DETAIL.json')
+        $null = & $generator -EvidencePath $pack -WarningVariable warnings -WarningAction SilentlyContinue
+        $text = Get-Content (Join-Path $pack '04-secops-worklist.md') -Raw
+        $text | Should -Match '\| Workload subnets without segmentation \| NB\.1 \| 0 \| Result file unreadable \(NB\.1\), recollect or restore the pack \|'
+        $text | Should -Match '\| High severity Defender for Cloud recommendations \| DFC\.1 \| 0 \| Result file unreadable \(DFC\.1-DETAIL\), recollect or restore the pack \|'
+        @($warnings | ForEach-Object { [string]$_ }) | Should -Be @('NB.1 could not be read. Recollect or restore this result.', 'DFC.1-DETAIL could not be read. Recollect or restore this result.')
+        @(Import-Csv (Join-Path $pack '04-secops-worklist.csv') | Where-Object Category -eq 'Open alerts').Count | Should -Be 2
+    }
     It 'does not change the evidence and writes to another folder when asked' {
         $before = (Get-FileHash (Join-Path $pack 'results/OUT.1-OPEN.json')).Hash
         $out = Join-Path $TestDrive 'elsewhere'
@@ -229,6 +245,12 @@ Describe 'Onboarding reasons and patch exclusions (collector 1.14.0)' {
         $ex[0].Detail | Should -Be 'Tag "patching":"client owned", resource group app'
         $ex[0].Source | Should -Be 'EW.10-EXCLUDED'
     }
+    It 'reads an empty reason list as none found, with no empty item' {
+        Add-WorklistResult $pack 'EW.1-GAPS' '[]' 'EMPTY'
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $pack '04-secops-worklist.md') -Raw | Should -Match '\| Azure virtual machines not reporting to Defender for Endpoint, by reason \| EW\.1 \| 0 \| None found \|'
+        @(Import-Csv (Join-Path $pack '04-secops-worklist.csv') | Where-Object Category -eq 'Azure virtual machines not reporting to Defender for Endpoint, by reason').Count | Should -Be 0
+    }
     It 'reads needs recollection on an older pack' {
         $old = Join-Path $TestDrive ([guid]::NewGuid().ToString())
         New-WorklistFixture $old
@@ -241,5 +263,27 @@ Describe 'Onboarding reasons and patch exclusions (collector 1.14.0)' {
         $md | Should -Not -Match ';'
         $md | Should -Not -Match '[←-⇿]|->|=>'
         ($md -replace '[A-Za-z0-9)] > [A-Za-z]', '') | Should -Not -Match '>'
+    }
+}
+Describe 'Windows PowerShell 5.1, where ConvertFrom-Json writes a JSON array as one object' {
+    BeforeEach {
+        $pack = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        New-WorklistFixture $pack
+    }
+    It 'reads JSON as Windows PowerShell 5.1 does, so the tests below cannot pass by accident' {
+        (Invoke-WithWindowsPowerShellJson { , @('[{"a":1},{"a":2}]' | ConvertFrom-Json | Where-Object { $null -ne $_ }) }).Count | Should -Be 1
+    }
+    It 'filters each row of a result on its own, and drops the managed resource group rows' {
+        Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack }
+        $csv = @(Import-Csv (Join-Path $pack '04-secops-worklist.csv'))
+        @($csv | Where-Object Category -eq 'High severity Defender for Cloud recommendations').Resource | Should -Be @('Management ports should be closed')
+        @($csv | Where-Object Category -eq 'Azure virtual machines with an inactive sensor').Resource | Should -Be @('vm-02')
+        @($csv | Where-Object Category -eq 'Virtual machines without Azure Backup').Resource | Should -Be @('avd-host-1', 'sql-01')
+    }
+    It 'reads an empty result as none found, with no note about rows it does not have' {
+        Add-WorklistResult $pack 'EW.1-DEVICES' '[]' 'EMPTY'
+        Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack }
+        $md = Get-Content (Join-Path $pack '04-secops-worklist.md') -Raw
+        $md | Should -Match '\| Azure virtual machines not onboarded to endpoint detection \| EW\.1 \| 0 \| None found \|'
     }
 }

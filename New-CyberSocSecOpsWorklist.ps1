@@ -56,18 +56,10 @@ function Test-ManagedRow($row) {
     $false
 }
 
-function Get-Status([string]$id) {
-    $row = $manifest | Where-Object ResultId -eq $id | Select-Object -First 1
-    if ($null -eq $row) { 'MISSING' } else { [string]$row.Status }
-}
-function Get-Rows([string]$id) {
-    $file = Join-Path $pack "results/$id.json"
-    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return @() }
-    try { return @(Get-Content -LiteralPath $file -Raw | ConvertFrom-Json | Where-Object { $null -ne $_ -and -not (Test-ManagedRow $_) }) }
-    catch { Write-Warning "$id could not be read. Regenerate or recollect this result."; return @() }
-}
-function Get-Text($value) { if ($null -eq $value) { '' } else { ([string]$value).Trim() } }
-function Test-True($value) { $v = Get-Text $value; $v -eq '1' -or $v -ieq 'true' }
+# Get-Text, Test-True, Get-Status, Get-Rows and Test-Unreadable. Every result is read without the managed
+# resource group rows.
+. (Join-Path $PSScriptRoot 'report/Read-CyberSocPackResult.ps1')
+Initialize-CyberSocPackReader -Pack $pack -Manifest $manifest -RowFilter { param($row) -not (Test-ManagedRow $row) }
 function Get-Day($value) {
     $v = Get-Text $value
     if ($v -eq '') { return '' }
@@ -280,9 +272,13 @@ $sections = foreach ($c in $categories) {
     $state = ''
     switch -Regex ($status) {
         '^(OK|PARTIAL|EMPTY)$' {
+            # A damaged result never reads as none found.
+            if (Test-Unreadable $c.Id) { $state = Get-UnreadableState $c.Id; break }
             $all = @(Get-Rows $c.Id)
             if ($c.Prepare) { $all = @(& $c.Prepare $all) }
-            $rows = if ($c.Filter) { @($all | Where-Object { & $c.Filter $_ }) } else { $all }
+            # Kept an array, since an empty one assigned from the if would turn into $null, which a Map that
+            # pipes $rows straight into ForEach-Object reads as one empty item.
+            $rows = @(if ($c.Filter) { $all | Where-Object { & $c.Filter $_ } } else { $all })
             $items = @(& $c.Map $rows)
             $state = if ($items.Count) { ('{0} item{1}{2}' -f $items.Count, $(if ($items.Count -eq 1) { '' } else { 's' }), $(if ($status -eq 'PARTIAL') { ', partial collection scope' } else { '' })) } else { 'None found' }
             if ($c.Note) { $extra = Get-Text (& $c.Note $all); if ($extra) { $state = "$state, $extra" } }

@@ -1,5 +1,11 @@
 BeforeAll {
     $generator = Join-Path $PSScriptRoot '../New-CyberSocReport.ps1'
+    # Windows PowerShell 5.1 writes the array ConvertFrom-Json parses to the pipeline as one object.
+    # PowerShell 7 does the same with -NoEnumerate, so this runs a script block as 5.1 reads JSON.
+    function Invoke-WithWindowsPowerShellJson([scriptblock]$Script) {
+        function ConvertFrom-Json { param([Parameter(ValueFromPipeline, Position = 0)]$InputObject) process { Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject -NoEnumerate } }
+        & $Script
+    }
     function New-ReportFixture {
         param([string]$Path)
         New-Item -ItemType Directory -Path (Join-Path $Path 'results') -Force | Out-Null
@@ -407,5 +413,39 @@ Describe 'Why a Scoped Conditional Access flow is scoped' {
         Get-ScopeReason @((New-CaPolicy 'P1' @('All') @('app-1')), (New-CaPolicy 'P4' @('g-1') @('app-1'))) | Should -Be 'Applications'
         Get-ScopeReason @((New-CaPolicy 'P2' @('g-1') @('All')), (New-CaPolicy 'P4' @('g-2') @('app-1'))) | Should -Be 'Users'
         Get-ScopeReason @(New-CaPolicy 'P5' @('All') @('All') -Platforms @('iOS')) | Should -Be 'Conditions'
+    }
+}
+Describe 'Windows PowerShell 5.1, where ConvertFrom-Json writes a JSON array as one object' {
+    BeforeEach {
+        $pack = Join-Path $TestDrive ([guid]::NewGuid().ToString())
+        New-ReportFixture $pack
+    }
+    It 'reads JSON as Windows PowerShell 5.1 does, so the tests below cannot pass by accident' {
+        (Invoke-WithWindowsPowerShellJson { , @(Get-Content (Join-Path $pack 'results/NB.1.json') -Raw | ConvertFrom-Json) }).Count | Should -Be 1
+    }
+    It 'embeds and reduces every row of a result' {
+        '[{"Month":"2026-08","Total":5,"High":1,"Medium":2,"Low":2,"Informational":0,"TruePositive":1,"FalsePositive":3},{"Month":"2026-09","Total":7,"High":0,"Medium":3,"Low":4,"Informational":0,"TruePositive":2,"FalsePositive":4}]' |
+            Set-Content (Join-Path $pack 'results/OUT.3.json')
+        $html = Get-Content (Invoke-WithWindowsPowerShellJson { & $generator -SkipDeck -EvidencePath $pack })[0] -Raw
+        $html | Should -Match '"OUT.3":\[\{"Month":"2026-08","Total":5,"High":1,"Medium":2,"Low":2,"Informational":0,"TruePositive":1,"FalsePositive":3\},\{"Month":"2026-09","Total":7,'
+        $html | Should -Match '"WorkloadSubnets":2,"Segmented":1'
+        $html | Should -Match '"VmsWithoutBackup":2'
+    }
+    It 'embeds no aggregate for an empty result, as PowerShell 7 does' {
+        '[]' | Set-Content (Join-Path $pack 'results/DP.5b.json')
+        $html = Get-Content (Invoke-WithWindowsPowerShellJson { & $generator -SkipDeck -EvidencePath $pack })[0] -Raw
+        $html | Should -Match '"DP\.5b":\[\]' -Because 'an empty result must not reach the aggregate as one empty row set and embed zero counts'
+    }
+    It 'evaluates Conditional Access from every policy and sign-in' {
+        $m = @(Import-Csv (Join-Path $pack '00-manifest.csv'))
+        $m += [pscustomobject]@{ ResultId = 'IA.8-POLICIES'; Status = 'OK'; Rows = 1; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m += [pscustomobject]@{ ResultId = 'IA.8-SIGNINS'; Status = 'OK'; Rows = 2; ReadTimeUtc = '2026-10-08T10:00:00Z' }
+        $m | Export-Csv (Join-Path $pack '00-manifest.csv') -NoTypeInformation
+        '[{"id":"P1","displayName":"Secret policy name","state":"enabled","conditions":{"users":{"includeUsers":["All"],"excludeUsers":["u1"]},"applications":{"includeApplications":["All"]},"clientAppTypes":["all"],"authenticationFlows":{"transferMethods":"deviceCodeFlow"}},"grantControls":{"builtInControls":["block"]}}]' |
+            Set-Content (Join-Path $pack 'results/IA.8-POLICIES.json')
+        '[{"Flow":"Device code","UserId":"u1","UserPrincipalName":"secret-room@example.test","PolicyResults":"p1=notApplied","SignIns":4},{"Flow":"Device code","UserId":"u2","UserPrincipalName":"secret-user@example.test","PolicyResults":"","SignIns":1}]' |
+            Set-Content (Join-Path $pack 'results/IA.8-SIGNINS.json')
+        $html = Get-Content (Invoke-WithWindowsPowerShellJson { & $generator -SkipDeck -EvidencePath $pack })[0] -Raw
+        $html | Should -Match '"Flow":"Device code","Control":"IA.3-DEVICECODE","PolicyRead":true,"PolicySource":"Raw","PolicyState":"Enforced","EnforcedPolicies":1,"ExcludedIdentities":1,"DetailRead":true,"SignIns":5,"SucceededExcluded":4,"AccountsExcluded":1,"SucceededUngoverned":1,"AccountsUngoverned":1'
     }
 }
