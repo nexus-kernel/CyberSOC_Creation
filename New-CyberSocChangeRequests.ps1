@@ -1477,6 +1477,8 @@ $catalog = @(
                     $summary = '{0} in network security group {1} (resource group {2}, priority {3}, {4} from {5}, on {6})' -f $rule, $nsg, $res.ResourceGroup, (Get-Text $r.Priority), $portWords, (Join-Words @($sources | ForEach-Object { Format-RuleSource $_ })), (Join-Words $attachments)
                     $res | Add-Member -NotePropertyName Summary -NotePropertyValue $summary
                     $res | Add-Member -NotePropertyName OtherPorts -NotePropertyValue ([bool]$other.Count)
+                    # Any, 0.0.0.0/0 and ::/0 match private addresses too, unlike the Internet service tag.
+                    $res | Add-Member -NotePropertyName Broad -NotePropertyValue ([bool]@($sources | Where-Object { $_ -in '*', '0.0.0.0/0', '::/0' }).Count)
                     $res
                 })
             $notes = [System.Collections.Generic.List[string]]::new()
@@ -1518,22 +1520,30 @@ $catalog = @(
             $impl.Add('Where Azure Bastion is the path, open each network security group on the subnet or network interface of the machines behind each rule and go to Settings > Inbound security rules. Unless a rule already allows ports 22 and 3389 from the AzureBastionSubnet address range ahead of every deny rule for those ports, select + Add and add one with Source set to IP Addresses and that range, at a lower priority number than those deny rules. Then open a Bastion session to one machine behind each rule from its Connect > Bastion page, and if it does not open, stop here and leave every rule listed unchanged.')
             $impl.Add('Go to Network security groups and open the network security group of the first rule listed in the RESOURCES section.')
             $impl.Add('Go to Settings > Inbound security rules and find the rule. If its priority, source or ports no longer read as listed, leave it unchanged and note it in the change record for the next pack.')
+            # A source of Any, 0.0.0.0/0 or ::/0 also lets in the virtual network, peered networks and connected
+            # on-premises networks. With a deny rule behind it, removing it would cut that private access too, so the
+            # private access moves to a rule of its own first, unless the client confirmed nothing uses it.
+            $broad = @($resources | Where-Object Broad).Count
+            if ($broad) {
+                $impl.Add('If the source of the rule is Any, 0.0.0.0/0 or ::/0, which also matches private addresses, select + Add and add an allow rule with the protocol and destination of the rule, Destination port ranges set to the management ports it lists, Source set to Service Tag and VirtualNetwork, and a free priority number lower than any deny rule for those ports, then select Add. This keeps connections from the virtual network, peered networks and connected on-premises networks working. Leave this rule out only where the client confirmed nothing connects from those networks.')
+            }
             # Narrowing the source of a rule that also allows other ports would narrow them too, so the management
             # ports move to a rule of their own and the other ports keep the source they have.
             $impl.Add('If the client named source addresses that still need direct access and the rule allows only ports 22, 3389, 5985 or 5986, select the rule, set Source to IP Addresses, enter those addresses in Source IP addresses/CIDR ranges and select Save.')
             $impl.Add('If the client named such addresses and the rule also allows other ports, select + Add and add an allow rule with the protocol and destination of the rule, Destination port ranges set to the management ports it lists, Source set to IP Addresses with those addresses, and a free priority number, then select Add. Then select the original rule, remove 22, 3389, 5985 and 5986 from Destination port ranges and select Save, so its other ports keep the source they have.')
             $impl.Add('If the client named no addresses, select the rule. If it allows only ports 22, 3389, 5985 or 5986, select Delete and then Yes. If it also allows other ports, remove 22, 3389, 5985 and 5986 from Destination port ranges and select Save.')
             Add-RepeatStep $impl $n 4 'rule'
+            $privateTest = if ($broad) { ' Any rule added for the VirtualNetwork service tag allows only the management ports.' } else { '' }
             $testing = @(
                 ('In the Azure portal, open the network security group of {0} and go to Settings > Inbound security rules.' -f (Get-EachStep $n 'rule'))
-                'Confirm each rule listed is gone, allows only the source addresses the client named, or no longer allows 22, 3389, 5985 or 5986 while its other ports keep their source, and that no other rule allows those ports over TCP from Any, Internet, 0.0.0.0/0 or ::/0.'
+                ('Confirm each rule listed is gone, allows only the source addresses the client named, or no longer allows 22, 3389, 5985 or 5986 while its other ports keep their source, and that no other rule allows those ports over TCP from Any, Internet, 0.0.0.0/0 or ::/0.{0}' -f $privateTest)
                 'Where just-in-time VM access was enabled, go to Microsoft Defender for Cloud > Workload protections > Just-in-time VM access and confirm the virtual machines behind the rules show on the Configured tab.'
                 'Where Azure Bastion is the path, open one virtual machine behind each rule, select Connect > Bastion and confirm a session opens.')
             $rollback = @(
                 'In the Azure portal, open the network security group of the rule to restore and go to Settings > Inbound security rules.'
                 'For a rule that was deleted, select + Add, enter the name, priority, source, source port ranges, destination, destination port ranges, protocol, action Allow and description recorded for it in the RESOURCES section and in change-requests.csv, and select Add.'
                 'For a rule that was narrowed, select it, set Source and Destination port ranges back to the values recorded for it and select Save.'
-                'Delete any rule this change added for the named addresses, and the rule added for the AzureBastionSubnet address range if Azure Bastion is no longer wanted.'
+                ('Delete any rule this change added for the named addresses{0}, and the rule added for the AzureBastionSubnet address range if Azure Bastion is no longer wanted.' -f $(if ($broad) { ' or the VirtualNetwork service tag' } else { '' }))
                 'If just-in-time VM access added a deny rule for the same ports at a lower priority number than the restored rule, give the restored rule a priority number below it, so it applies first as it did before the change.')
 
             # A subscription whose plan was not read stays unknown in the email, never on or off.
@@ -1552,6 +1562,7 @@ $catalog = @(
             else { 'I suggest just-in-time VM access where Plan 2 is on and Azure Bastion elsewhere, unless you would rather turn Plan 2 on there.' }
             $effect = [System.Collections.Generic.List[object]]::new()
             $effect.Add(('Once {0} closed, anyone who connects to these machines over RDP, SSH or WinRM straight from the internet today will no longer be able to open a new connection that way. A connection that is already open stays up, because a rule change applies only to new connections.' -f (Get-Pick $n 'the rule is' 'the rules are')))
+            if ($broad) { $effect.Add(('Connections from your own networks, such as a VPN, a peered virtual network or an office linked to Azure over a private connection, keep working. {0}, so I will keep that private access in a rule of its own unless you tell me nobody uses it.' -f $(if ($n -eq 1) { 'The rule is open to every address, which includes those networks' } elseif ($broad -eq $n) { 'The rules are open to every address, which includes those networks' } elseif ($broad -eq 1) { 'One of the rules is open to every address, which includes those networks' } else { 'Some of the rules are open to every address, which includes those networks' }))) }
             if ($otherPorts) { $effect.Add(('Where a rule also allows other ports, only 22, 3389, 5985 and 5986 are removed from it, and {0}' -f (Get-Pick $otherPorts 'its other ports stay as they are.' 'the other ports stay as they are.'))) }
             $effect.Add('There are two ways to keep administrator access in place of the open ports:')
             $effect.Add([string[]]@(
@@ -1583,6 +1594,7 @@ $catalog = @(
                         , @('Enable just-in-time access', 'https://learn.microsoft.com/azure/defender-for-cloud/enable-just-in-time-access')
                         , @('Deploy Azure Bastion from the Azure portal', 'https://learn.microsoft.com/azure/bastion/quickstart-host-portal')
                         , @('Configure NSG rules for Azure Bastion, target VM subnet', 'https://learn.microsoft.com/azure/bastion/bastion-nsg#target-vm-subnet')
+                        , @('Virtual network service tags', 'https://learn.microsoft.com/azure/virtual-network/service-tags-overview')
                         , @('Choose the right Azure Bastion SKU', 'https://learn.microsoft.com/azure/bastion/bastion-sku-comparison'))
                     Csv = $resources
                     Email = $email
