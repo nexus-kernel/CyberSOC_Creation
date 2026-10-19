@@ -174,9 +174,9 @@ main and the absence of tracked workflows at baseline, but do not prove that no
 historical workflow registration or external publisher exists. Hosted rollout
 and registered-inventory checks remain outstanding.
 
-The existing MANIFEST.sha256 is a release-package manifest; regenerate it as part
-of a future packaging task, not as a claim that this development checkout is the
-original release bundle.
+MANIFEST.sha256 exists only in a release zip: Export-CyberSocToolkit.ps1 writes it
+into the package. The repository root has no copy, and a Pester test fails if one
+returns, so a development checkout never claims to be a release bundle.
 
 ## Revalidation against the refreshed publication base
 
