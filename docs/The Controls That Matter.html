@@ -236,6 +236,32 @@ thead th { background:var(--wash); color:var(--navy); }
 .review-notes p,#review > p { font-size:13px; color:var(--muted); }
 .review-notes h3 { font-size:15px; }
 .empty-state { padding:30px 0; color:var(--muted); font-size:14px; }
+/* CyberSOC monthly report */
+.month-brief { margin:0 0 24px; padding:16px 22px; background:var(--wash); border-left:4px solid var(--blue); }
+.month-brief .eyebrow { color:var(--blue); margin:0 0 4px; }
+.month-brief p { font-size:14px; }
+.glance { margin:0 0 26px; }
+.glance h2 { font-size:24px; color:var(--navy); }
+.glance td,.glance th { white-space:nowrap; }
+.glance .num { text-align:right; }
+.glance tbody th { font-weight:600; color:var(--navy); white-space:normal; }
+.highlights { margin:0 0 26px; }
+.highlight-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:12px; }
+.highlight-grid article { border-top:3px solid var(--cyan); padding-top:10px; }
+.highlight-grid p { font-size:13px; }
+.weekly { margin-top:26px; }
+.stages-observed { margin:6px 0 26px; }
+.stage-row { display:grid; grid-template-columns:190px minmax(0,1fr) 48px 150px; align-items:center; gap:12px; font-size:12px; margin:6px 0; }
+.stage-row strong { text-align:right; }
+.stage-row .small { margin:0; }
+.two-col.even > div,.two-col > div { min-width:0; }
+#threat table .num,#vulnerability table .num,.score-trend .num { text-align:right; }
+#threat tbody th,#vulnerability tbody th,.score-trend tbody th { font-weight:600; color:var(--navy); }
+.not-gathered { margin-top:18px; }
+#threat .two-col,#vulnerability .two-col { margin-top:26px; }
+#vulnerability .panel,#vulnerability .panel h3 { text-align:left; }
+.score-trend { margin:24px 0; }
+.score-trend h4 { margin-top:14px; font-size:14px; }
 [hidden],body[data-depth="brief"] .balanced-only,body:not([data-depth="detailed"]) .detailed-only { display:none; }
 @media screen and (max-width:900px) {
   body { font-size:15px; }
@@ -253,6 +279,9 @@ thead th { background:var(--wash); color:var(--navy); }
   .tiers { grid-template-columns:1fr 1fr; gap:18px; }
   .tier { padding:0; border-left:0; }
   .two-col,.two-col.even,.meters,.mfa-methods { grid-template-columns:1fr; }
+  .highlight-grid { grid-template-columns:1fr; }
+  .stage-row { grid-template-columns:120px minmax(0,1fr) 40px; }
+  .stage-row .small { grid-column:1 / -1; }
   .pillar-row { grid-template-columns:1fr; gap:10px; }
   .pillar-callout { border-left:0; padding-left:0; text-align:left; }
   .pillar { grid-template-columns:1fr; }
@@ -324,6 +353,13 @@ thead th { background:var(--wash); color:var(--navy); }
   .threats th,.threats td { padding:3px 8px; }
   .threats tbody th { overflow-wrap:anywhere; }
   .threats .small + .source { margin-top:2px; }
+  .month-brief { padding:10px 14px; margin-bottom:12px; }
+  .month-brief p,.highlight-grid p { font-size:10px; }
+  .glance { margin-bottom:12px; }
+  .glance h2 { font-size:16px; }
+  .glance table,#threat table,#vulnerability table,.score-trend table { font-size:9px; margin:4px 0; }
+  .glance th,.glance td,#threat th,#threat td,#vulnerability th,#vulnerability td { padding:3px 8px; }
+  .stage-row { grid-template-columns:130px minmax(0,1fr) 36px 110px; font-size:9px; margin:2px 0; }
   #outcomes .page-body { padding:12px 22px; }
   #outcomes .section-scope { margin-bottom:10px; }
   #outcomes .strip { padding:10px 16px 12px; margin-bottom:10px; }
@@ -492,6 +528,11 @@ thead th { background:var(--wash); color:var(--navy); }
   // (Oct 18, 2026, issue #24).
   const MIN_SAMPLE = 10
   const smallSampleText = n => `${fmt(n)} on a small sample`
+  // What a control at E leaves out, for the register. A ratio control names its exceptions, and a Conditional Access
+  // block in force names the accounts whose sign-ins fell under its exclusions (issue #27), so neither reads as covering
+  // everyone. The evaluator counts a sign-in as excluded when a policy for all users did not apply to it, which can be a
+  // user, group, role or application exclusion, so the text never says the account itself is excluded.
+  const exceptionsText = c => c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : c.excludedAccounts > 0 ? plural(c.excludedAccounts, 'account with excluded sign-ins', 'accounts with excluded sign-ins') : ''
   const bool = value => value === true || String(value ?? '').toLowerCase() === 'true'
   const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`
   // Microsoft retires its own text message and voice delivery in two populations: most users on Feb 1, 2027, and
@@ -550,7 +591,7 @@ thead th { background:var(--wash); color:var(--navy); }
       workspaces: [...new Map(array(p.Workspaces).map(w => [String(w.CustomerId || w.ResourceId || w.Name).toLowerCase(), w])).values()],
       depth: ['brief', 'balanced', 'detailed'].includes(data.depth) ? data.depth : 'balanced',
       service: null, headline: [], tiers: { outcomes: [], controls: [], hardening: [], benchmark: [] }, tierSummary: null, whatNext: '',
-      response: null, alerts: null, threats: null, impact: null, threatMeasures: null, impactStatement: '', detections: null, trend: [], pillars: [], controls: [], priorities: [], delivered: [], actions: [], mfaMethods: null,
+      response: null, alerts: null, threats: null, detections: null, trend: [], pillars: [], controls: [], priorities: [], delivered: [], actions: [], mfaMethods: null,
       cloudScore: null, tenantScore: null, posture: {}, review: [], presenter: [], unmeasured: [], notApplicable: [], issues: array(data.issues).map(clean),
       manifest: manifest.map(r => ({ id: clean(r.ResultId), status: clean(r.Status), rows: count(r.Rows), date: date(r.ReadTimeUtc) })),
       tenantWorkspace: clean(p.TenantWideTables?.SigninLogs || 'Not recorded'),
@@ -597,6 +638,8 @@ thead th { background:var(--wash); color:var(--navy); }
       if (late) presenter('Workspace start dates', `${plural(late, 'workspace starts', 'workspaces start')} after ${date(p.WindowStart)}. Earlier months reflect the workspaces that were already collecting.`)
     }
     const alertsAllowed = duplicateSafe && windowValid
+    // The CyberSOC model (cybersoc-model.js) applies the same gate to its monthly alert figures.
+    m.alertsAllowed = alertsAllowed
     m.ticketed = !!clean(p.TicketPattern)
     if (!m.ticketed) presenter('Alert scope', 'This pack was collected before the ticket scope rule. Alert counts include every Sentinel incident, including informational severity and incidents that never opened an Atmosera ticket. Recollect with collector 1.6 or later so only ticketed, non-informational alerts are counted.')
     else note('Alert scope', `Alerts are Sentinel incidents whose comments reference an Atmosera ticket (pattern ${clean(p.TicketPattern)}). Informational severity is excluded. Detections are limited to those linked to these alerts.`)
@@ -619,31 +662,20 @@ thead th { background:var(--wash); color:var(--navy); }
     if (incValid) {
       const automation = analystMode ? allRow.AutoClosed : 0
       const triaged = inc.Raised - automation, closed = inc.Closed - automation
-      const tp = count(inc.TruePositive)
-      // The collector's ExfilOrImpactTactic flag also fires on a Collection tactic. The builder embeds each row's
-      // tactics, so the count the report presents is the narrower one, alerts whose tactics include Exfiltration or
-      // Impact, and every surface names that scope. A pack whose rows carry no tactics (an older builder, or a
-      // flagged row whose tactics could not be read) keeps the flag count and names the wider scope (Oct 14, 2026).
-      const flags = has('OUT.4') ? rows('OUT.4') : null
-      const tacticsOf = r => String(r.Tactics ?? '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
-      const tacticsKnown = !!flags && flags.every(r => 'Tactics' in r && (!bool(r.ExfilOrImpactTactic) || tacticsOf(r).length > 0))
-      const flagged = flags ? (tacticsKnown ? flags.filter(r => tacticsOf(r).some(t => t === 'exfiltration' || t === 'impact')) : flags.filter(r => bool(r.ExfilOrImpactTactic))).length : null
-      const flaggedScope = tacticsKnown ? 'exfiltration or impact' : 'collection, exfiltration or impact'
-      // The phrase every surface uses for the count: a tactic recorded on the alert, never an outcome verb such
-      // as reached. A true positive is a closure classification, so the surfaces say classified, never
-      // investigated, and the impact statement comes only from the reviewed record below (Oct 15, 2026).
-      const tacticPhrase = `${/^[aeiou]/.test(flaggedScope) ? 'an' : 'a'} ${flaggedScope} tactic`
+      // A true positive is a closure classification, so the surfaces say classified, never investigated. The
+      // CyberSOC report counts true positive detections only: it carries no data exfiltration, data exposure or
+      // compromise determination, which stays with the EBR (Oct 19, 2026).
       m.alerts = {
         triaged, closed, open: inc.Open, raised: inc.Raised, automation: autoValid ? allRow.AutoClosed : null, analystMode, autoShare: autoValid ? pct(allRow.AutoClosed, allRow.Incidents) : null,
-        resolvedPct: pct(closed, triaged), truePositives: tp, benign: count(inc.BenignPositive), falsePositives: count(inc.FalsePositive),
-        flagged, flaggedKnown: flagged !== null && tp !== null, flaggedScope, tacticPhrase, unclassified: count(inc.ClosedUnclassified),
+        resolvedPct: pct(closed, triaged), truePositives: count(inc.TruePositive), benign: count(inc.BenignPositive), falsePositives: count(inc.FalsePositive),
+        unclassified: count(inc.ClosedUnclassified),
         source: source('OUT.1', m.ticketed ? 'Alerts that opened an Atmosera ticket, informational severity excluded.' : ''), partial: partial('OUT.1')
       }
       // Open alerts at collection split into those awaiting the client and those still with Atmosera only from a
       // reviewed OpenAlertNote record in the context file: OUT.1 holds the open count, never who holds each alert.
-      // Like the Impact record, the split is bound to the alert period it covers and must account for every open
-      // alert, so a context file reused from an earlier period never splits a later count. Without it every surface
-      // names both possibilities in one sentence (Oct 16, 2026).
+      // The split is bound to the alert period it covers and must account for every open alert, so a context file
+      // reused from an earlier period never splits a later count. Without it every surface names both
+      // possibilities in one sentence (Oct 16, 2026).
       const openRecord = context.OpenAlertNote
       if (openRecord !== undefined && openRecord !== null && inc.Open > 0) {
         const record = typeof openRecord === 'object' ? openRecord : {}
@@ -667,11 +699,11 @@ thead th { background:var(--wash); color:var(--navy); }
       else if (autoValid && autoShare >= 0.25) presenter('Automation share', `${fmt(allRow.AutoClosed)} of ${fmt(allRow.Incidents)} closed alerts (${pctText(m.alerts.autoShare)}) were closed by automation rules. Below the 50 percent threshold, so headline counts include them.`)
     } else if (alertsAllowed) unmeasured('OUT.1', 'Alerts triaged', inc ? 'the combined result does not reconcile' : state('OUT.1'))
 
-    // Confirmed threat examples (OUT.4). The builder embeds a screened title (Threat), the tactics and the day only.
+    // True positive detection examples (OUT.4). The builder embeds a screened title (Threat), the tactics and the day only.
     // Every row is an example, withheld or operational. Withheld covers screened out titles, rows the builder could not
     // screen and staged rows with no title or day. Operational true positives carry no attack stage, such as a service limit warning.
     const threatRows = alertsAllowed && m.alerts ? rows('OUT.4') : []
-    if (threatRows.length && !threatRows.some(r => 'Threat' in r)) note('Confirmed threat examples', 'The report data predates confirmed threat examples. Regenerate the report with the current builder to show them.')
+    if (threatRows.length && !threatRows.some(r => 'Threat' in r)) note('True positive detection examples', 'The report data predates true positive detection examples. Regenerate the report with the current builder to show them.')
     else if (threatRows.length) {
       const stagesOf = r => [...new Set(String(r.Tactics ?? '').split(',').map(t => t.trim()).filter(Boolean))]
       const isWithheld = r => clean(r.Threat) === 'Title withheld'
@@ -694,50 +726,15 @@ thead th { background:var(--wash); color:var(--navy); }
         // Severity is counted per alert before grouping and before the five-group cut, since a group carries its
         // highest severity while its count covers every severity in it.
         const severities = Object.fromEntries(['High', 'Medium', 'Low', 'Informational'].map(k => [k, examples.filter(r => sevName(r.Severity) === k).length]))
-        m.threats = { examples: shown.map(({ latest, ...g }) => g), more: more.length, moreAlerts: alertsIn(more), alerts: examples.length, severities, source: source('OUT.4', 'Confirmed threats with an attack stage, grouped by alert title.') }
-        presenter('Confirmed threat examples', `The examples use alert titles as Sentinel recorded them, with incident written as alert. Titles that carry an email address, IP address, host or domain name, path, GUID, ticket reference or machine-style name are withheld automatically. Check that no title shown names a person, account or machine, or implies containment, before the review. The table shows ${plural(alertsIn(shown), 'confirmed alert', 'confirmed alerts')} in ${plural(shown.length, 'group', 'groups')}.${more.length ? ` ${fmt(m.threats.moreAlerts)} more ${m.threats.moreAlerts === 1 ? 'sits' : 'sit'} in ${plural(more.length, 'further group', 'further groups')}.` : ''}`)
+        m.threats = { examples: shown.map(({ latest, ...g }) => g), more: more.length, moreAlerts: alertsIn(more), alerts: examples.length, severities, source: source('OUT.4', 'True positive detections with an attack stage, grouped by alert title.') }
+        presenter('True positive detection examples', `The examples use alert titles as Sentinel recorded them, with incident written as alert. Titles that carry an email address, IP address, host or domain name, path, GUID, ticket reference or machine-style name are withheld automatically. Check that no title shown names a person, account or machine, or implies containment, before the review. The table shows ${plural(alertsIn(shown), 'true positive detection', 'true positive detections')} in ${plural(shown.length, 'group', 'groups')}.${more.length ? ` ${fmt(m.threats.moreAlerts)} more ${m.threats.moreAlerts === 1 ? 'sits' : 'sit'} in ${plural(more.length, 'further group', 'further groups')}.` : ''}`)
         // An indicator match (a Log4Shell IP or domain indicator, for example) classified as a true positive confirms
-        // the indicator was seen, not that exploitation or compromise occurred. The report draws no distinction.
+        // the indicator was seen in telemetry. The report counts it as a true positive detection like any other.
         const indicators = examples.filter(r => /\b(IOC|IOCs|indicator|indicators|Log4Shell|Log4j|threat intel|threat intelligence)\b/i.test(clean(r.Threat))).length
-        presenter('Indicator-based true positives', `A true-positive classification on an indicator detection, such as a Log4Shell IP or domain indicator match, confirms that the indicator was observed, not that exploitation or compromise occurred. The report draws no distinction between an indicator detection and a confirmed exploitation.${indicators ? ` ${fmt(indicators)} of the ${plural(examples.length, 'confirmed alert', 'confirmed alerts')} with an attack stage ${indicators === 1 ? 'carries' : 'carry'} an indicator in the title.` : ''} Have the investigation outcome from each ticket ready if asked.`)
+        presenter('Indicator-based true positives', `A true-positive classification on an indicator detection, such as a Log4Shell IP or domain indicator match, confirms that the indicator was observed in telemetry. The report counts it as a true positive detection like any other.${indicators ? ` ${fmt(indicators)} of the ${plural(examples.length, 'true positive detection', 'true positive detections')} with an attack stage ${indicators === 1 ? 'carries' : 'carry'} an indicator in the title.` : ''} Have each ticket ready if asked.`)
       }
-      if (withheld) presenter('Confirmed threat titles withheld', `${plural(withheld, 'confirmed alert is', 'confirmed alerts are')} left out of the examples because ${withheld === 1 ? 'its title may identify' : 'their titles may identify'} an account, address, host or other internal detail, could not be screened, or ${withheld === 1 ? 'carries' : 'carry'} no title or date. The tickets and the pack's OUT.4 result carry the detail.`)
-      if (operational) presenter('Operational true positives', `${plural(operational, 'confirmed alert carries', 'confirmed alerts carry')} no attack stage, for example a service limit warning, and ${operational === 1 ? 'is' : 'are'} left out of the confirmed threat examples. The confirmed threat count still includes ${operational === 1 ? 'it' : 'them'}.`)
-    }
-
-    // Three measures the surfaces keep apart. Confirmed malicious activity is the true-positive classification
-    // count (OUT.1). Confirmed security incidents have no collected or reviewed source, so that measure stays null
-    // and no surface prints one. Confirmed business impact comes only from a reviewed determination in the context
-    // file (Impact with Confirmed, Reviewed and Reference), never from the tactics Sentinel recorded on an alert:
-    // the collector's own OUT.4 note holds that a zero data loss statement needs each flagged closing comment
-    // reviewed. Without the record every surface prints the tactic count and asks for additional investigation
-    // evidence, and no surface prints reached, no impact or did not reach (Oct 15, 2026).
-    // The record is bound to the alert period it covers: it names the period's WindowStart and WindowEnd, its review
-    // is dated on or after the period's end, and its count never exceeds the true positives. A context file reused
-    // from an earlier period therefore never carries a determination forward to later true positives.
-    const impactRecord = context.Impact && typeof context.Impact === 'object' ? context.Impact : null
-    if (impactRecord) {
-      const confirmed = count(impactRecord.Confirmed)
-      const reviewed = iso(impactRecord.Reviewed), recordStart = iso(impactRecord.WindowStart), recordEnd = iso(impactRecord.WindowEnd)
-      const omitted = reason => note('Impact determination needs review', `The context Impact record was omitted because ${reason} Correct it before presenting, or remove it to keep the request for additional investigation evidence.`)
-      if (confirmed === null || !validDate(reviewed) || !clean(impactRecord.Reference) || !validDate(recordStart) || !validDate(recordEnd)) omitted('it lacks a Confirmed count, a Reviewed date, a Reference, or the WindowStart and WindowEnd of the alert period it covers.')
-      else if (!windowValid || recordStart !== p.WindowStart || recordEnd !== p.WindowEnd) omitted(`it covers ${span(recordStart, recordEnd)} and this pack's alert period is ${m.period.label}.`)
-      else if (reviewed < p.WindowEnd) omitted(`its review is dated ${date(reviewed)}, before the alert period ended on ${date(p.WindowEnd)}, so it cannot cover every true positive in the period.`)
-      else if (m.alerts && m.alerts.truePositives !== null && confirmed > m.alerts.truePositives) omitted(`it confirms impact from ${fmt(confirmed)} alerts against ${fmt(m.alerts.truePositives)} true positives.`)
-      else m.impact = { confirmed, reviewed: date(reviewed), reference: clean(impactRecord.Reference), source: `Reviewed impact determination ${clean(impactRecord.Reference)}, ${date(reviewed)}, covering ${m.period.label}, from the reviewed context file.` }
-    }
-    const tpKnown = !!m.alerts && m.alerts.truePositives !== null
-    m.threatMeasures = {
-      malicious: tpKnown ? { value: m.alerts.truePositives, label: 'Confirmed threats', detail: 'Alerts the SOC classified as true positives', source: m.alerts.source } : null,
-      incidents: null,
-      impact: m.impact ? { value: m.impact.confirmed, label: 'Confirmed business impact', detail: `Reviewed ${m.impact.reviewed}, ${m.impact.reference}`, source: m.impact.source } : null
-    }
-    if (tpKnown && m.alerts.truePositives > 0) {
-      const a = m.alerts, tpText = a.truePositives === 1 ? 'the confirmed threat' : `the ${fmt(a.truePositives)} confirmed threats`
-      m.impactStatement = clean(m.impact
-        ? (m.impact.confirmed === 0 ? `The reviewed investigation records confirm no data exposure or business impact from ${tpText} (${m.impact.reference}, reviewed ${m.impact.reviewed}).` : `The reviewed investigation records confirm data exposure or business impact from ${a.truePositives === 1 ? tpText : `${fmt(m.impact.confirmed)} of ${tpText}`} (${m.impact.reference}, reviewed ${m.impact.reviewed}).`)
-        : `${a.flaggedKnown ? `Based on the tactics Sentinel recorded on the alerts, ${a.flagged === 0 ? (a.truePositives === 1 ? 'the confirmed threat did not carry' : 'none of the confirmed threats carried') : `${fmt(a.flagged)} of ${tpText} carried`} ${a.tacticPhrase}. ` : ''}Additional investigation evidence is required to confirm whether any data exposure or business impact occurred.`)
-      if (!m.impact) note('Impact determination', 'The context file carries no reviewed Impact record, so the report prints the tactic count with a request for additional investigation evidence and never a data exposure or business impact statement. Review the closing comment and ticket of each true positive, then add Impact with Confirmed, Reviewed, Reference, WindowStart and WindowEnd to the context file to print the determination.')
+      if (withheld) presenter('True positive detection titles withheld', `${plural(withheld, 'true positive detection is', 'true positive detections are')} left out of the examples because ${withheld === 1 ? 'its title may identify' : 'their titles may identify'} an account, address, host or other internal detail, could not be screened, or ${withheld === 1 ? 'carries' : 'carry'} no title or date. The tickets and the pack's OUT.4 result carry the detail.`)
+      if (operational) presenter('Operational true positives', `${plural(operational, 'true positive detection carries', 'true positive detections carry')} no attack stage, for example a service limit warning, and ${operational === 1 ? 'is' : 'are'} left out of the examples. The true positive detection count still includes ${operational === 1 ? 'it' : 'them'}.`)
     }
 
     // Response timing from one fixed cohort: every eligible high severity alert created in the alert period and closed
@@ -977,8 +974,10 @@ thead th { background:var(--wash); color:var(--navy); }
       : `Members with at least one successful sign-in in the last 30 days that satisfied multifactor authentication.${externalMfa > 0 ? ` ${plural(externalMfa, 'user', 'users')} satisfied it through a federated identity provider claim.` : ''}${evidenceQuery ? ' Windows logon and device registration are left out.' : ''}${mfaSplit ? ` ${mfaSplit}` : ''}`
     // Conditional Access controls. IA.8-CA is evaluated by the report builder from the raw policies and
     // the per-account sign-in detail, and carries counts only. A successful sign-in by an account the
-    // policy excludes is an approved exception, not a gap. Without a policy inventory and without any
-    // sign-in of the kind, there is no evidence either way and the control reads N/A.
+    // policy excludes is an exception, not a gap. Nothing in the evidence records that an exclusion was
+    // approved, so the note says the accounts are excluded and that Atmosera reviews the exclusions with the
+    // client (issue #27). Without a policy inventory and without any sign-in of the kind, there is no
+    // evidence either way and the control reads N/A.
     const caFlows = array(results['IA.8-CA'])
     const caFlow = name => caFlows.find(r => r.Flow === name && bool(r.PolicyRead) && String(r.PolicyState) !== 'Unknown') || null
     const enforcedState = f => ['Enforced', 'Security defaults'].includes(String(f.PolicyState))
@@ -1005,9 +1004,23 @@ thead th { background:var(--wash); color:var(--navy); }
     const exceptionText = f => {
       if (!f || !bool(f.DetailRead)) return ''
       const parts = []
-      if (count(f.SucceededExcluded) > 0) parts.push(`${plural(f.SucceededExcluded, 'successful sign-in', 'successful sign-ins')} came from ${plural(f.AccountsExcluded, 'account', 'accounts')} the policy excludes as approved exceptions.`)
+      if (count(f.SucceededExcluded) > 0) parts.push(`${plural(f.SucceededExcluded, 'successful sign-in', 'successful sign-ins')} by ${plural(f.AccountsExcluded, 'account', 'accounts')} fell under exclusions in the policy, which can name users, groups, roles or applications. Atmosera reviews these exclusions with your team at each business review.`)
       if (count(f.SucceededUngoverned) > 0) parts.push(`${plural(f.SucceededUngoverned, 'successful sign-in', 'successful sign-ins')} from ${plural(f.AccountsUngoverned, 'account was', 'accounts were')} not covered by the policy.`)
       return parts.join(' ')
+    }
+    // A control in force whose exclusions let sign-ins through carries the count of accounts that made them, which the register shows beside
+    // In force so the policy never reads as covering everyone. Every such exclusion is also listed, pending validation
+    // with the client, for the proposed exceptions section (issue #27, section in issue #30). Only the flows with
+    // per-account sign-in detail (device code and legacy authentication, IA.8-SIGNINS) can carry one. The count is the
+    // accounts seen signing in under an exclusion, not every identity the policy excludes.
+    m.caExclusions = []
+    const withExclusions = (item, f) => {
+      const signIns = f && bool(f.DetailRead) ? count(f.SucceededExcluded) : null
+      if (!(signIns > 0)) return item
+      const accounts = count(f.AccountsExcluded)
+      if (isInForce(item) && accounts > 0) item.excludedAccounts = accounts
+      m.caExclusions.push({ id: item.id, label: item.label, flow: clean(f.Flow), signIns, accounts, status: 'Pending validation' })
+      return item
     }
     // MFA at sign-in is a Conditional Access control (Oct 14, 2026). When the policy inventory was read, the
     // policy decides the status: an enabled policy requiring MFA on every application for all users, or
@@ -1041,7 +1054,7 @@ thead th { background:var(--wash); color:var(--navy); }
     const locControl = locFlow ? inForce('IA.4-LOCATION', locLabel, F.identity, enforcedState(locFlow), policyText(locFlow, 'sign-ins by location', 'restricts'))
       : ungathered('IA.4-LOCATION', locLabel, F.identity, caFlows.some(r => r.Flow === 'Location') ? 'the policy inventory in this pack predates collector 1.10.0 and does not record location conditions' : reason(locSource), 'An enabled Conditional Access policy blocks sign-ins or requires multifactor authentication by country or named network, for all users and all resources.')
     locControl.source = `IA.4-LOCATION from ${source(locSource)}`
-    if (locFlow && enforcedState(locFlow) && count(locFlow.ExcludedIdentities) > 0) presenter('Location policy exceptions', `${plural(locFlow.ExcludedIdentities, 'user, group or role is', 'users, groups or roles are')} excluded from the location policy. Confirm each is an approved exception, such as emergency access or a travel group, before presenting the control.`)
+    if (locFlow && enforcedState(locFlow) && count(locFlow.ExcludedIdentities) > 0) presenter('Location policy exceptions', `${plural(locFlow.ExcludedIdentities, 'user, group or role is', 'users, groups or roles are')} excluded from the location policy. Confirm with the client that each exclusion is intended, such as emergency access or a travel group, before presenting the control.`)
     const legacyLabel = 'Legacy authentication blocked'
     const legacyFlow = caFlow('Legacy authentication')
     // Unknown is not a legacy protocol. Packs before collector 1.10.0 still carry it as an IA.3 row.
@@ -1064,9 +1077,9 @@ thead th { background:var(--wash); color:var(--navy); }
     let legacyControl
     if (legacyFlow) {
       // The policy configuration decides the status. Sign-ins show whether any account got past it.
-      legacyControl = inForce('IA.3', legacyLabel, F.identity, enforcedState(legacyFlow), [policyText(legacyFlow, 'legacy authentication'), legacyActivity, exceptionText(legacyFlow), outsideScope(legacyFlow) ? outsideText(legacySucceeded) : ''].filter(Boolean).join(' '))
+      legacyControl = withExclusions(inForce('IA.3', legacyLabel, F.identity, enforcedState(legacyFlow), [policyText(legacyFlow, 'legacy authentication'), legacyActivity, exceptionText(legacyFlow), outsideScope(legacyFlow) ? outsideText(legacySucceeded) : ''].filter(Boolean).join(' ')), legacyFlow)
       if (enforcedState(legacyFlow) && bool(legacyFlow.DetailRead) && count(legacyFlow.SucceededUngoverned) > 0) presenter('Legacy sign-ins outside the block policy', `${plural(legacyFlow.SucceededUngoverned, 'successful legacy sign-in', 'successful legacy sign-ins')} in the last 30 days were not evaluated by the enabled block policy. They most likely predate the policy. Confirm before presenting the control. The SecOps worklist names the accounts.`)
-    } else if (!has('IA.3')) legacyControl = ungathered('IA.3', legacyLabel, F.identity, reason('IA.3'), 'An enabled Conditional Access policy or security defaults block legacy authentication for all users, with approved exceptions only.')
+    } else if (!has('IA.3')) legacyControl = ungathered('IA.3', legacyLabel, F.identity, reason('IA.3'), 'An enabled Conditional Access policy or security defaults block legacy authentication for all users, with documented exceptions only.')
     else if (legacyAttempts === 0) legacyControl = notApplicable('IA.3', legacyLabel, F.identity, 'No legacy protocol sign-in attempts in the last 30 days and no Conditional Access policy inventory, so there is no evidence either way.')
     else if (legacySucceeded > 0) {
       legacyControl = inForce('IA.3', legacyLabel, F.identity, false, legacyActivity)
@@ -1132,7 +1145,7 @@ thead th { background:var(--wash); color:var(--navy); }
     if (notItemized.length) presenter('Conditional Access exceptions not itemized', `${list(notItemized)} succeeded while an enabled policy blocks the flow for all users, so the accounts are outside the policy scope, either excluded or signing in before the policy existed. This pack has no per-account sign-in detail. Recollect with collector 1.10.0 or later to have the SecOps worklist name the accounts and confirm each exclusion before presenting the controls.`)
     if (deviceFlow) {
       // The policy configuration decides the status. Sign-ins show whether any account got past it.
-      inForce('IA.3-DEVICECODE', deviceLabel, F.identity, enforcedState(deviceFlow), [policyText(deviceFlow, 'device code flow'), deviceActivity, exceptionText(deviceFlow)].filter(Boolean).join(' '))
+      withExclusions(inForce('IA.3-DEVICECODE', deviceLabel, F.identity, enforcedState(deviceFlow), [policyText(deviceFlow, 'device code flow'), deviceActivity, exceptionText(deviceFlow)].filter(Boolean).join(' ')), deviceFlow)
       if (enforcedState(deviceFlow) && bool(deviceFlow.DetailRead) && count(deviceFlow.SucceededUngoverned) > 0) presenter('Device code sign-ins outside the block policy', `${plural(deviceFlow.SucceededUngoverned, 'successful device code sign-in', 'successful device code sign-ins')} in the last 30 days were not evaluated by the enabled block policy. They most likely predate the policy. Confirm before presenting the control. The SecOps worklist names the accounts.`)
     } else if (!has('IA.3-DEVICECODE')) ungathered('IA.3-DEVICECODE', deviceLabel, F.identity, reason('IA.3-DEVICECODE'), 'Device code flow sign-ins blocked by Conditional Access.')
     else if (deviceAttempts === 0) notApplicable('IA.3-DEVICECODE', deviceLabel, F.identity, 'No device code sign-ins in the last 30 days and no Conditional Access policy inventory, so there is no evidence either way.')
@@ -1586,7 +1599,7 @@ thead th { background:var(--wash); color:var(--navy); }
     }
     if (!m.delivered.length) note('Delivered work', 'Add completed change references through the context file to show verified delivery on the roadmap page. Planned work is never labeled as delivered.')
 
-    // Action status from the reviewed context file. Like Impact and OpenAlertNote, a record is bound to the alert
+    // Action status from the reviewed context file. Like OpenAlertNote, a record is bound to the alert
     // period it covers and reviewed on or after the posture read date, so a record from an earlier review never
     // carries a status forward to this collection's findings. Scheduled needs a target date, and Verified needs a
     // Delivered record in this period with the same reference. A record that fails a check is omitted with a note.
@@ -1630,7 +1643,8 @@ thead th { background:var(--wash); color:var(--navy); }
       if (mfaSplit && mfa.pct !== null) parts.push(mfaSplitNarrative)
       if (isInForce(locControl)) parts.push('Conditional Access restricts sign-ins by location for every user.')
       const legacyBlockedInForce = isInForce(legacyControl)
-      if (legacyBlockedInForce) parts.push('Legacy authentication is blocked.')
+      // The narrative names the accounts seen signing in under an exclusion, so the block never reads as covering every user.
+      if (legacyBlockedInForce) parts.push(`Legacy authentication is blocked${legacyControl.excludedAccounts > 0 ? `. ${plural(legacyControl.excludedAccounts, 'account', 'accounts')} signed in with a legacy protocol under exclusions in the policy in the last 30 days` : ''}.`)
       if (advancedPhish) parts.push('An advanced anti-phishing policy protects every mailbox.')
       else if (basicPhish) parts.push('The Microsoft default anti-phishing policy covers every mailbox.')
       const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', `Multifactor authentication covers ${measureText(mfa)} ${unevaluated !== null ? 'evaluated members' : 'members'} at sign-in, ${remaining(mfa)}${legacyBlockedInForce ? ', and legacy protocols are blocked' : ''}`, 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')
@@ -1719,16 +1733,14 @@ thead th { background:var(--wash); color:var(--navy); }
     if (m.service) tile('Months of managed security', fmt(m.service.months), 'Continuous coverage, not project work', `Service start ${m.service.start}, from the reviewed context file.`)
     else if (m.posture.assessed !== null) tile('Azure resources assessed by Defender for Cloud', fmt(m.posture.assessed), m.posture.estate !== null ? `Across ${fmt(m.posture.estate)} resources in the estate` : 'Continuous posture assessment', source('POS.2'))
     else if (m.posture.estate !== null) tile('Azure resources in the estate', fmt(m.posture.estate), 'Under managed security coverage', source('P0.5'))
-    if (m.alerts) tile('Alerts triaged', fmt(m.alerts.triaged), m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} closed by automation rules` : m.alerts.truePositives > 0 ? `${plural(m.alerts.truePositives, 'confirmed threat', 'confirmed threats')}, classified by the SOC` : m.detections ? `Across ${m.detections.sources}` : m.period.label, m.alerts.source)
+    if (m.alerts) tile('Alerts triaged', fmt(m.alerts.triaged), m.alerts.analystMode ? `Plus ${fmt(m.alerts.automation)} closed by automation rules` : m.alerts.truePositives > 0 ? `${plural(m.alerts.truePositives, 'true positive detection', 'true positive detections')}, classified by the SOC` : m.detections ? `Across ${m.detections.sources}` : m.period.label, m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
     // The 90th percentile is creation to recorded close, so the line claims triage and closure, never investigation
     // completion or resolution quality, which the evidence does not hold.
     // A median under 20 minutes or a 90th percentile over one hour carries its note on the tile as well.
     if (m.response) tile(m.response.median.label, m.response.median.value, [m.response.p90 ? `Nine in ten triaged and closed within ${m.response.p90.value}` : 'High severity alerts', ...m.response.notes.map(t => t.replace(/\.$/, ''))].join('. '), m.response.median.source)
-    // The tile never claims an outcome: the sub-line is the reviewed impact determination when the context file
-    // carries one, otherwise the tactic reading or the classification itself. When the determination drives the
-    // sub-line the source line cites the reviewed record beside OUT.1, so the impact claim traces to its evidence.
-    else if (m.alerts && m.alerts.truePositives !== null) tile('Confirmed threats', fmt(m.alerts.truePositives), m.impact && m.alerts.truePositives > 0 ? (m.impact.confirmed === 0 ? `No data exposure or business impact confirmed, reviewed ${m.impact.reviewed}` : `${fmt(m.impact.confirmed)} with confirmed data exposure or business impact`) : m.alerts.flaggedKnown && m.alerts.truePositives > 0 ? (m.alerts.flagged === 0 ? `None carried ${m.alerts.tacticPhrase}` : `${fmt(m.alerts.flagged)} carried ${m.alerts.tacticPhrase}`) : 'Alerts the SOC classified as true positives', m.impact && m.alerts.truePositives > 0 ? `${m.alerts.source} ${m.impact.source}` : m.alerts.source)
+    // The tile never claims an outcome: the sub-line is the classification itself.
+    else if (m.alerts && m.alerts.truePositives !== null) tile('True positive detections', fmt(m.alerts.truePositives), 'Classified by the SOC', m.alerts.source)
     else if (m.detections) tile('Detections received', fmt(m.detections.total), `Across ${m.detections.sources}`, m.detections.source)
     if (m.tenantScore) tile('Microsoft tenant Secure Score', pctText(m.tenantScore.value), m.tenantScore.delta ? `Up ${fmt(m.tenantScore.delta.points)} points since ${m.tenantScore.delta.since}, from ${pctText(m.tenantScore.delta.from)}` : `Read ${m.tenantScore.read}`, m.tenantScore.source, m.tenantScore.delta ? 'up' : '')
     else if (m.cloudScore) tile('Defender for Cloud secure score', pctText(m.cloudScore.value), m.cloudScore.delta && m.cloudScore.delta.points > 0 ? `Up ${fmt(m.cloudScore.delta.points)} points since ${m.cloudScore.delta.since}, from ${pctText(m.cloudScore.delta.from)}` : 'Classic Defender for Cloud score', m.cloudScore.source, m.cloudScore.delta && m.cloudScore.delta.points > 0 ? 'up' : '')
@@ -1736,15 +1748,11 @@ thead th { background:var(--wash); color:var(--navy); }
 
     const row = (tier, label, value, id) => { if (value !== null && value !== undefined && value !== '' && value !== 'Not available') m.tiers[tier].push({ label: clean(label), value: clean(String(value)), id }) }
     if (m.alerts) {
-      // The deck band shows the first three rows, so the tier leads with what "Did the program hold" names: alerts,
-      // confirmed threats and the reviewed impact determination when the context file holds one. The closed
-      // share and the tactic reading follow. Tactic-qualified: the count is of tactics recorded on the alert,
-      // never a verified outcome.
+      // The deck band shows the first three rows, so the tier leads with what "Did the program hold" names: alerts
+      // and true positive detections, then the closed share.
       row('outcomes', 'Alerts triaged', fmt(m.alerts.triaged), 'OUT.1')
-      if (m.alerts.truePositives !== null) row('outcomes', 'Confirmed threats', fmt(m.alerts.truePositives), 'OUT.1')
-      if (m.impact && m.alerts.truePositives > 0) row('outcomes', 'Confirmed data exposure or business impact', fmt(m.impact.confirmed), 'CONTEXT')
+      if (m.alerts.truePositives !== null) row('outcomes', 'True positive detections', fmt(m.alerts.truePositives), 'OUT.1')
       if (m.alerts.resolvedPct !== null && m.alerts.resolvedPct >= 90) row('outcomes', 'Alerts closed', `${pctText(m.alerts.resolvedPct)}`, 'OUT.1')
-      if (m.alerts.flaggedKnown) row('outcomes', `True positives whose alerts carried ${m.alerts.tacticPhrase}`, `${fmt(m.alerts.flagged)} of ${fmt(m.alerts.truePositives)}`, 'OUT.4')
     }
     if (m.response) {
       row('outcomes', m.response.median.label, m.response.median.value, 'OUT.2')
@@ -1785,7 +1793,7 @@ thead th { background:var(--wash); color:var(--navy); }
     if (m.notApplicable.length) note('Controls without evidence either way', `${m.notApplicable.map(u => `${u.label} (${u.id})`).join('. ')}. These read N/A on the controls page because the collection holds no activity or configuration to judge them by. They are excluded from every count.`)
     if (m.unmeasured.length) note('Controls not measured in this collection', `${m.unmeasured.map(u => `${u.label} (${u.id}: ${u.reason})`).join('. ')}. These appear as (null) on the controls page rather than as measured gaps, and they are excluded from the executive summary tiers.`)
     if (String(p.DefenderApi || '').toLowerCase() !== 'available' && p.DefenderApi) presenter('Defender API', `Defender Advanced Hunting was not reachable: ${clean(p.DefenderApi)}. Endpoint readings come from the portal for this review.`)
-    note('Presentation boundaries', 'Alert closure does not confirm containment. Detections do not prove triage. No claim of zero data loss, SLA attainment, a control grade or completed hardening is generated from these aggregates.')
+    note('Presentation boundaries', 'Alert closure does not confirm containment. Detections do not prove triage. No claim of SLA attainment, a control grade or completed hardening is generated from these aggregates.')
     note('Scope and time', `Alert activity covers ${m.period.label}. Identity and endpoint readings use the source lookback, generally the last 30 days. Azure configuration and score readings reflect ${readDate}.`)
     for (const issue of m.issues) note('Evidence file', issue)
     m.coverage = {
@@ -1794,7 +1802,9 @@ thead th { background:var(--wash); color:var(--navy); }
     }
     return m
   }
-  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, MIN_SAMPLE, smallSampleText, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced' }
+  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, MIN_SAMPLE, smallSampleText, exceptionsText, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced',
+    // Shared with cybersoc-model.js, so the monthly figures use the same vocabulary, dates and sample rules.
+    TIMING_SAMPLE, STAGES, stageIndex, stageLabel, alertWords, validDate, iso, monthLabel, monthName, list, array, bool }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.EbrReport = api
 })(typeof globalThis !== 'undefined' ? globalThis : this)

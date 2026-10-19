@@ -127,6 +127,20 @@ test('neither edition reports a data exfiltration, data exposure or compromise d
   assert.ok(client.report.includes('Exfiltration'))
 })
 
+// The CyberSOC report labels the alerts the SOC classified as true positives "True positive detections", never
+// "Confirmed threats", which the EBR toolkit keeps (issue #19). The whole written files are checked, embedded data and
+// scripts included, so the old label cannot come back through a merge of an EBR fix.
+test('neither edition carries the EBR "Confirmed threats" label, and both carry True positive detections', () => {
+  const { internal, client } = editions
+  for (const [name, text] of [['internal file', internal.html], ['internal pages', internal.report], ['presenter notes', internal.review], ['client file', client.html]]) {
+    assert.ok(!/confirmed threat/i.test(text), `${name}: ${text.match(/.{0,60}confirmed threat.{0,60}/i)?.[0]}`)
+  }
+  for (const [name, text] of [['internal pages', internal.report], ['client pages', client.report]]) {
+    assert.ok(text.includes('<h3>True positive detections</h3>'), `${name} carry the true positive detections block`)
+    assert.ok((text.match(/<div class="glance">[\s\S]*?<\/table>/)?.[0] || '').includes('True positive detections'), `${name} carry the month at a glance row`)
+  }
+})
+
 test("the client edition's pages equal the internal edition's on the offline fixture", () => {
   const { internal, client } = editions
   const m = build(internal.data)

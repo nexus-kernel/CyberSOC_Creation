@@ -17,7 +17,8 @@ with the two months before, and what needs attention".
 | Trend | Alerts by month | Alerts by week and month, response timing by month, alert types by title, scores by month, and the month at a glance with a neutral change from the previous month |
 | Threat intelligence | Ingestion and matches as two controls (DR.7, DR.8) | A page and a slide: indicators monitored, indicator matches by month, MITRE ATT&CK tactics and techniques on the alerts, identity threat activity and Entra ID Protection risk detections, email threats, malware on Azure virtual machines, and the CISA KEV-listed vulnerabilities present |
 | Vulnerability assessment | Exploitable vulnerabilities as one backlog figure (BKL.1) | A page and a slide from the monthly Atmosera.VulnAssessment runs: open findings by severity at each assessment, CISA KEV, public exploit, the change between assessments, top products to patch, remediation status and owner. The Defender current state when no run is imported |
-| Compromise and exfiltration | Confirmed data loss or exfiltration, identity compromises contained, malicious sign-in to containment (OUT.8), the exfiltration or impact tactic count on the true positives and the reviewed `Impact` determination | Not reported or collected. The report keeps the confirmed threats, the alerts the SOC classified as true positives, with their examples. Keep these out when merging EBR fixes |
+| Compromise and exfiltration | Confirmed data loss or exfiltration, identity compromises contained, malicious sign-in to containment (OUT.8), the exfiltration or impact tactic count on the true positives and the reviewed `Impact` determination | Not reported or collected. The report keeps the true positive detections, the alerts the SOC classified as true positives, with their examples. Keep these out when merging EBR fixes |
+| True positive label | "Confirmed threats" on the tiles, the KPIs, the threats block and slide, and the handling strip ("EVERY CONFIRMED THREAT") | "True positive detections" ("EVERY TRUE POSITIVE DETECTION" on the strip): the label names the classification the evidence records and suggests no confirmed compromise. Keep the CyberSOC label when merging EBR fixes. The edition, deck and Pester tests fail if "Confirmed threat" reaches an edition |
 | Report | Security business review | CyberSOC monthly security report, same editions (internal HTML, client HTML, PowerPoint) and the same evidence and copy rules |
 
 Everything else carries over unchanged: the control matrix, the measured outcomes by pillar, the hardening
@@ -77,7 +78,7 @@ pwsh ./New-CyberSocReport.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_
 | Page | Depth | Content |
 |---|---|---|
 | 01 Executive summary | all | The month's tiles, the month in brief, the month at a glance beside the two months before it, reviewed analyst highlights, the four tier posture block |
-| 02 Security operations | Balanced, Detailed | Response timing, alerts by month and by week, response timing by month, the most common alert types, disposition, detections by source, confirmed threats |
+| 02 Security operations | Balanced, Detailed | Response timing, alerts by month and by week, response timing by month, the most common alert types, disposition, detections by source, true positive detections |
 | 03 Threat intelligence | all | Indicator matches, indicators monitored, ATT&CK tactics and techniques, identity threat activity and risk detections, email threats, malware detections, the CISA KEV-listed vulnerabilities present |
 | 04 Vulnerability management | all | Open findings at each assessment, the change between them, top products to patch, remediation status and owner |
 | 05 Measured outcomes | Balanced, Detailed | One row per pillar |

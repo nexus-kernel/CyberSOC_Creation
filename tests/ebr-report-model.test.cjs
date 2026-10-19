@@ -87,14 +87,14 @@ test('a median under the 20 minute floor is presented with its note on every sur
   p.results['OUT.2'][1].P90CloseMin = 90
   assert.deepEqual(build(p).response.notes, ['Median under 20 minutes, covered in the review.', '90th percentile over one hour, covered in the review.'])
 })
-test('timing is withheld only below the minimum sample, whatever the figures, and the tile falls back to confirmed threats', () => {
+test('timing is withheld only below the minimum sample, whatever the figures, and the tile falls back to true positive detections', () => {
   const p = pack(); alerts(p)
   p.results['OUT.2'][1].Incidents = 4
   const m = build(p)
   assert.equal(m.response, null)
   assert.ok(m.unmeasured.some(u => u.id === 'OUT.2' && u.reason === '4 high severity alerts closed, below the minimum sample of 5'))
   assert.equal(m.timingRationale[0].status, 'Not presented: 4 high severity alerts closed, below the minimum sample of 5')
-  assert.ok(m.headline.some(t => t.label === 'Confirmed threats' && t.sub === 'Alerts the SOC classified as true positives'))
+  assert.ok(m.headline.some(t => t.label === 'True positive detections' && t.sub === 'Classified by the SOC'))
   assert.equal(m.timing.find(r => r.scope === 'High').median, null, 'the deck row carries no timing below the sample')
   // Fast or slow figures on a large enough sample are always presented.
   p.results['OUT.2'][1].Incidents = 5; p.results['OUT.2'][1].MedianCloseMin = 1; p.results['OUT.2'][1].P90CloseMin = 5000
@@ -1622,7 +1622,7 @@ test('a managed tenant, a federated tenant without the Graph read and older pack
   put(old, 'IA.1', [{ UserType: 'Member', UsersSignedIn: 100, UsersChallenged: 85 }])
   assert.match(build(old).presenter.find(n => n.title === 'MFA coverage query').text, /before IA.1 recognised MFA satisfied by external identity provider claims/)
 })
-test('confirmed threat examples are grouped by title, tied to an attack stage, ordered by severity and capped at five', () => {
+test('true positive detection examples are grouped by title, tied to an attack stage, ordered by severity and capped at five', () => {
   const p = pack(); alerts(p)
   const rowsOut = [
     ...Array.from({ length: 8 }, (_, i) => threat('Log4j vulnerability exploit aka Log4Shell IP IOC', 'High', 'CommandAndControl', `2026-0${i < 4 ? 8 : 9}-1${i}`)),
@@ -1657,11 +1657,11 @@ test('confirmed threat examples are grouped by title, tied to an attack stage, o
   assert.equal(ex['User account compromised by device code phishing (attack disruption)'].when, 'September 2026')
   assert.equal(ex['Multi-stage alert involving Initial access and Lateral movement'].stage, 'Initial access, Lateral movement')
   assert.equal(ex['Multi-stage alert involving Initial access and Lateral movement'].when, 'December 2025 to January 2026')
-  assert.ok(m.presenter.some(n => n.title === 'Confirmed threat titles withheld' && /^4 confirmed alerts are left out of the examples because their titles may identify an account, address, host or other internal detail, could not be screened, or carry no title or date\. The tickets and the pack's OUT\.4 result carry the detail\.$/.test(n.text)))
-  assert.ok(m.presenter.some(n => n.title === 'Operational true positives' && /^1 confirmed alert carries no attack stage/.test(n.text)))
-  const examplesNote = m.presenter.find(n => n.title === 'Confirmed threat examples').text
+  assert.ok(m.presenter.some(n => n.title === 'True positive detection titles withheld' && /^4 true positive detections are left out of the examples because their titles may identify an account, address, host or other internal detail, could not be screened, or carry no title or date\. The tickets and the pack's OUT\.4 result carry the detail\.$/.test(n.text)))
+  assert.ok(m.presenter.some(n => n.title === 'Operational true positives' && /^1 true positive detection carries no attack stage/.test(n.text)))
+  const examplesNote = m.presenter.find(n => n.title === 'True positive detection examples').text
   assert.match(examplesNote, /^The examples use alert titles as Sentinel recorded them, with incident written as alert\. Titles that carry an email address, IP address, host or domain name, path, GUID, ticket reference or machine-style name are withheld automatically\. Check that no title shown names a person, account or machine, or implies containment, before the review\./)
-  assert.match(examplesNote, /The table shows 14 confirmed alerts in 5 groups\. 1 more sits in 1 further group\.$/, 'examples, withheld and operational rows reconcile with the 20 rows in OUT.4')
+  assert.match(examplesNote, /The table shows 14 true positive detections in 5 groups\. 1 more sits in 1 further group\.$/, 'examples, withheld and operational rows reconcile with the 20 rows in OUT.4')
   assert.ok(!/\bincidents?\b/i.test(JSON.stringify(m.threats)), 'titles follow the alerts vocabulary')
 })
 test('threat examples are omitted when there are none, when alerts are withheld, or when the report data predates them', () => {
@@ -1675,7 +1675,7 @@ test('threat examples are omitted when there are none, when alerts are withheld,
   put(p, 'OUT.4', [{ Severity: 'High' }])
   const m = build(p)
   assert.equal(m.threats, null)
-  assert.ok(m.review.some(n => n.title === 'Confirmed threat examples' && /Regenerate the report/.test(n.text)))
+  assert.ok(m.review.some(n => n.title === 'True positive detection examples' && /Regenerate the report/.test(n.text)))
   assert.ok(!m.presenter.some(n => n.title === 'Operational true positives'))
 })
 test('alert titles say alerts in any letter case', () => {
@@ -1684,7 +1684,7 @@ test('alert titles say alerts in any letter case', () => {
   const m = build(p)
   assert.deepEqual(m.threats.examples.map(t => t.title), ['Multi-stage ALERT involving Execution', 'Alerts correlated by Fusion', 'Suspicious alert from a rare location'])
   put(p, 'OUT.4', [threat('Suspicious incident from a rare location', 'Low', 'InitialAccess', '2026-09-01'), threat('Title withheld', 'High', 'Execution', '2026-09-01')])
-  assert.match(build(p).presenter.find(n => n.title === 'Confirmed threat titles withheld').text, /^1 confirmed alert is left out of the examples because its title may identify an account, address, host or other internal detail, could not be screened, or carries no title or date\./)
+  assert.match(build(p).presenter.find(n => n.title === 'True positive detection titles withheld').text, /^1 true positive detection is left out of the examples because its title may identify an account, address, host or other internal detail, could not be screened, or carries no title or date\./)
 })
 test('attack stages read in kill-chain order joined by commas, and severities rank in any letter case', () => {
   const p = pack(); alerts(p)
@@ -1702,7 +1702,7 @@ test('attack stages read in kill-chain order joined by commas, and severities ra
     ['Unrated detection', 'Not recorded', 'Initial access, Execution, plus 1 more stage']
   ])
   assert.deepEqual([m.threats.more, m.threats.moreAlerts], [0, 0])
-  assert.match(m.presenter.find(n => n.title === 'Confirmed threat examples').text, /The table shows 4 confirmed alerts in 4 groups\.$/)
+  assert.match(m.presenter.find(n => n.title === 'True positive detection examples').text, /The table shows 4 true positive detections in 4 groups\.$/)
 })
 test('ties break on title, and moreAlerts counts the alerts in the hidden groups', () => {
   const p = pack(); alerts(p)
@@ -1710,14 +1710,14 @@ test('ties break on title, and moreAlerts counts the alerts in the hidden groups
   const m = build(p)
   assert.deepEqual(m.threats.examples.map(t => t.title), ['Threat A', 'Threat B', 'Threat C', 'Threat D', 'Threat E'])
   assert.deepEqual([m.threats.more, m.threats.moreAlerts], [1, 2])
-  assert.match(m.presenter.find(n => n.title === 'Confirmed threat examples').text, /The table shows 10 confirmed alerts in 5 groups\. 2 more sit in 1 further group\.$/)
+  assert.match(m.presenter.find(n => n.title === 'True positive detection examples').text, /The table shows 10 true positive detections in 5 groups\. 2 more sit in 1 further group\.$/)
 })
 test('a null OUT.4 row is skipped without a crash or an operational note', () => {
   const p = pack(); alerts(p)
   put(p, 'OUT.4', [null, threat('Password spray attack', 'Medium', 'CredentialAccess', '2026-08-22')])
   const m = build(p)
   assert.deepEqual(m.threats.examples.map(t => t.title), ['Password spray attack'])
-  assert.ok(!m.presenter.some(n => ['Operational true positives', 'Confirmed threat titles withheld'].includes(n.title)))
+  assert.ok(!m.presenter.some(n => ['Operational true positives', 'True positive detection titles withheld'].includes(n.title)))
 })
 test('without the alert count there are no threat examples and no threat notes', () => {
   const p = pack(); alerts(p)
@@ -1726,7 +1726,7 @@ test('without the alert count there are no threat examples and no threat notes',
   const m = build(p)
   assert.equal(m.alerts, null)
   assert.equal(m.threats, null)
-  const titles = ['Confirmed threat examples', 'Confirmed threat titles withheld', 'Operational true positives']
+  const titles = ['True positive detection examples', 'True positive detection titles withheld', 'Operational true positives']
   assert.ok(![...m.presenter, ...m.review].some(n => titles.includes(n.title)))
 })
 test('every client-facing string keeps to the copy rules: no semicolons, arrows or emoji, and no angle brackets', () => {
@@ -1777,15 +1777,15 @@ test('tenant score movement is refused when the two readings differ in maximum o
   p.context.TenantScore.PreviousModel = 'microsoft secure score'
   assert.deepEqual(build(p).tenantScore.delta, { points: 5, since: 'Jul 2026', from: 40 }, 'the model name is matched without regard to case')
 })
-test('confirmed threats are the only threat measure: no exfiltration or impact tactic count and no impact or compromise determination', () => {
+test('true positive detections are the only threat measure: no exfiltration or impact tactic count and no impact or compromise determination', () => {
   const p = pack(); alerts(p)
-  p.results['OUT.2'][1].Incidents = 4 // below the minimum sample, so no timing and the executive tile falls back to the confirmed threats
+  p.results['OUT.2'][1].Incidents = 4 // below the minimum sample, so no timing and the executive tile falls back to the true positive detections
   put(p, 'OUT.4', [threat('Data staged for transfer', 'High', 'Exfiltration,Impact', '2026-08-18'), threat('Log4j vulnerability exploit aka Log4Shell IP IOC', 'High', 'CommandAndControl', '2026-08-18'), threat('Password spray attack', 'Medium', 'CredentialAccess', '2026-08-22')])
   // An Impact record copied from an EBR context file changes nothing: the CyberSOC report reads no impact determination.
   p.context = { Impact: { Confirmed: 2, Reviewed: '2026-10-10', Reference: 'CHG-123', WindowStart: '2025-11-01', WindowEnd: '2026-09-30' } }
   const m = build(p)
-  const tile = m.headline.find(t => t.label === 'Confirmed threats')
-  assert.deepEqual([tile.value, tile.sub, tile.source], ['3', 'Alerts the SOC classified as true positives', 'OUT.1. Read Oct 8, 2026.'])
+  const tile = m.headline.find(t => t.label === 'True positive detections')
+  assert.deepEqual([tile.value, tile.sub, tile.source], ['3', 'Classified by the SOC', 'OUT.1. Read Oct 8, 2026.'])
   assert.ok(!['impact', 'impactStatement', 'threatMeasures'].some(k => k in m))
   assert.ok(!['flagged', 'flaggedKnown', 'flaggedScope', 'tacticPhrase'].some(k => k in m.alerts))
   assert.deepEqual(m.tiers.outcomes.filter(r => r.id !== 'OUT.1' && r.id !== 'OUT.5').map(r => r.label), [], 'no tactic or impact row on the outcomes tier')
@@ -1793,13 +1793,13 @@ test('confirmed threats are the only threat measure: no exfiltration or impact t
   const claim = /exfiltration or impact|data exposure|data loss|business impact|compromise|impact determination|investigation evidence/i
   const text = JSON.stringify([m.headline, m.tiers, m.pillars, m.threats, m.review, m.presenter])
   assert.ok(!claim.test(text), text.match(new RegExp(`.{0,60}${claim.source}.{0,60}`, 'i'))?.[0])
-  // The confirmed threats keep their ATT&CK tactics, Exfiltration and Impact included: they are detection labels.
+  // The true positive detections keep their ATT&CK tactics, Exfiltration and Impact included: they are detection labels.
   assert.equal(m.threats.examples.find(t => t.title === 'Data staged for transfer').stage, 'Exfiltration, Impact')
-  assert.match(m.presenter.find(n => n.title === 'Indicator-based true positives').text, /^A true-positive classification on an indicator detection, such as a Log4Shell IP or domain indicator match, confirms that the indicator was observed in telemetry\. The report counts it as a confirmed threat like any other true positive\. 1 of the 3 confirmed alerts with an attack stage carries an indicator in the title\./)
+  assert.match(m.presenter.find(n => n.title === 'Indicator-based true positives').text, /^A true-positive classification on an indicator detection, such as a Log4Shell IP or domain indicator match, confirms that the indicator was observed in telemetry\. The report counts it as a true positive detection like any other\. 1 of the 3 true positive detections with an attack stage carries an indicator in the title\./)
   assert.ok(!/\breached\b|no impact|did not reach/i.test(visible(m)), 'an outcome verb reached the model')
   assert.ok(!/investigated/i.test(JSON.stringify([m.headline, m.tiers, m.threats])), 'a true positive never reads as investigated')
 })
-test('confirmed threat severities are counted per alert before grouping, so a mixed group never reads as all high', () => {
+test('true positive detection severities are counted per alert before grouping, so a mixed group never reads as all high', () => {
   const p = pack(); alerts(p)
   put(p, 'OUT.4', [{ Threat: 'Suspicious sign-in detected', Severity: 'High', Tactics: 'InitialAccess', Created: '2026-08-01' }, ...Array.from({ length: 9 }, (_, i) => ({ Threat: 'Suspicious sign-in detected', Severity: 'Low', Tactics: 'InitialAccess', Created: `2026-08-0${i + 1}` }))])
   const m = build(p)

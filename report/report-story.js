@@ -148,7 +148,7 @@
     s.foundational = tierTotal('foundational')
     s.defense = tierTotal('defense')
 
-    // Outcome KPIs: alerts, confirmed threats, speed, score. Scope figures such as resources assessed are inputs, not
+    // Outcome KPIs: alerts, true positive detections, speed, score. Scope figures such as resources assessed are inputs, not
     // outcomes. The alert KPI carries the period, or the automation line, as the HTML tile does. The detection count
     // stays on the operations slide, where the chart explains it.
     const kpis = []
@@ -156,7 +156,7 @@
     // A true positive is a classification the SOC recorded, so the sub-line says classified, never investigated or
     // closed. The CyberSOC report carries no data exfiltration or compromise determination (Oct 19, 2026).
     const a = m.alerts
-    if (a && a.truePositives !== null) kpis.push({ value: fmt(a.truePositives), label: 'Confirmed threats', sub: 'Alerts the SOC classified as true positives', area: 'threat' })
+    if (a && a.truePositives !== null) kpis.push({ value: fmt(a.truePositives), label: 'True positive detections', sub: 'Classified by the SOC', area: 'threat' })
     if (s.speed) kpis.push({ value: s.speed.value, label: sentence(s.speed.label), sub: s.speed.kpiSub, area: 'response' })
     if (score) kpis.push({ value: pctText(score.value), label: scoreName, sub: gain ? `Up ${fmt(gain.points)} points since ${gain.since}, from ${pctText(gain.from)}` : `Read ${s.readShort}`, area: 'posture' })
     if (kpis.length < 4 && s.foundational.measured) kpis.push({ value: `${fmt(s.foundational.enforced)} of ${fmt(s.foundational.measured)}`, label: 'Foundational controls enforced', sub: `Across five pillars${s.foundational.small ? `, ${smallSampleText(s.foundational.small)}` : ''}`, area: 'controls' })

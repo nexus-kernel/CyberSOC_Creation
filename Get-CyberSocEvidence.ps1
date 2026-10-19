@@ -1102,7 +1102,7 @@ SecurityIncident
 | order by Month asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'OUT.4' -Phase 'P1 Outcomes' -Engine 'LA' -Title 'True positives' -Notes 'One row per confirmed threat. The row count is the true positives detected and managed.' -Query @'
+    $q.Add((New-EbrQuery -Id 'OUT.4' -Phase 'P1 Outcomes' -Engine 'LA' -Title 'True positives' -Notes 'One row per true positive detection. The row count is the true positives detected and managed.' -Query @'
 SecurityIncident
 | where TimeGenerated between ({{WINDOW_START}} .. now())
 | summarize arg_max(TimeGenerated, *) by TenantId, IncidentNumber

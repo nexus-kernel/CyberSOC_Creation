@@ -82,7 +82,7 @@ Describe 'Offline HTML report generation' {
         $html | Should -Match '"OUT.7":\[\{"Incidents":2\}\]'
         $html | Should -Not -Match '9900417|9900418|Secret disruption title|IncidentNumber'
     }
-    It 'embeds confirmed threat titles only after screening, with the tactics and the day, and never the comments' {
+    It 'embeds true positive detection titles only after screening, with the tactics and the day, and never the comments' {
         $p = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
         $p | Add-Member -NotePropertyName TicketPattern -NotePropertyValue '(?i)\bSR\s*\d{3,}'
         $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
@@ -119,7 +119,7 @@ Describe 'Offline HTML report generation' {
         $html | Should -Not -Match 'jane\.doe|203\.0\.113|2001:db8|2001::1|DESKTOP-4F2KQ1|FILESERVER01|badsite|fs01|3f2b8c1e|Payroll|ZD 12345|ZD#4521|C:/Users|Repeated suspicious|SR 4521|Malware Scanning|pat\.doe|contoso|9900001|ClassificationComment|IncidentNumber|"Title"'
         $html | Should -Not -Match 'An OUT\.4 row could not be screened, so its title was withheld'
     }
-    It "withholds every confirmed threat title and notes it once when the pack's ticket pattern is not a .NET regular expression" {
+    It "withholds every true positive detection title and notes it once when the pack's ticket pattern is not a .NET regular expression" {
         $p = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
         $p | Add-Member -NotePropertyName TicketPattern -NotePropertyValue '(?P<ref>SR\d+)'
         $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
@@ -271,6 +271,25 @@ Describe 'Offline HTML report generation' {
         }
         finally { $zip.Dispose() }
         $text | Should -Not -Match 'private@example.test|Internal notes|secret-subnet|secret-vm|Secret incident title|Private comment|object Object'
+    }
+    # The CyberSOC report says "True positive detections" where the EBR toolkit says "Confirmed threats" (issue #19).
+    It 'labels the true positives True positive detections in every edition and never Confirmed threats' -Skip:(-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        $offline = Join-Path $TestDrive 'offline-pack'
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'fixtures/offline-pack') -Destination $offline -Recurse
+        $files = @(& $generator -EvidencePath $offline -ContextPath (Join-Path $PSScriptRoot 'fixtures/offline-context.json') -Depth Detailed)
+        $files.Count | Should -Be 3
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $zip = [IO.Compression.ZipFile]::OpenRead($files[2])
+        try {
+            $parts = @($zip.Entries | Where-Object { $_.FullName -match '^ppt/(slides/slide|notesSlides/notesSlide)\d+\.xml$' })
+            $deck = ($parts | ForEach-Object { $r = [IO.StreamReader]::new($_.Open()); try { $r.ReadToEnd() } finally { $r.Dispose() } }) -join ' '
+        }
+        finally { $zip.Dispose() }
+        foreach ($text in @((Get-Content -LiteralPath $files[0] -Raw), (Get-Content -LiteralPath $files[1] -Raw), $deck)) {
+            $text | Should -Not -Match '(?i)confirmed threat'
+            $text | Should -Match 'True positive detections'
+        }
+        $deck | Should -Match 'EVERY TRUE POSITIVE DETECTION'
     }
     It 'writes the two HTML editions only with -SkipDeck' {
         $files = @(& $generator -SkipDeck -EvidencePath $pack)
