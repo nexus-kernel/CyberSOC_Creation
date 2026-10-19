@@ -125,7 +125,7 @@ Describe 'Change request generation' {
             'CR-01-diagnostic-logging.txt', 'CR-02-storage-secure-transfer.txt', 'CR-03-storage-minimum-tls.txt', 'CR-04-app-service-minimum-tls.txt',
             'CR-06-key-vault-purge-protection.txt', 'CR-07-storage-anonymous-access.txt', 'CR-08-app-service-https-only.txt', 'CR-09-encryption-at-host.txt',
             'CR-11-redis-minimum-tls.txt', 'CR-12-service-bus-minimum-tls.txt', 'CR-13-event-hubs-minimum-tls.txt', 'CR-14-cosmos-db-minimum-tls.txt', 'CR-15-scale-set-encryption-at-host.txt')
-        @($emailFiles.Name | Sort-Object) | Should -Be @('CR-06-key-vault-purge-protection.email.txt', 'CR-07-storage-anonymous-access.email.txt', 'CR-08-app-service-https-only.email.txt', 'CR-09-encryption-at-host.email.txt', 'CR-13-event-hubs-minimum-tls.email.txt', 'CR-15-scale-set-encryption-at-host.email.txt')
+        @($emailFiles.Name | Sort-Object) | Should -Be @($crFiles.Name | Sort-Object | ForEach-Object { $_ -replace '\.txt$', '.email.txt' }) -Because 'every change request writes a client email'
         $files.Count | Should -Be ($crFiles.Count + $emailFiles.Count + 2)
         $index | Should -Match '\| 05 \| Minimum TLS 1\.2 on Azure SQL servers \|  \| No gaps found \|'
         $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request and client email \| CR-06-key-vault-purge-protection\.txt, CR-06-key-vault-purge-protection\.email\.txt \|'
@@ -467,7 +467,7 @@ Describe 'Change request generation' {
         @(Get-Section $stg 'C) ROLLBACK PLAN')[-1] | Should -Match 'or to Version 1\.0 where it is recorded as not set, since an account without the setting accepts TLS 1\.0, and select Save\.$'
     }
 
-    It 'sets minimum TLS 1.2 on Redis, Service Bus and Cosmos DB without a client email or a rollback, since each already refuses TLS 1.0 and 1.1' {
+    It 'sets minimum TLS 1.2 on Redis, Service Bus and Cosmos DB with a notice and no rollback, since each already refuses TLS 1.0 and 1.1' {
         $checks = @(
             @{ File = 'CR-11-redis-minimum-tls'; Resource = "Subscription: Example Production \($s1\)\r?\n- redis-sessions, resource group rg-app, minimum TLS 1\.0"
                Step = '2\. Go to Settings > Advanced settings\.\r?\n3\. Set Minimum TLS version to 1\.2 and select Save\.'; Rollback = 'Azure Cache for Redis has not allowed a minimum below 1\.2 since March 1, 2024\.'
@@ -488,12 +488,12 @@ Describe 'Change request generation' {
             $rollback[0] | Should -Match ('^1\. No rollback is available or needed, because ' + $c.Rollback + '$') -Because $c.File
             $rollback[1] | Should -Match 'so every client that connected before the change can still connect\.$' -Because $c.File
             @(Get-Section $text 'A) REFERENCES')[0] | Should -Match $c.Reference -Because $c.File
-            Test-Path (Join-Path $out "$($c.File).email.txt") | Should -BeFalse -Because "$($c.File) changes nothing a client can still use"
+            (& $read "$($c.File).email.txt") | Should -Match '^Subject: Notice of planned change: ' -Because "$($c.File) changes nothing a client can still use, so it needs no approval"
         }
         @(Get-Section (& $read 'CR-11-redis-minimum-tls.txt') 'B) PURPOSE')[0] | Should -Match '^Azure Cache for Redis has refused TLS 1\.0 and 1\.1 on every cache since April 1, 2025, but this cache still records an older minimum in its configuration\.'
         @(Get-Section (& $read 'CR-14-cosmos-db-minimum-tls.txt') 'B) PURPOSE')[0] | Should -Match '^Azure Cosmos DB retired TLS 1\.0 and 1\.1 on August 31, 2025, but this account does not record a minimum of 1\.2'
-        $index | Should -Match '\| 11 \| Minimum TLS 1\.2 on Azure Cache for Redis \| 1 \| Change request \| CR-11-redis-minimum-tls\.txt \|'
-        $index | Should -Match '\| 14 \| Minimum TLS 1\.2 on Azure Cosmos DB accounts \| 1 \| Change request \| CR-14-cosmos-db-minimum-tls\.txt \|'
+        $index | Should -Match '\| 11 \| Minimum TLS 1\.2 on Azure Cache for Redis \| 1 \| Change request and client email \| CR-11-redis-minimum-tls\.txt, CR-11-redis-minimum-tls\.email\.txt \|'
+        $index | Should -Match '\| 14 \| Minimum TLS 1\.2 on Azure Cosmos DB accounts \| 1 \| Change request and client email \| CR-14-cosmos-db-minimum-tls\.txt, CR-14-cosmos-db-minimum-tls\.email\.txt \|'
     }
 
     It 'asks the client first for minimum TLS 1.2 on Event Hubs, which still documents namespaces that accept TLS 1.0 and 1.1, and keeps a rollback' {
@@ -515,6 +515,66 @@ Describe 'Change request generation' {
         $email | Should -Match 'Thank you,\r?\nScott Example\r?\n$'
     }
 
+    It 'writes a notice of planned change for every change that does not need the client first, and keeps the other emails' {
+        $today = (Get-Date).ToUniversalTime().Date
+        $planned = $today.AddDays(14).ToString('dddd, MMMM d, yyyy', [cultureinfo]::InvariantCulture)
+        $reply = $today.AddDays(7).ToString('dddd, MMMM d, yyyy', [cultureinfo]::InvariantCulture)
+        $notices = @{
+            'CR-01-diagnostic-logging' = 'diagnostic logging for Azure resources'
+            'CR-02-storage-secure-transfer' = 'secure transfer for Azure storage accounts'
+            'CR-03-storage-minimum-tls' = 'minimum TLS 1\.2 for Azure storage accounts'
+            'CR-04-app-service-minimum-tls' = 'minimum TLS 1\.2 for Azure App Service applications'
+            'CR-11-redis-minimum-tls' = 'minimum TLS 1\.2 for Azure Cache for Redis'
+            'CR-12-service-bus-minimum-tls' = 'minimum TLS 1\.2 for Azure Service Bus namespaces'
+            'CR-14-cosmos-db-minimum-tls' = 'minimum TLS 1\.2 for Azure Cosmos DB accounts' }
+        foreach ($k in $notices.Keys) {
+            $email = & $read "$k.email.txt"
+            $email | Should -Match ('^Subject: Notice of planned change: {0}\r?\n\r?\nHello Dana,\r?\n\r?\nI plan to ' -f $notices[$k]) -Because $k
+            $email | Should -Match "Subscription Example[^\r\n]*\((5f1c2a9e|a0b1c2d3)[^\r\n]*\):\r?\n\r?\n- " -Because "$k lists the resources by subscription"
+            $email | Should -Match ('I plan to make this change on or after {0}\. If you have a concern about it, or anything listed above should stay out of it, please let me know by {1} and I will hold the change until your concern is resolved\.\r?\n\r?\nThank you,\r?\nScott Example\r?\n$' -f $planned, $reply) -Because "$k gives the planned date and a week to raise a concern"
+            $email | Should -Not -Match '(?i)\bplease (approve|confirm)|maintenance window' -Because "$k needs no approval"
+        }
+        $kept = @{
+            'CR-06-key-vault-purge-protection' = 'Approval request: purge protection'; 'CR-07-storage-anonymous-access' = 'Planned change: turning off anonymous access'
+            'CR-08-app-service-https-only' = 'Planned change: HTTPS only'; 'CR-09-encryption-at-host' = 'Maintenance window request: encryption at host for Azure virtual machines'
+            'CR-13-event-hubs-minimum-tls' = 'Planned change: minimum TLS 1\.2 for Azure Event Hubs'; 'CR-15-scale-set-encryption-at-host' = 'Maintenance window request: encryption at host for Azure virtual machine scale sets' }
+        foreach ($k in $kept.Keys) {
+            $email = & $read "$k.email.txt"
+            $email | Should -Match ('^Subject: {0}' -f $kept[$k]) -Because "$k keeps its approval, confirmation or maintenance window request"
+            $email | Should -Not -Match 'I plan to make this change on or after' -Because "$k waits for the reply"
+        }
+        $index | Should -Match ('- CR-01, CR-02, CR-03, CR-04, CR-11, CR-12, CR-14 send a notice of planned change that plans the change for {0} and asks the client to raise any concern by {1}\. Run again with -ChangeDate' -f $planned, $reply)
+        $index | Should -Match 'a change with a notice of planned change goes ahead on its planned date unless the client raises a concern\.'
+    }
+
+    It 'says what each notice changes, why, and what the client should expect' {
+        $email = & $read 'CR-02-storage-secure-transfer.email.txt'
+        $email | Should -Match 'I plan to turn on Secure transfer required on 2 of your storage accounts, so they accept encrypted connections only\. Requests over plain HTTP and SMB connections without encryption expose data and credentials in transit\.'
+        $email | Should -Match "The accounts are listed below by subscription:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- stdata \(resource group rg-data\)\r?\n- stweb \(resource group rg-web\)\r?\n"
+        $email | Should -Match 'Azure Storage rejects any request made over HTTP and any SMB connection without encryption, such as SMB 2\.1, so a system that still connects to these accounts that way would stop working'
+        $email | Should -Not -Match 'stnfsblob|stpremfiles' -Because 'the accounts left out of the change are not in its email'
+        $email = & $read 'CR-03-storage-minimum-tls.email.txt'
+        $email | Should -Match 'Azure Storage stopped accepting TLS 1\.0 and 1\.1 on February 3, 2026, but these accounts still allow an older version in their configuration'
+        $email | Should -Match '- stdata \(resource group rg-data, minimum TLS 1\.0\)\r?\n- stweb \(resource group rg-web, minimum TLS not set\)'
+        $email | Should -Match 'I do not expect any visible effect, because Azure Storage already refuses TLS 1\.0 and 1\.1, so every connection that works today keeps working\.'
+        $email = & $read 'CR-04-app-service-minimum-tls.email.txt'
+        $email | Should -Match 'I plan to set the minimum inbound TLS version to 1\.2 on one of your App Service and Function applications\. TLS 1\.0 and 1\.1 have known weaknesses, and App Service stops accepting them on May 31, 2027'
+        $email | Should -Match 'The application is listed below with its minimum TLS version today:'
+        $email | Should -Match 'A client that can only use TLS 1\.0 or 1\.1, for example one on an old operating system or runtime, will no longer be able to connect to the application once the change is applied\.'
+        $email | Should -Not -Match 'app-blank'
+        (& $read 'CR-11-redis-minimum-tls.email.txt') | Should -Match 'Azure Cache for Redis has refused TLS 1\.0 and 1\.1 on every cache since April 1, 2025, but this cache still records an older minimum'
+        (& $read 'CR-12-service-bus-minimum-tls.email.txt') | Should -Match '- sb-orders \(resource group rg-msg, minimum TLS not set\)'
+        (& $read 'CR-14-cosmos-db-minimum-tls.email.txt') | Should -Match "Azure Cosmos DB retired TLS 1\.0 and 1\.1 on August 31, 2025.*\r?\n\r?\n.*\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- cosmos-catalog \(resource group rg-data, minimum TLS 1\.0\)"
+    }
+
+    It 'tells the client that diagnostic logging adds Log Analytics ingestion to their Sentinel workspace' {
+        $email = & $read 'CR-01-diagnostic-logging.email.txt'
+        $email | Should -Match 'by assigning the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative on each subscription below\. The initiative adds diagnostic settings that send the audit logs of the supported resources to your Sentinel workspace law-example-sentinel, including resources created later'
+        $email | Should -Match "Each subscription is listed below with the resources the initiative covers and how many each holds today:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- Key vaults: 4\r?\n- Subscription Activity Log\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- Key vaults: 2\r?\n- Subscription Activity Log\r?\n" -Because 'each subscription is counted on its own'
+        $email | Should -Match 'I do not expect any visible effect on these resources or the people who use them\. A diagnostic setting only sends the logs a resource already produces to the workspace, and does not change how the resource runs\.'
+        $email | Should -Match 'This change adds Log Analytics ingestion to your Sentinel workspace law-example-sentinel\. The resource logs are billed as data ingested into the workspace, and their volume depends on how busy each resource is\. The Azure Activity log of each subscription is ingested at no charge\.'
+    }
+
     It 'lists one row per resource in the CSV' {
         @($csv | Where-Object CR -eq 'CR-06').Resource | Should -Be @('kv-app', 'kv-dev')
         ($csv | Where-Object { $_.CR -eq 'CR-04' }).CurrentSetting | Should -Be 'minimum TLS 1.0'
@@ -528,21 +588,81 @@ Describe 'Change request generation' {
 }
 
 Describe 'Change request variants' {
-    It 'skips the purge protection email when the client approved it at build kickoff, and records the approval' {
+    It 'writes a purge protection notice that refers to the build kickoff approval when the client gave it, and records the approval' {
         $pack = Join-Path $TestDrive 'approved'
         New-ChangeFixture $pack
         $out = Join-Path $pack '05-change-requests'
         $null = & $generator -EvidencePath $pack
-        Test-Path (Join-Path $out 'CR-06-key-vault-purge-protection.email.txt') | Should -BeTrue
-        $files = @(& $generator -EvidencePath $pack -PurgeProtectionApproved)
-        Test-Path (Join-Path $out 'CR-06-key-vault-purge-protection.email.txt') | Should -BeFalse -Because 'the email from the earlier run is removed'
-        @($files | Where-Object { $_ -like '*CR-06*' } | ForEach-Object { Split-Path -Leaf $_ }) | Should -Be @('CR-06-key-vault-purge-protection.txt')
+        Get-Content (Join-Path $out 'CR-06-key-vault-purge-protection.email.txt') -Raw | Should -Match '^Subject: Approval request: '
+        $files = @(& $generator -EvidencePath $pack -PurgeProtectionApproved -ClientContact 'Dana')
+        @($files | Where-Object { $_ -like '*CR-06*' } | ForEach-Object { Split-Path -Leaf $_ }) | Should -Be @('CR-06-key-vault-purge-protection.txt', 'CR-06-key-vault-purge-protection.email.txt')
+        $email = Get-Content (Join-Path $out 'CR-06-key-vault-purge-protection.email.txt') -Raw
+        $email | Should -Match '^Subject: Notice of planned change: purge protection for Azure key vaults\r?\n\r?\nHello Dana,' -Because 'the approval request from the earlier run is replaced'
+        $email | Should -Match 'As you approved at the build kickoff, I plan to turn on purge protection for 2 of your Azure key vaults\.'
+        $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- kv-app \(resource group rg-app, soft delete retention 90 days\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- kv-dev \(resource group rg-dev, soft delete retention 7 days\)"
+        $email | Should -Match 'Nothing changes for the applications and people that read or write these vaults today\.'
+        $email | Should -Match 'As a reminder, purge protection cannot be turned off once it is enabled, by anyone including Microsoft\.'
+        $email | Should -Match 'a deleted vault keeps its name until then, so the name cannot be reused'
+        $email | Should -Match 'I plan to make this change on or after \w+day, '
+        $email | Should -Not -Match '(?i)written approval|Could you reply to confirm' -Because 'the approval was already given'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
-        $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request \| CR-06-key-vault-purge-protection\.txt \|'
-        $index | Should -Match '- CR-06 has no client email because the client approved purge protection at build kickoff \(-PurgeProtectionApproved\)\. Attach that approval to the change request\.'
+        $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request and client email \| CR-06-key-vault-purge-protection\.txt, CR-06-key-vault-purge-protection\.email\.txt \|'
+        $index | Should -Match '- CR-06 sends a notice of planned change instead of an approval request because the client approved purge protection at build kickoff \(-PurgeProtectionApproved\)\. Attach that approval to the change request\.'
+        $index | Should -Match 'CR-01, CR-02, CR-03, CR-04, CR-06, CR-11, CR-12, CR-14 send a notice of planned change'
         $kv = Get-Content (Join-Path $out 'CR-06-key-vault-purge-protection.txt') -Raw
         @(Get-Section $kv 'E) MITIGATION')[0] | Should -Match '^Purge protection cannot be disabled once it is enabled, so this change cannot be reverted\.'
-        Test-Path (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') | Should -BeTrue -Because 'the switch covers purge protection only'
+        Get-Content (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') -Raw | Should -Match '^Subject: Planned change: turning off anonymous access' -Because 'the switch covers purge protection only'
+    }
+
+    It 'writes a client email for every change request, CR-01 to CR-15' {
+        # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
+        # resource the diagnostic logging initiative reports as not compliant, so between them every change is
+        # written at least once. A change request written without its email fails here.
+        $full = Join-Path $TestDrive 'every-full'
+        New-ChangeFixture $full
+        $null = & $generator -EvidencePath $full
+        $more = Join-Path $TestDrive 'every-more'
+        New-ChangeFixture $more
+        Set-PackResult $more 'NB.6-DETAIL' @(@{ Name = 'sql-orders'; ResourceId = "/subscriptions/$s1/resourceGroups/rg-data/providers/Microsoft.Sql/servers/sql-orders"; resourceGroup = 'rg-data'; subscriptionId = $s1; MinimalTlsVersion = 'None' })
+        Set-PackResult $more 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 6; Compliant = 5; NonCompliant = 1 })
+        Set-PackResult $more 'DR.6-COVERAGE' @(@{ subscriptionId = $s1; Resources = 5; Assignments = 1 })
+        Set-PackResult $more 'DR.6-NONCOMPLIANT' @(@{ ResourceId = "/subscriptions/$s1/resourcegroups/rg-app/providers/microsoft.keyvault/vaults/kv-app"; ResourceType = 'microsoft.keyvault/vaults'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; AssignmentId = "/subscriptions/$s1/providers/microsoft.authorization/policyassignments/a1"; Policies = 'ATMO-MXDR-KV-TOSENT' })
+        $null = & $generator -EvidencePath $more -PurgeProtectionApproved
+        $written = @()
+        foreach ($pack in $full, $more) {
+            $out = Join-Path $pack '05-change-requests'
+            $index = Get-Content (Join-Path $out '00-index.md') -Raw
+            foreach ($cr in @(Get-ChildItem $out -Filter 'CR-*.txt' | Where-Object Name -notlike '*.email.txt')) {
+                $number = $cr.Name.Substring(3, 2)
+                $written += [int]$number
+                $email = Join-Path $out ($cr.BaseName + '.email.txt')
+                Test-Path $email | Should -BeTrue -Because "$($cr.Name) is written with a client email"
+                $text = Get-Content $email -Raw
+                $text | Should -Match '^Subject: \S' -Because $cr.Name
+                $text | Should -Not -Match ';|[<>]|->|=>' -Because "$($cr.Name) email keeps to the copy rules"
+                $text | Should -Not -Match '(?i)\b(we|our|ours|us)\b' -Because "$($cr.Name) email reads as written by one person"
+                $index | Should -Match ('\| {0} \| [^|]+ \| \d+ \| Change request and client email(, partial collection scope)? \| {1}, {2} \|' -f $number, [regex]::Escape($cr.Name), [regex]::Escape($cr.BaseName + '.email.txt')) -Because $cr.Name
+            }
+            $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
+        }
+        @($written | Sort-Object -Unique) | Should -Be @(1..15) -Because 'the two packs between them write every change request'
+        $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
+        $sql | Should -Match '^Subject: Notice of planned change: minimum TLS 1\.2 for Azure SQL servers'
+        $sql | Should -Match 'Azure SQL retired TLS 1\.0 and 1\.1 on August 31, 2025, but this server does not enforce a minimum of 1\.2'
+        $sql | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- sql-orders \(resource group rg-data, minimum TLS not set\)"
+        $sql | Should -Match 'Once a minimum is set, Azure SQL does not allow a return to the unset default, which is why I am letting you know before I make the change\.'
+    }
+
+    It 'plans the notices for the day -ChangeDate names, and refuses a day that leaves the client less than a week' {
+        $pack = Join-Path $TestDrive 'change-date'
+        New-ChangeFixture $pack
+        $day = (Get-Date).ToUniversalTime().Date.AddDays(30)
+        $null = & $generator -EvidencePath $pack -ChangeDate $day
+        $email = Get-Content (Join-Path $pack '05-change-requests/CR-03-storage-minimum-tls.email.txt') -Raw
+        $email | Should -Match ('on or after {0}\. .* please let me know by {1} and' -f $day.ToString('dddd, MMMM d, yyyy', [cultureinfo]::InvariantCulture), $day.AddDays(-7).ToString('dddd, MMMM d, yyyy', [cultureinfo]::InvariantCulture))
+        Get-Content (Join-Path $pack '05-change-requests/CR-13-event-hubs-minimum-tls.email.txt') -Raw | Should -Not -Match 'on or after' -Because 'a change that waits for the reply has no planned date'
+        { & $generator -EvidencePath $pack -ChangeDate (Get-Date).ToUniversalTime().Date.AddDays(7) } | Should -Throw '*less than a week to raise a concern*'
+        Get-Content (Join-Path $pack '05-change-requests/CR-03-storage-minimum-tls.email.txt') -Raw | Should -Be $email -Because 'a refused run leaves the earlier files as they were'
     }
 
     It 'writes the DR Playbook step for encryption at host on a DR client' {
@@ -838,6 +958,12 @@ Describe 'Change request variants' {
         $text | Should -Match "    - Assignment ATMO-MXDR-DIAG-TOSENT at subscription Example, Dev Test \($s2\): ATMO-MXDR-ACT-TOSENT" -Because 'a remediation task belongs to one assignment, and each subscription holds its own'
         $text | Should -Match 'Monitor > Activity log > Export Activity Logs'
         $text | Should -Match 'the Sentinel workspace law-chosen'
+        $email = Get-Content (Join-Path $pack '05-change-requests/CR-10-diagnostic-remediation.email.txt') -Raw
+        $email | Should -Match '^Subject: Notice of planned change: diagnostic logging remediation for Azure resources'
+        $email | Should -Match 'I plan to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on 3 of your Azure resources, which do not send their audit logs to your Sentinel workspace law-chosen today\.'
+        $email | Should -Match "The resources are listed below by subscription, each with its type:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- kv-app \(resource group rg-app, Key vault\)\r?\n- aa-ops \(resource group rg-ops, Automation account\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- Subscription Activity Log\r?\n"
+        $email | Should -Not -Match 'ATMO-MXDR-KV-TOSENT|ATMO-MXDR-AA-TOSENT' -Because 'the client email names the resource type, not the policy'
+        $email | Should -Match 'This change adds Log Analytics ingestion to your Sentinel workspace law-chosen\. The resource logs are billed as data ingested into the workspace, and their volume depends on how busy each resource is\. The Azure Activity log of each subscription is ingested at no charge\.'
     }
 
     It 'writes no diagnostic logging change when every resource is compliant, and asks for recollection without the resource list' {
@@ -861,7 +987,7 @@ Describe 'Change request variants' {
         Set-PackResult $pack 'DP.4-ELIGIBILITY' @() 'FAILED'
         $null = & $generator -EvidencePath $pack
         $out = Join-Path $pack '05-change-requests'
-        @(Get-ChildItem $out -Filter 'CR-*' | ForEach-Object Name) -join '|' | Should -Be 'CR-01-diagnostic-logging.txt' -Because 'change requests from the earlier run that this pack can no longer support are removed'
+        @(Get-ChildItem $out -Filter 'CR-*' | ForEach-Object Name | Sort-Object) -join '|' | Should -Be 'CR-01-diagnostic-logging.email.txt|CR-01-diagnostic-logging.txt' -Because 'change requests from the earlier run that this pack can no longer support are removed'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         $index | Should -Match '\| 02 \| Secure transfer required on storage accounts \|  \| Needs recollection with CyberSOC collector 1\.1\.0 or later \|'
         $index | Should -Match '\| 09 \| Encryption at host on virtual machines \|  \| Not collected \(DP\.4-ELIGIBILITY FAILED\) \|'
@@ -1012,7 +1138,7 @@ Describe 'Change request variants' {
         $text = Get-Content (Join-Path $pack '05-change-requests/CR-09-encryption-at-host.txt') -Raw
         $text | Should -Match 'vm-flex-1' -Because 'without the scale set list CR-09 keeps the Flexible instances, which take the setting as virtual machines'
         $text | Should -Not -Match 'vm-flexade-1' -Because 'an ineligible instance stays out'
-        $index | Should -Match '\| 10 \| .* \| 1 \| Change request, partial collection scope \|' -Because 'a partial resource list must not read as complete'
+        $index | Should -Match '\| 10 \| .* \| 1 \| Change request and client email, partial collection scope \|' -Because 'a partial resource list must not read as complete'
     }
 
     It 'lists no covered resource type when the estate inventory holds none of them' {

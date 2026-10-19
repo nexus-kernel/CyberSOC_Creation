@@ -1,9 +1,14 @@
 # Hardening change requests
 
 `New-CyberSocChangeRequests.ps1` turns a finished evidence pack into the change requests for the security hardening
-items that can be applied without affecting operations, laid out on the change request template. The changes that
-need the client first also get a client email, drafted and ready to send. The files name client resources, so they
-stay internal until they are sent.
+items that can be applied without affecting operations, laid out on the change request template. Every change
+request also gets a client email, drafted and ready to send: an approval, confirmation or maintenance window request
+for the changes that need the client first, and a notice of planned change for the others. The files name client
+resources, so they stay internal until they are sent.
+
+`Get-CyberSocEvidence.ps1` runs it at the end of every collection, after the SecOps worklist, unless
+`-SkipChangeRequests` is given. It passes on `-DrClient`, `-SentinelWorkspace`, `-ManagementGroup`, `-ClientContact`,
+`-SenderName` and `-PurgeProtectionApproved`, and records them under `ChangeRequests` in `00-parameters.json`.
 
 ## Generate from an existing evidence pack
 
@@ -21,9 +26,14 @@ Writes `05-change-requests` into the pack. Offline only. Nothing in the pack is 
 | `-ManagementGroup <name>` | Assigns the diagnostic logging initiative once at this management group. Without it CR-01 assigns it at each subscription, since an assignment has one scope |
 | `-ClientContact <name>` | The name the client emails open with. Without it they open with Hello |
 | `-SenderName <name>` | The name under the sign-off of the client emails |
-| `-PurgeProtectionApproved` | The client approved purge protection at build kickoff. CR-06 is written without its client email, and the index notes the approval |
+| `-PurgeProtectionApproved` | The client approved purge protection at build kickoff. CR-06 gets a notice of planned change that refers to that approval instead of an approval request, and the index notes the approval |
+| `-ChangeDate <date>` | The day the changes with a notice of planned change are planned for. The notices ask the client to raise any concern a week before it. Defaults to two weeks after the build date, and must be at least eight days after it |
 
-Run it again after a recollection. It replaces the change requests it wrote before, removes the ones the pack no
+Run it again after a recollection, or on its own to write the files again with another contact, sender or planned
+date, or on the day the emails are sent so their dates start from that day. The collector does not take
+`-ChangeDate`, so a collection run always plans the notices two weeks after the build. To plan an agreed date, run
+the generator again on the pack with it, for example
+`./New-CyberSocChangeRequests.ps1 -EvidencePath <pack> -ClientContact 'Dana' -SenderName 'Scott' -ChangeDate 2026-11-16`. It replaces the change requests it wrote before, removes the ones the pack no
 longer supports, and leaves every other file in the folder alone.
 
 ## The changes
@@ -32,21 +42,21 @@ Each change is written only when the pack shows resources still to fix. The numb
 
 | CR | Change | Evidence | Client email |
 |---|---|---|---|
-| 01 | Diagnostic logging initiative ATMO-MXDR-DIAG-TOSENT assigned on every subscription. When it has no policy state anywhere (DR.6-INITIATIVE is EMPTY) it is assigned once at the management group named with `-ManagementGroup`, or at each subscription. When some subscriptions already have it, it is assigned at each subscription without a state (DR.6-COVERAGE). The covered resource types are counted from P0.5 | DR.6-INITIATIVE, DR.6-COVERAGE, P0.5 | No |
-| 02 | Secure transfer required on storage accounts | DP.1-DETAIL | No |
-| 03 | Minimum TLS 1.2 on storage accounts. Azure Storage has refused TLS 1.0 and 1.1 since February 3, 2026, so this aligns the configuration | DP.1-DETAIL | No |
-| 04 | Minimum inbound TLS 1.2 on App Service and Function apps. App Service refuses TLS 1.0 and 1.1 from May 31, 2027 | NB.5-DETAIL | No |
-| 05 | Minimum TLS 1.2 on Azure SQL logical servers. Azure SQL retired TLS 1.0 and 1.1 on August 31, 2025 | NB.6-DETAIL | No |
-| 06 | Purge protection on key vaults, with the soft delete retention period of each vault. Purge protection cannot be disabled once enabled, so the client approves it in writing first | DP.2-DETAIL | Yes, asking for written approval, unless `-PurgeProtectionApproved` records that the client approved it at build kickoff |
-| 07 | Anonymous blob access disabled on the storage accounts where it carries no risk: DP.1-CONTAINERS listed every container (`ReadStatus` OK) and none is set to Blob or Container access. RESOURCES lists the container count of each account. Before Save, the steps check under Data storage > Containers that every container's anonymous access level still reads Private, and an account where one reads Blob or Container is left unchanged for the next pack. The rollback sets Allow Blob anonymous access back to Enabled, which applies within 30 seconds and leaves the containers as they are | DP.1-DETAIL, DP.1-CONTAINERS | Yes, a notice that walks through why nothing breaks (every container is private, sign-in, shared access signature and account key access are unaffected, and a static website, whose `$web` container Azure serves anonymously whatever the setting, keeps working), says each account is checked again just before the change, offers to turn the setting back on straight away, and asks the client to confirm |
-| 08 | HTTPS Only on App Service and Function apps | NB.4-DETAIL | Yes |
-| 09 | Encryption at host on the virtual machines that can take it. RESOURCES lists the VM ID of each machine, and before stopping a machine the steps check under Overview > JSON View that `properties.vmId` still reads that ID. A machine whose ID differs was deleted and created again under the same name after collection, so it is skipped and left for the next pack. Each machine changed is stopped for the change, and started again only if it was running when the change began, during the change and on rollback. The machines of a Flexible scale set that CR-15 changes are left to it | DP.4-ELIGIBILITY, DP.4-VMSS-ELIGIBILITY | Yes, asking for a maintenance window |
-| 10 | Diagnostic logging remediated on the resources not compliant with the initiative: one remediation task for each assignment and policy, each resource listed once | DR.6-INITIATIVE, DR.6-NONCOMPLIANT | No |
-| 11 | Minimum TLS 1.2 on Azure Cache for Redis. Every cache has refused TLS 1.0 and 1.1 since April 1, 2025, and no minimum below 1.2 can be set since March 1, 2024, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
-| 12 | Minimum TLS 1.2 on Service Bus namespaces. Service Bus accepts only TLS 1.2 and later, and a namespace takes only 1.2 or 1.3 as its minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
-| 13 | Minimum TLS 1.2 on Event Hubs namespaces. Event Hubs still documents namespaces that accept TLS 1.0 and 1.1 below a minimum of 1.2, so a client on an older version would be refused. The rollback sets the recorded version back | NB.6-PAAS-DETAIL | Yes, asking whether anything still connects with TLS 1.0 or 1.1 |
-| 14 | Minimum TLS 1.2 on Azure Cosmos DB accounts. Azure Cosmos DB retired TLS 1.0 and 1.1 on August 31, 2025 and accepts only TLS 1.2 as an account minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
-| 15 | Encryption at host on the virtual machine scale sets whose model can take it. The model is set from Cloud Shell, then each existing instance is stopped (deallocated), brought to the model (Upgrade on a Uniform instance, Settings > Disks > Additional settings on a Flexible one) and started again only if it was running. A scale set with an Automatic or Rolling upgrade policy may apply the model on its own, all at once or in batches, so the change runs inside the maintenance window and the availability impact says so. RESOURCES lists the unique ID of each scale set and the VM ID of each Flexible instance to change. Before the model is set, the steps check under Overview > JSON View that `properties.uniqueId` still reads the listed ID, and a scale set whose ID differs is left out of every step. The Flexible steps work through the instances the scale set holds when the change is made and change only an instance whose `properties.vmId` is listed for that scale set, so an instance that joined after collection, or one created again under a listed name, is skipped and left for the next pack. The rollback covers any instance created after the model was changed. AKS node pools are routed to a planned project in the index | DP.4-VMSS-ELIGIBILITY, DP.4-ELIGIBILITY | Yes, asking for a maintenance window |
+| 01 | Diagnostic logging initiative ATMO-MXDR-DIAG-TOSENT assigned on every subscription. When it has no policy state anywhere (DR.6-INITIATIVE is EMPTY) it is assigned once at the management group named with `-ManagementGroup`, or at each subscription. When some subscriptions already have it, it is assigned at each subscription without a state (DR.6-COVERAGE). The covered resource types are counted from P0.5 | DR.6-INITIATIVE, DR.6-COVERAGE, P0.5 | Notice of planned change, with the resource types each subscription holds, and that the resource logs add Log Analytics ingestion to the Sentinel workspace (the Activity log is ingested at no charge) |
+| 02 | Secure transfer required on storage accounts | DP.1-DETAIL | Notice of planned change, saying that a request over HTTP or an SMB connection without encryption is rejected once it is on |
+| 03 | Minimum TLS 1.2 on storage accounts. Azure Storage has refused TLS 1.0 and 1.1 since February 3, 2026, so this aligns the configuration | DP.1-DETAIL | Notice of planned change, with no visible effect expected |
+| 04 | Minimum inbound TLS 1.2 on App Service and Function apps. App Service refuses TLS 1.0 and 1.1 from May 31, 2027 | NB.5-DETAIL | Notice of planned change, saying that a client limited to TLS 1.0 or 1.1 can no longer connect |
+| 05 | Minimum TLS 1.2 on Azure SQL logical servers. Azure SQL retired TLS 1.0 and 1.1 on August 31, 2025 | NB.6-DETAIL | Notice of planned change, with no visible effect expected, and that a minimum once set cannot return to the unset default |
+| 06 | Purge protection on key vaults, with the soft delete retention period of each vault. Purge protection cannot be disabled once enabled, so the client approves it in writing first | DP.2-DETAIL | Approval request, asking for written approval. With `-PurgeProtectionApproved`, a notice of planned change that refers to the approval the client gave at build kickoff |
+| 07 | Anonymous blob access disabled on the storage accounts where it carries no risk: DP.1-CONTAINERS listed every container (`ReadStatus` OK) and none is set to Blob or Container access. RESOURCES lists the container count of each account. Before Save, the steps check under Data storage > Containers that every container's anonymous access level still reads Private, and an account where one reads Blob or Container is left unchanged for the next pack. The rollback sets Allow Blob anonymous access back to Enabled, which applies within 30 seconds and leaves the containers as they are | DP.1-DETAIL, DP.1-CONTAINERS | Confirmation request, a notice that walks through why nothing breaks (every container is private, sign-in, shared access signature and account key access are unaffected, and a static website, whose `$web` container Azure serves anonymously whatever the setting, keeps working), says each account is checked again just before the change, offers to turn the setting back on straight away, and asks the client to confirm |
+| 08 | HTTPS Only on App Service and Function apps | NB.4-DETAIL | Confirmation request, asking whether anything still calls the apps over HTTP |
+| 09 | Encryption at host on the virtual machines that can take it. RESOURCES lists the VM ID of each machine, and before stopping a machine the steps check under Overview > JSON View that `properties.vmId` still reads that ID. A machine whose ID differs was deleted and created again under the same name after collection, so it is skipped and left for the next pack. Each machine changed is stopped for the change, and started again only if it was running when the change began, during the change and on rollback. The machines of a Flexible scale set that CR-15 changes are left to it | DP.4-ELIGIBILITY, DP.4-VMSS-ELIGIBILITY | Maintenance window request |
+| 10 | Diagnostic logging remediated on the resources not compliant with the initiative: one remediation task for each assignment and policy, each resource listed once | DR.6-INITIATIVE, DR.6-NONCOMPLIANT | Notice of planned change, with the type of each resource, and that the resource logs add Log Analytics ingestion to the Sentinel workspace |
+| 11 | Minimum TLS 1.2 on Azure Cache for Redis. Every cache has refused TLS 1.0 and 1.1 since April 1, 2025, and no minimum below 1.2 can be set since March 1, 2024, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | Notice of planned change, with no visible effect expected |
+| 12 | Minimum TLS 1.2 on Service Bus namespaces. Service Bus accepts only TLS 1.2 and later, and a namespace takes only 1.2 or 1.3 as its minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | Notice of planned change, with no visible effect expected |
+| 13 | Minimum TLS 1.2 on Event Hubs namespaces. Event Hubs still documents namespaces that accept TLS 1.0 and 1.1 below a minimum of 1.2, so a client on an older version would be refused. The rollback sets the recorded version back | NB.6-PAAS-DETAIL | Confirmation request, asking whether anything still connects with TLS 1.0 or 1.1 |
+| 14 | Minimum TLS 1.2 on Azure Cosmos DB accounts. Azure Cosmos DB retired TLS 1.0 and 1.1 on August 31, 2025 and accepts only TLS 1.2 as an account minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | Notice of planned change, with no visible effect expected |
+| 15 | Encryption at host on the virtual machine scale sets whose model can take it. The model is set from Cloud Shell, then each existing instance is stopped (deallocated), brought to the model (Upgrade on a Uniform instance, Settings > Disks > Additional settings on a Flexible one) and started again only if it was running. A scale set with an Automatic or Rolling upgrade policy may apply the model on its own, all at once or in batches, so the change runs inside the maintenance window and the availability impact says so. RESOURCES lists the unique ID of each scale set and the VM ID of each Flexible instance to change. Before the model is set, the steps check under Overview > JSON View that `properties.uniqueId` still reads the listed ID, and a scale set whose ID differs is left out of every step. The Flexible steps work through the instances the scale set holds when the change is made and change only an instance whose `properties.vmId` is listed for that scale set, so an instance that joined after collection, or one created again under a listed name, is skipped and left for the next pack. The rollback covers any instance created after the model was changed. AKS node pools are routed to a planned project in the index | DP.4-VMSS-ELIGIBILITY, DP.4-ELIGIBILITY | Maintenance window request |
 
 Resources a change leaves out are named in the index notes:
 
@@ -131,13 +141,34 @@ The sections follow the template headings, in order, so each one pastes into the
   the scale set Overview.
 - References are Microsoft Learn pages only.
 - The notification list is left empty to fill in.
+- Every change request writes a client email (`CR-NN-<change>.email.txt`). The generator stops before writing
+  anything when a change request has none, and the Pester suite fails when any change request from CR-01 to CR-15
+  is written without one. A new change request picks one of the two kinds of email below.
 
-The client emails are written in the first person singular, explain the change and what it means for the client, list the
-affected resources and ask for a confirmation or a maintenance window before anything is scheduled. The purge
-protection email lists the vaults by subscription with the soft delete retention period of each, explains that
-purge protection cannot be turned off and that a deleted vault, key, secret or certificate is kept for that period,
-cannot be purged early and keeps its name until the period ends, and asks for the client's written approval before
-the change is scheduled.
+Every client email is written in the first person singular, explains the change and what it means for the client,
+and lists the affected resources by subscription. There are two kinds:
+
+- **Approval, confirmation or maintenance window request,** for a change that needs the client first: CR-06
+  (purge protection, which cannot be undone), CR-07 (anonymous blob access), CR-08 (HTTPS only), CR-09 and CR-15
+  (encryption at host, which restarts each machine) and CR-13 (minimum TLS 1.2 on Event Hubs, which still accepts
+  older clients). The change waits for the reply. The purge protection email lists the vaults by subscription with
+  the soft delete retention period of each, explains that purge protection cannot be turned off and that a deleted
+  vault, key, secret or certificate is kept for that period, cannot be purged early and keeps its name until the
+  period ends, and asks for the client's written approval before the change is scheduled.
+- **Notice of planned change,** for every other change: CR-01 to CR-05, CR-10, CR-11, CR-12 and CR-14, and CR-06
+  with `-PurgeProtectionApproved`. It says what changes and why, lists the resources by subscription, says what the
+  client should expect and why (usually no visible effect, because the platform already refuses what the setting
+  turns off), gives the planned date and asks the client to raise any concern a week before it. CR-01 and CR-10
+  send resource logs to the client's Sentinel workspace, so their notices say that this adds Log Analytics ingestion,
+  billed by volume, and that the Activity log is ingested at no charge. The CR-06 notice refers to the approval
+  given at build kickoff and repeats that purge protection cannot be turned off. The index names the notices with
+  their dates. The change goes ahead on its planned date unless the client raises a concern.
+
+Each claim in the emails was checked on Microsoft Learn: secure transfer rejects HTTP requests and SMB without
+encryption (Require secure transfer to ensure secure connections), the TLS retirement dates and minimums of each
+service (the pages each change request cites), the Log Analytics ingestion charge for resource logs sent through
+diagnostic settings (Azure Monitor cost and usage), and the Activity log collected at no charge (Azure Monitor data
+sources, Microsoft Sentinel free data sources).
 
 Every change request, email and the index keep to the copy rules: no semicolons, arrows, emoji or angle brackets, and
 the greater-than sign only in navigation steps such as Settings > Configuration. The CSV is tracking data and carries
@@ -153,7 +184,7 @@ rejects, and a file that still breaks a rule stops the run before any file is wr
 | `00-index.md` | Every change with its status and files, and notes on the resources left out |
 | `change-requests.csv` | One row per resource: CR, Change, Subscription, ResourceGroup, Resource, CurrentSetting, ResourceId |
 
-Each change reports one of these statuses in the index: a change request (and client email), no gaps found, not
+Each change reports one of these statuses in the index: change request and client email, no gaps found, not
 collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
 later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15, and 1.4.0 or later for CR-09 and CR-15 when they
 have a machine or scale set to change). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never

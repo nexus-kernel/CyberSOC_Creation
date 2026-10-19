@@ -478,8 +478,10 @@ DeviceTvmSoftwareVulnerabilities
 ## 6. Change request inputs
 
 CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, and 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
-to name the resources in each change request (see `New-CyberSocChangeRequests.README.md`). The report embeds counts
-only. These lists name client resources and stay internal.
+to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
+From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
+holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
+client resources and stay internal.
 
 ### P0.7 Subscription names
 
