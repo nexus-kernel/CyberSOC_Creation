@@ -16,7 +16,9 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
 - **Vulnerability assessment.** `-VulnAssessmentPath` imports the Atmosera.VulnAssessment runs dated inside the
   window (VA.RUNS, VA.CHANGE, VA.TOP, VA.KEV). See the runbook, section 4.
 - **Pack name.** `CyberSOC-Evidence_<client>_<report month>_<yyyyMMdd-HHmmss>/`.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.4.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Change requests.** Each collection ends by writing the hardening change requests and a client email for each
+  one into `05-change-requests` (`New-CyberSocChangeRequests.ps1`). See [Change requests](#change-requests).
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.5.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -69,6 +71,32 @@ pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -EdrVend
 `-EdrVendorPattern` names the third-party endpoint detection products in the environment (CrowdStrike
 Falcon is in the default), so an Azure virtual machine that runs one is reported as covered rather than
 as not onboarded. `-PatchExclusionTagPattern ''` turns off the tag-based patch exclusion.
+
+### Change requests
+
+```bash
+pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1>,<sub2> -ReportMonth 2026-09 -ClientContact 'Dana' -SenderName 'Scott' -DrClient
+```
+
+After the SecOps worklist, the collector runs `New-CyberSocChangeRequests.ps1` on the pack. It writes
+`05-change-requests`: one change request for each low-impact hardening item that still has resources to fix, with a
+client email for each, and `00-index.md`, which lists every change with its status and the resources left out.
+These options are passed to it and recorded under `ChangeRequests` in `00-parameters.json`:
+
+| Parameter | Effect on the change requests |
+|---|---|
+| `-SkipChangeRequests` | Writes none |
+| `-DrClient` | The client is a DR client: DR Impact reads N/A - No DR impact, and the encryption at host changes add the DR Playbook step |
+| `-SentinelWorkspace <name>` | The workspace the diagnostic logging initiative sends to. Defaults to the workspace the run finds when it finds exactly one |
+| `-ManagementGroup <name>` | Assigns the diagnostic logging initiative once at this management group |
+| `-ClientContact <name>` | The name the client emails open with. Without it they open with Hello |
+| `-SenderName <name>` | The name under the sign-off of the client emails |
+| `-PurgeProtectionApproved` | The client approved purge protection at build kickoff, so its email is a notice of planned change instead of an approval request |
+
+A failure there is logged and warned about, and the collection stays complete (exit code 2). A dry run writes no
+change requests, like the report and the worklist. Run `New-CyberSocChangeRequests.ps1 -EvidencePath <pack>` on
+its own to write them again, for example with another contact, sender or planned date. See
+[Hardening change requests](New-CyberSocChangeRequests.README.md).
 
 ## What it decides for you
 
@@ -259,6 +287,13 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.5.0 (October 19, 2026): each collection ends by running `New-CyberSocChangeRequests.ps1`
+  on the pack, after the SecOps worklist, so the pack holds `05-change-requests` with a client email for every
+  change request. `-SkipChangeRequests` turns it off. `-DrClient`, `-SentinelWorkspace`, `-ManagementGroup`,
+  `-ClientContact`, `-SenderName` and `-PurgeProtectionApproved` are passed to it and recorded under
+  `ChangeRequests` in `00-parameters.json`. The execution summary and `02-notes.txt` name the change request and
+  email count, and say why none were written when they were skipped or failed. A failure is logged and warned
+  about and leaves the collection complete. No query changed.
 - CyberSOC collector 1.4.0 (October 19, 2026): `DP.4-ELIGIBILITY` gains `VmId` (`properties.vmId`), the unique ID
   Azure gives each virtual machine, standalone or a Flexible scale set instance, and `DP.4-VMSS-ELIGIBILITY` gains
   `UniqueId` (`properties.uniqueId`), the unique ID of each scale set. A machine or scale set deleted and created again
@@ -332,10 +367,11 @@ The script writes `CyberSOC-Evidence_<client>_<report month yyyy-MM>_<yyyyMMdd-H
 | File | Contents |
 |---|---|
 | `00-manifest.csv` | One row per result set: ID, phase, engine, source, status (OK, EMPTY, PARTIAL, UNAVAILABLE, FAILED, SKIPPED, MANUAL), row count, read time (UTC), detail (which workspaces were combined, missing or failed) and the runbook guidance |
-| `00-parameters.json` | Tenant, subscriptions, workspaces and how each is reached, which workspace supplied the tenant-wide tables, window and its basis, the report month and trend months, the vulnerability assessment runs used and skipped, managed RG pattern, warnings |
+| `00-parameters.json` | Tenant, subscriptions, workspaces and how each is reached, which workspace supplied the tenant-wide tables, window and its basis, the report month and trend months, the vulnerability assessment runs used and skipped, managed RG pattern, the change request options (`ChangeRequests`), warnings |
 | `01-worksheet.csv` | The runbook's slide map (45 rows, without the EBR's confirmed data loss, identity compromise and containment rows). Values are filled in wherever they can be derived, each with a read date and a note. `MANUAL` means a portal reading; `REVIEW` means the data is collected but an analyst has to do the calculation. The MFA rows quote **members**, with guests and other user types in the note. A user counts as challenged when any successful sign-in satisfied MFA through the requirement field, a step detail claim (in the token or from an external identity provider) or `MfaDetail`, so federated tenants are not under-counted. The note states how many members relied on an external provider claim. When automation rules closed at least half the incidents, the close-time rows quote the **analyst-handled** figures (OUT.2-ANALYST, per the runbook), labelled as such, with the all-incident figure in the note. Fewer than 20 incidents behind a median or P90 adds a small-sample caveat. The anti-malware row quotes the weakest check and lists every check, with scope and OS, in the note. Privileged roles read "N role assignments across M accounts", because PIM state is unknown without Graph |
-| `02-notes.txt` | Ticket notes ready to paste: scope, collection summary, key figures, attention items |
+| `02-notes.txt` | Ticket notes ready to paste: scope, collection summary, the change requests written, key figures, attention items |
 | `04-secops-worklist.md`, `04-secops-worklist.csv` | Internal SecOps worklist written by `New-CyberSocSecOpsWorklist.ps1`: open alerts with incident number and Zendesk ticket, closures without a documented disposition, devices not onboarded or with an inactive sensor, virtual machines without backup, stale backup items and the row-level platform gaps. Names resources, so it stays with the SecOps team. `-SkipSecOpsWorklist` opts out. See [SecOps worklist](New-CyberSocSecOpsWorklist.README.md) |
+| `05-change-requests/` | The hardening change requests (`CR-NN-<change>.txt`), the client email for each (`CR-NN-<change>.email.txt`), `00-index.md` and `change-requests.csv`, written by `New-CyberSocChangeRequests.ps1`. They name client resources, so each stays internal until its email is sent. `-SkipChangeRequests` opts out. See [Hardening change requests](New-CyberSocChangeRequests.README.md) |
 | `03-security-report.pptx` | PowerPoint edition of the report, same figures, slides following the report depth, talking-point speaker notes only. Needs Node.js and pptxgenjs, skipped with a warning without them |
 | `03-security-report.html` | Self-contained executive security report: headline tiles, four tier posture block, measured outcomes by pillar, E, P, N control matrix, sequenced roadmap, score context and screen-only presenter notes. The internal edition, never sent to the client. Client-facing copy says alerts, never incidents |
 | `03-security-report.client.html` | Client edition of the same report, for sending to the client: the pages rendered ahead of time, with no embedded data, presenter notes, evidence review or collection register, and no GUIDs. Needs Node.js, skipped with a warning without it. See [Client edition](New-CyberSocReport.README.md#client-edition) |
@@ -421,6 +457,8 @@ The Pester suite covers:
   including the 403 to UNAVAILABLE mapping
 - an end-to-end run of the whole script against three mocked workspaces (one returns errors,
   one lacks a table, Defender returns 403, and Graph answers role assignments but not policies)
+- the change requests at the end of a run: the options passed through and recorded, the generator run after the
+  worklist, `-SkipChangeRequests`, a failure that leaves the collection complete, and a dry run that writes none
 
 Nothing in it signs in or calls Azure.
 

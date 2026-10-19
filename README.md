@@ -50,23 +50,30 @@ missing evidence never becomes a favorable zero.
 4. **Send** `03-security-report.client.html` and `03-security-report.pptx`. `03-security-report.html` is the
    internal edition, with the presenter notes and the evidence review, and the SecOps worklist names client
    resources. Neither goes to the client.
-5. **Raise the hardening change requests** when the client is ready for them:
+5. **Raise the hardening change requests** when the client is ready for them. The collection run already wrote
+   them, with a client email for each, into `05-change-requests/`. Pass the client details to the collection run
+   (`-ClientContact`, `-SenderName`, and `-DrClient`, `-SentinelWorkspace`, `-ManagementGroup` or
+   `-PurgeProtectionApproved` when they apply), or write the change requests again on their own:
 
    ```powershell
-   pwsh ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000
+   pwsh ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000 -ClientContact 'Dana' -SenderName 'Scott'
    ```
 
    `05-change-requests/` holds one change request for each low-impact hardening item that still has resources to
    fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service, Azure SQL, Redis, Service Bus,
-   Event Hubs and Cosmos DB, purge protection), and a ready-to-send client email for the changes that need the client
-   first (purge protection, which cannot be undone and needs the client's written approval, anonymous blob access,
-   HTTPS only, encryption at host on virtual machines and on scale sets, minimum TLS 1.2 on Event Hubs). Anonymous blob
-   access is turned off only on the storage accounts whose containers were all listed and are private, so its email
-   walks the client through why nothing breaks, and the index names the accounts left out. Add
-   `-PurgeProtectionApproved` when the client approved purge protection at build kickoff, and the index records that
-   approval instead of an email. AKS node pools without encryption at host get no change request: a pool takes it
-   only when it is created, so the index names each cluster and node pool for a planned node pool replacement with
-   the client.
+   Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
+   machines and on scale sets), and a ready-to-send client email for every change request. The changes that need the
+   client first ask for an approval, a confirmation or a maintenance window: purge protection, which cannot be undone
+   and needs the client's written approval, anonymous blob access, HTTPS only, encryption at host on virtual machines
+   and on scale sets, and minimum TLS 1.2 on Event Hubs. Every other change gets a notice of planned change with the
+   planned date and a date a week before it to raise any concern by (`-ChangeDate` on the generator moves it). The
+   diagnostic logging notices say that the resource logs add Log Analytics ingestion to the Sentinel workspace.
+   Anonymous blob access is turned off only on the storage accounts whose containers were all listed and are private,
+   so its email walks the client through why nothing breaks, and the index names the accounts left out. Add
+   `-PurgeProtectionApproved` when the client approved purge protection at build kickoff: its email is then a notice
+   that refers to that approval, and the index records it. AKS node pools without encryption at host get no change
+   request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
+   pool replacement with the client.
 
 A pack collected without the vulnerability runs takes them later:
 

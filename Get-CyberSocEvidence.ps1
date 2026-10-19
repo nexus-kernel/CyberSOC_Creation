@@ -33,6 +33,8 @@
       4. Writes one CSV and one JSON file per query ID, the exact KQL that ran, a manifest,
          the runbook slide-map worksheet with every derivable value filled in, and
          copy-ready notes.
+      5. Builds the report editions, the SecOps worklist and the hardening change requests with
+         their client emails from the finished pack, offline.
 
     Microsoft Graph is read with GET requests only, on the instruction of Oct 11, 2026, for the
     measures that have no other source: IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, POS.6,
@@ -177,6 +179,33 @@
     after collection by New-CyberSocSecOpsWorklist.ps1. It names incidents, devices and resources and
     is never part of the client report.
 
+.PARAMETER SkipChangeRequests
+    Skip the hardening change requests and their client emails (05-change-requests). By default they
+    are written after the SecOps worklist by New-CyberSocChangeRequests.ps1, which can also be run on
+    its own against the pack. They name client resources and stay internal until each email is sent.
+
+.PARAMETER DrClient
+    Passed to New-CyberSocChangeRequests.ps1: the client is a DR client, so DR Impact reads N/A - No DR
+    impact and the encryption at host changes add the DR Playbook step.
+
+.PARAMETER SentinelWorkspace
+    Passed to New-CyberSocChangeRequests.ps1: the workspace the diagnostic logging initiative sends to.
+    Defaults to the workspace the run finds when it finds exactly one.
+
+.PARAMETER ManagementGroup
+    Passed to New-CyberSocChangeRequests.ps1: the management group to assign the diagnostic logging
+    initiative at, once.
+
+.PARAMETER ClientContact
+    Passed to New-CyberSocChangeRequests.ps1: the name the client emails open with.
+
+.PARAMETER SenderName
+    Passed to New-CyberSocChangeRequests.ps1: the name under the sign-off of the client emails.
+
+.PARAMETER PurgeProtectionApproved
+    Passed to New-CyberSocChangeRequests.ps1: the client approved purge protection at build kickoff, so
+    its email is a notice of planned change instead of an approval request.
+
 .PARAMETER LoadFunctionsOnly
     Load the functions and stop. Used by the Pester tests.
 
@@ -201,7 +230,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.4.0, based on the EBR collector 1.14.0
+    Version: 1.5.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -238,11 +267,18 @@ param(
     [ValidateSet('Brief', 'Balanced', 'Detailed')]
     [string]$ReportDepth = 'Balanced',
     [switch]$SkipSecOpsWorklist,
+    [switch]$SkipChangeRequests,
+    [switch]$DrClient,
+    [string]$SentinelWorkspace,
+    [string]$ManagementGroup,
+    [string]$ClientContact,
+    [string]$SenderName,
+    [switch]$PurgeProtectionApproved,
     [switch]$DryRun,
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.4.0'
+$script:EbrVersion = '1.5.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -5450,7 +5486,7 @@ function Get-EbrPreflightWarnings {
 }
 
 function New-EbrNotes {
-    param($Ctx, $Worksheet)
+    param($Ctx, $Worksheet, [string[]]$ChangeRequests)
     $sym = $script:EbrSym
     $inv = [cultureinfo]::InvariantCulture
     $div = '=' * 60
@@ -5494,6 +5530,11 @@ function New-EbrNotes {
     & $line ("  {0} {1} result sets: {2}" -f $sym.Dot, $Ctx.Manifest.Count, ($counts -join ', '))
     & $line ("  {0} Evidence pack: {1}" -f $sym.Dot, $Ctx.OutDir)
     & $line ''
+    if ($ChangeRequests.Count) {
+        & $line '--- Change Requests ---'
+        foreach ($c in $ChangeRequests) { & $line ("  {0} {1}" -f $sym.Dot, $c) }
+        & $line ''
+    }
     $figures = @($Worksheet | Where-Object { $_.Value -and $_.Value -notin 'MANUAL', 'REVIEW' })
     if ($figures.Count) {
         & $line '--- Key Findings ---'
@@ -5545,6 +5586,15 @@ function New-EbrNotes {
     $sb.ToString()
 }
 
+# The hardening change requests and their client emails, written into the pack by the generator beside
+# this script. Returns the paths it wrote.
+function Invoke-EbrChangeRequestGenerator {
+    param([string]$EvidencePath, [hashtable]$Options = @{})
+    $generator = Join-Path $PSScriptRoot 'New-CyberSocChangeRequests.ps1'
+    if (-not (Test-Path -LiteralPath $generator)) { throw 'New-CyberSocChangeRequests.ps1 is missing from the collector folder.' }
+    & $generator -EvidencePath $EvidencePath @Options
+}
+
 function Invoke-EbrMain {
     param(
         [string]$TenantId, [string[]]$SubscriptionId, [string[]]$WorkspaceResourceId, [string]$ReportMonth,
@@ -5554,7 +5604,8 @@ function Invoke-EbrMain {
         [AllowEmptyString()][string]$PatchExclusionTagPattern, [AllowEmptyString()][string]$EdrVendorPattern = '',
         [switch]$SkipWorkspaceBreakdown, [switch]$DryRun,
         [switch]$SkipHtmlReport, [ValidateSet('Brief', 'Balanced', 'Detailed')][string]$ReportDepth = 'Balanced',
-        [switch]$SkipSecOpsWorklist
+        [switch]$SkipSecOpsWorklist, [switch]$SkipChangeRequests, [switch]$DrClient, [string]$SentinelWorkspace,
+        [string]$ManagementGroup, [string]$ClientContact, [string]$SenderName, [switch]$PurgeProtectionApproved
     )
     $ErrorActionPreference = 'Stop'
     try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
@@ -5938,6 +5989,16 @@ function Invoke-EbrMain {
             PatchExclusionTagPattern = $ctx.PatchExclusionTagPattern
             EdrVendorPattern    = $ctx.EdrVendorPattern
             ExchangeAndPurview  = $(if ($SkipExchange) { 'skipped' } else { 'attempted' })
+            # The options New-CyberSocChangeRequests.ps1 runs with. Run it on its own with others to write the files again.
+            ChangeRequests      = [ordered]@{
+                Written                 = -not $SkipChangeRequests
+                DrClient                = [bool]$DrClient
+                SentinelWorkspace       = $(if ($SentinelWorkspace) { $SentinelWorkspace } else { $null })
+                ManagementGroup         = $(if ($ManagementGroup) { $ManagementGroup } else { $null })
+                ClientContact           = $(if ($ClientContact) { $ClientContact } else { $null })
+                SenderName              = $(if ($SenderName) { $SenderName } else { $null })
+                PurgeProtectionApproved = [bool]$PurgeProtectionApproved
+            }
             Warnings            = @($ctx.Warnings)
         }
         Write-EbrTextFile -Path (Join-Path $ctx.OutDir '00-parameters.json') -Text (ConvertTo-Json -InputObject $params -Depth 6)
@@ -5973,6 +6034,34 @@ function Invoke-EbrMain {
             }
         }
 
+        # The change requests read the finished pack, so they come last. A failure leaves the collection complete.
+        $changeRequests = @()
+        $rerun = 'Run New-CyberSocChangeRequests.ps1 -EvidencePath on this pack to write them.'
+        if ($SkipChangeRequests) { $changeRequests = @("Not written (-SkipChangeRequests). $rerun") }
+        else {
+            try {
+                $crOptions = @{}
+                if ($DrClient) { $crOptions.DrClient = $true }
+                if ($PurgeProtectionApproved) { $crOptions.PurgeProtectionApproved = $true }
+                foreach ($k in 'SentinelWorkspace', 'ManagementGroup', 'ClientContact', 'SenderName') { if ($PSBoundParameters[$k]) { $crOptions[$k] = $PSBoundParameters[$k] } }
+                $crFiles = @(Invoke-EbrChangeRequestGenerator -EvidencePath $ctx.OutDir -Options $crOptions)
+                Write-EbrLog -Level INFO -Component Report -Message ('Change requests created: {0}' -f ($crFiles -join ', '))
+                $crNames = @($crFiles | ForEach-Object { Split-Path -Leaf $_ })
+                $crCount = @($crNames | Where-Object { $_ -match '^CR-\d+-.+(?<!\.email)\.txt$' }).Count
+                $emailCount = @($crNames | Where-Object { $_ -match '^CR-\d+-.+\.email\.txt$' }).Count
+                $changeRequests = @(('{0} and {1} in 05-change-requests. 00-index.md lists every change with its status and the resources left out. They name client resources, so each stays internal until its email is sent.' -f $(if ($crCount -eq 1) { '1 change request' } else { "$crCount change requests" }), $(if ($emailCount -eq 1) { '1 client email' } else { "$emailCount client emails" })))
+            }
+            catch {
+                $reportFailed = $true
+                $changeRequests = @(('Not written: {0} {1}' -f ($_.Exception.Message -replace ';', ',' -replace '[<>]', ' '), $rerun))
+                Write-EbrWarn "Evidence collection completed. Change request generation needs attention: $($_.Exception.Message)"
+                Write-EbrLog -Level WARNING -Component Report -Message $_.Exception.Message
+            }
+        }
+        # The notes are written again with the change requests, now that they are known.
+        $notes = New-EbrNotes -Ctx $ctx -Worksheet $worksheet -ChangeRequests $changeRequests
+        Write-EbrTextFile -Path (Join-Path $ctx.OutDir '02-notes.txt') -Text $notes -Bom
+
         $failed = @($ctx.Manifest | Where-Object { $_.Status -in 'FAILED', 'PARTIAL', 'UNAVAILABLE' }).Count
         $elapsed = (Get-Date).ToUniversalTime() - $ctx.StartedUtc
         Write-Host ''
@@ -5982,6 +6071,7 @@ function Invoke-EbrMain {
         foreach ($g in ($ctx.Manifest | Group-Object Status | Sort-Object Name)) { Write-Host ('  {0,-8} {1}' -f $g.Name, $g.Count) }
         Write-Host ('  Elapsed  {0:hh\:mm\:ss}' -f $elapsed)
         Write-Host ('  Output   {0}' -f $ctx.OutDir)
+        Write-Host ('  Changes  {0}' -f $changeRequests[0])
         Write-Host $notes
         if ($failed) {
             Write-EbrWarn "$failed result set(s) failed, are partial or have no data source. Details in 00-manifest.csv and run.log."
@@ -6019,7 +6109,9 @@ try {
         -OutputPath $OutputPath -SkipExchange:$SkipExchange -SkipDefender:$SkipDefender `
         -SkipGraph:$SkipGraph -PatchCadenceDays $PatchCadenceDays @patternArgs `
         -SkipWorkspaceBreakdown:$SkipWorkspaceBreakdown -DryRun:$DryRun `
-        -SkipHtmlReport:$SkipHtmlReport -ReportDepth $ReportDepth -SkipSecOpsWorklist:$SkipSecOpsWorklist
+        -SkipHtmlReport:$SkipHtmlReport -ReportDepth $ReportDepth -SkipSecOpsWorklist:$SkipSecOpsWorklist `
+        -SkipChangeRequests:$SkipChangeRequests -DrClient:$DrClient -SentinelWorkspace $SentinelWorkspace -ManagementGroup $ManagementGroup `
+        -ClientContact $ClientContact -SenderName $SenderName -PurgeProtectionApproved:$PurgeProtectionApproved
 }
 finally { Restore-EbrQuickEdit $quickEditMode }
 # The exit code is the last thing main emits. Anything else that leaked is ignored, not exited with.

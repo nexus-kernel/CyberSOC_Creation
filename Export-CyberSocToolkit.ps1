@@ -152,15 +152,17 @@ pwsh ./Get-CyberSocEvidence.ps1 -TenantId <tenant> -SubscriptionId <subscription
 
 The window is the report month and the two full months before it, the 90-day trend. The report month defaults to the last full month. ``-VulnAssessmentPath`` imports the monthly Atmosera.VulnAssessment runs of that window for these subscriptions. A pack collected without them takes them later with ``Import-CyberSocVulnAssessment.ps1 -EvidencePath <pack> -VulnAssessmentPath <runs>``, then ``New-CyberSocReport.ps1 -EvidencePath <pack>``.
 
-Each run writes an evidence pack with the report in two HTML editions and a deck, and the SecOps worklist (``04-secops-worklist.md`` and ``.csv``). Send the client ``03-security-report.client.html`` and ``03-security-report.pptx``. ``03-security-report.html`` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-CyberSocEvidence.README.md covers parameters, permissions and sign-ins.
+Each run writes an evidence pack with the report in two HTML editions and a deck, the SecOps worklist (``04-secops-worklist.md`` and ``.csv``) and the hardening change requests (``05-change-requests``). Send the client ``03-security-report.client.html`` and ``03-security-report.pptx``. ``03-security-report.html`` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-CyberSocEvidence.README.md covers parameters, permissions and sign-ins.
 
 ## Raise the hardening change requests
 
+The collection run writes ``05-change-requests`` into the pack: one change request for each low-impact hardening item that still has resources to fix, and a ready-to-send client email for each one. A change that needs the client first asks for an approval, a confirmation or a maintenance window, and every other change gets a notice of planned change. Pass ``-ClientContact`` and ``-SenderName`` to the collection run for the emails, or write them again on their own:
+
 ``````powershell
-pwsh ./New-CyberSocChangeRequests.ps1 -EvidencePath <pack>
+pwsh ./New-CyberSocChangeRequests.ps1 -EvidencePath <pack> -ClientContact <name> -SenderName <name>
 ``````
 
-Writes ``05-change-requests`` into the pack: one change request for each low-impact hardening item that still has resources to fix, and a ready-to-send client email for the changes that need the client first. New-CyberSocChangeRequests.README.md covers the changes and the options.
+New-CyberSocChangeRequests.README.md covers the changes, the emails and the options.
 
 ## Integrity
 
@@ -206,7 +208,7 @@ finally { $zip.Dispose(); $sha.Dispose() }
 
 # Reopen the zip and confirm it can run on its own.
 $expected = @(
-    'Get-CyberSocEvidence.ps1', 'Import-CyberSocVulnAssessment.ps1', 'New-CyberSocReport.ps1', 'New-CyberSocSecOpsWorklist.ps1', 'New-CyberSocControlsStandard.ps1',
+    'Get-CyberSocEvidence.ps1', 'Import-CyberSocVulnAssessment.ps1', 'New-CyberSocReport.ps1', 'New-CyberSocSecOpsWorklist.ps1', 'New-CyberSocChangeRequests.ps1', 'New-CyberSocControlsStandard.ps1',
     'report/Get-EbrCaEvaluation.ps1', 'report/Read-CyberSocPackResult.ps1', 'report/report-model.js', 'report/cybersoc-model.js', 'report/report-render.js', 'report/report-review.js', 'report/report-controls.js', 'report/build-client-report.cjs', 'report/report-story.js',
     'report/report.html', 'report/report.css', 'report/standard.html', 'report/standard-render.js', 'report/controls-standard.json',
     'report/deck-common.cjs', 'report/build-report-deck.cjs', 'report/build-controls-deck.cjs', 'report/assets/template-background.jpg',

@@ -1890,7 +1890,8 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
             [pscustomobject]@{ Columns = @('N'); Rows = @([pscustomobject]@{ N = 1 }); Detail = '' }
         }
 
-        $code = Invoke-EbrMain -TenantId $client -SubscriptionId $subs -OutputPath $TestDrive -SkipExchange -ManagedRgPattern 'aznativesol0' -VulnAssessmentPath $vaDir
+        $code = Invoke-EbrMain -TenantId $client -SubscriptionId $subs -OutputPath $TestDrive -SkipExchange -ManagedRgPattern 'aznativesol0' -VulnAssessmentPath $vaDir `
+            -DrClient -SentinelWorkspace 'ws-2' -ManagementGroup 'mg-contoso' -ClientContact 'Dana' -SenderName 'Scott Example' -PurgeProtectionApproved
         $outDir = Get-ChildItem -Path $TestDrive -Directory -Filter 'CyberSOC-Evidence_*' | Select-Object -First 1
         $manifest = Import-Csv (Join-Path $outDir.FullName '00-manifest.csv')
         $params = Get-Content (Join-Path $outDir.FullName '00-parameters.json') -Raw | ConvertFrom-Json
@@ -2073,6 +2074,89 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
 
     It 'reads the rules of each workspace exactly once' {
         Should -Invoke Get-EbrSentinelRules -Times 3 -Exactly -Scope Describe
+    }
+
+    It 'writes the change requests and client emails into the pack, with the options recorded and passed through' {
+        $folder = Join-Path $outDir.FullName '05-change-requests'
+        $index = Get-Content (Join-Path $folder '00-index.md') -Raw
+        $index | Should -Match '^# Change requests: Contoso Test'
+        $index | Should -Not -Match 'Run again with -DrClient' -Because '-DrClient reached the generator'
+        $crs = @(Get-ChildItem $folder -Filter 'CR-*.txt' | Where-Object Name -notlike '*.email.txt')
+        $crs.Count | Should -BeGreaterThan 0 -Because 'the mocked pack has gaps to change'
+        foreach ($cr in $crs) { Test-Path (Join-Path $folder ($cr.BaseName + '.email.txt')) | Should -BeTrue -Because "$($cr.Name) is written with its client email" }
+        foreach ($email in @(Get-ChildItem $folder -Filter '*.email.txt')) {
+            $text = Get-Content $email.FullName -Raw
+            $text | Should -Match '\r?\n\r?\nHello Dana,\r?\n' -Because "-ClientContact reached the generator ($($email.Name))"
+            $text | Should -Match 'Thank you,\r?\nScott Example\r?\n$' -Because "-SenderName reached the generator ($($email.Name))"
+        }
+        $params.ChangeRequests.Written | Should -BeTrue
+        $params.ChangeRequests.DrClient | Should -BeTrue
+        $params.ChangeRequests.SentinelWorkspace | Should -Be 'ws-2'
+        $params.ChangeRequests.ManagementGroup | Should -Be 'mg-contoso'
+        $params.ChangeRequests.ClientContact | Should -Be 'Dana'
+        $params.ChangeRequests.SenderName | Should -Be 'Scott Example'
+        $params.ChangeRequests.PurgeProtectionApproved | Should -BeTrue
+        $notes = Get-Content (Join-Path $outDir.FullName '02-notes.txt') -Raw
+        $notes | Should -Match ('--- Change Requests ---\r?\n  \S+ {0} change requests? and {0} client emails? in 05-change-requests\. 00-index\.md lists every change' -f $crs.Count)
+        (Get-Item (Join-Path $folder '00-index.md')).LastWriteTimeUtc | Should -BeGreaterOrEqual (Get-Item (Join-Path $outDir.FullName '04-secops-worklist.md')).LastWriteTimeUtc -Because 'the change requests come after the worklist'
+    }
+
+    It 'runs the change request generator after the worklist with the options given, and only those' {
+        Mock Invoke-EbrChangeRequestGenerator {
+            $script:crCall = @{ Path = $EvidencePath; Options = $Options; Worklist = Test-Path (Join-Path $EvidencePath '04-secops-worklist.md'); Parameters = Test-Path (Join-Path $EvidencePath '00-parameters.json') }
+            Join-Path $EvidencePath '05-change-requests/CR-02-storage-secure-transfer.txt'
+            Join-Path $EvidencePath '05-change-requests/CR-02-storage-secure-transfer.email.txt'
+            Join-Path $EvidencePath '05-change-requests/00-index.md'
+        }
+        $dest = Join-Path $TestDrive 'cr-options'
+        $null = Invoke-EbrMain -TenantId $client -SubscriptionId $subs -OutputPath $dest -SkipExchange -SkipHtmlReport -ClientContact 'Dana' -ManagementGroup 'mg-contoso'
+        Should -Invoke Invoke-EbrChangeRequestGenerator -Times 1 -Exactly
+        $pack = Get-ChildItem -Path $dest -Directory -Filter 'CyberSOC-Evidence_*' | Select-Object -First 1
+        $script:crCall.Path | Should -Be $pack.FullName
+        $script:crCall.Worklist | Should -BeTrue -Because 'the worklist is written first'
+        $script:crCall.Parameters | Should -BeTrue -Because 'the generator reads 00-parameters.json'
+        @($script:crCall.Options.Keys | Sort-Object) | Should -Be @('ClientContact', 'ManagementGroup') -Because 'an option not given is left to the generator default'
+        $script:crCall.Options.ClientContact | Should -Be 'Dana'
+        $script:crCall.Options.ManagementGroup | Should -Be 'mg-contoso'
+        $notes = Get-Content (Join-Path $pack.FullName '02-notes.txt') -Raw
+        $notes | Should -Match '1 change request and 1 client email in 05-change-requests\.'
+        $params2 = Get-Content (Join-Path $pack.FullName '00-parameters.json') -Raw | ConvertFrom-Json
+        $params2.ChangeRequests.DrClient | Should -BeFalse
+        $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
+        $params2.ScriptVersion | Should -Be '1.5.0'
+    }
+
+    It 'warns and leaves the collection complete when the change requests fail' {
+        Mock Invoke-EbrChangeRequestGenerator { throw 'CR-03 has no client email. Every change request writes one.' }
+        $dest = Join-Path $TestDrive 'cr-failed'
+        $failedCode = Invoke-EbrMain -TenantId $client -SubscriptionId $subs -OutputPath $dest -SkipExchange -SkipHtmlReport
+        $failedCode | Should -Be 2
+        $pack = Get-ChildItem -Path $dest -Directory -Filter 'CyberSOC-Evidence_*' | Select-Object -First 1
+        foreach ($f in '00-manifest.csv', '00-parameters.json', '01-worksheet.csv', '02-notes.txt', '04-secops-worklist.md') { Test-Path (Join-Path $pack.FullName $f) | Should -BeTrue -Because "$f is part of the completed collection" }
+        $log = Get-Content (Join-Path $pack.FullName 'run.log') -Raw
+        $log | Should -Match 'WARNING Console - Evidence collection completed\. Change request generation needs attention: CR-03 has no client email\.'
+        Get-Content (Join-Path $pack.FullName '02-notes.txt') -Raw | Should -Match 'Not written: CR-03 has no client email\. Every change request writes one\. Run New-CyberSocChangeRequests\.ps1 -EvidencePath on this pack to write them\.'
+    }
+
+    It 'skips the change requests with -SkipChangeRequests and records it' {
+        Mock Invoke-EbrChangeRequestGenerator { }
+        $dest = Join-Path $TestDrive 'cr-skipped'
+        $null = Invoke-EbrMain -TenantId $client -SubscriptionId $subs -OutputPath $dest -SkipExchange -SkipHtmlReport -SkipChangeRequests
+        Should -Invoke Invoke-EbrChangeRequestGenerator -Times 0 -Exactly
+        $pack = Get-ChildItem -Path $dest -Directory -Filter 'CyberSOC-Evidence_*' | Select-Object -First 1
+        Test-Path (Join-Path $pack.FullName '05-change-requests') | Should -BeFalse
+        (Get-Content (Join-Path $pack.FullName '00-parameters.json') -Raw | ConvertFrom-Json).ChangeRequests.Written | Should -BeFalse
+        Get-Content (Join-Path $pack.FullName '02-notes.txt') -Raw | Should -Match 'Not written \(-SkipChangeRequests\)\. Run New-CyberSocChangeRequests\.ps1 -EvidencePath on this pack to write them\.'
+    }
+
+    It 'writes no change requests on a dry run, like the report and the worklist' {
+        Mock Invoke-EbrChangeRequestGenerator { }
+        $dest = Join-Path $TestDrive 'cr-dryrun'
+        Invoke-EbrMain -TenantId $client -SubscriptionId $subs -OutputPath $dest -DryRun -ClientContact 'Dana' | Should -Be 0
+        Should -Invoke Invoke-EbrChangeRequestGenerator -Times 0 -Exactly
+        $pack = Get-ChildItem -Path $dest -Directory -Filter 'CyberSOC-Evidence_DRYRUN_*' | Select-Object -First 1
+        Test-Path (Join-Path $pack.FullName '05-change-requests') | Should -BeFalse
+        Test-Path (Join-Path $pack.FullName '04-secops-worklist.md') | Should -BeFalse
     }
 }
 
