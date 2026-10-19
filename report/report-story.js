@@ -168,7 +168,6 @@
 
     // Wins, at most one per area, up to six. A verified configuration reads In force with its own label. A sub-line
     // may depend on the reading, so a win at E that leaves resources out never says none or every (Oct 15, 2026).
-    // The MFA policy win names the excluded accounts that signed in, as the register does (issue #27).
     // Managed disk encryption at rest (DP.3) is never a win: platform-managed encryption is the Azure default, so the
     // data protection win comes from post-delivery mail removal only (Oct 18, 2026, issue #26).
     const winAt = (re, area, label, sub, boolLabel = label, boolSub = sub) => { const c = find(re); return c && c.mark === 'E' && c.pct !== null && (c.boolean || !c.smallSample) ? { area, value: c.boolean ? c.value : ofText(c), label: c.boolean ? boolLabel : label, sub: c.boolean ? boolSub : (c.population || (typeof sub === 'function' ? sub(c) : sub)), source: c.source } : null }
@@ -176,7 +175,7 @@
       a && a.flaggedKnown && a.truePositives > 0 && a.flagged === 0 && !impactConfirmed ? { area: 'threat', eyebrow: 'Confirmed threats', value: `0 of ${fmt(a.truePositives)}`, label: `${tpWord(a.truePositives)} carried ${a.tacticPhrase}`, sub: `${classified(a.truePositives)} ${s.periodPhrase}.`, source: a.source } : null,
       s.speed ? { area: 'response', eyebrow: 'Response speed', value: s.speed.value, label: s.speed.label, sub: s.speed.sub, source: s.speed.row.source } : null,
       gain ? { area: 'posture', eyebrow: 'Posture', value: `+${fmt(gain.points)} pts`, label: `${scoreName}, ${pctText(gain.from)} in ${gain.since} to ${pctText(score.value)}`, sub: `Calculated by Microsoft, read ${score.read || s.readShort}.`, source: score.source } : null,
-      winAt(/^Multifactor authentication required at sign-in/, 'identity', 'users challenged for MFA at sign-in', 'Members who signed in over the last 30 days.', 'multifactor authentication required at sign-in by Conditional Access policy', `An enabled policy for all users on every application${find(/^Multifactor authentication required at sign-in/)?.excludedAccounts > 0 ? `, with ${exceptionsText(find(/^Multifactor authentication required at sign-in/))}` : ''}.`),
+      winAt(/^Multifactor authentication required at sign-in/, 'identity', 'users challenged for MFA at sign-in', 'Members who signed in over the last 30 days.', 'multifactor authentication required at sign-in by Conditional Access policy', 'An enabled policy for all users on every application.'),
       winAt(/^Operating system findings/, 'endpoint', 'machines patched inside the agreed cadence', c => c.good === c.total ? 'No critical or security patch past the cadence at collection.' : `${plural(c.total - c.good, 'machine carries', 'machines carry')} a critical or security patch past the cadence at collection.`) || winAt(/^Azure virtual machines reporting/, 'endpoint', 'Azure virtual machines reporting to endpoint detection', 'Seen in the last 7 days.'),
       m.mailRemoved > 0 && find(/^Malicious mail removed/)?.mark === 'E' ? { area: 'data', eyebrow: 'Email protection', value: fmt(m.mailRemoved), label: 'malicious messages removed after delivery', sub: 'Zero-hour auto purge and automated remediation, last 30 days.', source: find(/^Malicious mail removed/).source } : null,
       // The DR.10 win reads the last 30 days beside quarterly figures, so its label names the window and its sub-line
@@ -311,8 +310,8 @@
     })
 
     // The register: every control, with a value that is never null. A control at E that leaves resources out
-    // carries its exception count, so E with exceptions never reads as E with none (Oct 15, 2026), and a Conditional
-    // Access control in force carries the excluded accounts that signed in (issue #27). A control on a
+    // carries its exception count, so E with exceptions never reads as E with none (Oct 15, 2026), and a device code
+    // or legacy authentication block in force carries the excluded accounts seen signing in (issue #27). A control on a
     // small sample carries the flag, and the patch cadence row names its assessed and excluded populations (issue #24).
     s.register = GROUPS.map(g => {
       const inG = m.controls.filter(c => c.group === g)

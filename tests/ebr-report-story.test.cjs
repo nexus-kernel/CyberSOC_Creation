@@ -297,20 +297,18 @@ test('a win, headline or narrative at E that leaves resources out never says eve
   const shown = [...s.drift.map(c => c.detail), ...s.roadmap.flatMap(h => h.items.flatMap(i => [i.evidence, ...i.controls.map(c => c.detail)]))]
   assert.ok(shown.length && shown.every(t => !/\bexceptions?\b/.test(t)), shown.find(t => /\bexceptions?\b/.test(t)))
 })
-test('Conditional Access controls in force carry the excluded accounts that signed in on the register and the MFA win (issue #27)', () => {
+test('Conditional Access controls in force carry the excluded accounts that signed in on the register (issue #27)', () => {
   const p = quarterPack()
   const set = (id, rows) => { p.manifest = p.manifest.filter(r => r.ResultId !== id); p.manifest.push({ ResultId: id, Status: 'OK', Rows: rows.length, ReadTimeUtc: '2026-10-12T10:00:00Z' }); p.results[id] = rows }
   const ca = (Flow, o = {}) => ({ Flow, PolicyRead: true, PolicyState: 'Enforced', EnforcedPolicies: 1, ExcludedIdentities: 3, DetailRead: true, SignIns: 0, SucceededExcluded: 0, AccountsExcluded: 0, SucceededUngoverned: 0, AccountsUngoverned: 0, ...o })
   set('IA.3', [{ ClientAppUsed: 'Exchange ActiveSync', Attempts: 10, Succeeded: 2, BlockedByCa: 8, Users: 1 }])
   set('IA.3-DEVICECODE', [{ Attempts: 3, Succeeded: 3, BlockedByCa: 0, Users: 2, Apps: 1, InForce: false }])
-  set('IA.8-CA', [ca('MFA at sign-in', { SucceededExcluded: 4, AccountsExcluded: 2 }), ca('Legacy authentication', { SucceededExcluded: 2, AccountsExcluded: 1 }), ca('Device code', { SucceededExcluded: 3, AccountsExcluded: 2 }), ca('Admin portals')])
+  set('IA.8-CA', [ca('MFA at sign-in', { DetailRead: false }), ca('Legacy authentication', { SucceededExcluded: 2, AccountsExcluded: 1 }), ca('Device code', { SucceededExcluded: 3, AccountsExcluded: 2 }), ca('Admin portals')])
   const { s } = story(p)
   const rows = s.register.flatMap(r => [...r.foundational, ...r.defense])
   const row = re => rows.find(c => re.test(c.label))
   assert.deepEqual([/^Multifactor authentication required/, /^Legacy authentication/, /^Device code/, /^Multifactor authentication at admin portal/].map(re => [row(re).valueText, row(re).exceptionText]),
-    [['In force', '2 excluded accounts signed in'], ['In force', '1 excluded account signed in'], ['In force', '2 excluded accounts signed in'], ['In force', '']])
-  const win = s.wins.find(w => /multifactor authentication required at sign-in by Conditional Access policy/.test(w.label))
-  assert.equal(win.sub, 'An enabled policy for all users on every application, with 2 excluded accounts signed in.')
+    [['In force', ''], ['In force', '1 excluded account signed in'], ['In force', '2 excluded accounts signed in'], ['In force', '']], 'MFA at sign-in has no per-account detail')
 })
 test('the identity win names the evaluated population in a federated tenant', () => {
   const p = quarterPack()

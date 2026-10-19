@@ -683,18 +683,20 @@ test('a device code block policy with excluded accounts reads in force with the 
   c = build(p).controls.find(x => x.id === 'IA.3-DEVICECODE')
   assert.equal(c.value, 'Not in force'); assert.match(c.note, /runs in report-only mode/)
 })
-test('legacy authentication and MFA in force with excluded accounts that signed in never read as covering every user', () => {
+test('legacy authentication in force with excluded accounts that signed in never reads as covering every user', () => {
   const p = pack()
   put(p, 'IA.3', [{ ClientAppUsed: 'Exchange ActiveSync', Attempts: 40, Succeeded: 4, BlockedByCa: 30, Users: 2 }])
-  put(p, 'IA.8-CA', [caRow('Legacy authentication', { SignIns: 4, SucceededExcluded: 4, AccountsExcluded: 2 }), caRow('MFA at sign-in', { SignIns: 9, SucceededExcluded: 3, AccountsExcluded: 1 })])
+  // The evaluator reads no per-account detail for MFA at sign-in (DetailRead false), as Get-EbrCaEvaluation.ps1 emits it.
+  put(p, 'IA.8-CA', [caRow('Legacy authentication', { SignIns: 4, SucceededExcluded: 4, AccountsExcluded: 2 }), caRow('MFA at sign-in', { DetailRead: false })])
   const m = build(p)
   const legacy = m.controls.find(x => x.id === 'IA.3'), mfa = m.controls.find(x => x.id === 'IA.1')
-  assert.deepEqual([legacy.value, exceptionsText(legacy), mfa.value, exceptionsText(mfa)], ['In force', '2 excluded accounts signed in', 'In force', '1 excluded account signed in'])
-  for (const c of [legacy, mfa]) assert.ok(/excluded from the policy\. Atmosera reviews these exclusions with your team at each business review\./.test(c.note) && !/approved/i.test(c.note), c.note)
-  assert.deepEqual(m.caExclusions.map(x => [x.id, x.signIns, x.accounts, x.status]), [['IA.1', 3, 1, 'Pending validation'], ['IA.3', 4, 2, 'Pending validation']])
+  assert.deepEqual([legacy.value, exceptionsText(legacy), mfa.value, exceptionsText(mfa)], ['In force', '2 excluded accounts signed in', 'In force', ''])
+  assert.ok(/excluded from the policy\. Atmosera reviews these exclusions with your team at each business review\./.test(legacy.note) && !/approved/i.test(legacy.note), legacy.note)
+  assert.deepEqual(m.caExclusions.map(x => [x.id, x.signIns, x.accounts, x.status]), [['IA.3', 4, 2, 'Pending validation']])
   const identity = m.pillars.find(x => /identity/i.test(x.name)).narrative
-  assert.match(identity, /Conditional Access requires multifactor authentication for every user on every application, apart from 1 account excluded from the policy\./)
-  assert.match(identity, /Legacy authentication is blocked, apart from 2 accounts excluded from the policy\./)
+  assert.match(identity, /Conditional Access requires multifactor authentication for every user on every application\./)
+  // The count is the excluded accounts seen signing in, never the configured exclusions (12 here).
+  assert.match(identity, /Legacy authentication is blocked\. 2 accounts excluded from the policy signed in with a legacy protocol in the last 30 days\./)
   // The legacy failures keep the password spraying hint in the presenter notes.
   assert.ok(m.presenter.some(n => n.title === 'Legacy sign-ins that failed without a Conditional Access block' && /6 legacy protocol attempts failed/.test(n.text) && /password spraying/.test(n.text)))
   const clean = build((() => { const q = pack(); put(q, 'IA.3', [{ ClientAppUsed: 'Exchange ActiveSync', Attempts: 30, Succeeded: 0, BlockedByCa: 30, Users: 0 }]); put(q, 'IA.8-CA', [caRow('Legacy authentication')]); return q })())

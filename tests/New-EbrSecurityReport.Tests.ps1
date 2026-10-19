@@ -143,8 +143,16 @@ Describe 'Offline HTML report generation' {
         '[{"Flow":"Device code","UserId":"u1","UserPrincipalName":"secret-room@example.test","PolicyResults":"p1=notApplied","SignIns":4},{"Flow":"Device code","UserId":"u2","UserPrincipalName":"secret-user@example.test","PolicyResults":"","SignIns":1}]' |
             Set-Content (Join-Path $pack 'results/IA.8-SIGNINS.json')
         '[{"Name":"secret-fw","Publisher":"paloaltonetworks","ResourceId":"/subscriptions/s/x/secret-fw"}]' | Set-Content (Join-Path $pack 'results/P0.6-APPLIANCES.json')
-        $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
+        $files = @(& $generator -SkipDeck -EvidencePath $pack)
+        $html = Get-Content $files[0] -Raw
         $html | Should -Match '"Flow":"Device code","Control":"IA.3-DEVICECODE","PolicyRead":true,"PolicySource":"Raw","PolicyState":"Enforced","EnforcedPolicies":1,"ExcludedIdentities":1,"DetailRead":true,"SignIns":5,"SucceededExcluded":4,"AccountsExcluded":1,"SucceededUngoverned":1,"AccountsUngoverned":1'
+        # Issue #27: the evaluator's counts reach the rendered client page as an excluded account count beside In force,
+        # with the review sentence and without approved wording. MFA at sign-in carries no per-account detail.
+        $html | Should -Match '"Flow":"MFA at sign-in","Control":"IA.1","PolicyRead":true,"PolicySource":"Raw","PolicyState":"None","EnforcedPolicies":0,"ExcludedIdentities":0,"DetailRead":false'
+        $client = Get-Content $files[1] -Raw
+        $client | Should -Match '<h4>Device code flow sign-ins blocked</h4><p>[^<]*4 successful sign-ins came from 1 account excluded from the policy\. Atmosera reviews these exclusions with your team at each business review\.'
+        $client | Should -Match '<strong>In force</strong><span></span><span class="exceptions">1 excluded account signed in</span>'
+        $client | Should -Not -Match 'approved exception'
         $html | Should -Match '"Flow":"Legacy authentication","Control":"IA.3","PolicyRead":true,"PolicySource":"Raw","PolicyState":"None"'
         $html | Should -Match '"Appliances":1'
         $html | Should -Not -Match 'secret-room|secret-user|Secret policy name|secret-fw|"UserId"'

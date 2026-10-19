@@ -52,7 +52,7 @@
   const MIN_SAMPLE = 10
   const smallSampleText = n => `${fmt(n)} on a small sample`
   // What a control at E leaves out, for the register. A ratio control names its exceptions, and a Conditional Access
-  // control in force names the excluded accounts that signed in (issue #27), so neither reads as covering everyone.
+  // control in force names the excluded accounts seen signing in (issue #27), so neither reads as covering everyone.
   const exceptionsText = c => c.exceptions > 0 ? plural(c.exceptions, 'exception', 'exceptions') : c.excludedAccounts > 0 ? plural(c.excludedAccounts, 'excluded account signed in', 'excluded accounts signed in') : ''
   const bool = value => value === true || String(value ?? '').toLowerCase() === 'true'
   const plural = (n, one, many) => `${fmt(n)} ${n === 1 ? one : many}`
@@ -575,7 +575,9 @@
     }
     // A control in force whose excluded accounts signed in carries the account count, which the register shows beside
     // In force so the policy never reads as covering everyone. Every such exclusion is also listed, pending validation
-    // with the client, for the proposed exceptions section (issue #27, section in issue #30).
+    // with the client, for the proposed exceptions section (issue #27, section in issue #30). Only the flows with
+    // per-account sign-in detail (device code and legacy authentication, IA.8-SIGNINS) can carry one. The count is the
+    // excluded accounts seen signing in, not every account the policy excludes.
     m.caExclusions = []
     const withExclusions = (item, f) => {
       const signIns = f && bool(f.DetailRead) ? count(f.SucceededExcluded) : null
@@ -585,8 +587,6 @@
       m.caExclusions.push({ id: item.id, label: item.label, flow: clean(f.Flow), signIns, accounts, status: 'Pending validation' })
       return item
     }
-    // The pillar narrative names the same accounts, so a policy in force never reads as covering every user.
-    const excludedTail = c => c && c.excludedAccounts > 0 ? `, apart from ${plural(c.excludedAccounts, 'account', 'accounts')} excluded from the policy` : ''
     // MFA at sign-in is a Conditional Access control (Oct 14, 2026). When the policy inventory was read, the
     // policy decides the status: an enabled policy requiring MFA on every application for all users, or
     // security defaults, reads In force. The sign-in evidence then supports the note. Packs with no policy
@@ -597,7 +597,7 @@
       : count(member?.UsersSignedIn) > 0 && count(member?.UsersChallenged) !== null ? `${fmt(member.UsersChallenged)} of ${fmt(member.UsersSignedIn)} members who signed in over the last 30 days satisfied it.` : '')
     // The sign-in ratio behind the policy status, for the pillar page, the priorities and the Mostly enforced reading.
     const mfaRatio = count(member?.UsersChallenged) !== null && (evaluated ?? count(member?.UsersSignedIn)) > 0 ? { good: member.UsersChallenged, total: evaluated ?? member.UsersSignedIn, pct: pct(member.UsersChallenged, evaluated ?? member.UsersSignedIn) } : null
-    const mfa = mfaFlow ? withExclusions(inForce('IA.1', mfaLabel, F.identity, flowCondition(mfaFlow), [mfaPolicy, mfaSignIns, exceptionText(mfaFlow)].filter(Boolean).join(' '), mfaRatio), mfaFlow)
+    const mfa = mfaFlow ? inForce('IA.1', mfaLabel, F.identity, flowCondition(mfaFlow), [mfaPolicy, mfaSignIns, exceptionText(mfaFlow)].filter(Boolean).join(' '), mfaRatio)
       : !member && has('IA.1') ? notApplicable('IA.1', mfaLabel, F.identity, 'No member sign-ins were recorded in the last 30 days, so there is no evidence either way.')
       : evaluated === 0 ? notApplicable('IA.1', mfaLabel, F.identity, 'Every member sign-in in the last 30 days reused a device session that no Conditional Access policy checked, so the logs hold no evidence either way.')
       : control('IA.1', mfaLabel, F.identity, member?.UsersChallenged, evaluated ?? member?.UsersSignedIn, mfaNote, unevaluated !== null ? { population: 'Members whose sign-ins in the last 30 days could be evaluated.' } : {})
@@ -1202,13 +1202,14 @@
     const pillar = (name, headline, narrative, measure, callout, sourceText, extra = {}) => m.pillars.push({ name, headline: clean(headline), narrative: clean(narrative), measure: measure && measure.pct !== null ? { label: clean(measure.label), good: measure.good, total: measure.total, pct: measure.pct, mark: measure.mark } : null, callout: callout ? { value: clean(callout.value), label: clean(callout.label) } : null, source: clean(sourceText), ...(extra.keep ? { keep: clean(extra.keep) } : {}), ...(extra.headlineShort && extra.headlineShort !== headline ? { headlineShort: clean(extra.headlineShort) } : {}) })
     {
       const parts = []
-      if (mfa.boolean) parts.push(isInForce(mfa) ? `Conditional Access requires multifactor authentication for every user on every application${excludedTail(mfa)}.${mfaRatio ? ` ${pctText(mfaRatio.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied it.` : ''}` : `${mfaPolicy}${mfaRatio ? ` ${pctText(mfaRatio.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied multifactor authentication.` : ''}`)
+      if (mfa.boolean) parts.push(isInForce(mfa) ? `Conditional Access requires multifactor authentication for every user on every application.${mfaRatio ? ` ${pctText(mfaRatio.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied it.` : ''}` : `${mfaPolicy}${mfaRatio ? ` ${pctText(mfaRatio.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied multifactor authentication.` : ''}`)
       else if (mfa.pct !== null) parts.push(`${pctText(mfa.pct)} of ${unevaluated !== null ? 'members whose sign-ins in the last 30 days could be evaluated' : 'members who signed in over the last 30 days'} satisfied multifactor authentication${externalMfa > 0 ? ', including sign-ins where a federated identity provider supplied the multifactor claim' : ''}.${legacyMfaQuery && mfa.pct < 50 ? ' Multifactor authentication completed through a federated identity provider is confirmed in the review.' : ''}`)
       // The split follows the share, and no deck row may cut it.
       if (mfaSplit && mfa.pct !== null) parts.push(mfaSplitNarrative)
       if (isInForce(locControl)) parts.push('Conditional Access restricts sign-ins by location for every user.')
       const legacyBlockedInForce = isInForce(legacyControl)
-      if (legacyBlockedInForce) parts.push(`Legacy authentication is blocked${excludedTail(legacyControl)}.`)
+      // The narrative names the excluded accounts seen signing in, so the block never reads as covering every user.
+      if (legacyBlockedInForce) parts.push(`Legacy authentication is blocked${legacyControl.excludedAccounts > 0 ? `. ${plural(legacyControl.excludedAccounts, 'account excluded from the policy', 'accounts excluded from the policy')} signed in with a legacy protocol in the last 30 days` : ''}.`)
       if (advancedPhish) parts.push('An advanced anti-phishing policy protects every mailbox.')
       else if (basicPhish) parts.push('The Microsoft default anti-phishing policy covers every mailbox.')
       const headline = band(mfa, legacyBlockedInForce ? 'Sign-ins are challenged and legacy protocols are blocked' : 'Sign-ins are challenged for multifactor authentication', `Multifactor authentication covers ${measureText(mfa)} ${unevaluated !== null ? 'evaluated members' : 'members'} at sign-in, ${remaining(mfa)}${legacyBlockedInForce ? ', and legacy protocols are blocked' : ''}`, 'Multifactor authentication covers most sign-ins, with full coverage sequenced', mfa.boolean ? 'Multifactor authentication policy coverage is the identity priority on the roadmap' : 'Multifactor coverage is the identity priority on the roadmap') || (isInForce(locControl) ? 'Conditional Access restricts sign-ins by location' : 'Identity readings are completed in the review')

@@ -22,8 +22,8 @@
     return `<svg class="spark" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(label)}"><polyline points="${xy.map(p => p.map(n => n.toFixed(1)).join(',')).join(' ')}"/><circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="4"/></svg><div class="spark-axis"><span>${esc(points[0].label)}</span><span>${esc(points[points.length - 1].label)}</span></div>`
   }
   // A control at E that leaves resources out names its exceptions, so meeting the threshold reads differently from
-  // having none left out (Oct 15, 2026). A Conditional Access control in force names the excluded accounts that
-  // signed in the same way (issue #27).
+  // having none left out (Oct 15, 2026). A device code or legacy authentication block in force names the
+  // excluded accounts seen signing in the same way (issue #27).
   const exceptionText = exceptionsText
   // A ratio control on a small sample keeps its mark and carries the flag beside it (issue #24).
   const sampleText = c => c.mark && c.smallSample ? 'small sample' : ''
