@@ -6,9 +6,10 @@
     pack and writes one change request for each hardening item that still has resources to fix, laid
     out on the change request template: diagnostic logging through the ATMO-MXDR-DIAG-TOSENT initiative
     (assigned where it is missing, and remediated where resources are not compliant),
-    secure transfer and minimum TLS 1.2 on storage accounts, minimum TLS 1.2 on App Service and Azure
-    SQL, and Key Vault purge protection. The changes that need the client first (purge protection, which
-    cannot be undone, anonymous blob access, HTTPS only on App Service and encryption at host) also get a
+    secure transfer and minimum TLS 1.2 on storage accounts, minimum TLS 1.2 on App Service, Azure SQL,
+    Azure Cache for Redis, Service Bus, Event Hubs and Azure Cosmos DB, and Key Vault purge protection.
+    The changes that need the client first (purge protection, which cannot be undone, anonymous blob
+    access, HTTPS only on App Service, encryption at host and minimum TLS 1.2 on Event Hubs) also get a
     client email, drafted and ready to send.
 
     Every testing plan is a check in the Azure portal, every reference is a Microsoft Learn page and the
@@ -41,8 +42,9 @@
     ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000 -DrClient -ClientContact 'Dana' -SenderName 'Scott'
 .NOTES
     The per-resource results (P0.7, NB.4-DETAIL, NB.5-DETAIL, NB.6-DETAIL, DP.1-DETAIL, DP.2-DETAIL,
-    DP.4-ELIGIBILITY, DR.6-COVERAGE and DR.6-NONCOMPLIANT) were added in CyberSOC collector 1.1.0. Changes that read them say "needs
-    recollection" on packs collected with an earlier version.
+    DP.4-ELIGIBILITY, DR.6-COVERAGE and DR.6-NONCOMPLIANT) were added in CyberSOC collector 1.1.0, and
+    NB.6-PAAS-DETAIL in 1.2.0. Changes that read them say "needs recollection" on packs collected with an
+    earlier version.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -67,9 +69,16 @@ foreach ($required in '00-parameters.json', '00-manifest.csv') {
 $parameters = Get-Content -LiteralPath (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
 $manifest = @(Import-Csv -LiteralPath (Join-Path $pack '00-manifest.csv'))
 $inv = [cultureinfo]::InvariantCulture
-# The CyberSOC collector that added the per-resource results, for the needs recollection status.
-$detailIds = 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DP.4-ELIGIBILITY', 'DR.6-COVERAGE', 'DR.6-NONCOMPLIANT'
-$needsRecollection = 'Needs recollection with CyberSOC collector 1.1.0 or later'
+# The CyberSOC collector that added each per-resource result, for the needs recollection status.
+$detailVersions = @{}
+foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DP.4-ELIGIBILITY', 'DR.6-COVERAGE', 'DR.6-NONCOMPLIANT') { $detailVersions[$id] = '1.1.0' }
+$detailVersions['NB.6-PAAS-DETAIL'] = '1.2.0'
+# The latest collector among the results given, so a pack missing several asks for the one that has them all.
+function Get-RecollectionState([string[]]$Ids) {
+    $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
+    "Needs recollection with CyberSOC collector $version or later"
+}
+$needsRecollection = Get-RecollectionState 'DR.6-COVERAGE', 'DR.6-NONCOMPLIANT'
 
 # Get-Text, Test-True, Get-Status, Get-Rows, Test-Unreadable and Get-UnreadableState. Each result file is
 # parsed once. A result the manifest reads as OK or PARTIAL needs a file that parses, or a damaged pack would
@@ -150,7 +159,8 @@ function Get-PowerText($value) {
     switch -Regex (Get-Text $value) { 'running$' { 'running' } 'deallocated$' { 'deallocated' } 'stopped$' { 'stopped' } '^$' { 'power state unknown' } default { (Get-Text $value).Replace('PowerState/', '') } }
 }
 function Format-TlsVersion($value) {
-    switch -Regex (Get-Text $value) { '^TLS1_(\d)$' { '1.' + $Matches[1] } '^(|None)$' { 'not set' } default { ConvertTo-CopyText $value } }
+    # Storage writes TLS1_2, Cosmos DB Tls, Tls11 and Tls12, the other services 1.2.
+    switch -Regex (Get-Text $value) { '^TLS1_(\d)$' { '1.' + $Matches[1] } '^Tls1(\d)$' { '1.' + $Matches[1] } '^Tls$' { '1.0' } '^(|None)$' { 'not set' } default { ConvertTo-CopyText $value } }
 }
 
 $workspaces = @($parameters.Workspaces | Where-Object { $_ })
@@ -380,6 +390,13 @@ function New-DiagnosticRemediation($rows) {
             Implementation = $impl.ToArray(); Testing = $testing.ToArray(); Rollback = $rollback.ToArray()
             References = $diagnosticReferences; Csv = $resources
         } }
+}
+
+# NB.6-PAAS-DETAIL lists the Redis caches, Service Bus and Event Hubs namespaces and Cosmos DB accounts
+# below TLS 1.2 together, so each of CR-11 to CR-14 reads the rows of its own resource type.
+function Get-PaasTlsResource([string]$Type) {
+    , @(Get-Rows 'NB.6-PAAS-DETAIL' | Where-Object { (Get-Text $_.ResourceType) -ieq $Type } |
+            ForEach-Object { New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('minimum TLS ' + (Format-TlsVersion $_.MinimumTlsVersion)) $_.ResourceId })
 }
 
 $catalog = @(
@@ -801,6 +818,141 @@ $catalog = @(
             $rows = @(Get-Rows 'DR.6-NONCOMPLIANT')
             if (-not $rows.Count) { return @{ State = 'No gaps found in DR.6-NONCOMPLIANT' } }
             New-DiagnosticRemediation $rows } }
+
+    @{ Number = 11; Key = 'redis-minimum-tls'; Change = 'Minimum TLS 1.2 on Azure Cache for Redis'; Sources = @('NB.6-PAAS-DETAIL')
+       Build = {
+            $resources = Get-PaasTlsResource 'microsoft.cache/redis'
+            $n = $resources.Count
+            if (-not $n) { return @{ State = 'No gaps found' } }
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add((Get-OpenStep $n 'Azure Cache for Redis' 'cache'))
+            $impl.Add('Go to Settings > Advanced settings.')
+            $impl.Add('Set Minimum TLS version to 1.2 and select Save.')
+            Add-RepeatStep $impl $n 1 'cache'
+            @{ Cr = New-ChangeRequest @{
+                    Number = 11; Key = 'redis-minimum-tls'; Title = 'Set minimum TLS version 1.2 on Azure Cache for Redis'
+                    Description = 'Set the minimum TLS version to 1.2 on {0}.' -f (Get-Listed $n 'Azure Cache for Redis cache' 'Azure Cache for Redis caches')
+                    Purpose = 'Azure Cache for Redis has refused TLS 1.0 and 1.1 on every cache since April 1, 2025, but {0} still {1} an older minimum in {2} configuration. Setting 1.2 brings the configuration in line with the platform and the security baseline.' -f (Get-Pick $n 'this cache' 'these caches'), (Get-Pick $n 'records' 'record'), (Get-Pick $n 'its' 'their')
+                    ResourceIntro = '{0} with the minimum TLS version {1} today.' -f $(if ($n -eq 1) { 'The cache below is listed' } else { "The $n caches below are listed" }), (Get-Pick $n 'it records' 'each one records')
+                    ResourceLines = Format-ResourceList $resources
+                    Availability = 'No impact, since Azure Cache for Redis already refuses TLS 1.0 and 1.1 and connections that work today keep working.'
+                    UserExperience = 'No change for users or applications.'
+                    Dependencies = 'None, since the platform already requires TLS 1.2 or later from every client.'
+                    Implementation = $impl.ToArray()
+                    Testing = @(
+                        ('In the Azure portal, open {0} and go to Settings > Advanced settings.' -f (Get-EachStep $n 'cache'))
+                        'Confirm Minimum TLS version shows 1.2.')
+                    Rollback = @(
+                        'No rollback is available or needed, because Azure Cache for Redis has not allowed a minimum below 1.2 since March 1, 2024.'
+                        'Every cache has refused TLS 1.0 and 1.1 since April 1, 2025, so every client that connected before the change can still connect.')
+                    References = @(
+                        , @('Remove TLS 1.0 and 1.1 from use with Azure Cache for Redis', 'https://learn.microsoft.com/azure/azure-cache-for-redis/cache-remove-tls-10-11')
+                        , @('How to configure Azure Cache for Redis, advanced settings', 'https://learn.microsoft.com/azure/azure-cache-for-redis/cache-configure#advanced-settings'))
+                    Csv = $resources
+                } } } }
+
+    @{ Number = 12; Key = 'service-bus-minimum-tls'; Change = 'Minimum TLS 1.2 on Service Bus namespaces'; Sources = @('NB.6-PAAS-DETAIL')
+       Build = {
+            $resources = Get-PaasTlsResource 'microsoft.servicebus/namespaces'
+            $n = $resources.Count
+            if (-not $n) { return @{ State = 'No gaps found' } }
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add((Get-OpenStep $n 'Service Bus' 'namespace'))
+            $impl.Add('Go to Settings > Configuration.')
+            $impl.Add('Set Minimum TLS version to 1.2 and select Save.')
+            Add-RepeatStep $impl $n 1 'namespace'
+            @{ Cr = New-ChangeRequest @{
+                    Number = 12; Key = 'service-bus-minimum-tls'; Title = 'Set minimum TLS version 1.2 on Service Bus namespaces'
+                    Description = 'Set the minimum TLS version to 1.2 on {0}.' -f (Get-Listed $n 'Service Bus namespace' 'Service Bus namespaces')
+                    Purpose = 'Service Bus accepts only TLS 1.2 and later, but {0} still {1} an older minimum in {2} configuration. Setting 1.2 brings the configuration in line with the platform and the security baseline.' -f (Get-Pick $n 'this namespace' 'these namespaces'), (Get-Pick $n 'records' 'record'), (Get-Pick $n 'its' 'their')
+                    ResourceIntro = '{0} with the minimum TLS version {1} today.' -f $(if ($n -eq 1) { 'The namespace below is listed' } else { "The $n namespaces below are listed" }), (Get-Pick $n 'it records' 'each one records')
+                    ResourceLines = Format-ResourceList $resources
+                    Availability = 'No impact, since Service Bus already refuses TLS 1.0 and 1.1 and connections that work today keep working.'
+                    UserExperience = 'No change for users or applications.'
+                    Dependencies = 'None, since every client that connects today already uses TLS 1.2 or later.'
+                    Implementation = $impl.ToArray()
+                    Testing = @(
+                        ('In the Azure portal, open {0} and go to Settings > Configuration.' -f (Get-EachStep $n 'namespace'))
+                        'Confirm Minimum TLS version shows 1.2.')
+                    Rollback = @(
+                        'No rollback is available or needed, because a Service Bus namespace takes only 1.2 or 1.3 as its minimum TLS version.'
+                        'Service Bus accepts only TLS 1.2 and later, so every client that connected before the change can still connect.')
+                    References = @(
+                        , @('Enforce a minimum required version of TLS for requests to a Service Bus namespace', 'https://learn.microsoft.com/azure/service-bus-messaging/transport-layer-security-enforce-minimum-version')
+                        , @('Configure the minimum TLS version for a Service Bus namespace', 'https://learn.microsoft.com/azure/service-bus-messaging/transport-layer-security-configure-minimum-version'))
+                    Csv = $resources
+                } } } }
+
+    @{ Number = 13; Key = 'event-hubs-minimum-tls'; Change = 'Minimum TLS 1.2 on Event Hubs namespaces'; Sources = @('NB.6-PAAS-DETAIL')
+       Build = {
+            # Event Hubs still documents namespaces that accept TLS 1.0 and 1.1 below a minimum of 1.2, so a
+            # client on an older version would be refused. The client is asked first.
+            $resources = Get-PaasTlsResource 'microsoft.eventhub/namespaces'
+            $n = $resources.Count
+            if (-not $n) { return @{ State = 'No gaps found' } }
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add((Get-OpenStep $n 'Event Hubs' 'namespace'))
+            $impl.Add('Go to Settings > Configuration.')
+            $impl.Add('Set Minimum TLS version to 1.2 and select Save.')
+            Add-RepeatStep $impl $n 1 'namespace'
+            $namespaces = @($resources | Sort-Object Name | ForEach-Object { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $_.Setting })
+            @{ Cr = New-ChangeRequest @{
+                    Number = 13; Key = 'event-hubs-minimum-tls'; Title = 'Set minimum TLS version 1.2 on Event Hubs namespaces'
+                    Description = 'Set the minimum TLS version to 1.2 on {0}.' -f (Get-Listed $n 'Event Hubs namespace' 'Event Hubs namespaces')
+                    Purpose = 'TLS 1.0 and 1.1 have known weaknesses, and an Event Hubs namespace with a minimum below 1.2 still accepts requests over them. Setting 1.2 refuses these older protocols and matches the default for new namespaces.'
+                    ResourceIntro = '{0} with the minimum TLS version {1} today.' -f $(if ($n -eq 1) { 'The namespace below is listed' } else { "The $n namespaces below are listed" }), (Get-Pick $n 'it allows' 'each one allows')
+                    ResourceLines = Format-ResourceList $resources
+                    Availability = 'No downtime expected, since the setting takes effect within about 30 seconds without a restart.'
+                    UserExperience = 'No change for applications that send or receive events over TLS 1.2 or later.'
+                    Dependencies = 'Clients limited to TLS 1.0 or 1.1 can no longer send or receive events once the change is applied.'
+                    Implementation = $impl.ToArray()
+                    Testing = @(
+                        ('In the Azure portal, open {0} and go to Settings > Configuration.' -f (Get-EachStep $n 'namespace'))
+                        'Confirm Minimum TLS version shows 1.2.')
+                    Rollback = @(
+                        'In the Azure portal, open the namespace to revert and go to Settings > Configuration.'
+                        'Set Minimum TLS version back to the version recorded for the namespace in the RESOURCES section, or to 1.0 where it is recorded as not set, since a namespace created without the setting accepts TLS 1.0, and select Save.'
+                        'If the portal no longer offers that version, Event Hubs has retired TLS 1.0 and 1.1 for every namespace, so no client can use them and no rollback is needed.')
+                    References = @(
+                        , @('Enforce a minimum required version of TLS for requests to an Event Hubs namespace', 'https://learn.microsoft.com/azure/event-hubs/transport-layer-security-enforce-minimum-version')
+                        , @('Configure the minimum TLS version for an Event Hubs namespace', 'https://learn.microsoft.com/azure/event-hubs/transport-layer-security-configure-minimum-version'))
+                    Csv = $resources
+                    Email = @{ Subject = 'Planned change: minimum TLS 1.2 for Azure Event Hubs namespaces'; Body = @(
+                            ('I am planning a security hardening change that sets the minimum TLS version to 1.2 on {0}. TLS 1.0 and 1.1 have known weaknesses, and once the change is applied {1} will refuse requests made over them.' -f $(if ($n -eq 1) { 'the Event Hubs namespace below' } else { "the $n Event Hubs namespaces below" }), (Get-Pick $n 'the namespace' 'these namespaces'))
+                            , $namespaces
+                            'Applications that send or receive events over TLS 1.2 or later see no change. An application, device or partner system that can only use TLS 1.0 or 1.1, for example one on an old operating system or runtime, will have its requests refused until it is updated.'
+                            ('Could you let me know whether anything that connects to {0} may still use TLS 1.0 or 1.1? Once I have your confirmation, I will schedule the change.' -f (Get-Pick $n 'the namespace' 'these namespaces'))) }
+                } } } }
+
+    @{ Number = 14; Key = 'cosmos-db-minimum-tls'; Change = 'Minimum TLS 1.2 on Azure Cosmos DB accounts'; Sources = @('NB.6-PAAS-DETAIL')
+       Build = {
+            $resources = Get-PaasTlsResource 'microsoft.documentdb/databaseaccounts'
+            $n = $resources.Count
+            if (-not $n) { return @{ State = 'No gaps found' } }
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add((Get-OpenStep $n 'Azure Cosmos DB' 'account'))
+            $impl.Add('Go to Settings > Networking and select the Connectivity tab.')
+            $impl.Add('Set Minimum Transport Layer Security Protocol to TLS 1.2 and select Save.')
+            Add-RepeatStep $impl $n 1 'account'
+            @{ Cr = New-ChangeRequest @{
+                    Number = 14; Key = 'cosmos-db-minimum-tls'; Title = 'Set minimum TLS version 1.2 on Azure Cosmos DB accounts'
+                    Description = 'Set the minimum TLS version to 1.2 on {0}.' -f (Get-Listed $n 'Azure Cosmos DB account' 'Azure Cosmos DB accounts')
+                    Purpose = 'Azure Cosmos DB retired TLS 1.0 and 1.1 on August 31, 2025, but {0} not record a minimum of 1.2 in {1} configuration. Setting 1.2 brings the configuration in line with the platform and the security baseline.' -f (Get-Pick $n 'this account does' 'these accounts do'), (Get-Pick $n 'its' 'their')
+                    ResourceIntro = '{0} with the minimum TLS version {1} today.' -f $(if ($n -eq 1) { 'The account below is listed' } else { "The $n accounts below are listed" }), (Get-Pick $n 'it records' 'each one records')
+                    ResourceLines = Format-ResourceList $resources
+                    Availability = 'No impact, since Azure Cosmos DB already refuses TLS 1.0 and 1.1 and connections that work today keep working.'
+                    UserExperience = 'No change for users or applications.'
+                    Dependencies = 'None, since every client that connects today already uses TLS 1.2 or later.'
+                    Implementation = $impl.ToArray()
+                    Testing = @(
+                        ('In the Azure portal, open {0}, go to Settings > Networking and select the Connectivity tab.' -f (Get-EachStep $n 'account'))
+                        'Confirm Minimum Transport Layer Security Protocol shows TLS 1.2.')
+                    Rollback = @(
+                        'No rollback is available or needed, because Azure Cosmos DB accepts only TLS 1.2 as the minimum for an account.'
+                        'TLS 1.0 and 1.1 were retired across Azure Cosmos DB on August 31, 2025, so every client that connected before the change can still connect.')
+                    References = @(, @('Self-serve minimum TLS version enforcement in Azure Cosmos DB', 'https://learn.microsoft.com/azure/cosmos-db/self-serve-minimum-tls-enforcement'))
+                    Csv = $resources
+                } } } }
 )
 #endregion
 
@@ -810,7 +962,7 @@ $results = foreach ($item in $catalog) {
     $missing = @($item.Sources | Where-Object { (Get-Status $_) -eq 'MISSING' })
     $failed = @($item.Sources | Where-Object { (Get-Status $_) -notin 'OK', 'PARTIAL', 'EMPTY', 'MISSING' })
     $unreadable = @($item.Sources | Where-Object { Test-Unreadable $_ })
-    if ($missing.Count) { $state = if (@($missing | Where-Object { $_ -in $detailIds }).Count) { $needsRecollection } else { "Not collected ($($missing -join ', '))" } }
+    if ($missing.Count) { $state = if (@($missing | Where-Object { $detailVersions.Contains($_) }).Count) { Get-RecollectionState $missing } else { "Not collected ($($missing -join ', '))" } }
     elseif ($failed.Count) { $state = 'Not collected ({0})' -f (@($failed | ForEach-Object { "$_ $(Get-Status $_)" }) -join ', ') }
     elseif ($unreadable.Count) { $state = Get-UnreadableState $unreadable }
     else {

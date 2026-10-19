@@ -16,7 +16,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
 - **Vulnerability assessment.** `-VulnAssessmentPath` imports the Atmosera.VulnAssessment runs dated inside the
   window (VA.RUNS, VA.CHANGE, VA.TOP, VA.KEV). See the runbook, section 4.
 - **Pack name.** `CyberSOC-Evidence_<client>_<report month>_<yyyyMMdd-HHmmss>/`.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.1.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.2.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -259,6 +259,10 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.2.0 (October 19, 2026): `NB.6-PAAS-DETAIL` lists the Azure Cache for Redis caches, Service Bus
+  and Event Hubs namespaces and Azure Cosmos DB accounts whose minimum TLS version is below 1.2 or not set, one row
+  each with the resource type and the current value (`minimumTlsVersion`, or `minimalTlsVersion` on Cosmos DB), for
+  change requests CR-11 to CR-14. The query is in section 6 of the CyberSOC Monthly Report Runbook.
 - CyberSOC collector 1.1.0 (October 19, 2026): the per-resource lists the hardening change requests read
   (`New-CyberSocChangeRequests.ps1`). `P0.7` names each subscription. `NB.4-DETAIL`, `NB.5-DETAIL`, `NB.6-DETAIL`,
   `DP.1-DETAIL` and `DP.2-DETAIL` list the sites, servers, storage accounts and vaults that NB.4, NB.5, NB.6, DP.1 and

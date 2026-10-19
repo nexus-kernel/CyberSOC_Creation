@@ -42,6 +42,10 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 08 | HTTPS Only on App Service and Function apps | NB.4-DETAIL | Yes |
 | 09 | Encryption at host on the virtual machines that can take it. Each is stopped for the change, and started again only if it was running when the change began, during the change and on rollback | DP.4-ELIGIBILITY, DP.4-DETAIL | Yes, asking for a maintenance window |
 | 10 | Diagnostic logging remediated on the resources not compliant with the initiative: one remediation task for each assignment and policy, each resource listed once | DR.6-INITIATIVE, DR.6-NONCOMPLIANT | No |
+| 11 | Minimum TLS 1.2 on Azure Cache for Redis. Every cache has refused TLS 1.0 and 1.1 since April 1, 2025, and no minimum below 1.2 can be set since March 1, 2024, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
+| 12 | Minimum TLS 1.2 on Service Bus namespaces. Service Bus accepts only TLS 1.2 and later, and a namespace takes only 1.2 or 1.3 as its minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
+| 13 | Minimum TLS 1.2 on Event Hubs namespaces. Event Hubs still documents namespaces that accept TLS 1.0 and 1.1 below a minimum of 1.2, so a client on an older version would be refused. The rollback sets the recorded version back | NB.6-PAAS-DETAIL | Yes, asking whether anything still connects with TLS 1.0 or 1.1 |
+| 14 | Minimum TLS 1.2 on Azure Cosmos DB accounts. Azure Cosmos DB retired TLS 1.0 and 1.1 on August 31, 2025 and accepts only TLS 1.2 as an account minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | No |
 
 Resources a change leaves out are named in the index notes:
 
@@ -75,7 +79,9 @@ The sections follow the template headings, in order, so each one pastes into the
   the DR plan adds the post-failover step to the DR Playbook and asks for the evidence before the change is closed.
 - Mitigation reads "If changes need to be reverted, follow the rollback plan." on every change except purge
   protection, which cannot be disabled once enabled. That change explains the soft delete retention instead, and its
-  rollback plan says no rollback is possible and how to recover a deleted vault.
+  rollback plan says no rollback is possible and how to recover a deleted vault. The minimum TLS changes for Azure
+  SQL, Redis, Service Bus and Cosmos DB keep the standard mitigation, and their rollback plans say no rollback is
+  available or needed, because the service no longer takes a lower minimum and already refuses TLS 1.0 and 1.1.
 - The implementation plan holds only the steps that make the change, in the Azure portal. Encryption at host also
   registers the EncryptionAtHost feature on each subscription from Cloud Shell, since the portal has no other path
   for it. Each register and status command names its subscription, so the plan waits until the feature reads
@@ -107,7 +113,7 @@ rejects, and a file that still breaks a rule stops the run before any file is wr
 
 Each change reports one of these statuses in the index: a change request (and client email), no gaps found, not
 collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
-later. A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
+later (1.2.0 or later for CR-11 to CR-14). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
 read as no gaps. A change request that also reads a result beyond its sources (DR.6-COVERAGE and P0.5 for CR-01,
 DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07, DP.4-DETAIL for CR-09) reads "partial collection scope" when that result
 is PARTIAL, and gets a note in the index when it was not collected or is unreadable.
@@ -115,7 +121,9 @@ is PARTIAL, and gets a note in the index when it was not collected or is unreada
 Every file is built and checked against the copy rules before the folder is touched, so a run that stops leaves the
 earlier files as they were. The per-resource
 results (P0.7, NB.4-DETAIL, NB.5-DETAIL, NB.6-DETAIL, DP.1-DETAIL, DP.2-DETAIL, DP.4-ELIGIBILITY,
-DR.6-COVERAGE, DR.6-NONCOMPLIANT) were added in that version. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
+DR.6-COVERAGE, DR.6-NONCOMPLIANT) were added in collector 1.1.0, and NB.6-PAAS-DETAIL, which lists the Redis caches,
+Service Bus and Event Hubs namespaces and Cosmos DB accounts below TLS 1.2 for CR-11 to CR-14, in 1.2.0. Their queries
+are in section 6 of the CyberSOC Monthly Report Runbook.
 
 ## Validation
 
