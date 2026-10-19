@@ -1,0 +1,72 @@
+{
+  "version": "1.1.0",
+  "source_repository": "nexus-kernel/mxdr_deployment",
+  "source_commit": "5aa4ddb35d4988ecd6d69f0ff2af76298b4a79e4",
+  "route": "pinned-source-fallback; Library transfer failed; ZIP hash not verified",
+  "files": [
+    {
+      "path": ".github/review-gate-requirements.txt",
+      "source_sha256": "0969da99a0bc2a1b71ed50584560f4588a37567ac63af3ddbaf3c4617ca5621a"
+    },
+    {
+      "path": ".github/review-budget.json",
+      "source_sha256": "71b7fcc60a148615e8ec5b32d835196912d116256b855b3d560bef9c398cbbfc"
+    },
+    {
+      "path": ".github/scripts/review_gate.py",
+      "source_sha256": "afc599ac9561412472c7b2682d47a3500a2ab93b6556a9d7918d0cdea07ca5aa"
+    },
+    {
+      "path": ".github/scripts/budget_policy.py",
+      "source_sha256": "82db0e43d08da5d16286d1e9ea4ff30511bddac62fd8a726d298207182e32105"
+    },
+    {
+      "path": ".github/scripts/review_budget.py",
+      "source_sha256": "def653c3a9ad0ba47b16e42f4a3f29cc3c61286b756846a030787ad57f969e9e"
+    },
+    {
+      "path": ".github/workflows/review-clearance.yml",
+      "source_sha256": "f5ec5448b84203c24de7a3548618b1dcbec8e8297dc02310ceeec0b95881ed30"
+    },
+    {
+      "path": ".github/workflows/cancel-ci.yml",
+      "source_sha256": "26ebd6a12b668d966faf55e2efa073e818dc945e8650624f7d9054ef9e84a51d"
+    },
+    {
+      "path": ".github/workflows/review-budget.yml",
+      "source_sha256": "e712c2f1b88e47f498d717e6a9073b2941f919ab8ec74259ee6994918c8d81ae"
+    },
+    {
+      "path": "tests/ci/test_admission.py",
+      "source_sha256": "cb0fad33a1cf5f9584de8b587a0d8120e41bdc1e4f5b85f90c55815a2f28f77f"
+    },
+    {
+      "path": "tests/ci/test_workflows.py",
+      "source_sha256": "dba3c0e6f20abd6c1b4f73d54b9f1a1b985c8e14326781992dd1c52e39522cf3"
+    },
+    {
+      "path": "tests/ci/test_review_budget.py",
+      "source_sha256": "598371e921d2588a22b81e9d3e06a24de994543e4eb014f464fc250b65d9f63c"
+    },
+    {
+      "path": "tests/ci/workflow_support.py",
+      "source_sha256": "7f72a5b9a5ff8bc26e7fd08651de2f326f6ce80356ec09d0c0dc094b56a5039f"
+    },
+    {
+      "path": "tests/ci/test_budget_policy.py",
+      "source_sha256": "b47d81a7be8b0c620ddb72485940720f0e679fb2b72e54a5555f2f5e766b2329"
+    },
+    {
+      "path": "tests/ci/test_manual_retry.py",
+      "source_sha256": "32b03f88c534e13fb034bf2557c8a0fdc223a092bd17c30f99b8ed5b81842548"
+    },
+    {
+      "path": "tests/ci/test_dispatch_clearance.py",
+      "source_sha256": "029c1cfac27fc6e398db8efab29d89dd1a745ff6d38db5da8c48e54afcaa69e7"
+    },
+    {
+      "path": "tests/ci/test_adversarial.py",
+      "source_sha256": "133ab7407d51e104fa5a00c410b054a33cc210ad7f711ca919041ed9003ba37e"
+    }
+  ]
+}

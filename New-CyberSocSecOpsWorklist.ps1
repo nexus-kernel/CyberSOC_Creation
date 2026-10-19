@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Writes the internal SecOps worklist from an existing EBR evidence pack.
+    Writes the internal SecOps worklist from an existing CyberSOC evidence pack.
 .DESCRIPTION
     Offline only. Reads the manifest, parameters and the row-level results of a finished pack and
     writes 04-secops-worklist.md and 04-secops-worklist.csv beside the client report. The list names

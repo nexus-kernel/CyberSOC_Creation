@@ -4728,7 +4728,7 @@ function Write-EbrResultFiles {
 
 function Write-EbrQueryFile {
     param([string]$OutDir, $Item, [string]$Text, [string]$Target)
-    $header = "// EBR evidence query {0}: {1}`n// Engine: {2}. Target: {3}`n// Expanded {4} UTC by Get-CyberSocEvidence.ps1 v{5}`n" -f $Item.Id, $Item.Title, $Item.Engine, $Target, (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss', [cultureinfo]::InvariantCulture), $script:EbrVersion
+    $header = "// CyberSOC evidence query {0}: {1}`n// Engine: {2}. Target: {3}`n// Expanded {4} UTC by Get-CyberSocEvidence.ps1 v{5}`n" -f $Item.Id, $Item.Title, $Item.Engine, $Target, (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss', [cultureinfo]::InvariantCulture), $script:EbrVersion
     # Graph items carry the endpoints they read rather than KQL, so they get their own extension.
     $ext = if ($Item.Engine -eq 'GRAPH') { '.graph.txt' } else { '.kql' }
     Write-EbrTextFile -Path (Join-Path (Join-Path $OutDir 'queries') "$($Item.Id)$ext") -Text ($header + $Text + "`n")
@@ -5669,7 +5669,7 @@ function Invoke-EbrMain {
         #endregion
     }
     catch {
-        Write-Progress -Id 1 -Activity 'EBR evidence' -Completed
+        Write-Progress -Id 1 -Activity 'CyberSOC evidence' -Completed
         Write-EbrFail $_.Exception.Message
         Write-EbrLog -Level CRITICAL -Component Main -Message $_.Exception.Message
         if ($ctx.OutDir -and (Test-Path $ctx.OutDir) -and $ctx.Manifest.Count) {

@@ -180,7 +180,7 @@ class ClearanceTests(unittest.TestCase):
             gate.evaluate(**self.data)
 
     def test_old_eyes_do_not_block_a_completed_clean_review(self):
-        for created_at in ("2026-10-13T07:00:00Z", "2026-10-14T07:00:00Z"):
+        for created_at in ("2026-10-13T07:00:00Z", "2026-10-14T06:59:59Z"):
             with self.subTest(created_at=created_at):
                 self.data = fixture()
                 self.data["reactions"].append({"user": BOT, "content": "eyes", "created_at": created_at})
@@ -449,7 +449,7 @@ class ApiAndDispatchTests(unittest.TestCase):
         prior = {"id": 1, "run_attempt": 1, "head_sha": "b" * 40, "head_branch": "main", "event": "workflow_dispatch",
                  "display_title": f"Reviewed CI / PR #1 / {SHA}"}
         with patch.object(gate, "check", return_value=fixture()["pr"]), \
-             patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 1, "workflow_runs": [prior]}], [{"total_count": 0, "workflow_runs": []}]]), \
+             patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 0, "workflow_runs": []}], [{"total_count": 1, "workflow_runs": [prior]}]]), \
              patch.object(gate.subprocess, "run") as run:
             self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch", "--once"]), 0)
             run.assert_not_called()
@@ -469,7 +469,7 @@ class ApiAndDispatchTests(unittest.TestCase):
             {"head_branch": "main", "event": "push", "display_title": f"Reviewed CI / PR #1 / {SHA}"},
         ):
             with self.subTest(prior=prior), patch.object(gate, "check", return_value=fixture()["pr"]), \
-                 patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 1, "workflow_runs": [dict(prior, id=1)]}], [{"total_count": 0, "workflow_runs": []}]]), \
+                 patch.object(gate, "gh_api", side_effect=[{"default_branch": "main"}, [{"total_count": 0, "workflow_runs": []}], [{"total_count": 1, "workflow_runs": [dict(prior, id=1)]}]]), \
                  patch.object(gate.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run:
                 self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--dispatch", "--once"]), 0)
                 run.assert_called_once()
@@ -534,7 +534,7 @@ class ApiAndDispatchTests(unittest.TestCase):
             self.assertEqual(gate.main(["--repo", "owner/repo", "--pr", "1", "--expected-sha", SHA]), 0)
             check.assert_called_once_with("owner/repo", 1, SHA)
 
-class MigrationSecurityTests(unittest.TestCase):
+class TrustBoundaryTests(unittest.TestCase):
     def test_bot_id_type_and_login_are_all_required(self):
         for field, value in [('id', 123), ('type', 'User'), ('login', 'other')]:
             for location in ['summary', 'reaction']:
@@ -580,7 +580,7 @@ class MigrationSecurityTests(unittest.TestCase):
                 gate.review_threads('owner/repo', 1, SHA, 'b'*40)
 
     def test_late_clearance_change_prevents_dispatch(self):
-        with patch.object(gate, 'check', side_effect=[fixture()['pr'], gate.Blocked('Changed')]) as check, patch.object(gate, 'gh_api', side_effect=[{'default_branch': 'main'}, [{'total_count': 0, 'workflow_runs': []}], [{"total_count": 0, "workflow_runs": []}]]), patch.object(gate.subprocess, 'run') as run:
+        with patch.object(gate, 'check', side_effect=[fixture()['pr'], gate.Blocked('Changed')]) as check, patch.object(gate, 'gh_api', side_effect=[{'default_branch': 'main'}, [{'total_count': 0, 'workflow_runs': []}], [{'total_count': 0, 'workflow_runs': []}]]), patch.object(gate.subprocess, 'run') as run:
             self.assertEqual(gate.main(['--repo','owner/repo','--pr','1','--dispatch','--once']), 1)
             self.assertEqual(check.call_args.args, ('owner/repo', 1, SHA))
             run.assert_not_called()

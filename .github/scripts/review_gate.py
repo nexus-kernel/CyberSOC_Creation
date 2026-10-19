@@ -30,11 +30,6 @@ def is_bot_reaction(user):
 
 SUMMARY_MARKER = "<!-- codex-pull-request-review-summary -->"
 
-# Activation is a reviewed trusted-default code change, never an input/label or
-# environment toggle. No new permission is granted by this staged integration.
-CAPPED_DEFERRAL_ENABLED = False
-
-
 class Blocked(RuntimeError):
     """The PR is not cleared for CI."""
 
@@ -65,10 +60,16 @@ def gh_api(endpoint, *, fields=None, method="GET", paginate=False):
 
 
 def list_api(endpoint):
-    return [item for page in gh_api(endpoint, paginate=True) for item in page]
+    pages = gh_api(endpoint, paginate=True)
+    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+        raise Blocked("Missing or malformed paginated review evidence.")
+    return [item for page in pages for item in page]
 
 
 def timestamp(value):
+    if not isinstance(value, str) or not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)", value):
+        raise Blocked("Missing or invalid timezone-aware review timestamp.")
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
@@ -145,7 +146,9 @@ def evaluate(pr, summary, reactions, reviews, threads, expected_sha=None):
         raise Blocked("Unresolved review threads remain (including outdated threads).")
     decisions = {}
     for review in sorted(reviews, key=lambda item: item["id"]):
-        if review["state"] in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED"):
+        # Dismissal changes that review record's state; it is not a new decision
+        # clearing every earlier decision by the same reviewer.
+        if review["state"] in ("APPROVED", "CHANGES_REQUESTED"):
             decisions[review["user"]["id"]] = review["state"]
     if "CHANGES_REQUESTED" in decisions.values():
         raise Blocked("An outstanding changes-requested review remains.")
@@ -154,7 +157,7 @@ def evaluate(pr, summary, reactions, reviews, threads, expected_sha=None):
     completed = completed_review_times(summary, sha, pr["base"]["repo"]["full_name"])
     bot_reactions = [r for r in reactions if is_bot_reaction(r.get("user", {}))]
     if any(r["content"] == "eyes" and any(
-            kind not in completed or timestamp(r["created_at"]) > completed[kind]
+            kind not in completed or timestamp(r["created_at"]).replace(microsecond=0) >= completed[kind]
             for kind in r.get("review_types", ["Code Review"])) for r in bot_reactions):
         raise AwaitingSignoff("Codex still indicates a review is running.")
     clean = [r for r in bot_reactions if r["content"] == "+1"
@@ -164,7 +167,8 @@ def evaluate(pr, summary, reactions, reviews, threads, expected_sha=None):
         raise AwaitingSignoff("No fresh Codex thumbs-up sign-off after the latest completed Code Review.")
     signed_off = max(timestamp(r["created_at"]) for r in clean)
     if any(is_bot(r["user"]) and r["state"] != "DISMISSED"
-           and r.get("submitted_at") and timestamp(r["submitted_at"]) > signed_off for r in reviews):
+           and timestamp(r.get("submitted_at")).replace(microsecond=0) >= signed_off.replace(microsecond=0)
+           for r in reviews):
         raise Blocked("A newer Codex review supersedes the clean sign-off.")
     return sha
 
@@ -199,6 +203,9 @@ def review_threads(repo, number, head, base):
         if pr["reviewDecision"] not in (None, "APPROVED"):
             raise Blocked("Repository review requirements are not satisfied.")
         page = pr["reviewThreads"]
+        if (not isinstance(page["nodes"], list)
+                or type(page["pageInfo"]["hasNextPage"]) is not bool):
+            raise Blocked("Incomplete review-thread pagination evidence.")
         threads.extend(page["nodes"])
         if not page["pageInfo"]["hasNextPage"]:
             return threads
@@ -246,23 +253,18 @@ def check_clean(repo, number, expected_sha=None):
 
 
 def check(repo, number, expected_sha=None):
-    try:
-        return check_clean(repo, number, expected_sha)
-    except Blocked as clean_error:
-        if not CAPPED_DEFERRAL_ENABLED:
-            raise
-        # The alternate basis rechecks every prerequisite from authenticated live
-        # evidence. It is used by launch, dispatch recheck, --admit-run, and the
-        # downstream clearance job because all four call this function.
-        import review_budget_runtime
-        try:
-            return review_budget_runtime.check(repo, number, expected_sha)
-        except review_budget_runtime.Blocked as exc:
-            # A denied alternate basis must not consume the clean path's
-            # retryable sign-off delay. main() owns the bounded wait policy.
-            if isinstance(clean_error, AwaitingSignoff):
-                raise clean_error from exc
-            raise Blocked(str(exc)) from exc
+    config_path = Path(__file__).resolve().parents[1] / 'review-budget.json'
+    if repo == 'nexus-kernel/CyberSOC_Creation' and config_path.exists():
+        settings = json.loads(config_path.read_text())
+        if settings.get('enabled') is True:
+            # Pre-activation PRs retain strict clean review; never invent a budget
+            # history or silently enroll an existing assessment PR.
+            current = gh_api(f'repos/{repo}/pulls/{number}')
+            if timestamp(current['created_at']) <= timestamp(settings['activation_after']):
+                return check_clean(repo, number, expected_sha)
+            import review_budget
+            return review_budget.check(number, expected_sha)
+    return check_clean(repo, number, expected_sha)
 
 
 def get_default_branch(repo):
@@ -329,7 +331,7 @@ def retry_is_allowed(runs):
 def matching_runs(repo, branch, number, sha):
     title = f"Reviewed CI / PR #{number} / {sha}"
     runs, seen = [], set()
-    # Retain old reviewed-ci history as well as the controller-owned runs.
+    # Preserve the inherited retired identity as well as controller execution history.
     for workflow in ("reviewed-ci.yml", "review-clearance.yml"):
         pages = gh_api(f"repos/{repo}/actions/workflows/{workflow}/runs?event=workflow_dispatch&branch={quote(branch, safe='')}&per_page=100", paginate=True)
         for run in complete_run_history(pages):
@@ -348,8 +350,48 @@ def matching_runs(repo, branch, number, sha):
     return runs
 
 
+def has_no_jobs(repo, run):
+    """Require explicit, stable first-attempt evidence before ignoring a run."""
+    endpoint = f"repos/{repo}/actions/runs/{run['id']}"
+    keys = ('id', 'run_attempt', 'status', 'conclusion', 'head_branch', 'event', 'display_title')
+    def verify_snapshot():
+        fresh = gh_api(endpoint)
+        if (not isinstance(fresh, dict) or type(fresh.get('id')) is not int
+                or type(fresh.get('run_attempt')) is not int
+                or any(key not in fresh or key not in run or fresh[key] != run[key] for key in keys)):
+            raise Blocked("Duplicate run changed while checking job provenance.")
+    verify_snapshot()
+    pages = gh_api(f"{endpoint}/attempts/1/jobs?per_page=100", paginate=True)
+    # Accept only an explicit, complete empty collection. Any job, even a skipped
+    # or apparently unstarted job, may conceal earlier activity; retain that run.
+    # Missing pages, errors, nonzero totals and inconsistent pagination never
+    # establish non-execution. This endpoint needs only existing Actions read.
+    if not isinstance(pages, list) or not pages:
+        raise Blocked("Missing duplicate-run job provenance.")
+    total, seen = None, set()
+    for page in pages:
+        if (not isinstance(page, dict) or type(page.get('total_count')) is not int
+                or page['total_count'] < 0 or not isinstance(page.get('jobs'), list)):
+            raise Blocked("Malformed duplicate-run job provenance.")
+        if total is not None and page['total_count'] != total:
+            raise Blocked("Duplicate-run job totals changed across pages.")
+        total = page['total_count']
+        if not page['jobs'] and (total != 0 or len(pages) != 1):
+            raise Blocked("Incomplete duplicate-run job pages.")
+        for job in page['jobs']:
+            if (not isinstance(job, dict) or type(job.get('id')) is not int or job['id'] < 1
+                    or job['id'] in seen or job.get('run_id') != run['id']
+                    or type(job.get('run_attempt')) is not int or job['run_attempt'] != 1):
+                raise Blocked("Uncertain duplicate-run job identity.")
+            seen.add(job['id'])
+    if len(seen) != total:
+        raise Blocked("Incomplete duplicate-run job provenance.")
+    verify_snapshot()
+    return total == 0
+
+
 def exclude_admission_run(runs, repo, branch):
-    """Exclude only the actual running controller invocation, never supplied input."""
+    """Elect the running invocation over duplicates proven never to have jobs."""
     if (os.environ.get("GITHUB_ACTIONS") != "true"
             or os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
             or os.environ.get("GITHUB_WORKFLOW_REF") !=
@@ -360,9 +402,24 @@ def exclude_admission_run(runs, repo, branch):
         raise Blocked("Cannot identify the current admission run.")
     current = [run for run in runs if run["id"] == int(run_id)]
     if (len(current) != 1 or current[0]["history_workflow"] != "review-clearance.yml"
-            or current[0].get("status") not in ("in_progress", "queued", "pending", "waiting", "requested")):
+            or current[0].get("status") != "in_progress"):
         raise Blocked("Current admission run is absent or inconsistent in complete history.")
-    return [run for run in runs if run["id"] != int(run_id)]
+    # Workflow concurrency serializes execution with cancel-in-progress false;
+    # the running slot wins independently of ID/scheduling order. A third event
+    # can replace a pending duplicate, leaving a cancelled run with zero jobs.
+    # Retain success, in-progress, waiting and unknown states unconditionally.
+    # Complete history and attempt == 1 were checked before this function.
+    retained = []
+    for run in runs:
+        if run['id'] == int(run_id):
+            continue
+        candidate = ('conclusion' in run and (
+            (run.get('status') in ('queued', 'pending', 'requested') and run['conclusion'] is None)
+            or (run.get('status') == 'completed' and run['conclusion'] == 'cancelled')))
+        if candidate and has_no_jobs(repo, run):
+            continue
+        retained.append(run)
+    return retained
 
 
 def main(argv=None):
@@ -439,6 +496,8 @@ def main(argv=None):
         if os.environ.get("GITHUB_OUTPUT"):
             with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
                 output.write(f"sha={sha}\n")
+                if pr.get('clearance_base') and pr.get('clearance_evidence'):
+                    output.write(f"base={pr['clearance_base']}\nevidence={pr['clearance_evidence']}\n")
         return 0
     except (Blocked, KeyError, TypeError, ValueError, OSError) as exc:
         print(f"CI blocked: {exc}", file=sys.stderr)

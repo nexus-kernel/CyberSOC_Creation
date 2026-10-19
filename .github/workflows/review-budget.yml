@@ -1,0 +1,146 @@
+name: CyberSOC review budget
+run-name: >-
+  ${{ inputs.pr_number != '' && format('MXDR budget / PR #{0}', inputs.pr_number) || 'MXDR budget wake-up' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'CyberSOC PR number; no supplied counts, findings or clearance'
+        required: true
+        type: string
+  pull_request_target:
+    types: [opened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created, edited]
+  workflow_run:
+    workflows: [Check Codex review clearance]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: ${{ inputs.pr_number != '' && format('mxdr-budget-{0}', inputs.pr_number) || format('mxdr-budget-wakeup-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  wake:
+    if: github.event_name != 'workflow_dispatch' && github.repository == 'nexus-kernel/CyberSOC_Creation'
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-latest
+    steps:
+      # Inline trusted workflow only. No checkout, PR script or artifact execution.
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea
+        with:
+          script: |
+            const configFile = await github.rest.repos.getContent({...context.repo, path: '.github/review-budget.json', ref: context.payload.repository.default_branch});
+            const config = JSON.parse(Buffer.from(configFile.data.content, 'base64').toString('utf8'));
+            if (config.enabled !== true || config.repository !== 'nexus-kernel/CyberSOC_Creation') return;
+            // Match review_gate.timestamp: explicit timezone, valid calendar/time, UTC years 1..9999.
+            function validActivationTimestamp(value) {
+              if (typeof value !== 'string') return false;
+              const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(value);
+              if (!m || m[0] !== value) return false;
+              const [year, month, day, hour, minute, second] = m.slice(1).map(Number);
+              const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+              const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+              if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1] ||
+                  hour > 23 || minute > 59 || second > 59) return false;
+              const parsed = new Date(value);
+              return Number.isFinite(parsed.getTime()) && parsed.getUTCFullYear() >= 1 && parsed.getUTCFullYear() <= 9999;
+            }
+            if (config.native_merge_policy_verified !== true || config.merge_queue_required !== false ||
+                config.independent_code_triggers_disabled !== true || config.ordinary_completed_rounds !== 3 ||
+                typeof config.security_review_required !== 'boolean' || !validActivationTimestamp(config.activation_after)) return;
+            let number;
+            if (context.eventName === 'pull_request_target') {
+              if (context.payload.pull_request.draft) return;
+              number = context.payload.pull_request.number;
+            } else if (context.eventName === 'issue_comment') {
+              const c = context.payload.comment;
+              if (!context.payload.issue.pull_request || c.user.id !== 199175422 || c.user.type !== 'Bot' || c.user.login !== 'chatgpt-codex-connector[bot]' || !c.body.startsWith('<!-- codex-pull-request-review-summary -->')) return;
+              number = context.payload.issue.number;
+            } else if (context.eventName === 'workflow_run') {
+              const r = context.payload.workflow_run;
+              if (r.conclusion !== 'success' || r.event !== 'workflow_dispatch' || r.path !== '.github/workflows/review-clearance.yml' || r.head_branch !== context.payload.repository.default_branch) return;
+              const m = /^Reviewed CI \/ PR #(\d+) \/ [0-9a-f]{40}$/.exec(r.display_title);
+              if (!m) return;
+              number = Number(m[1]);
+            }
+            if (!Number.isSafeInteger(number) || number < 1) throw new Error('Invalid PR');
+            await github.rest.actions.createWorkflowDispatch({...context.repo, workflow_id: 'review-budget.yml', ref: context.payload.repository.default_branch, inputs: {pr_number: String(number)}});
+
+  controller:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'nexus-kernel/CyberSOC_Creation' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+      actions: write
+      statuses: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      merge: ${{ steps.advance.outputs.merge }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Prepare durable operation
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: python3 .github/scripts/review_budget.py prepare --pr "$PR_NUMBER"
+      - name: Persist before external writes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mxdr-budget-${{ inputs.pr_number }}-${{ github.run_id }}-prepared
+          path: ${{ runner.temp }}/budget-ledger/ledger.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Execute prepared action
+        id: act
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: python3 .github/scripts/review_budget.py act --pr "$PR_NUMBER"
+      - name: Commit completed operation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mxdr-budget-${{ inputs.pr_number }}-${{ github.run_id }}-final
+          path: ${{ runner.temp }}/budget-ledger/ledger.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Request independently verified CI
+        id: advance
+        if: steps.act.outputs.continue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: python3 .github/scripts/review_budget.py advance --pr "$PR_NUMBER"
+
+  merge:
+    needs: controller
+    if: needs.controller.result == 'success' && needs.controller.outputs.merge == 'true'
+    permissions:
+      contents: write
+      pull-requests: read
+      issues: read
+      actions: read
+      statuses: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify current-head CI and native requirements then merge normally
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: python3 .github/scripts/review_budget.py merge --pr "$PR_NUMBER"

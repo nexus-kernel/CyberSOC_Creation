@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Reproducible Linux x64 validation setup. No credentials or system-wide writes.
 set -euo pipefail
-cd "${EBR_REPO_DIR:-/workspace/EBR_Creation}"
+# Route only to this checkout (or an explicitly selected CyberSOC checkout).
+cybersoc_root="${CYBERSOC_REPO_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
+cd -- "$cybersoc_root"
+case "$(git remote get-url origin)" in
+  https://github.com/nexus-kernel/CyberSOC_Creation|https://github.com/nexus-kernel/CyberSOC_Creation.git) ;;
+  git@github.com:nexus-kernel/CyberSOC_Creation|git@github.com:nexus-kernel/CyberSOC_Creation.git) ;;
+  *) echo 'Refusing setup outside nexus-kernel/CyberSOC_Creation.' >&2; exit 1 ;;
+esac
 test "$(uname -s)/$(uname -m)" = Linux/x86_64 || { echo 'This bootstrap requires Linux x64.' >&2; exit 1; }
 for executable in node npm python3 gh git curl tar; do
   command -v "$executable" >/dev/null || { echo "Missing prerequisite: $executable" >&2; exit 1; }
@@ -25,8 +32,8 @@ if ! command -v dotnet >/dev/null; then
   test "$(git -C "$installer_source" rev-parse HEAD)" = "$installer_commit"
   bash "$installer_source/src/dotnet-install.sh" --version 8.0.408 --install-dir "$local_tools/dotnet" --no-path
 fi
-# This file is self-contained so its contents can be pasted into the saved
-# environment setup before these repository changes have been published.
+# Invoke this checked-out file from saved setup; do not paste its contents into
+# an inline shell or wrapper, where the script-relative root would be different.
 node -e 'if (Number(process.versions.node.split(".")[0]) < 18) process.exit(1)'
 python3 -c 'import sys; assert sys.version_info >= (3, 10)'
 export npm_config_cache="$PWD/.dev-cache/npm"
