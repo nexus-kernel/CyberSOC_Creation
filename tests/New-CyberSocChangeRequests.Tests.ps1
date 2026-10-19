@@ -301,19 +301,22 @@ Describe 'Change request generation' {
         $impl | Should -Contain '6. With the instance still selected, select Upgrade if Latest model reads No, and wait for the upgrade to finish.'
         $impl | Should -Contain '7. Select Start only if the instance read Running before the stop, so an instance that was not running stays stopped.'
         $impl | Should -Contain '8. Repeat steps 5 to 7 for each remaining instance, then steps 4 to 7 for each remaining Uniform scale set listed.'
-        $impl | Should -Contain '9. In the Azure portal, go to Virtual machine scale sets, open the Flexible scale set listed in the RESOURCES section, go to Settings > Instances and open the first instance named for it.'
-        $impl | Should -Contain '11. Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.'
-        $impl | Should -Contain '12. Go back to Overview and select Start only if the status read Running before the stop, so an instance that was not running stays stopped.'
-        $impl[-1] | Should -Be '13. Repeat steps 10 to 12 for each remaining instance named.'
+        $impl | Should -Contain '9. In the Azure portal, go to Virtual machine scale sets, open the Flexible scale set listed in the RESOURCES section, go to Settings > Instances and open the first instance listed there, since the scale set may have gained instances since collection.'
+        $impl | Should -Contain '10. Go to Settings > Disks > Additional settings and go on to the next instance if Encryption at host already shows Yes, or if the instance is not named in the RESOURCES section and its size differs from the size of the scale set, which leaves it for a follow-up change.' -Because 'an instance created after collection is changed too, but only on the size the model was checked for'
+        $impl | Should -Contain '11. On Overview, note whether the status reads Running, then select Stop and wait for the status to read Stopped (deallocated).'
+        $impl | Should -Contain '12. Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.'
+        $impl | Should -Contain '13. Go back to Overview and select Start only if the status read Running before the stop, so an instance that was not running stays stopped.'
+        $impl[-1] | Should -Be '14. Repeat steps 10 to 13 for each remaining instance under Settings > Instances.' -Because 'the instances are those the scale set holds when the change is made, not only those collected'
         $testing = @(Get-Section $text 'B) TESTING PLAN')
         $testing[0] | Should -Be '1. In the Azure portal, open each scale set listed in the RESOURCES section, select JSON View on Overview and confirm virtualMachineProfile.securityProfile.encryptionAtHost reads true.'
         $testing[1] | Should -Match '^2\. For each Uniform scale set, go to Settings > Instances and confirm every instance shows Latest model Yes'
-        $testing[2] | Should -Match '^3\. For the Flexible scale set, open each instance named in the RESOURCES section, go to Settings > Disks > Additional settings and confirm Encryption at host shows Yes'
+        $testing[2] | Should -Match '^3\. For the Flexible scale set, open each instance changed under Settings > Instances, go to Settings > Disks > Additional settings and confirm Encryption at host shows Yes'
         $rollback = @(Get-Section $text 'C) ROLLBACK PLAN')
         $rollback | Should -Contain "    az vmss update --subscription '$s1' --resource-group 'rg-web' --name 'vmss-web' --set virtualMachineProfile.securityProfile.encryptionAtHost=false"
         ($rollback -join "`n") | Should -Match 'For a Uniform scale set, go to Settings > Instances and for each instance note whether its status reads Running, select Stop, wait for Stopped \(deallocated\), select Upgrade, and select Start only if it read Running before the stop\.'
+        ($rollback -join "`n") | Should -Match 'For a Flexible scale set, open each instance under Settings > Instances whose Encryption at host shows Yes under Settings > Disks > Additional settings, including any created after the model was changed,' -Because 'an instance created from the changed model has the setting too'
         ($rollback -join "`n") | Should -Match 'set Encryption at host to No under Settings > Disks > Additional settings, select Save, and select Start only if it read Running before the stop\.'
-        @(Get-Section $text 'A) AVAILABILITY/PERFORMANCE')[0] | Should -Be 'Each instance is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window, one instance at a time.' -Because 'no scale set here has an Automatic upgrade policy'
+        @(Get-Section $text 'A) AVAILABILITY/PERFORMANCE')[0] | Should -Be 'Each instance is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window, and a scale set with a Rolling upgrade policy may take several instances down in each batch to apply the model.' -Because 'vmss-web uses a Rolling policy, which applies the model in batches'
         (Get-Section $text 'D) DR Impact') -join '|' | Should -Be 'Not a DR Client'
         $text | Should -Match 'virtual-machine-scale-sets-perform-manual-upgrades'
         @($csv | Where-Object CR -eq 'CR-15' | ForEach-Object Resource | Sort-Object) | Should -Be @('vmss-batch', 'vmss-flex', 'vmss-web')
@@ -549,6 +552,7 @@ Describe 'Change request variants' {
         $text = Get-Content (Join-Path $out 'CR-15-scale-set-encryption-at-host.txt') -Raw
         $text | Should -Match 'vmss-flex, resource group rg-app, Flexible, no upgrade policy, 2 instances, size Standard_D4s_v5, no instance without encryption at host'
         $text | Should -Match 'open the Flexible scale set listed in the RESOURCES section'
+        @(Get-Section $text 'A) AVAILABILITY/PERFORMANCE')[0] | Should -Match ', one instance at a time\.$' -Because 'no scale set here applies the model on its own'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         $index | Should -Match '1 Flexible scale set without a scale set model left out of CR-15: vmss-bare\. With no model there is nothing to set on the scale set, so CR-09 covers its machines as standalone virtual machines\.'
         Set-PackResult $pack 'DP.4-ELIGIBILITY' @(@{ Name = 'vm-x'; ResourceId = 'x'; resourceGroup = 'rg-app'; subscriptionId = $s1; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; Eligible = $true; Reason = '' })

@@ -1082,22 +1082,25 @@ $catalog = @(
             }
             if ($flex.Count) {
                 $from = $impl.Count + 1
-                $impl.Add(('In the Azure portal, go to Virtual machine scale sets, open the {0}Flexible scale set listed in the RESOURCES section, go to Settings > Instances and open the first instance named for it.' -f $(if ($flex.Count -gt 1) { 'first ' } else { '' })))
+                # The steps work through the instances the scale set holds when the change is made, since it may
+                # have gained some since collection. A newer one created from the model has its size.
+                $impl.Add(('In the Azure portal, go to Virtual machine scale sets, open the {0}Flexible scale set listed in the RESOURCES section, go to Settings > Instances and open the first instance listed there, since the scale set may have gained instances since collection.' -f $(if ($flex.Count -gt 1) { 'first ' } else { '' })))
+                $impl.Add('Go to Settings > Disks > Additional settings and go on to the next instance if Encryption at host already shows Yes, or if the instance is not named in the RESOURCES section and its size differs from the size of the scale set, which leaves it for a follow-up change.')
                 $impl.Add('On Overview, note whether the status reads Running, then select Stop and wait for the status to read Stopped (deallocated).')
                 $impl.Add('Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.')
                 $impl.Add('Go back to Overview and select Start only if the status read Running before the stop, so an instance that was not running stays stopped.')
-                $impl.Add(('Repeat steps {0} to {1} for each remaining instance named{2}.' -f ($from + 1), $impl.Count, $(if ($flex.Count -gt 1) { ", then steps $from to $($impl.Count) for each remaining Flexible scale set listed" } else { '' })))
+                $impl.Add(('Repeat steps {0} to {1} for each remaining instance under Settings > Instances{2}.' -f ($from + 1), $impl.Count, $(if ($flex.Count -gt 1) { ", then steps $from to $($impl.Count) for each remaining Flexible scale set listed" } else { '' })))
             }
             $testing = [System.Collections.Generic.List[object]]::new()
             $testing.Add(('In the Azure portal, open {0}, select JSON View on Overview and confirm virtualMachineProfile.securityProfile.encryptionAtHost reads true.' -f (Get-EachStep $n 'scale set')))
             if ($uniform.Count) { $testing.Add(('For {0}, go to Settings > Instances and confirm every instance shows Latest model Yes, and every instance that was running before the change shows Running.' -f (Get-Pick $uniform.Count 'the Uniform scale set' 'each Uniform scale set'))) }
-            if ($flex.Count) { $testing.Add(('For {0}, open each instance named in the RESOURCES section, go to Settings > Disks > Additional settings and confirm Encryption at host shows Yes, and on Overview confirm each instance that was running before the change shows Running.' -f (Get-Pick $flex.Count 'the Flexible scale set' 'each Flexible scale set'))) }
+            if ($flex.Count) { $testing.Add(('For {0}, open each instance changed under Settings > Instances, go to Settings > Disks > Additional settings and confirm Encryption at host shows Yes, and on Overview confirm each instance that was running before the change shows Running.' -f (Get-Pick $flex.Count 'the Flexible scale set' 'each Flexible scale set'))) }
             $rollback = [System.Collections.Generic.List[object]]::new()
             $off = @('In the Azure portal, open Cloud Shell in Bash and turn encryption at host off on the model of the scale set to revert, with the command for it below:')
             foreach ($r in @($resources | Sort-Object SubscriptionId, ResourceGroup, Name)) { $off += 'az vmss update --subscription {0} --resource-group {1} --name {2} --set virtualMachineProfile.securityProfile.encryptionAtHost=false' -f (Format-ShellArgument $r.SubscriptionId), (Format-ShellArgument $r.ResourceGroup), (Format-ShellArgument $r.Name) }
             $rollback.Add($off)
             if ($uniform.Count) { $rollback.Add('For a Uniform scale set, go to Settings > Instances and for each instance note whether its status reads Running, select Stop, wait for Stopped (deallocated), select Upgrade, and select Start only if it read Running before the stop.') }
-            if ($flex.Count) { $rollback.Add('For a Flexible scale set, open each instance named in the RESOURCES section, note on Overview whether its status reads Running, select Stop, wait for Stopped (deallocated), set Encryption at host to No under Settings > Disks > Additional settings, select Save, and select Start only if it read Running before the stop.') }
+            if ($flex.Count) { $rollback.Add('For a Flexible scale set, open each instance under Settings > Instances whose Encryption at host shows Yes under Settings > Disks > Additional settings, including any created after the model was changed, note on Overview whether its status reads Running, select Stop, wait for Stopped (deallocated), set Encryption at host to No under Settings > Disks > Additional settings, select Save, and select Start only if it read Running before the stop.') }
             $references = @(
                 , @('Use the Azure portal to enable end-to-end encryption using encryption at host', 'https://learn.microsoft.com/azure/virtual-machines/disks-enable-host-based-encryption-portal')
                 , @('Use the Azure CLI to enable end-to-end encryption using encryption at host, Virtual Machine Scale Sets', 'https://learn.microsoft.com/azure/virtual-machines/linux/disks-enable-host-based-encryption-cli#update-a-virtual-machine-scale-set-to-enable-encryption-at-host')
@@ -1111,13 +1114,21 @@ $catalog = @(
                 $body.Add(('{0} set to update {1} instances automatically, so once the setting is applied it may also restart them on its own, all at the same time under the Automatic policy and in batches under the Rolling policy. I will plan the window as if every instance could be unavailable at once: {2}.' -f $(if ($automatic.Count -eq 1) { 'One scale set is' } else { "$($automatic.Count) scale sets are" }), (Get-Pick $automatic.Count 'its' 'their'), (@($automatic | Sort-Object Name | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Policy }) -join ', ')))
             }
             $body.Add((Get-Pick $n 'Could you suggest a maintenance window that works for this scale set? I will schedule the change once I have your confirmation.' 'Could you suggest a maintenance window that works for these scale sets, and let me know if any of them need to be handled separately or in a particular order? I will schedule the change once I have your confirmation.'))
+            # Instances are restarted one at a time, unless the upgrade policy applies the model on its own.
+            $auto = @($automatic | Where-Object Policy -eq 'Automatic').Count
+            $rolling = @($automatic | Where-Object Policy -eq 'Rolling').Count
+            $availability = 'Each instance is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window{0}.' -f $(
+                if ($auto -and $rolling) { ', and a scale set with an Automatic upgrade policy may take all its instances down at once, and one with a Rolling policy several in each batch, to apply the model' }
+                elseif ($auto) { ', and a scale set with an Automatic upgrade policy may take all its instances down at once to apply the model' }
+                elseif ($rolling) { ', and a scale set with a Rolling upgrade policy may take several instances down in each batch to apply the model' }
+                else { ', one instance at a time' })
             $spec = @{
                 Number = 15; Key = 'scale-set-encryption-at-host'; Title = 'Enable encryption at host on virtual machine scale sets'
                 Description = 'Enable encryption at host on the model and the existing instances of {0}, which needs a stop and start of each instance.' -f (Get-Listed $n 'virtual machine scale set' 'virtual machine scale sets')
                 Purpose = 'Encryption at host encrypts the temporary disk and the OS and data disk caches on the Azure host, so the data of each instance is encrypted from end to end. Setting it on the model covers the instances a scale set creates later, and the stop and start brings in the instances it already has.'
                 ResourceIntro = $(if ($n -eq 1) { 'The scale set below is listed with its orchestration mode, upgrade policy, instance count and size at collection. Each instance is returned to the power state it has when the change is made.' } else { "The $n scale sets below are listed with the orchestration mode, upgrade policy, instance count and size of each at collection. Each instance is returned to the power state it has when the change is made." })
                 ResourceLines = Format-ResourceList $resources
-                Availability = $(if (@($automatic | Where-Object Policy -eq 'Automatic').Count) { 'Each instance is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window, and a scale set with an Automatic upgrade policy may take all its instances down at once to apply the model.' } else { 'Each instance is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window, one instance at a time.' })
+                Availability = $availability
                 UserExperience = 'Users of a scale set see reduced capacity while one of its instances restarts, or a short outage where it runs a single instance, and no change afterwards.'
                 Dependencies = 'Needs the EncryptionAtHost feature on each subscription, a VM size that supports it and a scale set that never used Azure Disk Encryption.'
                 Implementation = $impl.ToArray(); Testing = $testing.ToArray(); Rollback = $rollback.ToArray()
