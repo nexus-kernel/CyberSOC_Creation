@@ -83,6 +83,30 @@ BeforeAll {
             (& $ss 'vmss-flexade' 'rg-app' $s1 @{ OrchestrationMode = 'Flexible'; UpgradePolicy = ''; Instances = 1 })
             (& $ss 'vmss-legacy' 'rg-app' $s1 @{ AdeUsed = $true; Eligible = $false; Reason = 'Azure Disk Encryption used' })
             (& $ss 'aks-nodepool1-12345678-vmss' 'MC_rg-aks_aks-prod_eastus' $s1 @{ Size = 'Standard_D2s_v5'; Instances = 3; SizeSupported = ''; SizeRead = ''; Aks = $true; AksCluster = 'aks-prod'; AksClusterResourceGroup = 'rg-aks'; AksNodePool = 'nodepool1'; Eligible = $false; Reason = 'AKS node pool, set only when a node pool is created' }))
+        # NB.2-DETAIL: a workload subnet rule, a network interface rule that also opens 443, a firewall untrust
+        # interface, a group attached to nothing, and a port range and * rule for review.
+        $nsg = { param($name, $rg, $sub) "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Network/networkSecurityGroups/$name" }
+        $subnet = { param($vnet, $name, $rg, $sub) @{ id = "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Network/virtualNetworks/$vnet/subnets/$name" } }
+        $nic = { param($name, $rg, $sub) "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Network/networkInterfaces/$name" }
+        $rule = { param($name, $group, $rg, $sub, [hashtable]$extra = @{})
+            $o = @{ subscriptionId = $sub; resourceGroup = $rg; NSG = $group; NsgId = (& $nsg $group $rg $sub); RuleName = $name; RuleId = (& $nsg $group $rg $sub) + "/securityRules/$name"
+                Priority = 300; Direction = 'Inbound'; Access = 'Allow'; Protocol = 'Tcp'; SourcePrefixes = @('Internet'); SourcePorts = @('*'); DestinationPrefixes = @('*'); DestinationAsgs = @()
+                DestinationPorts = @('3389'); Description = ''; Association = 'Subnet'; RangeNeedsReview = $false; Subnets = @(); Nics = @(); NicVms = @(); ApplianceNics = @() }
+            foreach ($k in $extra.Keys) { $o[$k] = $extra[$k] }
+            $o }
+        Set-PackResult $Path 'NB.2-DETAIL' @(
+            (& $rule 'Allow-RDP' 'nsg-web' 'rg-web' $s1 @{ Subnets = @((& $subnet 'vnet-app' 'snet-web' 'rg-net' $s1)) })
+            (& $rule 'Allow-SSH-HTTPS' 'nsg-jump' 'rg-ops' $s2 @{ Priority = 310; SourcePrefixes = @('', '*'); DestinationPorts = @('', '22', '443'); Description = 'Jump box access; vendor'; Association = 'NIC'
+                    Nics = @(@{ id = (& $nic 'nic-jump01' 'rg-ops' $s2) }); NicVms = @(@{ NicId = (& $nic 'nic-jump01' 'rg-ops' $s2).ToLowerInvariant(); VmId = "/subscriptions/$s2/resourcegroups/rg-ops/providers/microsoft.compute/virtualmachines/vm-jump01"; Appliance = $false }) })
+            (& $rule 'Allow-Mgmt' 'nsg-fw-untrust' 'rg-fw' $s1 @{ Priority = 200; DestinationPorts = @('22', '443'); Association = 'NIC'
+                    Nics = @(@{ id = (& $nic 'nic-fw-untrust' 'rg-fw' $s1) }); NicVms = @(@{ NicId = (& $nic 'nic-fw-untrust' 'rg-fw' $s1).ToLowerInvariant(); VmId = "/subscriptions/$s1/resourcegroups/rg-fw/providers/microsoft.compute/virtualmachines/fw-palo01"; Appliance = $true }); ApplianceNics = @((& $nic 'nic-fw-untrust' 'rg-fw' $s1).ToLowerInvariant()) })
+            (& $rule 'Allow-WinRM' 'nsg-old' 'rg-old' $s2 @{ DestinationPorts = @('5985', '5986'); Association = 'Unassociated' })
+            (& $rule 'Allow-HighPorts' 'nsg-app' 'rg-app' $s1 @{ Priority = 400; SourcePrefixes = @('0.0.0.0/0'); DestinationPorts = @('3000-4000'); RangeNeedsReview = $true; Subnets = @((& $subnet 'vnet-app' 'snet-app' 'rg-net' $s1)) })
+            (& $rule 'Allow-Any' 'nsg-app' 'rg-app' $s1 @{ Priority = 4000; Protocol = '*'; DestinationPorts = @('*'); Subnets = @((& $subnet 'vnet-app' 'snet-app' 'rg-net' $s1)) }))
+        Set-PackResult $Path 'P0.3' @(
+            @{ subscriptionId = $s1; Plan = 'VirtualMachines'; Tier = 'Standard'; SubPlan = 'P2' }
+            @{ subscriptionId = $s1; Plan = 'CloudPosture'; Tier = 'Free'; SubPlan = '' }
+            @{ subscriptionId = $s2; Plan = 'VirtualMachines'; Tier = 'Standard'; SubPlan = 'P1' })
         Set-PackResult $Path 'DP.4-DETAIL' @(
             @{ Name = 'vm-app01'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s1; PowerState = 'PowerState/running'; Size = 'Standard_D4s_v5' }
             @{ Name = 'vm-old'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s2; PowerState = 'PowerState/deallocated'; Size = 'Standard_B2s' }
@@ -155,7 +179,8 @@ Describe 'Change request generation' {
         @($crFiles.Name | Sort-Object) | Should -Be @(
             'CR-01-diagnostic-logging.txt', 'CR-02-storage-secure-transfer.txt', 'CR-03-storage-minimum-tls.txt', 'CR-04-app-service-minimum-tls.txt',
             'CR-06-key-vault-purge-protection.txt', 'CR-07-storage-anonymous-access.txt', 'CR-08-app-service-https-only.txt', 'CR-09-encryption-at-host.txt',
-            'CR-11-redis-minimum-tls.txt', 'CR-12-service-bus-minimum-tls.txt', 'CR-13-event-hubs-minimum-tls.txt', 'CR-14-cosmos-db-minimum-tls.txt', 'CR-15-scale-set-encryption-at-host.txt')
+            'CR-11-redis-minimum-tls.txt', 'CR-12-service-bus-minimum-tls.txt', 'CR-13-event-hubs-minimum-tls.txt', 'CR-14-cosmos-db-minimum-tls.txt', 'CR-15-scale-set-encryption-at-host.txt',
+            'CR-16-management-ports.txt')
         @($emailFiles.Name | Sort-Object) | Should -Be @($crFiles.Name | Sort-Object | ForEach-Object { $_ -replace '\.txt$', '.email.txt' }) -Because 'every change request writes a client email'
         $files.Count | Should -Be ($crFiles.Count + $emailFiles.Count + 2)
         $index | Should -Match '\| 05 \| Minimum TLS 1\.2 on Azure SQL servers \|  \| No gaps found \|'
@@ -582,7 +607,7 @@ Describe 'Change request generation' {
             $email | Should -Match "Please reply by $reply\. " -Because "$($f.Name) asks for a reply a week before the proposed date"
             $email | Should -Match "The resources\r?\n[^\r\n]+:\r?\n\r?\nSubscription Example[^\r\n]*\((5f1c2a9e|a0b1c2d3)[^\r\n]*\):\r?\n\r?\n- " -Because "$($f.Name) lists the resources by subscription"
         }
-        $dated = 'CR-01-diagnostic-logging', 'CR-02-storage-secure-transfer', 'CR-03-storage-minimum-tls', 'CR-04-app-service-minimum-tls', 'CR-06-key-vault-purge-protection', 'CR-07-storage-anonymous-access', 'CR-08-app-service-https-only', 'CR-11-redis-minimum-tls', 'CR-12-service-bus-minimum-tls', 'CR-13-event-hubs-minimum-tls', 'CR-14-cosmos-db-minimum-tls'
+        $dated = 'CR-01-diagnostic-logging', 'CR-02-storage-secure-transfer', 'CR-03-storage-minimum-tls', 'CR-04-app-service-minimum-tls', 'CR-06-key-vault-purge-protection', 'CR-07-storage-anonymous-access', 'CR-08-app-service-https-only', 'CR-11-redis-minimum-tls', 'CR-12-service-bus-minimum-tls', 'CR-13-event-hubs-minimum-tls', 'CR-14-cosmos-db-minimum-tls', 'CR-16-management-ports'
         foreach ($k in $dated) {
             $email = & $read "$k.email.txt"
             $email | Should -Match "Your approval\r?\n[^\r\n]*approve [^?]*$proposed\? Please reply by $reply\. [^\r\n]*I will not schedule this change until I have your approval\.\r?\n\r?\nThank you,\r?\nScott Example\r?\n$" -Because "$k asks for approval of the proposed date"
@@ -593,7 +618,7 @@ Describe 'Change request generation' {
             $email | Should -Match "Your approval and a maintenance window\r?\nCould you approve this change and suggest a maintenance window that works for these (servers|scale sets)\? Please reply by $reply\. " -Because "$k restarts machines, so it asks for a maintenance window"
             $email | Should -Not -Match $proposed -Because "$k leaves the date to the maintenance window"
         }
-        $index | Should -Match ('- CR-01, CR-02, CR-03, CR-04, CR-06, CR-07, CR-08, CR-11, CR-12, CR-13, CR-14 ask the client to approve the proposed date, {0}, and CR-09, CR-15 ask the client to approve the change and suggest a maintenance window\. Every email asks for a reply by {1}\. Run again with -ChangeDate to propose another day' -f $proposed, $reply)
+        $index | Should -Match ('- CR-01, CR-02, CR-03, CR-04, CR-06, CR-07, CR-08, CR-11, CR-12, CR-13, CR-14, CR-16 ask the client to approve the proposed date, {0}, and CR-09, CR-15 ask the client to approve the change and suggest a maintenance window\. Every email asks for a reply by {1}\. Run again with -ChangeDate to propose another day' -f $proposed, $reply)
         $index | Should -Match "Every client email asks for the client's approval, and no change is scheduled until the client approves it\."
         $index | Should -Not -Match '(?i)notice|concern'
     }
@@ -633,6 +658,52 @@ Describe 'Change request generation' {
         $email | Should -Match 'This change adds Log Analytics ingestion to your Sentinel workspace law-example-sentinel\. The resource logs are billed as data ingested into the workspace, and their volume depends on how busy each resource is\. The Azure Activity log of each subscription is ingested at no charge\.'
     }
 
+    It 'closes the management port rules on workload subnets and network interfaces, with every property recorded for the rollback' {
+        $text = & $read 'CR-16-management-ports.txt'
+        $text | Should -Match '^Title: Close internet-facing RDP, SSH and WinRM rules on network security groups\r?\n'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the 2 inbound security rules listed below that allow RDP, SSH or WinRM from any internet address, or narrow each to named source addresses, and give administrators just-in-time VM access or Azure Bastion in their place.'
+        $text | Should -Match "Subscription: Example Production \($s1\)\r?\n- nsg-web/Allow-RDP, resource group rg-web, priority 300, allow inbound, protocol TCP, source Internet, source ports \*, destination \*, destination ports 3389, applies to subnet snet-web of virtual network vnet-app\r?\n"
+        $text | Should -Match '- nsg-jump/Allow-SSH-HTTPS, resource group rg-ops, priority 310, allow inbound, protocol TCP, source \*, source ports \*, destination \*, destination ports \(22, 443\), description "Jump box access, vendor", applies to network interface nic-jump01 of virtual machine vm-jump01\r?\n' -Because 'the empty single form of a list property is dropped, and a semicolon in the description is cleaned'
+        $text | Should -Match "Defender for Servers Plan 2, which just-in-time VM access needs \(P0\.3\):\r?\n- Example Production \($s1\): on, so just-in-time VM access is the path\r?\n- Example, Dev Test \($s2\): not on, so Azure Bastion is the path unless the client turns Plan 2 on" -Because 'P0.3 reads Plan 2 only where the VirtualMachines plan has sub-plan P2'
+        foreach ($left in 'nsg-fw-untrust', 'nsg-old', 'Allow-HighPorts', 'Allow-Any') { $text | Should -Not -Match $left -Because "$left is left to the index notes" }
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $impl[0] | Should -Match '^1\. Where the client agreed just-in-time VM access, in the Azure portal go to Microsoft Defender for Cloud > Workload protections > Just-in-time VM access, select the Not configured tab, .*select Enable JIT on VMs, keep the ports it proposes and select Save\. The rules listed keep priority over its deny rules until they are removed below\.$' -Because 'the replacement path is in place before a rule is removed'
+        $impl[1] | Should -Match '^2\. Where the client agreed Azure Bastion, go to the virtual network of the machines behind each rule and select Connect > Bastion\.'
+        $impl | Should -Contain '5. If the client named source addresses that still need direct access, select the rule, set Source to IP Addresses, enter those addresses in Source IP addresses/CIDR ranges and select Save.'
+        $impl | Should -Contain '6. Otherwise, if the rule allows only ports 22, 3389, 5985 or 5986, select it, select Delete and then Yes. If it also allows other ports, select it, remove 22, 3389, 5985 and 5986 from Destination port ranges and select Save.'
+        $impl[-1] | Should -Be '7. Repeat steps 3 to 6 for each remaining rule listed.'
+        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'no other rule allows those ports from Any, Internet or 0\.0\.0\.0/0'
+        $rollback = @(Get-Section $text 'C) ROLLBACK PLAN')
+        $rollback[1] | Should -Match 'For a rule that was deleted, select \+ Add, enter the name, priority, source, source port ranges, destination, destination port ranges, protocol, action Allow and description recorded for it in the RESOURCES section and in change-requests\.csv'
+        $rollback[-1] | Should -Match 'If just-in-time VM access added a deny rule for the same ports at a lower priority number than the restored rule, give the restored rule a priority number below it'
+        @(Get-Section $text 'E) MITIGATION') -join '|' | Should -Be 'If changes need to be reverted, follow the rollback plan.'
+        $index | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \| 2 \| Change request and client email \| CR-16-management-ports\.txt, CR-16-management-ports\.email\.txt \|'
+    }
+
+    It 'leaves appliance untrust interfaces, unattached groups and * or port range rules out of CR-16 with an index note each' {
+        $index | Should -Match '- 1 rule left out of CR-16 as a cleanup item because its network security group is attached to no subnet or network interface, so it exposes nothing today: Allow-WinRM in nsg-old \(resource group rg-old\)\. Delete the rule, or the group if it is unused, with the client, since attaching the group later would open the port to the internet\.'
+        $index | Should -Match '- 1 rule left out of CR-16 because its network security group is attached only to network interfaces of network virtual appliances \(P0\.6-APPLIANCES\), where an untrust interface takes internet traffic by design: Allow-Mgmt in nsg-fw-untrust \(resource group rg-fw\)\.'
+        $index | Should -Match '- 2 rules left out of CR-16 for review because their destination ports include \* or a port range, which may not mean a management port is meant to be open: Allow-HighPorts in nsg-app \(resource group rg-app\), ports 3000-4000 / Allow-Any in nsg-app \(resource group rg-app\), ports \*\. Review each with the client and narrow it to the ports it needs\.'
+        $index | Should -Not -Match 'CR-16 was written without' -Because 'P0.3 was read'
+    }
+
+    It 'asks for approval to close the management ports, who still needs them and which replacement path to use' {
+        $email = & $read 'CR-16-management-ports.email.txt'
+        Assert-ApprovalEmail $email 'CR-16'
+        $email | Should -Match '^Subject: Approval requested: closing remote management ports to the internet\r?\n'
+        $email | Should -Match 'I would like to close the 2 network security group rules that let anyone on the internet reach RDP, SSH or WinRM, the remote management ports, on your Azure virtual machines\. In their place, administrators would connect through just-in-time VM access or Azure Bastion\.'
+        $email | Should -Match 'A connection that is already open stays up, because a rule change applies only to new connections\.'
+        $email | Should -Match 'Where a rule also allows other ports, only 22, 3389, 5985 and 5986 are removed from it, and its other ports stay as they are\.' -Because 'nsg-jump also allows 443'
+        $email | Should -Match "- Just-in-time VM access keeps the ports closed .* It is part of Microsoft Defender for Servers Plan 2\. Plan 2 is on in subscription Example Production \($s1\), and not on in subscription Example, Dev Test \($s2\), where this path would add the cost of Plan 2 for the servers\.\r?\n- Azure Bastion lets administrators connect from the Azure portal over an encrypted connection on port 443"
+        $email | Should -Match 'It is billed by the hour from the moment it is deployed in a virtual network, and its free Developer tier is meant for development and test only\.'
+        $email | Should -Match 'I suggest just-in-time VM access where Plan 2 is on and Azure Bastion elsewhere'
+        $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- Allow-RDP in network security group nsg-web \(resource group rg-web, priority 300, TCP port 3389 from Internet, on subnet snet-web of virtual network vnet-app\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- Allow-SSH-HTTPS in network security group nsg-jump \(resource group rg-ops, priority 310, TCP ports 22 and 443 from any address, on network interface nic-jump01 of virtual machine vm-jump01\)"
+        $email | Should -Match 'How it can be reversed\r?\nEvery setting of each rule is recorded, so any of them can be recreated exactly as it is today'
+        $email | Should -Match 'Your approval\r?\nCould you tell me who still needs RDP, SSH or WinRM to these machines from the internet, and from which addresses, and which replacement you would like, just-in-time VM access or Azure Bastion\? With that agreed, could you approve this change for \w+day, [^?]+\? Please reply by '
+        $email | Should -Match 'Where someone still needs direct access, I can narrow a rule to their named addresses instead of removing it\.'
+        foreach ($left in 'nsg-fw-untrust', 'nsg-old', 'Allow-HighPorts', 'Allow-Any') { $email | Should -Not -Match $left -Because "$left is not in the change" }
+    }
+
     It 'lists one row per resource in the CSV' {
         @($csv | Where-Object CR -eq 'CR-06').Resource | Should -Be @('kv-app', 'kv-dev')
         ($csv | Where-Object { $_.CR -eq 'CR-04' }).CurrentSetting | Should -Be 'minimum TLS 1.0'
@@ -641,6 +712,10 @@ Describe 'Change request generation' {
         @($csv | Where-Object CR -eq 'CR-13').Resource | Should -Be @('evh-telemetry', 'evh-audit')
         @($csv | Where-Object CR -eq 'CR-01').Count | Should -Be 2
         ($csv | Where-Object { $_.CR -eq 'CR-09' -and $_.Resource -eq 'vm-old' }).ResourceId | Should -Be "/subscriptions/$s2/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-old"
+        $mgmt = @($csv | Where-Object CR -eq 'CR-16')
+        @($mgmt.Resource) | Should -Be @('nsg-web/Allow-RDP', 'nsg-jump/Allow-SSH-HTTPS')
+        ($mgmt | Where-Object Resource -eq 'nsg-web/Allow-RDP').ResourceId | Should -Be "/subscriptions/$s1/resourceGroups/rg-web/providers/Microsoft.Network/networkSecurityGroups/nsg-web/securityRules/Allow-RDP" -Because 'the CSV names the rule by its resource ID'
+        ($mgmt | Where-Object Resource -eq 'nsg-jump/Allow-SSH-HTTPS').CurrentSetting | Should -Be 'priority 310, allow inbound, protocol TCP, source *, source ports *, destination *, destination ports (22, 443), description "Jump box access, vendor", applies to network interface nic-jump01 of virtual machine vm-jump01' -Because 'the CSV carries every property the rollback needs, cleaned to the copy rules like every file'
         @($csv | Where-Object { -not $_.ResourceId }).Count | Should -Be 0 -Because 'every tracking row carries the resource ID'
     }
 }
@@ -668,7 +743,7 @@ Describe 'Change request variants' {
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request and client email \| CR-06-key-vault-purge-protection\.txt, CR-06-key-vault-purge-protection\.email\.txt \|'
         $index | Should -Match '- CR-06 refers to the purge protection approval the client gave at build kickoff \(-PurgeProtectionApproved\), and asks the client to confirm that it still stands and to approve the proposed date\. Attach that approval and the reply to the change request\.'
-        $index | Should -Match 'CR-01, CR-02, CR-03, CR-04, CR-06, CR-07, CR-08, CR-11, CR-12, CR-13, CR-14 ask the client to approve the proposed date'
+        $index | Should -Match 'CR-01, CR-02, CR-03, CR-04, CR-06, CR-07, CR-08, CR-11, CR-12, CR-13, CR-14, CR-16 ask the client to approve the proposed date'
         $kv = Get-Content (Join-Path $out 'CR-06-key-vault-purge-protection.txt') -Raw
         @(Get-Section $kv 'E) MITIGATION')[0] | Should -Match '^Purge protection cannot be disabled once it is enabled, so this change cannot be reverted\.'
         Get-Content (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') -Raw | Should -Not -Match 'build kickoff' -Because 'the switch covers purge protection only'
@@ -683,7 +758,7 @@ Describe 'Change request variants' {
         $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
     }
 
-    It 'writes a client email for every change request, CR-01 to CR-15' {
+    It 'writes a client email for every change request, CR-01 to CR-16' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
         # written at least once. A change request written without its email, or with an email that does not
@@ -713,7 +788,7 @@ Describe 'Change request variants' {
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
-        @($written | Sort-Object -Unique) | Should -Be @(1..15) -Because 'the two packs between them write every change request'
+        @($written | Sort-Object -Unique) | Should -Be @(1..16) -Because 'the two packs between them write every change request'
         $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
@@ -1060,11 +1135,87 @@ Describe 'Change request variants' {
         Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Match '\| 01 \| .* \| Needs recollection with CyberSOC collector 1\.1\.0 or later \|' -Because 'coverage by subscription needs DR.6-COVERAGE once the initiative has states'
     }
 
+    It 'suggests just-in-time VM access where every subscription has Plan 2, and both paths when P0.3 was not read' {
+        $pack = Join-Path $TestDrive 'mgmt-plan2'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'P0.3' @(@{ subscriptionId = $s1; Plan = 'VirtualMachines'; Tier = 'Standard'; SubPlan = 'P2' }, @{ subscriptionId = $s2.ToUpperInvariant(); Plan = 'VirtualMachines'; Tier = 'Standard'; SubPlan = 'P2' })
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-16 with Plan 2 on'
+        $email | Should -Match 'Plan 2 is on in each of these subscriptions\.'
+        $email | Should -Match 'Because Plan 2 is already on, I suggest just-in-time VM access\.'
+        Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw | Should -Match "- Example, Dev Test \($s2\): on, so just-in-time VM access is the path"
+
+        Set-PackResult $pack 'P0.3' @(@{ subscriptionId = $s1; Plan = 'VirtualMachines'; Tier = 'Free'; SubPlan = '' })
+        $null = & $generator -EvidencePath $pack
+        $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
+        $email | Should -Match 'Plan 2 is not on in these subscriptions, so this path would add the cost of Plan 2 for the servers there\.'
+        $email | Should -Match 'Because Plan 2 is not on, I suggest Azure Bastion, unless you would rather turn Plan 2 on\.'
+
+        Remove-PackResult $pack 'P0.3'
+        $null = & $generator -EvidencePath $pack
+        $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-16 without P0.3'
+        $email | Should -Match 'I could not confirm which of these subscriptions have Plan 2, and I will check that before the change\.'
+        Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw | Should -Match "- Example Production \($s1\): not read"
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '- CR-16 was written without P0\.3, which was not collected\.'
+    }
+
+    It 'writes singular wording for one rule, reads lists given as JSON text, and leaves a group shared with an appliance for review' {
+        $pack = Join-Path $TestDrive 'mgmt-single'
+        New-ChangeFixture $pack
+        $id = "/subscriptions/$s1/resourceGroups/rg-web/providers/Microsoft.Network/networkSecurityGroups/nsg-web"
+        $nic = "/subscriptions/$s1/resourceGroups/rg-fw/providers/Microsoft.Network/networkInterfaces"
+        Set-PackResult $pack 'NB.2-DETAIL' @(
+            @{ subscriptionId = $s1; resourceGroup = 'rg-web'; NSG = 'nsg-web'; NsgId = $id; RuleName = 'Allow-SSH'; RuleId = "$id/securityRules/Allow-SSH"; Priority = 120; Direction = 'Inbound'; Access = 'Allow'; Protocol = 'Tcp'
+                SourcePrefixes = '["","Internet","0.0.0.0/0"]'; SourcePorts = '["*"]'; DestinationPrefixes = '["*"]'; DestinationAsgs = '[]'; DestinationPorts = '["22"]'; Description = ''; Association = 'Subnet'; RangeNeedsReview = $false
+                Subnets = '[{"id":"/subscriptions/' + $s1 + '/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-web"}]'; Nics = '[]'; NicVms = @(); ApplianceNics = '[]' }
+            @{ subscriptionId = $s1; resourceGroup = 'rg-fw'; NSG = 'nsg-shared'; NsgId = 'nsg-shared'; RuleName = 'Allow-RDP'; RuleId = 'r2'; Priority = 130; Protocol = 'Tcp'; SourcePrefixes = @('*'); DestinationPorts = @('3389'); Association = 'NIC'
+                Subnets = @(); Nics = @(@{ id = "$nic/nic-fw-untrust" }, @{ id = "$nic/nic-app01" }); NicVms = @(); ApplianceNics = @("$nic/nic-fw-untrust".ToLowerInvariant()) })
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $text = Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw
+        $text | Should -Match 'Remove the inbound security rule listed below that allow'
+        $text | Should -Match 'The inbound rule below allows RDP, SSH or WinRM'
+        $text | Should -Match '- nsg-web/Allow-SSH, resource group rg-web, priority 120, allow inbound, protocol TCP, source \(Internet, 0\.0\.0\.0/0\), source ports \*, destination \*, destination ports 22, applies to subnet snet-web of virtual network vnet-app'
+        $text | Should -Not -Match 'Repeat steps'
+        $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-16 for one rule'
+        $email | Should -Match 'I would like to close the network security group rule that let anyone'
+        $email | Should -Match 'The rule is listed below with its network security group, priority, ports, source and where it applies:'
+        $email | Should -Match 'TCP port 22 from Internet and 0\.0\.0\.0/0, on subnet snet-web'
+        $email | Should -Match 'Every setting of the rule is recorded, so it can be recreated exactly as it is today'
+        $email | Should -Not -Match 'other ports' -Because 'the rule names only a management port'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '- 1 rule left out of CR-16 for review because its network security group is attached to a network virtual appliance as well as other resources, so changing the rule would change the appliance too: Allow-RDP in nsg-shared \(resource group rg-fw\)\.'
+        $index | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \| 1 \| Change request and client email \|'
+    }
+
+    It 'writes no management port change when only rules for cleanup or review remain, and no gaps when NB.2-DETAIL is empty' {
+        $pack = Join-Path $TestDrive 'mgmt-none'
+        New-ChangeFixture $pack
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        Test-Path (Join-Path $out 'CR-16-management-ports.txt') | Should -BeTrue
+        $rows = @(Get-Content (Join-Path $pack 'results/NB.2-DETAIL.json') -Raw | ConvertFrom-Json | Where-Object { $_.NSG -notin 'nsg-web', 'nsg-jump' })
+        Set-PackResult $pack 'NB.2-DETAIL' $rows
+        $null = & $generator -EvidencePath $pack
+        foreach ($f in 'CR-16-management-ports.txt', 'CR-16-management-ports.email.txt') { Test-Path (Join-Path $out $f) | Should -BeFalse -Because "the $f of the earlier run is removed" }
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \|  \| Only rules for cleanup or review remain, see the notes \|  \|'
+        $index | Should -Match '- 1 rule left out of CR-16 as a cleanup item'
+        @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-16').Count | Should -Be 0
+        Set-PackResult $pack 'NB.2-DETAIL' @()
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \|  \| No gaps found \|'
+    }
+
     It 'reads needs recollection on a pack collected before the per-resource results, and clears stale change requests' {
         $pack = Join-Path $TestDrive 'old'
         New-ChangeFixture $pack
         $null = & $generator -EvidencePath $pack
-        foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'NB.6-PAAS-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DP.4-VMSS-ELIGIBILITY') { Remove-PackResult $pack $id }
+        foreach ($id in 'P0.7', 'NB.2-DETAIL', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'NB.6-PAAS-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DP.4-VMSS-ELIGIBILITY') { Remove-PackResult $pack $id }
         Set-PackResult $pack 'DP.4-ELIGIBILITY' @() 'FAILED'
         $null = & $generator -EvidencePath $pack
         $out = Join-Path $pack '05-change-requests'
@@ -1074,6 +1225,7 @@ Describe 'Change request variants' {
         $index | Should -Match '\| 09 \| Encryption at host on virtual machines \|  \| Not collected \(DP\.4-ELIGIBILITY FAILED\) \|'
         foreach ($n in 11..14) { $index | Should -Match ('\| {0} \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.2\.0 or later \|' -f $n) -Because 'NB.6-PAAS-DETAIL was added in 1.2.0' }
         $index | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \|  \| Needs recollection with CyberSOC collector 1\.3\.0 or later \|' -Because 'DP.4-VMSS-ELIGIBILITY was added in 1.3.0'
+        $index | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \|  \| Needs recollection with CyberSOC collector 1\.6\.0 or later \|' -Because 'NB.2-DETAIL was added in 1.6.0'
         $index | Should -Match 'Subscription names were not read \(P0\.7\)'
         Get-Content (Join-Path $out 'CR-01-diagnostic-logging.txt') -Raw | Should -Match "- $s1\r?\n"
     }
@@ -1259,5 +1411,21 @@ Describe 'Windows PowerShell 5.1, where ConvertFrom-Json writes a JSON array as 
         $text = Get-Content (Join-Path $pack '05-change-requests/CR-03-storage-minimum-tls.txt') -Raw
         $text | Should -Match "Subscription: Example Production \($s1\)\r?\n- stdata, resource group rg-data, minimum TLS 1\.0\r?\n- stweb, resource group rg-web, minimum TLS not set"
         $text | Should -Match 'Set the minimum TLS version to 1\.2 on the 2 storage accounts listed below\.'
+        $rules = Get-Content (Join-Path $pack '05-change-requests/CR-16-management-ports.txt') -Raw
+        $rules | Should -Match 'destination ports \(22, 443\), description "Jump box access, vendor", applies to network interface nic-jump01 of virtual machine vm-jump01' -Because 'the lists inside each rule read the same way'
+        $rules | Should -Match 'Remove the 2 inbound security rules listed below'
+    }
+
+    It 'reads a rule list given as JSON text as its items' {
+        $pack = Join-Path $TestDrive 'windows-powershell-text'
+        New-ChangeFixture $pack
+        $id = "/subscriptions/$s1/resourceGroups/rg-web/providers/Microsoft.Network/networkSecurityGroups/nsg-web"
+        $vm = "/subscriptions/$s1/resourcegroups/rg-web/providers/microsoft.compute/virtualmachines/vm-web01"
+        $nic = "/subscriptions/$s1/resourcegroups/rg-web/providers/microsoft.network/networkinterfaces/nic-web01"
+        Set-PackResult $pack 'NB.2-DETAIL' @(@{ subscriptionId = $s1; resourceGroup = 'rg-web'; NSG = 'nsg-web'; NsgId = $id; RuleName = 'Allow-SSH'; RuleId = "$id/securityRules/Allow-SSH"; Priority = 120; Protocol = 'Tcp'
+                SourcePrefixes = '["","Internet","0.0.0.0/0"]'; SourcePorts = '["*"]'; DestinationPrefixes = '["*"]'; DestinationAsgs = '[]'; DestinationPorts = '["22","3389"]'; Association = 'NIC'
+                Subnets = '[]'; Nics = ('[{{"id":"{0}"}}]' -f $nic); NicVms = ('[{{"NicId":"{0}","VmId":"{1}","Appliance":false}}]' -f $nic, $vm); ApplianceNics = '[]' })
+        Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack }
+        Get-Content (Join-Path $pack '05-change-requests/CR-16-management-ports.txt') -Raw | Should -Match 'source \(Internet, 0\.0\.0\.0/0\), source ports \*, destination \*, destination ports \(22, 3389\), applies to network interface nic-web01 of virtual machine vm-web01'
     }
 }

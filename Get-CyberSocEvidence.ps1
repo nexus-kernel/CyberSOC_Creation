@@ -230,7 +230,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.5.0, based on the EBR collector 1.14.0
+    Version: 1.6.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -278,7 +278,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.5.0'
+$script:EbrVersion = '1.6.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2015,6 +2015,64 @@ resources
           Priority = toint(Rule.properties.priority), PortText, SourceText,
           Association, RangeNeedsReview
 | order by Association asc, Priority asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'NB.2-DETAIL' -Phase 'P2 Network' -Engine 'ARG' -Title 'Internet-exposed management port rules with their properties and attachments' -Notes 'Added in CyberSOC 1.6.0. The rules NB.2 lists, read the same way, one row each with everything change request CR-16 needs to change the rule and to recreate it on rollback: the subscription, the network security group and rule resource IDs, priority, protocol, source and destination prefixes and ports, the description, the destination application security groups, the association (Subnet, NIC or Unassociated), the subnets and network interfaces the group is attached to, and for each network interface its virtual machine and whether that machine is a network virtual appliance (the P0.6-APPLIANCES pattern). CR-16 takes the rules on a workload subnet or network interface and leaves to the index notes the groups attached only to appliances, the unassociated groups and the rules whose ports are * or a range. Internal: names rules, the report embeds counts only.' -Query @'
+resources
+| where type =~ "microsoft.network/networksecuritygroups"
+| where id !contains "{{MRG}}"
+| extend NsgKey  = tolower(id),
+         Subnets = coalesce(properties.subnets, dynamic([])),
+         Nics    = coalesce(properties.networkInterfaces, dynamic([]))
+| mv-expand Rule = properties.securityRules limit 1000
+| where tostring(Rule.properties.access) =~ "Allow"
+    and tostring(Rule.properties.direction) =~ "Inbound"
+| extend SourcePrefixes   = array_concat(pack_array(tostring(Rule.properties.sourceAddressPrefix)),
+                                         coalesce(Rule.properties.sourceAddressPrefixes, dynamic([]))),
+         DestinationPorts = array_concat(pack_array(tostring(Rule.properties.destinationPortRange)),
+                                         coalesce(Rule.properties.destinationPortRanges, dynamic([])))
+| extend SourceText = tostring(SourcePrefixes), PortText = tostring(DestinationPorts)
+| where SourceText contains '"*"' or SourceText contains '"Internet"' or SourceText contains '"0.0.0.0/0"'
+| where PortText contains '"*"' or PortText contains '"22"' or PortText contains '"3389"'
+     or PortText contains '"5985"' or PortText contains '"5986"' or PortText contains "-"
+// Each network interface the group is attached to, with its virtual machine and whether that machine is a
+// network virtual appliance, so CR-16 can leave an appliance untrust interface out.
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/networkinterfaces"
+    | extend NsgKey = tolower(tostring(properties.networkSecurityGroup.id)),
+             VmKey  = tolower(tostring(properties.virtualMachine.id))
+    | where isnotempty(NsgKey)
+    | join kind=leftouter (
+        resources
+        | where type =~ "microsoft.compute/virtualmachines"
+        | where {{APPLIANCE}}   // network virtual appliances, see P0.6-APPLIANCES
+        | project VmKey = tolower(id), ApplianceVm = name
+      ) on VmKey
+    | summarize NicVms        = make_list(pack("NicId", tolower(id), "VmId", VmKey, "Appliance", isnotempty(ApplianceVm))),
+                ApplianceNics = make_set_if(tolower(id), isnotempty(ApplianceVm))
+              by NsgKey
+  ) on NsgKey
+| extend Association = case(0 < array_length(Subnets), "Subnet", 0 < array_length(Nics), "NIC", "Unassociated"),
+         RangeNeedsReview = PortText contains "-"
+| project subscriptionId, resourceGroup, NSG = name, NsgId = id,
+          RuleName    = tostring(Rule.name), RuleId = tostring(Rule.id),
+          Priority    = toint(Rule.properties.priority),
+          Direction   = tostring(Rule.properties.direction), Access = tostring(Rule.properties.access),
+          Protocol    = tostring(Rule.properties.protocol),
+          SourcePrefixes,
+          SourcePorts = array_concat(pack_array(tostring(Rule.properties.sourcePortRange)),
+                                     coalesce(Rule.properties.sourcePortRanges, dynamic([]))),
+          DestinationPrefixes = array_concat(pack_array(tostring(Rule.properties.destinationAddressPrefix)),
+                                             coalesce(Rule.properties.destinationAddressPrefixes, dynamic([]))),
+          DestinationAsgs = coalesce(Rule.properties.destinationApplicationSecurityGroups, dynamic([])),
+          DestinationPorts,
+          Description = tostring(Rule.properties.description),
+          Association, RangeNeedsReview,
+          Subnets, Nics,
+          NicVms        = coalesce(NicVms, dynamic([])),
+          ApplianceNics = coalesce(ApplianceNics, dynamic([]))
+| order by subscriptionId asc, resourceGroup asc, NSG asc, Priority asc
 '@))
 
     $q.Add((New-EbrQuery -Id 'NB.3' -Phase 'P2 Network' -Engine 'ARG' -Title 'PaaS network exposure and private endpoints' -Notes 'NB-D3 credits only public access disabled or a private endpoint. SQL firewall rules are not read here.' -Query @'

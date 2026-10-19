@@ -62,7 +62,8 @@ missing evidence never becomes a favorable zero.
    `05-change-requests/` holds one change request for each low-impact hardening item that still has resources to
    fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service, Azure SQL, Redis, Service Bus,
    Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
-   machines and on scale sets), and a ready-to-send client email for every change request. Every email asks for the
+   machines and on scale sets, and closing internet-facing RDP, SSH and WinRM rules), and a ready-to-send client email
+   for every change request. Every email asks for the
    client's approval and follows one structure: what is to change, why, what it means for the client, the resources
    by subscription, how it can be reversed, and the request. It asks the client to approve the proposed date, two
    weeks after the build by default, or, for encryption at host, which restarts each machine, to suggest a
@@ -80,7 +81,10 @@ missing evidence never becomes a favorable zero.
    so its email walks the client through why nothing breaks, and the index names the accounts left out. Add
    `-PurgeProtectionApproved` when the client approved purge protection at build kickoff: its email then refers to
    that approval and asks the client to confirm it still stands and to approve the proposed date, and the index
-   records it. AKS node pools without encryption at host get no change
+   records it. The management port email asks who still needs RDP, SSH or WinRM from the internet and which replacement
+   the client wants, just-in-time VM access (which needs Defender for Servers Plan 2) or Azure Bastion, and the index
+   names the rules left out: appliance untrust interfaces, groups attached to nothing (a cleanup item) and `*` or port
+   range rules (for review). AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
    pool replacement with the client.
 
