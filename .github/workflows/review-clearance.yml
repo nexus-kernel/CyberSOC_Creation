@@ -109,8 +109,11 @@ jobs:
       pull-requests: read
       issues: read
       statuses: write
+      actions: read
     outputs:
       sha: ${{ steps.clearance.outputs.sha }}
+      base: ${{ steps.clearance.outputs.base }}
+      evidence: ${{ steps.clearance.outputs.evidence }}
     steps:
       # Use the same trusted revision as the workflow, never a script from the PR.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -143,7 +146,7 @@ jobs:
             });
 
   test:
-    name: EBR tests (Node and PowerShell)
+    name: CyberSOC offline tests (Node and PowerShell)
     needs: review-clearance
     if: ${{ !cancelled() && needs.review-clearance.result == 'success' }}
     runs-on: ubuntu-24.04
@@ -216,6 +219,8 @@ jobs:
           CLEARANCE_RESULT: ${{ needs.review-clearance.result }}
           TEST_RESULT: ${{ needs.test.result }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          REVIEWED_BASE: ${{ needs.review-clearance.outputs.base }}
+          REVIEW_EVIDENCE: ${{ needs.review-clearance.outputs.evidence }}
         with:
           script: |
             const passed = process.env.RUN_ATTEMPT === '1' && process.env.CLEARANCE_RESULT === 'success' && process.env.TEST_RESULT === 'success';
@@ -224,6 +229,6 @@ jobs:
               sha: process.env.REVIEWED_SHA,
               context: 'Reviewed CI',
               state: passed ? 'success' : 'failure',
-              description: passed ? 'All checks passed on the reviewed commit' : 'CI failed, was cancelled, or did not complete',
+              description: passed ? (process.env.REVIEWED_BASE && process.env.REVIEW_EVIDENCE ? `base:${process.env.REVIEWED_BASE} evidence:${process.env.REVIEW_EVIDENCE}` : 'All checks passed on the reviewed commit') : 'CI failed, was cancelled, or did not complete',
               target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             });

@@ -26,8 +26,8 @@
          client tenant, so one client's figures never absorb another's (Lighthouse warning).
       2. Finds every Sentinel workspace in the client subscriptions. Workspace-level queries run
        once across all of them (correct client-level medians and distinct counts) and once per
-       workspace (the <ID>-BY-WORKSPACE breakdown). Tenant-wide tables (SigninLogs, AuditLogs)
-       are read from one workspace so copies are never double counted.
+       workspace (the <ID>-BY-WORKSPACE breakdown). Tenant-wide tables (SigninLogs) are read
+       from one workspace so copies are never double counted.
       3. Runs Phase 0 to Phase 4 of the runbook across Azure Resource Graph, Log Analytics,
          Defender Advanced Hunting, the Sentinel ARM API, Exchange Online and Purview.
       4. Writes one CSV and one JSON file per query ID, the exact KQL that ran, a manifest,
@@ -1102,7 +1102,7 @@ SecurityIncident
 | order by Month asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'OUT.4' -Phase 'P1 Outcomes' -Engine 'LA' -Title 'True positives and the data loss check' -Notes 'Row count is the contained tile, with a containment statement in each ClassificationComment. Zero data loss holds only if no row is flagged or each flagged comment records no data access.' -Query @'
+    $q.Add((New-EbrQuery -Id 'OUT.4' -Phase 'P1 Outcomes' -Engine 'LA' -Title 'True positives' -Notes 'One row per confirmed threat. The row count is the true positives detected and managed.' -Query @'
 SecurityIncident
 | where TimeGenerated between ({{WINDOW_START}} .. now())
 | summarize arg_max(TimeGenerated, *) by TenantId, IncidentNumber
@@ -1112,8 +1112,7 @@ SecurityIncident
 | where Classification == "TruePositive"
 | extend Tactics = tostring(AdditionalData.tactics)
 | project IncidentNumber, Title, Severity, CreatedTime, ClosedTime,
-          ClassificationReason, ClassificationComment, Tactics,
-          ExfilOrImpactTactic = Tactics has_any ("Exfiltration", "Collection", "Impact")
+          ClassificationReason, ClassificationComment, Tactics
 | order by CreatedTime asc
 '@))
 
@@ -1168,16 +1167,8 @@ SecurityIncident
 | order by CreatedTime asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'OUT.8' -Phase 'P1 Outcomes' -Engine 'LA' -TenantTable 'AuditLogs' -Title 'Account disable events for containment timing' -Notes 'Containment minutes = OUT.8 disable time minus the malicious sign-in time for the same user in SigninLogs.' -Query @'
-AuditLogs
-| where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
-| where OperationName =~ "Disable account"
-| extend TargetUser = tostring(TargetResources[0].userPrincipalName),
-         Initiator  = coalesce(tostring(InitiatedBy.app.displayName),
-                               tostring(InitiatedBy.user.userPrincipalName))
-| project TimeGenerated, TargetUser, Initiator, Result
-| order by TimeGenerated asc
-'@))
+    # The EBR's OUT.8 (account disable events, for the malicious sign-in to containment timing) is not collected:
+    # the CyberSOC report carries no compromise or containment determination (Oct 19, 2026).
 
     # CyberSOC trend queries (CyberSOC Monthly Report Runbook, section 2). The same alert population as
     # OUT.1 to OUT.3, split finer: the OUT.2 cohort by the month each alert was created, OUT.3 in 7-day
@@ -2691,7 +2682,7 @@ union withsource = SourceTable isfuzzy = true ThreatIntelIndicators, ThreatIntel
 | order by Indicators desc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'TI.2' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Threat intelligence matches by month and indicator type' -Notes 'CyberSOC. Detections from the threat intelligence analytics rules (TI map rules and Microsoft Threat Intelligence Analytics), informational severity excluded. Ticketed counts the ones correlated into an alert that opened an Atmosera ticket. A match means the indicator was observed in telemetry, not that compromise occurred.' -Query ($ticketedDetections + @'
+    $q.Add((New-EbrQuery -Id 'TI.2' -Phase 'P5 Threat intelligence' -Engine 'LA' -CombinedOnly -Title 'Threat intelligence matches by month and indicator type' -Notes 'CyberSOC. Detections from the threat intelligence analytics rules (TI map rules and Microsoft Threat Intelligence Analytics), informational severity excluded. Ticketed counts the ones correlated into an alert that opened an Atmosera ticket. A match means the indicator was observed in telemetry, not an investigation finding.' -Query ($ticketedDetections + @'
 
 SecurityAlert
 | where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
@@ -2769,12 +2760,13 @@ Base
 | order by Month asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'TI.5-RISK' -Phase 'P5 Threat intelligence' -Engine 'LA' -TenantTable 'AADUserRiskEvents' -Title 'Entra ID Protection risk detections by month and type' -Notes 'CyberSOC. Each risk detection at its latest record. Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace holding the most AADUserRiskEvents in TI.0, else the one that holds the sign-ins. Counts only, no account names.' -Query @'
+    $q.Add((New-EbrQuery -Id 'TI.5-RISK' -Phase 'P5 Threat intelligence' -Engine 'LA' -TenantTable 'AADUserRiskEvents' -Title 'Entra ID Protection risk detections by month and type' -Notes 'CyberSOC. Each risk detection at its latest record. Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace holding the most AADUserRiskEvents in TI.0, else the one that holds the sign-ins. Counts only, no account names. adminConfirmedUserCompromised is an administrator action, not a detection, and is left out.' -Query @'
 AADUserRiskEvents
 | where TimeGenerated between ({{WINDOW_START}} .. now())
 | summarize arg_max(TimeGenerated, RiskEventType, RiskLevel, DetectedDateTime, UserId) by Id
 | extend Detected = coalesce(todatetime(DetectedDateTime), TimeGenerated)
 | where Detected between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
+| where RiskEventType !~ "adminConfirmedUserCompromised"
 | summarize Detections = count(),
             Users      = dcount(UserId),
             High       = countif(RiskLevel =~ "high"),
@@ -3226,11 +3218,6 @@ function Get-EbrWorksheetSpec {
                 $r0 = $rows[0]
                 @{ Value = Format-EbrRatio ([double](Get-EbrProp $r0 'Current')) ([double](Get-EbrProp $r0 'Max'))
                    Note  = 'Classic Defender for Cloud secure score across {0} subscription(s). Say which score the slide quotes.' -f (Get-EbrProp $r0 'Subscriptions') } } }
-        @{ Slide = 'Tier 1'; Figure = 'Confirmed data loss or exfiltration'; Query = 'OUT.4'; Ids = @('OUT.4'); Window = $true; Derive = {
-                param($R) $rows = Get-EbrRows $R 'OUT.4'; if ($null -eq $rows) { return }
-                $flagged = @($rows | Where-Object { Test-EbrTrue (Get-EbrProp $_ 'ExfilOrImpactTactic') }).Count
-                @{ Value = '{0} flagged of {1} true positives' -f $flagged, $rows.Count
-                   Note  = 'Zero data loss holds only if no row is flagged, or each flagged ClassificationComment records no data access.' } } }
         @{ Slide = 'Tier 1'; Figure = 'High severity incident reduction'; Query = 'OUT.3'; Ids = @('OUT.3'); Window = $true; Derive = {
                 param($R) $rows = Get-EbrRows $R 'OUT.3'; if ($null -eq $rows -or $rows.Count -lt 2) { return }
                 $first = $rows[0]; $last = $rows[$rows.Count - 1]
@@ -3244,11 +3231,7 @@ function Get-EbrWorksheetSpec {
                    Note  = 'Total incidents created per month. Severity and classification split in results/OUT.3.csv.' } } }
         @{ Slide = 'Tier 1'; Figure = 'True positives detected and managed'; Query = 'OUT.4'; Ids = @('OUT.4'); Window = $true; Derive = {
                 param($R) $rows = Get-EbrRows $R 'OUT.4'; if ($null -eq $rows) { return }
-                @{ Value = [string]$rows.Count; Note = 'Each row needs a containment statement in ClassificationComment.' } } }
-        @{ Slide = 'Tier 1'; Figure = 'Malicious sign-in to containment'; Query = 'OUT.7, OUT.8'; Ids = @('OUT.7', 'OUT.8'); Window = $true; Derive = {
-                param($R) $a = Get-EbrRows $R 'OUT.7'; $b = Get-EbrRows $R 'OUT.8'; if ($null -eq $a -and $null -eq $b) { return }
-                $na = if ($null -eq $a) { 'n/a' } else { $a.Count }; $nb = if ($null -eq $b) { 'n/a' } else { $b.Count }
-                @{ Value = 'REVIEW'; Note = "Per user: OUT.8 disable time minus the malicious sign-in time in SigninLogs. OUT.7 disruption incidents: $na. OUT.8 disable events: $nb. Incident timeline in the Defender portal is the source of record." } } }
+                @{ Value = [string]$rows.Count; Note = 'Incidents the SOC classified as true positives, one row each.' } } }
         @{ Slide = 'Tier 2'; Figure = 'Overall program control grade'; Query = 'Phase 2 matrix'; Manual = 'Grade the Phase 2 control matrix (E, P, N) from the collected evidence, then total points earned over points available.' }
         @{ Slide = 'Tier 2'; Figure = 'Foundational controls enforced'; Query = 'Phase 2 matrix'; Manual = 'Count of foundational controls graded E in the Phase 2 matrix.' }
         @{ Slide = 'Tier 2'; Figure = 'Defense in depth in force'; Query = 'Phase 2 matrix'; Manual = 'Count of in-scope defense in depth controls graded E in the Phase 2 matrix.' }
@@ -3329,10 +3312,6 @@ function Get-EbrWorksheetSpec {
                    Note  = "Passed over passed plus failed for: $names. Reconcile with Defender for Cloud > Regulatory compliance." } } }
         @{ Slide = 'Tier 4'; Figure = 'Category scores against peer median'; Query = 'POS.6, portal comparison'; Manual = 'Defender portal > Exposure management > Secure score > Comparison. POS.6 carries the all-tenant average score, not the per-category peer medians.' }
         @{ Slide = 'Controls'; Figure = 'Pillar grades and every E, P, N mark'; Query = 'Phase 2 tables'; Manual = 'Grade each control from its evidence IDs using the standard E, P, N rule.' }
-        @{ Slide = 'Measured outcomes'; Figure = 'Identity compromises contained'; Query = 'OUT.4, OUT.7'; Ids = @('OUT.4', 'OUT.7'); Window = $true; Derive = {
-                param($R) $a = Get-EbrRows $R 'OUT.4'; $b = Get-EbrRows $R 'OUT.7'; if ($null -eq $a -and $null -eq $b) { return }
-                $na = if ($null -eq $a) { 'n/a' } else { $a.Count }; $nb = if ($null -eq $b) { 'n/a' } else { $b.Count }
-                @{ Value = 'REVIEW'; Note = "True positives (OUT.4): $na. Attack disruption incidents (OUT.7): $nb. Count the identity compromises from the incident titles and comments." } } }
         @{ Slide = 'Measured outcomes'; Figure = 'Exploitable findings closed in the patch cycle'; Query = 'BKL.1, CyberSOC report'; Ids = @('BKL.1'); Derive = {
                 param($R) $rows = Get-EbrRows $R 'BKL.1'; if ($null -eq $rows) { return }
                 @{ Value = 'REVIEW'; Note = 'Open now: {0} exploitable CVE rows summed. The closed-in-cycle figure needs the CyberSOC report.' -f (Format-EbrNumber (Get-EbrSum $rows 'ExploitableCves')) } } }
@@ -4831,7 +4810,7 @@ function Write-EbrResultFiles {
 
 function Write-EbrQueryFile {
     param([string]$OutDir, $Item, [string]$Text, [string]$Target)
-    $header = "// EBR evidence query {0}: {1}`n// Engine: {2}. Target: {3}`n// Expanded {4} UTC by Get-CyberSocEvidence.ps1 v{5}`n" -f $Item.Id, $Item.Title, $Item.Engine, $Target, (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss', [cultureinfo]::InvariantCulture), $script:EbrVersion
+    $header = "// CyberSOC evidence query {0}: {1}`n// Engine: {2}. Target: {3}`n// Expanded {4} UTC by Get-CyberSocEvidence.ps1 v{5}`n" -f $Item.Id, $Item.Title, $Item.Engine, $Target, (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss', [cultureinfo]::InvariantCulture), $script:EbrVersion
     # Graph items carry the endpoints they read rather than KQL, so they get their own extension.
     $ext = if ($Item.Engine -eq 'GRAPH') { '.graph.txt' } else { '.kql' }
     Write-EbrTextFile -Path (Join-Path (Join-Path $OutDir 'queries') "$($Item.Id)$ext") -Text ($header + $Text + "`n")
@@ -5583,11 +5562,9 @@ function Invoke-EbrMain {
         Invoke-EbrPhase -Ctx $ctx -Items @($catalog | Where-Object { $_.Phase -like 'P0*' }) -Activity 'Phase 0 pre-flight'
 
         $reach = Get-EbrReachRows -Ctx $ctx
-        foreach ($table in 'SigninLogs', 'AuditLogs') {
-            if ($ctx.Workspaces.Count) {
-                $ctx.TenantWorkspace[$table] = Select-EbrTenantWorkspace -Workspaces $ctx.Workspaces -ReachRows $reach -Table $table
-                if ($ctx.Workspaces.Count -gt 1) { Write-EbrInfo ("Tenant-wide {0} will be read once, from {1} (it holds the most)." -f $table, $ctx.TenantWorkspace[$table].WorkspaceName) }
-            }
+        if ($ctx.Workspaces.Count) {
+            $ctx.TenantWorkspace['SigninLogs'] = Select-EbrTenantWorkspace -Workspaces $ctx.Workspaces -ReachRows $reach -Table 'SigninLogs'
+            if ($ctx.Workspaces.Count -gt 1) { Write-EbrInfo ("Tenant-wide SigninLogs will be read once, from {0} (it holds the most)." -f $ctx.TenantWorkspace['SigninLogs'].WorkspaceName) }
         }
         # Entra ID Protection risk detections (TI.5-RISK) start from the workspace of the sign-ins, the usual route.
         # Step 10 moves them to the workspace TI.0 finds them in.
@@ -5697,7 +5674,7 @@ function Invoke-EbrMain {
             AccessTenant        = $ctx.ArmTenant
             AccessPath          = $ctx.AccessPath
             Workspaces          = @($ctx.Workspaces | ForEach-Object { [ordered]@{ Name = $_.WorkspaceName; ResourceId = $_.WorkspaceResourceId; CustomerId = $_.CustomerId; SubscriptionId = $_.subscriptionId; RetentionDays = $_.RetentionDays; AccessTenant = $_.AccessTenant } })
-            TenantWideTables    = [ordered]@{ SigninLogs = $(if ($ctx.TenantWorkspace['SigninLogs']) { $ctx.TenantWorkspace['SigninLogs'].WorkspaceName } else { $null }); AuditLogs = $(if ($ctx.TenantWorkspace['AuditLogs']) { $ctx.TenantWorkspace['AuditLogs'].WorkspaceName } else { $null }) }
+            TenantWideTables    = [ordered]@{ SigninLogs = $(if ($ctx.TenantWorkspace['SigninLogs']) { $ctx.TenantWorkspace['SigninLogs'].WorkspaceName } else { $null }) }
             WorkspaceBreakdown  = -not $SkipWorkspaceBreakdown
             ManagedRgPattern    = $ctx.ManagedRgPattern
             WindowStart         = $ctx.WindowStart.ToString('yyyy-MM-dd', $inv)
@@ -5774,7 +5751,7 @@ function Invoke-EbrMain {
         #endregion
     }
     catch {
-        Write-Progress -Id 1 -Activity 'EBR evidence' -Completed
+        Write-Progress -Id 1 -Activity 'CyberSOC evidence' -Completed
         Write-EbrFail $_.Exception.Message
         Write-EbrLog -Level CRITICAL -Component Main -Message $_.Exception.Message
         if ($ctx.OutDir -and (Test-Path $ctx.OutDir) -and $ctx.Manifest.Count) {

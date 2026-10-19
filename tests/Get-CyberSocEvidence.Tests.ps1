@@ -17,7 +17,7 @@ Describe 'Query catalog' {
     It 'contains every runbook query ID' {
         $expected = @(
             'P0.1', 'P0.2', 'P0.3', 'P0.4', 'P0.5',
-            'OUT.1', 'OUT.2', 'OUT.3', 'OUT.4', 'OUT.5', 'OUT.6', 'OUT.7', 'OUT.8',
+            'OUT.1', 'OUT.2', 'OUT.3', 'OUT.4', 'OUT.5', 'OUT.6', 'OUT.7',
             'DFC.1',
             'IA.1', 'IA.1-ADMINPORTAL', 'IA.2', 'IA.3', 'IA.3-DEVICECODE', 'IA.4', 'IA.4b', 'IA.5', 'IA.6', 'IA.7', 'IA.8', 'IA.9', 'IA.11', 'IA.13', 'IA.14',
             'EW.1', 'EW.3', 'EW.4', 'EW.5', 'EW.6', 'EW.7', 'EW.8', 'EW.9', 'EW.10', 'EW.12', 'EW.13', 'EW.14', 'EW.15', 'EW.16',
@@ -29,6 +29,14 @@ Describe 'Query catalog' {
         )
         $missing = $expected | Where-Object { $_ -notin $catalog.Id }
         $missing | Should -BeNullOrEmpty
+    }
+
+    It 'runs no data loss, exfiltration or compromise check (CyberSOC)' {
+        $catalog.Id | Should -Not -Contain 'OUT.8' -Because 'the account disable events only fed the malicious sign-in to containment timing'
+        $out4 = $catalog | Where-Object Id -eq 'OUT.4'
+        $out4.Query | Should -Not -Match 'ExfilOrImpactTactic|Exfiltration'
+        "$($out4.Title) $($out4.Notes)" | Should -Not -Match 'data loss|contain'
+        ($catalog | Where-Object Id -eq 'TI.5-RISK').Query | Should -Match '\| where RiskEventType !~ "adminConfirmedUserCompromised"' -Because 'an administrator compromise confirmation is not a detection'
     }
 
     It 'adds the CyberSOC trend, threat intelligence and vulnerability exposure queries' {
@@ -292,12 +300,12 @@ Describe 'Query catalog' {
         foreach ($id in 'IA.1', 'IA.1-ADMINPORTAL', 'IA.2', 'IA.2-METHOD', 'IA.3', 'IA.3-DEVICECODE', 'IA.4', 'IA.4b', 'IA.8-SUB', 'IA.8-SIGNINS', 'IA.14') {
             ($tenant | Where-Object Id -eq $id).TenantTable | Should -Be 'SigninLogs' -Because $id
         }
-        ($tenant | Where-Object Id -eq 'OUT.8').TenantTable | Should -Be 'AuditLogs'
+        $tenant.TenantTable | Should -Not -Contain 'AuditLogs' -Because 'OUT.8 is not collected, so nothing reads the tenant audit log'
         # CyberSOC: identity threat activity, Entra ID Protection risk detections and email threats.
         ($tenant | Where-Object Id -eq 'TI.5').TenantTable | Should -Be 'SigninLogs'
         ($tenant | Where-Object Id -eq 'TI.5-RISK').TenantTable | Should -Be 'AADUserRiskEvents'
         ($tenant | Where-Object Id -eq 'TI.6').TenantTable | Should -Be 'EmailEvents'
-        @($tenant).Count | Should -Be 15
+        @($tenant).Count | Should -Be 14
     }
 
     It 'checks for Defender XDR incidents synced into more than one workspace' {
@@ -1492,8 +1500,12 @@ Describe 'Get-EbrWorksheet' {
         function Get-Row([string]$Figure) { $ws | Where-Object Figure -eq $Figure | Select-Object -First 1 }
     }
 
-    It 'carries every row of the runbook slide map' {
-        $ws.Count | Should -Be 48
+    It 'carries every row of the runbook slide map, without the confirmed data loss, compromise and containment rows' {
+        $ws.Count | Should -Be 45
+        $ws.Figure | Should -Not -Contain 'Confirmed data loss or exfiltration'
+        $ws.Figure | Should -Not -Contain 'Identity compromises contained'
+        $ws.Figure | Should -Not -Contain 'Malicious sign-in to containment'
+        foreach ($row in $ws) { "$($row.Figure) $($row.Note)" | Should -Not -Match 'data loss|exfiltrat|compromis|containment' -Because $row.Figure }
     }
 
     It 'sums the estate inventory' { (Get-Row 'Azure resources in the estate').Value | Should -Be '15' }
@@ -1607,7 +1619,7 @@ Describe 'Get-EbrWorksheet with Graph results' {
         function Get-GRow([string]$Figure) { $ws | Where-Object Figure -eq $Figure | Select-Object -First 1 }
     }
 
-    It 'still carries 48 rows' { $ws.Count | Should -Be 48 }
+    It 'still carries 45 rows' { $ws.Count | Should -Be 45 }
 
     It 'reads the tenant Secure Score from POS.6 with its read date' {
         $row = Get-GRow 'Microsoft tenant Secure Score'
@@ -1744,7 +1756,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
     It 'uses all three workspaces and writes the pack' {
         @($params.Workspaces).Count | Should -Be 3
         Test-Path (Join-Path $outDir.FullName '01-worksheet.csv') | Should -BeTrue
-        @(Import-Csv (Join-Path $outDir.FullName '01-worksheet.csv')).Count | Should -Be 48
+        @(Import-Csv (Join-Path $outDir.FullName '01-worksheet.csv')).Count | Should -Be 45
     }
 
     It 'sets the 90-day window ending with the last full month, since every workspace holds data before it' {

@@ -215,7 +215,7 @@ union withsource = SourceTable isfuzzy = true ThreatIntelIndicators, ThreatIntel
 
 ### TI.2 Threat intelligence matches by month and indicator type
 
-Engine LA, combined only. CyberSOC. Detections from the threat intelligence analytics rules (TI map rules and Microsoft Threat Intelligence Analytics), informational severity excluded. Ticketed counts the ones correlated into an alert that opened an Atmosera ticket. A match means the indicator was observed in telemetry, not that compromise occurred.
+Engine LA, combined only. CyberSOC. Detections from the threat intelligence analytics rules (TI map rules and Microsoft Threat Intelligence Analytics), informational severity excluded. Ticketed counts the ones correlated into an alert that opened an Atmosera ticket. A match means the indicator was observed in telemetry, not an investigation finding.
 
 ```kql
 let Ticketed = SecurityIncident

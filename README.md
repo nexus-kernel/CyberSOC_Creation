@@ -17,6 +17,7 @@ with the two months before, and what needs attention".
 | Trend | Alerts by month | Alerts by week and month, response timing by month, alert types by title, scores by month, and the month at a glance with a neutral change from the previous month |
 | Threat intelligence | Ingestion and matches as two controls (DR.7, DR.8) | A page and a slide: indicators monitored, indicator matches by month, MITRE ATT&CK tactics and techniques on the alerts, identity threat activity and Entra ID Protection risk detections, email threats, malware on Azure virtual machines, and the CISA KEV-listed vulnerabilities present |
 | Vulnerability assessment | Exploitable vulnerabilities as one backlog figure (BKL.1) | A page and a slide from the monthly Atmosera.VulnAssessment runs: open findings by severity at each assessment, CISA KEV, public exploit, the change between assessments, top products to patch, remediation status and owner. The Defender current state when no run is imported |
+| Compromise and exfiltration | Confirmed data loss or exfiltration, identity compromises contained, malicious sign-in to containment (OUT.8), the exfiltration or impact tactic count on the true positives and the reviewed `Impact` determination | Not reported or collected. The report keeps the confirmed threats, the alerts the SOC classified as true positives, with their examples. Keep these out when merging EBR fixes |
 | Report | Security business review | CyberSOC monthly security report, same editions (internal HTML, client HTML, PowerPoint) and the same evidence and copy rules |
 
 Everything else carries over unchanged: the control matrix, the measured outcomes by pillar, the hardening
@@ -38,8 +39,8 @@ missing evidence never becomes a favorable zero.
    The pack is `CyberSOC-Evidence_<client>_<report month>_<timestamp>/`. Runs dated inside the window, up to the
    collection date, are imported, and only for this client's subscriptions.
 3. **Add reviewed context** if you have it (optional): copy `report/context.example.json` and add the analyst
-   highlights of the month (`MonthHighlights`), the reviewed impact determination, the open alert split and the
-   tenant Secure Score portal reading. Regenerate:
+   highlights of the month (`MonthHighlights`), the open alert split and the tenant Secure Score portal reading.
+   Regenerate:
 
    ```powershell
    pwsh ./New-CyberSocReport.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000 -ContextPath ./contoso-2026-09.json

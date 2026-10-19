@@ -66,7 +66,7 @@ Describe 'Offline HTML report generation' {
         $html | Should -Match '"WorkloadSubnets":2'
         $html | Should -Match '"Segmented":1'
         $html | Should -Match '"VmsWithoutBackup":2'
-        $html | Should -Match '"ExfilOrImpactTactic":false'
+        $html | Should -Not -Match 'ExfilOrImpactTactic' -Because 'the CyberSOC report carries no data loss flag, even from a pack collected with one'
         $html | Should -Not -Match 'secret-subnet|secret-vm|Secret incident title|Private comment|"Title"'
     }
     It 'reduces attack disruption results (OUT.7) to a count and never embeds their incident numbers or titles' {
@@ -120,8 +120,9 @@ Describe 'Offline HTML report generation' {
         '[{"IncidentNumber":130,"Title":"Password spray attack against Microsoft Entra ID application","Severity":"Medium","CreatedTime":"2026-07-28T04:15:35Z","Tactics":"[\"CredentialAccess\"]","ExfilOrImpactTactic":false},{"IncidentNumber":131,"Title":"Suspicious inbox manipulation rule","Severity":"High","CreatedTime":"2026-07-29T00:00:00Z","Tactics":"[\"Collection\"]","ExfilOrImpactTactic":true}]' |
             Set-Content (Join-Path $pack 'results/OUT.4.json')
         $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack)[0] -Raw
-        $html | Should -Match '"Severity":"Medium","ExfilOrImpactTactic":false,"Threat":"Title withheld","Tactics":"","Created":""'
-        $html | Should -Match '"Severity":"High","ExfilOrImpactTactic":true,"Threat":"Title withheld","Tactics":"","Created":""' -Because 'the data loss flag survives a row that could not be screened'
+        $html | Should -Match '"Severity":"Medium","Threat":"Title withheld","Tactics":"","Created":""'
+        $html | Should -Match '"Severity":"High","Threat":"Title withheld","Tactics":"","Created":""' -Because 'the severity survives a row that could not be screened'
+        $html | Should -Not -Match 'ExfilOrImpactTactic'
         ([regex]::Matches($html, 'An OUT\.4 row could not be screened, so its title was withheld')).Count | Should -Be 1 -Because 'the review note is added once per report, not once per row'
         # The embedded data, not the report code: the CyberSOC model names Entra ID Protection detection types such as
         # Suspicious inbox manipulation rules.
@@ -223,7 +224,7 @@ Describe 'Offline HTML report generation' {
         '{"ClientName":"Example Client","TenantId":"example-tenant","ServiceStartDate":"2024-01-15","TenantScore":{"Current":45,"Max":100,"ReadDate":"2026-10-08","Source":"Portal"},"Delivered":[],"Actions":[{"Key":"critical","Status":"Scheduled","Owner":"Client infrastructure team","TargetDate":"2026-11-30","Reference":"CHG-400","Reviewed":"2026-10-10","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"}],"Impact":{"Confirmed":0,"Reviewed":"2026-10-10","Reference":"CHG-123","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"},"OpenAlertNote":{"AwaitingClient":2,"InProgress":1,"Reviewed":"2026-10-10","Reference":"ZD 9900200","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"},"ResponseTargetMinutes":60,"Raised":999}' | Set-Content $ctx
         $html = Get-Content (& $generator -SkipDeck -EvidencePath $pack -ContextPath $ctx)[0] -Raw
         $html | Should -Match '"ServiceStartDate":"2024-01-15"'
-        $html | Should -Match '"Impact":\{"Confirmed":0,"Reviewed":"2026-10-10","Reference":"CHG-123","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"\}'
+        $html | Should -Not -Match '"Impact":\{|CHG-123' -Because 'the CyberSOC report takes no impact determination, so an Impact record copied from an EBR context file is dropped'
         $html | Should -Match '"OpenAlertNote":\{"AwaitingClient":2,"InProgress":1,"Reviewed":"2026-10-10","Reference":"ZD 9900200","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"\}'
         $html | Should -Match '"ResponseTargetMinutes":60'
         $html | Should -Match '"Actions":\[\{"Key":"critical","Status":"Scheduled","Owner":"Client infrastructure team","TargetDate":"2026-11-30","Reference":"CHG-400","Reviewed":"2026-10-10","WindowStart":"2026-07-01","WindowEnd":"2026-09-30"\}\]'

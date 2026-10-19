@@ -1,0 +1,10 @@
+{
+  "repository": "nexus-kernel/CyberSOC_Creation",
+  "enabled": false,
+  "activation_after": null,
+  "independent_code_triggers_disabled": false,
+  "security_review_required": true,
+  "ordinary_completed_rounds": 3,
+  "native_merge_policy_verified": false,
+  "merge_queue_required": null
+}

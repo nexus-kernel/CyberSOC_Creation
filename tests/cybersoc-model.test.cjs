@@ -134,13 +134,25 @@ test('threat intelligence aggregates by kill chain order, names techniques and r
   assert.deepEqual(t.risk.rows.map(r => r.label), ['Unfamiliar sign-in properties', 'Some new detection'])
   assert.equal(t.identity.riskVisible, true)
   assert.ok(cs.summary.some(s => /most often initial access\. A tactic is a label recorded at detection, not an investigation finding\./.test(s)))
-  assert.ok(!strings(cs).some(s => /\breached\b|compromise occurred|no impact/i.test(s)))
+  assert.ok(!strings(cs).some(s => /\breached\b|compromise|no impact/i.test(s)))
+  assert.ok(![...cs.presenter, ...cs.review].some(n => /compromise/i.test(n.text)), 'the presenter and review notes word a match as an observation, never against a compromise')
   assert.ok(cs.review.some(r => r.title === 'Threat intelligence boundaries'))
   // Risk levels hidden from the tenant leave the risky sign-in row out rather than reading zero.
   const p = full(); put(p, 'TI.5', months.map(Month => ({ Month, SignIns: 100, RiskHidden: 90, RiskySignIns: 0 })))
   const hidden = both(p).cs
   assert.equal(hidden.threat.identity.riskVisible, false)
   assert.ok(!hidden.glance.rows.some(r => r.label === 'Medium and high risk sign-ins'))
+})
+
+test('an administrator compromise confirmation is not a risk detection and stays out of every risk figure', () => {
+  const base = both(full()).cs.threat.risk
+  const p = full()
+  put(p, 'TI.5-RISK', [...p.results['TI.5-RISK'], { Month: '2026-09-01', RiskEventType: 'adminConfirmedUserCompromised', Detections: 2, Users: 2, High: 2 }, { Month: '2026-08-01', RiskEventType: 'AdminConfirmedUserCompromised', Detections: 1, Users: 1, High: 1 }])
+  const { cs } = both(p)
+  const risk = cs.threat.risk
+  assert.deepEqual([risk.rows, risk.total, risk.month, risk.byMonth], [base.rows, base.total, base.month, base.byMonth])
+  assert.ok(!strings(cs).some(s => /compromis/i.test(s)), strings(cs).find(s => /compromis/i.test(s)))
+  assert.equal(C.RISK_TYPES.adminconfirmedusercompromised, undefined)
 })
 
 test('vulnerability management reads the assessment runs, with the KEV listing, the change and the owners', () => {

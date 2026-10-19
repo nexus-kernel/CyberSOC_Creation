@@ -21,10 +21,6 @@ class ManualRetryTests(unittest.TestCase):
         env = patch.dict(gate.os.environ, {'GITHUB_ACTIONS': 'false', 'GITHUB_OUTPUT': ''})
         env.start()
         self.addCleanup(env.stop)
-        if hasattr(gate, 'require_legacy_disabled'):
-            isolation = patch.object(gate, 'require_legacy_disabled')
-            self.isolation = isolation.start()
-            self.addCleanup(isolation.stop)
 
     def prior(self, **updates):
         run = {'id': 10, 'run_attempt': 1, 'head_branch': 'main', 'event': 'workflow_dispatch',
@@ -37,7 +33,7 @@ class ManualRetryTests(unittest.TestCase):
         pr = {'head': {'sha': SHA}}
         checks = [check_error or pr, late_error or pr]
         with patch.object(gate, 'check', side_effect=checks) as check, \
-             patch.object(gate, 'gh_api', side_effect=[{'default_branch': 'main'}, pages, [{'total_count': 0, 'workflow_runs': []}]]) as api, \
+             patch.object(gate, 'gh_api', side_effect=[{'default_branch': 'main'}, [{'total_count': 0, 'workflow_runs': []}], pages]) as api, \
              patch.object(gate.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as post:
             result = gate.main(['--repo', 'owner/repo', '--pr', '1', '--dispatch', mode])
         return result, check, post, api
@@ -140,15 +136,6 @@ class ManualRetryTests(unittest.TestCase):
         result, check, post, _ = self.invoke([{'total_count': 1, 'workflow_runs': [self.prior()]}], late_error=gate.Blocked('Head changed'))
         self.assertEqual(result, 1)
         self.assertEqual(check.call_args.args, ('owner/repo', 1, SHA))
-        post.assert_not_called()
-
-    def test_manual_mode_does_not_bypass_void_isolation(self):
-        if not hasattr(gate, 'require_legacy_disabled'):
-            return  # Rapid7/Sentinel have no Void-specific isolation prerequisite.
-        self.isolation.side_effect = gate.Blocked('Legacy workflow active')
-        result, check, post, _ = self.invoke([{'total_count': 1, 'workflow_runs': [self.prior()]}])
-        self.assertEqual(result, 1)
-        check.assert_not_called()
         post.assert_not_called()
 
     def test_invalid_mode_combinations_are_rejected(self):

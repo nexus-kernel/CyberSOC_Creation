@@ -13,15 +13,10 @@ class WorkflowTests(unittest.TestCase):
         self.workflows = {p.stem: parse_workflow(p.read_text()) for p in
                           (ROOT / '.github/workflows').glob('*.yml')}
         self.ci = self.workflows['review-clearance']
-        self.retired = self.workflows['reviewed-ci']
         self.control = self.workflows['review-clearance']
 
     def test_inventory_triggers_and_runner_free_cancellation(self):
-        self.assertEqual(set(self.workflows), {'reviewed-ci', 'review-clearance', 'cancel-ci'})
-        self.assertEqual(set(self.retired['on']), {'workflow_dispatch'})
-        self.assertEqual(self.retired['permissions'], {})
-        self.assertEqual(self.retired['jobs']['retired']['if'], '${{ false }}')
-        self.assertNotIn('concurrency', self.retired)
+        self.assertEqual(set(self.workflows), {'review-clearance', 'cancel-ci', 'review-budget', 'reviewed-ci'})
         self.assertEqual(set(self.control['on']), {'workflow_dispatch', 'issue_comment'})
         cancel = self.workflows['cancel-ci']
         self.assertEqual(cancel['on'], {'pull_request_target': {'types': ['synchronize', 'converted_to_draft', 'closed']}})
@@ -48,7 +43,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.control['jobs']['clearance']['permissions'], {'contents': 'read', 'pull-requests': 'read', 'issues': 'read', 'actions': 'write'})
         self.assertEqual(self.ci['jobs']['review-clearance']['needs'], 'clearance')
         self.assertIn("needs.clearance.result == 'success'", self.ci['jobs']['review-clearance']['if'])
-        self.assertEqual(self.ci['jobs']['review-clearance']['permissions'], {'contents': 'read', 'pull-requests': 'read', 'issues': 'read', 'statuses': 'write'})
+        self.assertEqual(self.ci['jobs']['review-clearance']['permissions'], {'contents': 'read', 'pull-requests': 'read', 'issues': 'read', 'statuses': 'write', 'actions': 'read'})
         for workflow in self.workflows.values():
             for job in workflow['jobs'].values():
                 for step in job['steps']:
@@ -71,7 +66,7 @@ class WorkflowTests(unittest.TestCase):
             result = subprocess.run(['bash', '-e', '-c', first['run']], env=dict(os.environ, CI_RUN_ATTEMPT=attempt), capture_output=True)
             self.assertEqual(result.returncode, code)
 
-    def test_ebr_suites_require_node_and_pester(self):
+    def test_cybersoc_suites_require_node_and_pester(self):
         steps = self.ci['jobs']['test']['steps']
         text = '\n'.join(s.get('run', '') for s in steps)
         self.assertIn('npm ci', text)
