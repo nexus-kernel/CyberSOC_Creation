@@ -1,8 +1,25 @@
 # Get-CyberSocEvidence.ps1
 
-**READ-ONLY.** This script runs every query in the *EBR Security Evidence Collection Runbook*
-(Oct 7, 2026) for one client and writes an evidence pack. Every figure in it traces back to a
-query ID. You supply the client's tenant and subscription IDs; the script does the rest.
+**READ-ONLY.** This script collects the evidence for the monthly CyberSOC report of one client and writes an
+evidence pack. It runs every query in the *EBR Security Evidence Collection Runbook* (Oct 7, 2026) over the
+90-day window that ends with the report month, plus the trend, threat intelligence and vulnerability exposure
+queries of the *CyberSOC Monthly Report Runbook*, and imports the monthly vulnerability assessment runs. Every
+figure in it traces back to a query ID. You supply the client's tenant and subscription IDs, and the report month
+when it is not the last full month.
+
+It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What is different:
+
+- **Window.** The report month (`-ReportMonth yyyy-MM`, the last full month by default) and the two full months
+  before it, not the maximum reach. A month that has not ended is refused. See [The reporting window](#the-reporting-window).
+- **Phase 5.** TI.0 to TI.7 (threat intelligence) and VA.1 to VA.3 (vulnerability exposure) run after Phases 3
+  and 4, as step 10 of 11. OUT.2-MONTH, OUT.3-WEEK and OUT.9 join Phase 1 for the trend.
+- **Vulnerability assessment.** `-VulnAssessmentPath` imports the Atmosera.VulnAssessment runs dated inside the
+  window (VA.RUNS, VA.CHANGE, VA.TOP, VA.KEV). See the runbook, section 4.
+- **Pack name.** `CyberSOC-Evidence_<client>_<report month>_<yyyyMMdd-HHmmss>/`.
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.0.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+  `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
+
+Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
 
 ## Quick start
 
@@ -18,8 +35,17 @@ pwsh ./Get-CyberSocEvidence.ps1 -TenantId contoso.onmicrosoft.com -SubscriptionI
 ```
 
 ```bash
+pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1>,<sub2> -ReportMonth 2026-09 -VulnAssessmentPath ./VULN_ASSESSMENT
+```
+
+The September 2026 report: July 1 to September 30, 2026, with every vulnerability assessment run in that folder
+that is dated inside the window and assessed these subscriptions.
+
+```bash
 pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1>,<sub2> -WindowStart 2026-01-01 -WindowEnd 2026-07-31
 ```
+
+An explicit window still works. The report month is then the month of `WindowEnd`.
 
 ```bash
 pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -DryRun
@@ -52,7 +78,9 @@ as not onboarded. `-PatchExclusionTagPattern ''` turns off the tag-based patch e
 | Sentinel workspaces | Every workspace with the SecurityInsights solution in those subscriptions. One per subscription is normal. See [Multiple workspaces](#multiple-workspaces) | `-WorkspaceResourceId` (one or more) |
 | Managed resource group pattern | `aznativesol0`, the same on every client subscription. Every resource that belongs to it is excluded from evaluation. ARG queries test the resource id. Records that describe another resource test that resource's id instead: backup items (`DP.5`, `DP.5-STALE`, `DP.5b`), policy states (`DR.6-INITIATIVE`), Defender for Cloud alerts (`BKL.2`), Defender devices in Advanced Hunting (`AzureResourceId`) and recommendation snapshots (`POS.8`). Subscription-level results (`P0.3`, `POS.1`, `POS.3`, `POS.5`, `POS.7`) and the workspace inventory (`P0.2`) carry no exclusion | `-ManagedRgPattern` (`''` removes the exclusion) |
 | Alert scope | Only incidents whose comments or closing comment reference an Atmosera ticket (Zendesk ticket URL, or `per ZD ticket NNNN`). Informational severity is excluded. Applies to OUT.1 to OUT.7, and detections (OUT.5, OUT.6) are limited to the alerts linked to those incidents | `-TicketPattern` (an RE2 regular expression, no double quotes) |
-| Incident reporting window | From the first full month of `SecurityIncident` data in any workspace (P0.1) to the end of the last full month. This gives the maximum reach | `-WindowStart` / `-WindowEnd` (yyyy-MM-dd) |
+| Report month | The last full month | `-ReportMonth` (yyyy-MM). A month that has not ended is refused |
+| Incident reporting window | The report month and the two full months before it, the 90-day trend. A client whose `SecurityIncident` data (P0.1), or workspace retention, starts later gets a shorter window from its first full month of data | `-WindowStart` / `-WindowEnd` (yyyy-MM-dd). The report month is then the month of `WindowEnd` |
+| Vulnerability assessment runs | None. Phase 5 then reads the Defender current state (VA.1 to VA.3) only | `-VulnAssessmentPath` (run folders, per_client folders or run CSVs) |
 | Posture read date | The run date | n/a |
 | Service start date | Not available from any API. The worksheet marks it MANUAL | n/a |
 | Device scope | Every Defender device query (EW.1, EW.1-DEVICES, EW.1-VMS, EW.3, EW.4, EW.5, EW.12, EW.14, EW.15, EW.16, NB.8, NB.10, NB.11, DR.5, DR.12, BKL.1) reads Azure virtual machines only, `isnotempty(AzureResourceId)`. Workstations, laptops and other endpoints that are not Azure resources are never counted (1.14.0) | n/a |
@@ -233,6 +261,32 @@ in the pack (`results/<ID>.csv`).
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
 - Managed resource group exclusion on every query that names a resource (collector 1.9.0). Before 1.9.0 only the ARG property queries carried it, so Defender devices, backup items, policy states, Defender for Cloud alerts and recommendation snapshots from `aznativesol0` were still counted.
 
+## The reporting window
+
+| Case | Window |
+|---|---|
+| Run on Oct 19, 2026, no parameter | Jul 1 to Sep 30, 2026, report month September 2026 |
+| `-ReportMonth 2026-01` | Nov 1, 2025 to Jan 31, 2026 |
+| SecurityIncident data starts Aug 14, 2026 | Sep 1 to Sep 30, 2026, shortened to the first full month of data |
+| SecurityIncident data starts Sep 15, 2026 | Sep 1 to Sep 30, 2026, a partial first month, and the basis says so |
+| `-ReportMonth 2026-10` on Oct 19, 2026 | Refused: the month has not ended |
+
+The basis is written to `WindowBasis` in `00-parameters.json` and to the notes. Workspace retention shorter than
+the window still raises the EBR warning, and months before the data starts are never shown as zero.
+
+## Phase 5: threat intelligence and vulnerability exposure
+
+TI.0 runs first, per workspace and combined, and tells which threat intelligence and telemetry tables Sentinel
+holds in the window. A missing table makes the measure that reads it not collected, never a zero. EmailEvents
+(TI.6) is read once from the workspace that holds the most of it, and the Entra ID Protection risk detections
+(TI.5-RISK) from the workspace that holds the sign-ins, for the same reason SigninLogs is read once. TI.7 and VA.1
+to VA.3 use Advanced Hunting with the Sentinel fallback of every AH query, and read Azure virtual machines only.
+
+With `-VulnAssessmentPath` the run files are read offline after the queries (`Import-CyberSocVulnAssessment.ps1`,
+which can also add them to an existing pack). The runs used and skipped are listed in the notes, in the VA.RUNS
+detail of the manifest and in `00-parameters.json` (`VulnAssessment`). The full rules are in the
+[CyberSOC Monthly Report Runbook](CyberSOC%20Monthly%20Report%20Runbook.md).
+
 ## Output
 
 Completed collections also create an offline executive HTML report. See
@@ -241,12 +295,12 @@ existing-pack generation and dated delivery context. Keep `New-CyberSocReport.ps
 the `report` folder beside the collector. The default depth is Balanced. Use
 `-ReportDepth Brief` or `-ReportDepth Detailed` to change it, or `-SkipHtmlReport` to opt out.
 
-The script writes `CyberSOC-Evidence_<client>_<yyyyMMdd-HHmmss>/`:
+The script writes `CyberSOC-Evidence_<client>_<report month yyyy-MM>_<yyyyMMdd-HHmmss>/`:
 
 | File | Contents |
 |---|---|
 | `00-manifest.csv` | One row per result set: ID, phase, engine, source, status (OK, EMPTY, PARTIAL, UNAVAILABLE, FAILED, SKIPPED, MANUAL), row count, read time (UTC), detail (which workspaces were combined, missing or failed) and the runbook guidance |
-| `00-parameters.json` | Tenant, subscriptions, workspaces and how each is reached, which workspace supplied the tenant-wide tables, window and its basis, managed RG pattern, warnings |
+| `00-parameters.json` | Tenant, subscriptions, workspaces and how each is reached, which workspace supplied the tenant-wide tables, window and its basis, the report month and trend months, the vulnerability assessment runs used and skipped, managed RG pattern, warnings |
 | `01-worksheet.csv` | The runbook's slide map (48 rows). Values are filled in wherever they can be derived, each with a read date and a note. `MANUAL` means a portal reading; `REVIEW` means the data is collected but an analyst has to do the calculation. The MFA rows quote **members**, with guests and other user types in the note. A user counts as challenged when any successful sign-in satisfied MFA through the requirement field, a step detail claim (in the token or from an external identity provider) or `MfaDetail`, so federated tenants are not under-counted. The note states how many members relied on an external provider claim. When automation rules closed at least half the incidents, the close-time rows quote the **analyst-handled** figures (OUT.2-ANALYST, per the runbook), labelled as such, with the all-incident figure in the note. Fewer than 20 incidents behind a median or P90 adds a small-sample caveat. The anti-malware row quotes the weakest check and lists every check, with scope and OS, in the note. Privileged roles read "N role assignments across M accounts", because PIM state is unknown without Graph |
 | `02-notes.txt` | Ticket notes ready to paste: scope, collection summary, key figures, attention items |
 | `04-secops-worklist.md`, `04-secops-worklist.csv` | Internal SecOps worklist written by `New-CyberSocSecOpsWorklist.ps1`: open alerts with incident number and Zendesk ticket, closures without a documented disposition, devices not onboarded or with an inactive sensor, virtual machines without backup, stale backup items and the row-level platform gaps. Names resources, so it stays with the SecOps team. `-SkipSecOpsWorklist` opts out. See [SecOps worklist](New-CyberSocSecOpsWorklist.README.md) |

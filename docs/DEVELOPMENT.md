@@ -1,5 +1,12 @@
 # Development and cloud environment
 
+CyberSOC note: this document was written for EBR_Creation and applies unchanged to this copy, with the scripts
+renamed (`Get-CyberSocEvidence.ps1`, `New-CyberSocReport.ps1` and the rest) and evidence packs named
+`CyberSOC-Evidence_*`. The suites now also hold `tests/Import-CyberSocVulnAssessment.Tests.ps1` and
+`tests/cybersoc-model.test.cjs`, with the synthetic vulnerability assessment runs in `tests/fixtures/vuln-assessment`.
+On Oct 19, 2026 the copy passed 278 Pester tests and 181 Node tests (one optional real-pack comparison skipped)
+and the 190 gate tests. The provenance and counts below are the EBR history.
+
 Use Linux, PowerShell 7, Pester 5.9.1, Node 24 LTS (application supports Node 18+),
 Python 3.10+ (3.12 recommended), npm, Git and GitHub CLI. The gate uses Python's
 standard library and gh; workflow regression tests additionally need

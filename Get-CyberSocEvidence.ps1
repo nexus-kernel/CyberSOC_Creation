@@ -5571,11 +5571,19 @@ function Invoke-EbrMain {
             if (-not (Test-Path -LiteralPath $importer)) { throw 'Import-CyberSocVulnAssessment.ps1 is missing from the collector folder.' }
             # Dot-sourcing runs the importer's param block in this scope, which resets $VulnAssessmentPath, so keep it first.
             $vaPaths = @($VulnAssessmentPath)
-            . $importer -LoadFunctionsOnly
-            $va = Get-CyberSocVulnAssessmentResults -Path $vaPaths -Subscriptions $ctx.Subscriptions -WindowStart $ctx.WindowStart -ReadDate $ctx.StartedUtc -ReportMonth $ctx.ReportMonth
-            foreach ($r in $va.Results) { Add-EbrResult -Ctx $ctx -Item ($va.Items | Where-Object Id -eq $r.ResultId | Select-Object -First 1) -Result $r }
-            $ctx.VulnAssessment = $va.Parameters
-            foreach ($w in $va.Warnings) { $ctx.Warnings.Add($w); Write-EbrWarn $w }
+            try {
+                . $importer -LoadFunctionsOnly
+                $va = Get-CyberSocVulnAssessmentResults -Path $vaPaths -Subscriptions $ctx.Subscriptions -WindowStart $ctx.WindowStart -ReadDate $ctx.StartedUtc -ReportMonth $ctx.ReportMonth
+                foreach ($r in $va.Results) { Add-EbrResult -Ctx $ctx -Item ($va.Items | Where-Object Id -eq $r.ResultId | Select-Object -First 1) -Result $r }
+                $ctx.VulnAssessment = $va.Parameters
+                foreach ($w in $va.Warnings) { $ctx.Warnings.Add($w); Write-EbrWarn $w }
+            }
+            catch {
+                # The queries are collected. A failed import leaves the vulnerability page on the Defender reading, and
+                # Import-CyberSocVulnAssessment.ps1 can add the runs to the pack afterwards.
+                $msg = "Vulnerability assessment import failed, so the pack has no VA.RUNS: $($_.Exception.Message) Add the runs later with Import-CyberSocVulnAssessment.ps1."
+                $ctx.Warnings.Add($msg); Write-EbrWarn $msg
+            }
         }
         #endregion
 

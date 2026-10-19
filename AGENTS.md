@@ -1,4 +1,7 @@
-# EBR repository work
+# CyberSOC repository work
+
+This repository is the monthly CyberSOC copy of EBR_Creation and follows the same process. README.md describes
+how it differs and how EBR fixes are merged in.
 
 Work on a topic branch. Open draft PRs when publication is authorized. Void reviews
 the draft first; resolve its findings before marking the PR ready. Request Codex
@@ -21,7 +24,7 @@ Safe local validation:
   or not-run Pester tests as failure.
 - Run actionlint and `git diff --check` after workflow changes.
 
-Do not run evidence collection, Azure/Exchange sign-ins, or tenant operations for
+Do not run evidence collection, Azure/Exchange sign-ins, vulnerability assessments or tenant operations for
 CI validation. Unit tests use fixtures and mocks. The safe controls-standard
 HTML/PPTX generation can be used as a local smoke test.
 
