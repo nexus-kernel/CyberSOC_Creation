@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, and 1.2.0 for NB.6-PAAS-DETAIL. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, and 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request (see `New-CyberSocChangeRequests.README.md`). The report embeds counts
 only. These lists name client resources and stay internal.
 
@@ -588,7 +588,7 @@ resources
 
 ### DP.4-ELIGIBILITY Virtual machines that can take encryption at host
 
-Engine ARG, then the Compute resource SKUs API. The virtual machines without encryption at host, network virtual appliances and scale sets left out, with whether each can take it. A machine that ever used Azure Disk Encryption cannot: its disks keep an encryptionSettingsCollection, enabled or not, or it carries an ADE extension. Nor can a machine with an attached Ultra Disk or Premium SSD v2 that uses 512e sectors and was created before May 13, 2023. Size support is not in Resource Graph, so for each region the collector reads `GET https://management.azure.com/subscriptions/<id>/providers/Microsoft.Compute/skus?api-version=2021-07-01&$filter=location eq '<region>'` (Reader is enough) through one of the subscriptions there, trying the next one if a read fails, and takes the EncryptionAtHostSupported capability of each size. A size the list cannot answer for, or a region whose list could not be read, reads Unknown. The result reads PARTIAL when some lists could not be read or Resource Graph truncated the machine list, and FAILED when no list could be read. CR-09 lists only the eligible machines and names the others in the index, so no machine is deallocated for a change Azure would reject.
+Engine ARG, then the Compute resource SKUs API. The virtual machines without encryption at host, network virtual appliances and scale sets left out, with whether each can take it. A machine that ever used Azure Disk Encryption cannot: its disks keep an encryptionSettingsCollection, enabled or not, or it carries an ADE extension. Nor can a machine with an attached Ultra Disk or Premium SSD v2 that uses 512e sectors and was created before May 13, 2023. Size support is not in Resource Graph, so for each region the collector reads `GET https://management.azure.com/subscriptions/<id>/providers/Microsoft.Compute/skus?api-version=2021-07-01&$filter=location eq '<region>'` (Reader is enough) through one of the subscriptions there, trying the next one if a read fails, and takes the EncryptionAtHostSupported capability of each size. A size the list cannot answer for, or a region whose list could not be read, reads Unknown. The result reads PARTIAL when some lists could not be read or Resource Graph truncated the machine list, and FAILED when no list could be read. From collector 1.3.0 each row carries ScaleSet, the lowercase ID of the Flexible scale set the machine belongs to (empty for a standalone machine). CR-09 lists only the eligible machines and names the others in the index, so no machine is deallocated for a change Azure would reject, and leaves the machines of a Flexible scale set with a model to CR-15, which also requires every one of them to be eligible.
 
 ```kql
 resources
@@ -598,7 +598,8 @@ resources
 | where not(coalesce(tobool(properties.securityProfile.encryptionAtHost), false))
 | project VmKey = tolower(id), ResourceId = id, Name = name, resourceGroup, subscriptionId, Location = tolower(location),
           Size = tostring(properties.hardwareProfile.vmSize),
-          PowerState = tostring(properties.extended.instanceView.powerState.code)
+          PowerState = tostring(properties.extended.instanceView.powerState.code),
+          ScaleSet = tolower(tostring(properties.virtualMachineScaleSet.id))
 | join kind=leftouter (
     resources
     | where type =~ "microsoft.compute/disks"
@@ -621,7 +622,41 @@ resources
   ) on VmKey
 | extend AdeUsed       = coalesce(AdeDisks, 0) > 0 or coalesce(AdeExtensions, 0) > 0,
          OldSectorDisk = coalesce(OldSectorDisks, 0) > 0
-| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed, OldSectorDisk
+| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, ScaleSet, AdeUsed, OldSectorDisk
+| order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### DP.4-VMSS-ELIGIBILITY Scale sets that can take encryption at host
+
+Engine ARG, then the Compute resource SKUs API. CyberSOC collector 1.3.0. The scale sets whose model, `virtualMachineProfile.securityProfile.encryptionAtHost`, is not set, network virtual appliances left out, one row each with the orchestration mode (a scale set without one is Uniform), the upgrade policy mode, the instance count (`sku.capacity`) and the size of the model, and whether the model can take encryption at host. A scale set that ever used Azure Disk Encryption cannot: the extensions on its model are searched for AzureDiskEncryption, which also matches AzureDiskEncryptionForLinux. An extension removed from the model leaves no trace in Resource Graph, which is a limit of this check. The disks of a Uniform instance are not Resource Graph resources, so an Ultra Disk or Premium SSD v2 in the model of a scale set created before May 13, 2023, or with no creation time, rules it out, since those disks may use 512e sectors from before that date. Size support is read as in DP.4-ELIGIBILITY, one size list per region. A scale set in the node resource group of an AKS cluster (`properties.nodeResourceGroup` of a `microsoft.containerservice/managedclusters` resource in the same subscription), or with a tag that starts with `aks-managed-`, is an AKS node pool. AKS manages its model and sets encryption at host only when a node pool is created, so it is never eligible, its size is not read, and the row names the cluster, its resource group and the node pool (`aks-managed-poolName`). A Flexible scale set without a model has nothing to set and its size is not read either. Its machines are standalone virtual machines in DP.4-ELIGIBILITY and CR-09. The result reads PARTIAL when a size list it needed could not be read or Resource Graph truncated the list, and FAILED when none it needed could be read. Feeds CR-15, its client email and the AKS note in the change request index. A Flexible scale set goes into CR-15 only when each of its machines in DP.4-ELIGIBILITY is eligible too.
+
+```kql
+resources
+| where type =~ "microsoft.compute/virtualmachinescalesets"
+| where id !contains "{{MRG}}"
+| where not({{APPLIANCE}})   // network virtual appliances, see P0.6-APPLIANCES
+| where not(coalesce(tobool(properties.virtualMachineProfile.securityProfile.encryptionAtHost), false))
+// AKS creates the scale set of each node pool in the node resource group of its cluster.
+| extend NodeRgKey = strcat(tolower(subscriptionId), "/", tolower(resourceGroup))
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.containerservice/managedclusters"
+    | project NodeRgKey = strcat(tolower(subscriptionId), "/", tolower(tostring(properties.nodeResourceGroup))),
+              AksCluster = name, AksClusterResourceGroup = resourceGroup
+  ) on NodeRgKey
+| extend Model = properties.virtualMachineProfile
+| extend OrchestrationMode = coalesce(tostring(properties.orchestrationMode), "Uniform"),
+         UpgradePolicy     = tostring(properties.upgradePolicy.mode),
+         Instances         = toint(sku.capacity),
+         Size              = tostring(sku.name),
+         HasModel          = isnotnull(Model),
+         AdeUsed           = tostring(Model.extensionProfile.extensions) contains "AzureDiskEncryption",
+         OldSectorDisk     = tostring(Model.storageProfile.dataDisks) has_any ("UltraSSD_LRS", "PremiumV2_LRS")
+                             and coalesce(todatetime(properties.timeCreated), datetime(2000-01-01)) < datetime(2023-05-13),
+         AksNodePool       = tostring(tags["aks-managed-poolName"]),
+         Aks               = isnotempty(AksCluster) or tostring(bag_keys(tags)) contains "aks-managed-"
+| project Name = name, ResourceId = id, resourceGroup, subscriptionId, Location = tolower(location), OrchestrationMode,
+          UpgradePolicy, Instances, Size, HasModel, AdeUsed, OldSectorDisk, Aks, AksCluster, AksClusterResourceGroup, AksNodePool
 | order by subscriptionId asc, resourceGroup asc, Name asc
 ```
 

@@ -7,10 +7,12 @@
     out on the change request template: diagnostic logging through the ATMO-MXDR-DIAG-TOSENT initiative
     (assigned where it is missing, and remediated where resources are not compliant),
     secure transfer and minimum TLS 1.2 on storage accounts, minimum TLS 1.2 on App Service, Azure SQL,
-    Azure Cache for Redis, Service Bus, Event Hubs and Azure Cosmos DB, and Key Vault purge protection.
-    The changes that need the client first (purge protection, which cannot be undone, anonymous blob
-    access, HTTPS only on App Service, encryption at host and minimum TLS 1.2 on Event Hubs) also get a
-    client email, drafted and ready to send.
+    Azure Cache for Redis, Service Bus, Event Hubs and Azure Cosmos DB, Key Vault purge protection, and
+    encryption at host on virtual machines and scale sets. The changes that need the client first (purge
+    protection, which cannot be undone, anonymous blob access, HTTPS only on App Service, encryption at
+    host and minimum TLS 1.2 on Event Hubs) also get a client email, drafted and ready to send. AKS node
+    pools take encryption at host only when a node pool is created, so the index routes them to a planned
+    project instead of a change request.
 
     Every testing plan is a check in the Azure portal, every reference is a Microsoft Learn page and the
     notification list is left empty to fill in. The files name client resources, so they stay internal
@@ -42,9 +44,9 @@
     ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000 -DrClient -ClientContact 'Dana' -SenderName 'Scott'
 .NOTES
     The per-resource results (P0.7, NB.4-DETAIL, NB.5-DETAIL, NB.6-DETAIL, DP.1-DETAIL, DP.2-DETAIL,
-    DP.4-ELIGIBILITY, DR.6-COVERAGE and DR.6-NONCOMPLIANT) were added in CyberSOC collector 1.1.0, and
-    NB.6-PAAS-DETAIL in 1.2.0. Changes that read them say "needs recollection" on packs collected with an
-    earlier version.
+    DP.4-ELIGIBILITY, DR.6-COVERAGE and DR.6-NONCOMPLIANT) were added in CyberSOC collector 1.1.0,
+    NB.6-PAAS-DETAIL in 1.2.0 and DP.4-VMSS-ELIGIBILITY in 1.3.0. Changes that read them say "needs
+    recollection" on packs collected with an earlier version.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -73,6 +75,7 @@ $inv = [cultureinfo]::InvariantCulture
 $detailVersions = @{}
 foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DP.4-ELIGIBILITY', 'DR.6-COVERAGE', 'DR.6-NONCOMPLIANT') { $detailVersions[$id] = '1.1.0' }
 $detailVersions['NB.6-PAAS-DETAIL'] = '1.2.0'
+$detailVersions['DP.4-VMSS-ELIGIBILITY'] = '1.3.0'
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -398,6 +401,31 @@ function Get-PaasTlsResource([string]$Type) {
     , @(Get-Rows 'NB.6-PAAS-DETAIL' | Where-Object { (Get-Text $_.ResourceType) -ieq $Type } |
             ForEach-Object { New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('minimum TLS ' + (Format-TlsVersion $_.MinimumTlsVersion)) $_.ResourceId })
 }
+
+# DP.4-VMSS-ELIGIBILITY lists the scale sets whose model lacks encryption at host. The machines of a
+# Flexible scale set are virtual machines, so DP.4-ELIGIBILITY lists them too (with their scale set since
+# collector 1.3.0). Those of a scale set with a model are changed with it in CR-15, not in CR-09.
+function Test-ResultRead([string]$Id) { (Get-Status $Id) -in 'OK', 'PARTIAL', 'EMPTY' -and -not (Test-Unreadable $Id) }
+function Get-ScaleSetModels {
+    $models = @{}
+    if (Test-ResultRead 'DP.4-VMSS-ELIGIBILITY') {
+        foreach ($r in @(Get-Rows 'DP.4-VMSS-ELIGIBILITY' | Where-Object { (Test-True $_.HasModel) -and -not (Test-True $_.Aks) })) { $models[(Get-Text $r.ResourceId).ToLowerInvariant()] = ConvertTo-CopyText $r.Name }
+    }
+    $models
+}
+function Get-ScaleSetText($value) { (Get-Text $value).ToLowerInvariant() }
+# The first two steps of CR-09 and CR-15. Each command names its subscription, so neither step depends on
+# the subscription Cloud Shell was left on and step 2 checks every one, not only the last registered.
+function New-EncryptionAtHostRegistration($resources) {
+    $subscriptions = @($resources | ForEach-Object SubscriptionId | Sort-Object -Unique)
+    $register = @('In the Azure portal, open Cloud Shell in Bash and register the EncryptionAtHost feature on each subscription in the RESOURCES section:')
+    foreach ($s in $subscriptions) { $register += "az feature register --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s" }
+    $check = @('Wait for the registration on each subscription, running these until every one returns Registered:')
+    foreach ($s in $subscriptions) { $check += "az feature show --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s --query properties.state -o tsv" }
+    , $register
+    , $check
+}
+function Format-UpgradePolicy($value) { $p = ConvertTo-CopyText $value; if ($p) { "upgrade policy $p" } else { 'no upgrade policy' } }
 
 $catalog = @(
     @{ Number = 1; Key = 'diagnostic-logging'; Change = 'Diagnostic logging initiative assigned on every subscription'; Sources = @('DR.6-INITIATIVE')
@@ -731,33 +759,30 @@ $catalog = @(
             # size support was not read would be deallocated for a change Azure then rejects, so only the
             # eligible ones are listed.
             $rows = @(Get-Rows 'DP.4-ELIGIBILITY')
-            $ineligible = @($rows | Where-Object { -not (Test-True $_.Eligible) })
+            # A pack from collector 1.3.0 names the scale set of each machine, and the instances of a scale set
+            # with a model are changed with it in CR-15. An older pack keeps them here, as before.
             $notes = [System.Collections.Generic.List[string]]::new()
+            $used = @()
+            if ($rows.Count -and $rows[0].PSObject.Properties.Name -contains 'ScaleSet') {
+                $used = @('DP.4-VMSS-ELIGIBILITY')
+                $models = Get-ScaleSetModels
+                $members = @($rows | Where-Object { $models.ContainsKey((Get-ScaleSetText $_.ScaleSet)) })
+                if ($members.Count) {
+                    $notes.Add(('{0} left out of CR-09 because {1} to a Flexible scale set with a model, so CR-15 handles {2} with {3} scale set: {4}.' -f (Get-Count $members.Count 'virtual machine' 'virtual machines'), (Get-Pick $members.Count 'it belongs' 'they belong'), (Get-Pick $members.Count 'it' 'them'), (Get-Pick $members.Count 'its' 'their'),
+                            (@($members | Sort-Object Name | ForEach-Object { '{0} ({1})' -f (ConvertTo-CopyText $_.Name), $models[(Get-ScaleSetText $_.ScaleSet)] }) -join ', ')))
+                    $rows = @($rows | Where-Object { $_ -notin $members })
+                }
+            }
+            $ineligible = @($rows | Where-Object { -not (Test-True $_.Eligible) })
             if ($ineligible.Count) {
                 $notes.Add(('{0} left out of CR-09 because {1} encryption at host as {2}: {3}.' -f (Get-Count $ineligible.Count 'virtual machine' 'virtual machines'), (Get-Pick $ineligible.Count 'it cannot take' 'they cannot take'), (Get-Pick $ineligible.Count 'it stands' 'they stand'),
                         (@($ineligible | Sort-Object Name | ForEach-Object { '{0} ({1}, {2})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.Size), ((ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1') }) -join ', ')))
             }
-            # Scale sets take the setting through their model and an instance update, and AKS node pools
-            # through the node pool, so they need their own change.
-            $detailStatus = Get-Status 'DP.4-DETAIL'
-            if ($detailStatus -in 'OK', 'PARTIAL' -and -not (Test-Unreadable 'DP.4-DETAIL')) {
-                $scaleSets = @(Get-Rows 'DP.4-DETAIL' | Where-Object { (Get-Text $_.ResourceType) -match 'scalesets' })
-                if ($scaleSets.Count) { $notes.Add(('{0} left out of CR-09: {1}. Scale sets take encryption at host through their model and an instance update, and AKS node pools through the node pool, so they need their own change.' -f (Get-Count $scaleSets.Count 'scale set' 'scale sets'), (@($scaleSets | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', '))) }
-            }
-            elseif ($detailStatus -ne 'EMPTY') { $notes.Add(('Scale sets were not checked for encryption at host, because DP.4-DETAIL {0}.' -f $(if ($detailStatus -eq 'MISSING') { 'was not collected' } elseif (Test-Unreadable 'DP.4-DETAIL') { 'is unreadable' } else { "reads $detailStatus" }))) }
             $resources = @($rows | Where-Object { Test-True $_.Eligible } | ForEach-Object { New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('size {0}, {1}' -f (Get-Text $_.Size), (Get-PowerText $_.PowerState)) $_.ResourceId })
             $n = $resources.Count
             if (-not $n) { return @{ State = $(if ($rows.Count) { 'No eligible virtual machines' } else { 'No gaps found' }); Notes = $notes.ToArray() } }
-            $subscriptions = @($resources | ForEach-Object SubscriptionId | Sort-Object -Unique)
-            $register = @('In the Azure portal, open Cloud Shell in Bash and register the EncryptionAtHost feature on each subscription in the RESOURCES section:')
-            # Each command names its subscription, so neither step depends on the subscription Cloud Shell
-            # was left on and step 2 checks every one, not only the last registered.
-            foreach ($s in $subscriptions) { $register += "az feature register --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s" }
-            $check = @('Wait for the registration on each subscription, running these until every one returns Registered:')
-            foreach ($s in $subscriptions) { $check += "az feature show --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s --query properties.state -o tsv" }
             $impl = [System.Collections.Generic.List[object]]::new()
-            $impl.Add($register)
-            $impl.Add($check)
+            foreach ($step in New-EncryptionAtHostRegistration $resources) { $impl.Add($step) }
             $impl.Add((Get-OpenStep $n 'Virtual machines' 'virtual machine'))
             $impl.Add('On Overview, note whether the status reads Running, then select Stop and wait for the status to read Stopped (deallocated).')
             $impl.Add('Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.')
@@ -802,7 +827,7 @@ $catalog = @(
                     'Attach the link to the updated DR Playbook, or a screenshot of the new step, to this change request before it is closed.')
                 $spec.References = $references + , @('Support matrix for Azure VM disaster recovery, replicated machines storage', 'https://learn.microsoft.com/azure/site-recovery/azure-to-azure-support-matrix#replicated-machines---storage')
             }
-            @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest $spec } } }
+            @{ Used = $used; Notes = $notes.ToArray(); Cr = New-ChangeRequest $spec } } }
 
     @{ Number = 10; Key = 'diagnostic-remediation'; Change = 'Diagnostic logging remediated on non-compliant resources'; Sources = @('DR.6-INITIATIVE')
        Build = {
@@ -953,6 +978,154 @@ $catalog = @(
                     References = @(, @('Self-serve minimum TLS version enforcement in Azure Cosmos DB', 'https://learn.microsoft.com/azure/cosmos-db/self-serve-minimum-tls-enforcement'))
                     Csv = $resources
                 } } } }
+
+    @{ Number = 15; Key = 'scale-set-encryption-at-host'; Change = 'Encryption at host on virtual machine scale sets'; Sources = @('DP.4-VMSS-ELIGIBILITY')
+       Build = {
+            # DP.4-VMSS-ELIGIBILITY lists the scale sets whose model lacks encryption at host and whether each
+            # model can take it. AKS manages the model of its node pools and sets encryption at host only when
+            # a node pool is created, so they go to a planned project instead. A Flexible scale set is listed
+            # only when every one of its machines without the setting can take it too, since the change stops
+            # each of them for a setting Azure would otherwise reject.
+            $rows = @(Get-Rows 'DP.4-VMSS-ELIGIBILITY')
+            $notes = [System.Collections.Generic.List[string]]::new()
+            $used = @()
+            $aks = @($rows | Where-Object { Test-True $_.Aks })
+            if ($aks.Count) {
+                $pools = @($aks | Sort-Object AksCluster, AksNodePool, Name | ForEach-Object {
+                        $pool = ConvertTo-CopyText $_.AksNodePool
+                        $where = if (Get-Text $_.AksCluster) { 'cluster {0} (resource group {1})' -f (ConvertTo-CopyText $_.AksCluster), (ConvertTo-CopyText $_.AksClusterResourceGroup) } else { 'scale set {0} in resource group {1}' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) }
+                        '{0} node pool {1} ({2}, {3})' -f $where, $(if ($pool) { $pool } else { 'name not tagged' }), (ConvertTo-CopyText $_.Size), (Get-Count (Get-Number $_.Instances) 'node' 'nodes') })
+                $notes.Add(('{0} without encryption at host left out of CR-15 and routed to a planned project: {1}. AKS sets encryption at host only when a node pool is created, so each pool is replaced: a new node pool created with encryption at host, its workloads moved across and the old pool removed. Plan that with the client as a project, not as a low-impact change.' -f (Get-Count $aks.Count 'AKS node pool' 'AKS node pools'), ($pools -join ', ')))
+            }
+            $bare = @($rows | Where-Object { -not (Test-True $_.Aks) -and -not (Test-True $_.HasModel) })
+            if ($bare.Count) {
+                $notes.Add(('{0} without a scale set model left out of CR-15: {1}. With no model there is nothing to set on the scale set, so CR-09 covers {2} machines as standalone virtual machines.' -f (Get-Count $bare.Count 'Flexible scale set' 'Flexible scale sets'), (@($bare | Sort-Object Name | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', '), (Get-Pick $bare.Count 'its' 'their')))
+            }
+            $models = @($rows | Where-Object { -not (Test-True $_.Aks) -and (Test-True $_.HasModel) })
+            $ineligible = @($models | Where-Object { -not (Test-True $_.Eligible) })
+            if ($ineligible.Count) {
+                $notes.Add(('{0} left out of CR-15 because {1} encryption at host as {2}: {3}.' -f (Get-Count $ineligible.Count 'scale set' 'scale sets'), (Get-Pick $ineligible.Count 'its model cannot take' 'their models cannot take'), (Get-Pick $ineligible.Count 'it stands' 'they stand'),
+                        (@($ineligible | Sort-Object Name | ForEach-Object { '{0} ({1}, {2})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.Size), ((ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1') }) -join ', ')))
+            }
+            $eligible = @($models | Where-Object { Test-True $_.Eligible })
+            # The machines of each Flexible scale set, from DP.4-ELIGIBILITY. A pack whose list does not name
+            # the scale set of each machine cannot prove them eligible.
+            $instances = @{}
+            $flexible = @($eligible | Where-Object { (Get-Text $_.OrchestrationMode) -ieq 'Flexible' })
+            if ($flexible.Count) {
+                $used = @('DP.4-ELIGIBILITY')
+                $vms = @(if (Test-ResultRead 'DP.4-ELIGIBILITY') { Get-Rows 'DP.4-ELIGIBILITY' })
+                $named = (Get-Status 'DP.4-ELIGIBILITY') -eq 'EMPTY' -or ($vms.Count -and $vms[0].PSObject.Properties.Name -contains 'ScaleSet')
+                if (-not (Test-ResultRead 'DP.4-ELIGIBILITY') -or -not $named) {
+                    $why = if (-not $named -and (Test-ResultRead 'DP.4-ELIGIBILITY')) { 'does not name the scale set of each machine' } elseif ((Get-Status 'DP.4-ELIGIBILITY') -eq 'MISSING') { 'was not collected' } elseif (Test-Unreadable 'DP.4-ELIGIBILITY') { 'is unreadable' } else { 'reads ' + (Get-Status 'DP.4-ELIGIBILITY') }
+                    $notes.Add(('{0} left out of CR-15 because DP.4-ELIGIBILITY {1}, so {2} could not be checked: {3}.' -f (Get-Count $flexible.Count 'Flexible scale set' 'Flexible scale sets'), $why, (Get-Pick $flexible.Count 'its machines' 'their machines'), (@($flexible | Sort-Object Name | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', ')))
+                    $eligible = @($eligible | Where-Object { $_ -notin $flexible })
+                }
+                else {
+                    $blocked = [System.Collections.Generic.List[string]]::new()
+                    foreach ($f in $flexible) {
+                        $key = (Get-Text $f.ResourceId).ToLowerInvariant()
+                        $members = @($vms | Where-Object { (Get-ScaleSetText $_.ScaleSet) -eq $key })
+                        $bad = @($members | Where-Object { -not (Test-True $_.Eligible) })
+                        if ($bad.Count) {
+                            $blocked.Add(('{0} ({1})' -f (ConvertTo-CopyText $f.Name), (@($bad | Sort-Object Name | ForEach-Object { '{0} {1}' -f (ConvertTo-CopyText $_.Name), ((ConvertTo-CopyText $_.Reason) -replace '^(size support not read):.*$', '$1') }) -join ', ')))
+                            $eligible = @($eligible | Where-Object { $_ -ne $f })
+                        }
+                        else { $instances[$key] = $members }
+                    }
+                    if ($blocked.Count) {
+                        $notes.Add(('{0} left out of CR-15 because {1} that cannot take encryption at host as it stands: {2}.' -f (Get-Count $blocked.Count 'Flexible scale set' 'Flexible scale sets'), (Get-Pick $blocked.Count 'it has a machine' 'each has a machine'), ($blocked -join ', ')))
+                    }
+                }
+            }
+            $resources = @($eligible | ForEach-Object {
+                    $mode = if ((Get-Text $_.OrchestrationMode) -ieq 'Flexible') { 'Flexible' } else { 'Uniform' }
+                    $setting = '{0}, {1}, {2}, size {3}' -f $mode, (Format-UpgradePolicy $_.UpgradePolicy), (Get-Count (Get-Number $_.Instances) 'instance' 'instances'), (ConvertTo-CopyText $_.Size)
+                    if ($mode -eq 'Flexible') {
+                        $members = @($instances[(Get-Text $_.ResourceId).ToLowerInvariant()])
+                        $setting += if ($members.Count) { ', instances without encryption at host: ' + (@($members | Sort-Object Name | ForEach-Object { '{0} ({1})' -f (ConvertTo-CopyText $_.Name), (Get-PowerText $_.PowerState) }) -join ', ') } else { ', no instance without encryption at host' }
+                    }
+                    $r = New-Resource $_.Name $_.resourceGroup $_.subscriptionId $setting $_.ResourceId
+                    $r | Add-Member -NotePropertyName Mode -NotePropertyValue $mode
+                    $r | Add-Member -NotePropertyName Policy -NotePropertyValue (ConvertTo-CopyText $_.UpgradePolicy)
+                    $r | Add-Member -NotePropertyName Instances -NotePropertyValue (Get-Number $_.Instances)
+                    $r })
+            $n = $resources.Count
+            if (-not $n) { return @{ Used = $used; Notes = $notes.ToArray(); State = $(if ($aks.Count -and $aks.Count -eq $rows.Count) { 'Only AKS node pools remain, see the notes' } elseif ($rows.Count) { 'No eligible scale sets' } else { 'No gaps found' }) } }
+            $uniform = @($resources | Where-Object Mode -eq 'Uniform')
+            $flex = @($resources | Where-Object Mode -eq 'Flexible')
+            $automatic = @($resources | Where-Object { $_.Policy -in 'Automatic', 'Rolling' })
+            $impl = [System.Collections.Generic.List[object]]::new()
+            foreach ($step in New-EncryptionAtHostRegistration $resources) { $impl.Add($step) }
+            $set = @(('In Cloud Shell, set encryption at host on the model of {0}{1}:' -f (Get-EachStep $n 'scale set'), $(if ($automatic.Count) { '. A scale set with an Automatic upgrade policy may take all its instances down at once to apply the new model, and one with a Rolling policy applies it in batches, so run this only inside the agreed maintenance window' } else { '' })))
+            foreach ($r in @($resources | Sort-Object SubscriptionId, ResourceGroup, Name)) { $set += 'az vmss update --subscription {0} --resource-group {1} --name {2} --set virtualMachineProfile.securityProfile.encryptionAtHost=true' -f $r.SubscriptionId, $r.ResourceGroup, $r.Name }
+            $impl.Add($set)
+            # Existing instances take the setting only once deallocated and started again. A Uniform instance
+            # takes it from the model through Upgrade, and a Flexible instance is a virtual machine that takes
+            # it directly, as in CR-09.
+            if ($uniform.Count) {
+                $from = $impl.Count + 1
+                $impl.Add(('In the Azure portal, go to Virtual machine scale sets, open the {0}Uniform scale set listed in the RESOURCES section and go to Settings > Instances.' -f $(if ($uniform.Count -gt 1) { 'first ' } else { '' })))
+                $impl.Add('Select the first instance, note whether its status reads Running, then select Stop and wait for the status to read Stopped (deallocated).')
+                $impl.Add('With the instance still selected, select Upgrade if Latest model reads No, and wait for the upgrade to finish.')
+                $impl.Add('Select Start only if the instance read Running before the stop, so an instance that was not running stays stopped.')
+                $impl.Add(('Repeat steps {0} to {1} for each remaining instance{2}.' -f ($from + 1), $impl.Count, $(if ($uniform.Count -gt 1) { ", then steps $from to $($impl.Count) for each remaining Uniform scale set listed" } else { '' })))
+            }
+            if ($flex.Count) {
+                $from = $impl.Count + 1
+                $impl.Add(('In the Azure portal, go to Virtual machine scale sets, open the {0}Flexible scale set listed in the RESOURCES section, go to Settings > Instances and open the first instance named for it.' -f $(if ($flex.Count -gt 1) { 'first ' } else { '' })))
+                $impl.Add('On Overview, note whether the status reads Running, then select Stop and wait for the status to read Stopped (deallocated).')
+                $impl.Add('Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.')
+                $impl.Add('Go back to Overview and select Start only if the status read Running before the stop, so an instance that was not running stays stopped.')
+                $impl.Add(('Repeat steps {0} to {1} for each remaining instance named{2}.' -f ($from + 1), $impl.Count, $(if ($flex.Count -gt 1) { ", then steps $from to $($impl.Count) for each remaining Flexible scale set listed" } else { '' })))
+            }
+            $testing = [System.Collections.Generic.List[object]]::new()
+            $testing.Add(('In the Azure portal, open {0}, select JSON View on Overview and confirm virtualMachineProfile.securityProfile.encryptionAtHost reads true.' -f (Get-EachStep $n 'scale set')))
+            if ($uniform.Count) { $testing.Add(('For {0}, go to Settings > Instances and confirm every instance shows Latest model Yes, and every instance that was running before the change shows Running.' -f (Get-Pick $uniform.Count 'the Uniform scale set' 'each Uniform scale set'))) }
+            if ($flex.Count) { $testing.Add(('For {0}, open each instance named in the RESOURCES section, go to Settings > Disks > Additional settings and confirm Encryption at host shows Yes, and on Overview confirm each instance that was running before the change shows Running.' -f (Get-Pick $flex.Count 'the Flexible scale set' 'each Flexible scale set'))) }
+            $rollback = [System.Collections.Generic.List[object]]::new()
+            $off = @('In the Azure portal, open Cloud Shell in Bash and turn encryption at host off on the model of the scale set to revert, with the command for it below:')
+            foreach ($r in @($resources | Sort-Object SubscriptionId, ResourceGroup, Name)) { $off += 'az vmss update --subscription {0} --resource-group {1} --name {2} --set virtualMachineProfile.securityProfile.encryptionAtHost=false' -f $r.SubscriptionId, $r.ResourceGroup, $r.Name }
+            $rollback.Add($off)
+            if ($uniform.Count) { $rollback.Add('For a Uniform scale set, go to Settings > Instances and for each instance note whether its status reads Running, select Stop, wait for Stopped (deallocated), select Upgrade, and select Start only if it read Running before the stop.') }
+            if ($flex.Count) { $rollback.Add('For a Flexible scale set, open each instance named in the RESOURCES section, note on Overview whether its status reads Running, select Stop, wait for Stopped (deallocated), set Encryption at host to No under Settings > Disks > Additional settings, select Save, and select Start only if it read Running before the stop.') }
+            $references = @(
+                , @('Use the Azure portal to enable end-to-end encryption using encryption at host', 'https://learn.microsoft.com/azure/virtual-machines/disks-enable-host-based-encryption-portal')
+                , @('Use the Azure CLI to enable end-to-end encryption using encryption at host, Virtual Machine Scale Sets', 'https://learn.microsoft.com/azure/virtual-machines/linux/disks-enable-host-based-encryption-cli#update-a-virtual-machine-scale-set-to-enable-encryption-at-host')
+                , @('Upgrade policy modes for Virtual Machine Scale Sets', 'https://learn.microsoft.com/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-upgrade-policy')
+                , @('Performing manual upgrades on Virtual Machine Scale Sets', 'https://learn.microsoft.com/azure/virtual-machine-scale-sets/virtual-machine-scale-sets-perform-manual-upgrades'))
+            $body = [System.Collections.Generic.List[object]]::new()
+            $body.Add(('I am planning to enable encryption at host on {0}. This setting encrypts the temporary disk and the disk caches on the Azure host, so the data of {1} stays encrypted all the way to Azure Storage.' -f $(if ($n -eq 1) { 'the virtual machine scale set below' } else { "the $n virtual machine scale sets below" }), (Get-Pick $n 'its instances' 'their instances')))
+            $body.Add(@($resources | Sort-Object Name | ForEach-Object { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, (Get-Count $_.Instances 'instance' 'instances') }))
+            $body.Add(('The setting goes on the configuration of {0}, so new instances are encrypted from the start. Each existing instance has to be stopped and started again to pick it up, which I will do one instance at a time. An instance that is running at the time will be unavailable for a few minutes until I start it again, and an instance that is already stopped will be left stopped. Nothing changes inside the operating system or the applications.' -f (Get-Pick $n 'the scale set' 'each scale set')))
+            if ($automatic.Count) {
+                $body.Add(('{0} set to update {1} instances automatically, so once the setting is applied it may also restart them on its own, all at the same time under the Automatic policy and in batches under the Rolling policy. I will plan the window as if every instance could be unavailable at once: {2}.' -f $(if ($automatic.Count -eq 1) { 'One scale set is' } else { "$($automatic.Count) scale sets are" }), (Get-Pick $automatic.Count 'its' 'their'), (@($automatic | Sort-Object Name | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Policy }) -join ', ')))
+            }
+            $body.Add((Get-Pick $n 'Could you suggest a maintenance window that works for this scale set? I will schedule the change once I have your confirmation.' 'Could you suggest a maintenance window that works for these scale sets, and let me know if any of them need to be handled separately or in a particular order? I will schedule the change once I have your confirmation.'))
+            $spec = @{
+                Number = 15; Key = 'scale-set-encryption-at-host'; Title = 'Enable encryption at host on virtual machine scale sets'
+                Description = 'Enable encryption at host on the model and the existing instances of {0}, which needs a stop and start of each instance.' -f (Get-Listed $n 'virtual machine scale set' 'virtual machine scale sets')
+                Purpose = 'Encryption at host encrypts the temporary disk and the OS and data disk caches on the Azure host, so the data of each instance is encrypted from end to end. Setting it on the model covers the instances a scale set creates later, and the stop and start brings in the instances it already has.'
+                ResourceIntro = $(if ($n -eq 1) { 'The scale set below is listed with its orchestration mode, upgrade policy, instance count and size at collection. Each instance is returned to the power state it has when the change is made.' } else { "The $n scale sets below are listed with the orchestration mode, upgrade policy, instance count and size of each at collection. Each instance is returned to the power state it has when the change is made." })
+                ResourceLines = Format-ResourceList $resources
+                Availability = $(if (@($automatic | Where-Object Policy -eq 'Automatic').Count) { 'Each instance is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window, and a scale set with an Automatic upgrade policy may take all its instances down at once to apply the model.' } else { 'Each instance is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window, one instance at a time.' })
+                UserExperience = 'Users of a scale set see reduced capacity while one of its instances restarts, or a short outage where it runs a single instance, and no change afterwards.'
+                Dependencies = 'Needs the EncryptionAtHost feature on each subscription, a VM size that supports it and a scale set that never used Azure Disk Encryption.'
+                Implementation = $impl.ToArray(); Testing = $testing.ToArray(); Rollback = $rollback.ToArray()
+                References = $references
+                Csv = $resources
+                Email = @{ Subject = 'Maintenance window request: encryption at host for Azure virtual machine scale sets'; Body = $body.ToArray() }
+            }
+            # Azure Site Recovery replicates the machines of a Flexible scale set, never a Uniform one.
+            if ($DrClient -and $flex.Count) {
+                $spec.DrImpact = 'This is a DR client. Azure Site Recovery does not carry encryption at host to test failover or failover virtual machines, so the DR Playbook needs an update for the Flexible scale set instances in this change.'
+                $spec.DrPlan = @(
+                    'In the DR Playbook, add a post-failover step for the Flexible scale set instances listed in this change.'
+                    'The step notes whether each failed over virtual machine reads Running, stops it, sets Encryption at host to Yes under Settings > Disks > Additional settings, selects Save, and starts it again only if it was running before the stop.'
+                    'Attach the link to the updated DR Playbook, or a screenshot of the new step, to this change request before it is closed.')
+                $spec.References = $references + , @('Support matrix for Azure VM disaster recovery, replicated machines storage', 'https://learn.microsoft.com/azure/site-recovery/azure-to-azure-support-matrix#replicated-machines---storage')
+            }
+            @{ Used = $used; Notes = $notes.ToArray(); Cr = New-ChangeRequest $spec } } }
 )
 #endregion
 

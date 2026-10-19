@@ -128,8 +128,30 @@ Describe 'Query catalog' {
         $eah.Query | Should -Match 'where not\(coalesce\(tobool\(properties\.securityProfile\.encryptionAtHost\), false\)\)'
         $eah.Query | Should -Match 'isnotnull\(properties\.encryptionSettingsCollection\)' -Because 'a disk that ever carried Azure Disk Encryption keeps its settings'
         $eah.Query | Should -Match '"AzureDiskEncryption", "AzureDiskEncryptionForLinux"'
-        $eah.Query | Should -Match 'project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed, OldSectorDisk'
+        $eah.Query | Should -Match 'project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, ScaleSet, AdeUsed, OldSectorDisk'
+        $eah.Query | Should -Match 'ScaleSet = tolower\(tostring\(properties\.virtualMachineScaleSet\.id\)\)' -Because 'a Flexible scale set instance is a virtual machine that CR-15 handles with its scale set'
+        $eah.Notes | Should -Match 'Since CyberSOC 1\.3\.0 each row carries ScaleSet'
         $eah.Query | Should -Match 'where todatetime\(properties\.timeCreated\) < datetime\(2023-05-13\)' -Because 'a 512e Ultra or Premium SSD v2 disk created before then rules out encryption at host'
+    }
+
+    It 'lists the scale sets without encryption at host with what decides whether the model can take it (1.3.0)' {
+        $ss = $catalog | Where-Object Id -eq 'DP.4-VMSS-ELIGIBILITY'
+        $ss.Engine | Should -Be 'COMPUTE-SKUS'
+        $ss.Notes | Should -Match '^Added in CyberSOC 1\.3\.0\.'
+        $ss.Query | Should -Match 'where type =~ "microsoft\.compute/virtualmachinescalesets"'
+        $ss.Query | Should -Match 'id !contains "\{\{MRG\}\}"'
+        $ss.Query | Should -Match 'where not\(\{\{APPLIANCE\}\}\)' -Because 'DP.4 and DP.4-DETAIL leave network virtual appliances out'
+        $ss.Query | Should -Match 'where not\(coalesce\(tobool\(properties\.virtualMachineProfile\.securityProfile\.encryptionAtHost\), false\)\)' -Because 'the setting goes on the model'
+        $ss.Query | Should -Match 'OrchestrationMode = coalesce\(tostring\(properties\.orchestrationMode\), "Uniform"\)' -Because 'a scale set created before Flexible orchestration records no mode'
+        $ss.Query | Should -Match 'UpgradePolicy\s+= tostring\(properties\.upgradePolicy\.mode\)'
+        $ss.Query | Should -Match 'Instances\s+= toint\(sku\.capacity\)'
+        $ss.Query | Should -Match 'AdeUsed\s+= tostring\(Model\.extensionProfile\.extensions\) contains "AzureDiskEncryption"' -Because 'both the Windows and the Linux extension carry the name'
+        $ss.Query | Should -Match 'has_any \("UltraSSD_LRS", "PremiumV2_LRS"\)\s+and coalesce\(todatetime\(properties\.timeCreated\), datetime\(2000-01-01\)\) < datetime\(2023-05-13\)' -Because 'a scale set without a creation time cannot prove its disks are recent'
+        $ss.Query | Should -Match 'tolower\(tostring\(properties\.nodeResourceGroup\)\)' -Because 'an AKS node pool lives in the node resource group of its cluster'
+        $ss.Query | Should -Match 'AksNodePool\s+= tostring\(tags\["aks-managed-poolName"\]\)'
+        $ss.Query | Should -Match 'Aks\s+= isnotempty\(AksCluster\) or tostring\(bag_keys\(tags\)\) contains "aks-managed-"'
+        $ss.Query | Should -Match 'project Name = name, ResourceId = id, resourceGroup, subscriptionId, Location = tolower\(location\), OrchestrationMode,\s+UpgradePolicy, Instances, Size, HasModel, AdeUsed, OldSectorDisk, Aks, AksCluster, AksClusterResourceGroup, AksNodePool'
+        ([regex]::Matches($ss.Query, 'join kind=')).Count | Should -BeLessOrEqual 3 -Because 'Resource Graph allows three joins per query'
     }
 
     It 'scopes the SecOps worklist incident lists like OUT.1 and DR.10 and extracts the ticket with the raw pattern' {
@@ -526,6 +548,54 @@ Describe 'Network devices and blob containers (1.11.0)' {
         $deniedAde.SizeRead | Should -Match '^Not read' -Because 'a failed SKU read still counts when Azure Disk Encryption already rules the machine out'
         $by.ok.ResourceId | Should -Be '/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/ok'
         Should -Invoke Invoke-EbrRest -Times 5 -Exactly -Because 'each region is read once per call: eastus through s2 then s1 and westus through s2, then eastus and westus for the two single-machine calls'
+    }
+    It 'marks a scale set eligible only when its model can take encryption at host, and never an AKS node pool' {
+        Mock Invoke-EbrRest {
+            if ($Uri -match 'westus') { throw 'HTTP 403: Forbidden' }
+            [pscustomobject]@{ value = @(
+                    [pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_D4s_v5'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'True' }) }
+                    [pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_A1'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'False' }) }) }
+        }
+        $ss = { param($name, $size, [hashtable]$extra = @{}) $o = [ordered]@{ Name = $name; ResourceId = "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachineScaleSets/$name"; resourceGroup = 'rg'; subscriptionId = 's1'; Location = 'eastus'; OrchestrationMode = 'Uniform'; UpgradePolicy = 'Manual'; Instances = 3; Size = $size; HasModel = 'true'; AdeUsed = $false; OldSectorDisk = $false; Aks = $false; AksCluster = ''; AksClusterResourceGroup = ''; AksNodePool = '' }; foreach ($k in $extra.Keys) { $o[$k] = $extra[$k] }; [pscustomobject]$o }
+        $rows = @(Get-EbrScaleSetEncryptionAtHostRows -ScaleSets @(
+                (& $ss 'web' 'Standard_D4s_v5'), (& $ss 'ade' 'Standard_D4s_v5' @{ AdeUsed = 'True' }), (& $ss 'a1' 'Standard_A1'), (& $ss 'ultra' 'Standard_D4s_v5' @{ OldSectorDisk = $true }),
+                (& $ss 'flex' 'Standard_D4s_v5' @{ OrchestrationMode = 'Flexible'; UpgradePolicy = '' }), (& $ss 'bare' '' @{ OrchestrationMode = 'Flexible'; HasModel = $false }),
+                (& $ss 'aks-system-12345678-vmss' 'Standard_D2s_v5' @{ Aks = $true; AksCluster = 'aks-prod'; AksClusterResourceGroup = 'rg-aks'; AksNodePool = 'system'; Location = 'westus' }),
+                (& $ss 'denied' 'Standard_D4s_v5' @{ Location = 'westus' })) -Tenant 't')
+        $by = @{}; foreach ($r in $rows) { $by[$r.Name] = $r }
+        @($by.web.Eligible, $by.web.SizeSupported, $by.web.SizeRead, $by.web.Reason, $by.web.Instances, $by.web.UpgradePolicy) | Should -Be @($true, 'Yes', 'OK', '', '3', 'Manual')
+        @($by.flex.Eligible, $by.flex.OrchestrationMode) | Should -Be @($true, 'Flexible') -Because 'the model of a Flexible scale set takes the setting too, and the generator checks its machines'
+        @($by.ade.Eligible, $by.ade.Reason) | Should -Be @($false, 'Azure Disk Encryption used')
+        @($by.a1.Eligible, $by.a1.Reason) | Should -Be @($false, 'size not supported')
+        @($by.ultra.Eligible, $by.ultra.Reason) | Should -Be @($false, 'Ultra Disk or Premium SSD v2 in a scale set created before May 13, 2023')
+        @($by.bare.Eligible, $by.bare.Reason, $by.bare.SizeRead) | Should -Be @($false, 'no scale set model', '') -Because 'a Flexible scale set without a model has no setting to change'
+        $aks = $by['aks-system-12345678-vmss']
+        @($aks.Eligible, $aks.Aks, $aks.AksCluster, $aks.AksNodePool, $aks.Reason, $aks.SizeRead) | Should -Be @($false, $true, 'aks-prod', 'system', 'AKS node pool, set only when a node pool is created', '') -Because 'AKS manages the model, so its size is not read'
+        @($by.denied.Eligible, $by.denied.SizeSupported) | Should -Be @($false, 'Unknown')
+        $by.denied.Reason | Should -Match '^size support not read: .*403'
+        Should -Invoke Invoke-EbrRest -Times 2 -Exactly -Because 'eastus and westus are each read once, and the AKS node pool alone in westus would not need a read'
+        $onlyAks = @(Get-EbrScaleSetEncryptionAtHostRows -ScaleSets @((& $ss 'aks-user-1-vmss' 'Standard_D2s_v5' @{ Aks = 'true' })) -Tenant 't')
+        $onlyAks[0].Eligible | Should -BeFalse
+        Should -Invoke Invoke-EbrRest -Times 2 -Exactly -Because 'a pack of AKS node pools only reads no size list'
+    }
+    It 'writes DP.4-VMSS-ELIGIBILITY with the scale set columns, and reads it PARTIAL only for a size list it needed' {
+        New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force | Out-Null
+        $ctx = [pscustomobject]@{ WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; ManagedRgPattern = 'aznativesol0'; OutDir = $TestDrive; Subscriptions = @('s1'); ArmTenant = 't'; Pending = [System.Collections.Generic.List[object]]::new() }
+        $item = Get-EbrQueryCatalog | Where-Object Id -eq 'DP.4-VMSS-ELIGIBILITY'
+        Mock Invoke-EbrRest { if ($Uri -match 'westus') { throw 'HTTP 403: Forbidden' }; [pscustomobject]@{ value = @([pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_D4s_v5'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'True' }) }) } }
+        $web = [pscustomobject]@{ Name = 'vmss-web'; ResourceId = '/x/vmss-web'; resourceGroup = 'rg'; subscriptionId = 's1'; Location = 'eastus'; OrchestrationMode = 'Uniform'; UpgradePolicy = 'Rolling'; Instances = 4; Size = 'Standard_D4s_v5'; HasModel = $true; AdeUsed = $false; OldSectorDisk = $false; Aks = $false; AksCluster = $null; AksClusterResourceGroup = $null; AksNodePool = '' }
+        $aks = [pscustomobject]@{ Name = 'aks-user-1-vmss'; ResourceId = '/x/aks'; resourceGroup = 'mc_rg'; subscriptionId = 's1'; Location = 'westus'; OrchestrationMode = 'Uniform'; UpgradePolicy = 'Manual'; Instances = 3; Size = 'Standard_D2s_v5'; HasModel = $true; AdeUsed = $false; OldSectorDisk = $false; Aks = $true; AksCluster = 'aks-prod'; AksClusterResourceGroup = 'rg-aks'; AksNodePool = 'user' }
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @($web, $aks); Detail = '' } }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $res.Status | Should -Be 'OK' -Because 'the AKS node pool in westus needs no size list, so the failed westus read is never made'
+        $res.Detail | Should -Match '^1 of 2 scale sets can take encryption at host\. 1 AKS node pools, 0 without a model'
+        @($res.Rows).Count | Should -Be 2
+        Should -Invoke Invoke-EbrRest -Times 1 -Exactly
+        $web.Location = 'westus'
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $res.Status | Should -Be 'FAILED' -Because 'no scale set that needed a size list had one read'
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @(); Detail = '' } }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'EMPTY'
     }
 }
 

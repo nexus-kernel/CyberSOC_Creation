@@ -59,8 +59,11 @@ missing evidence never becomes a favorable zero.
    fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service, Azure SQL, Redis, Service Bus,
    Event Hubs and Cosmos DB, purge protection), and a ready-to-send client email for the changes that need the client
    first (purge protection, which cannot be undone and needs the client's written approval, anonymous blob access,
-   HTTPS only, encryption at host, minimum TLS 1.2 on Event Hubs). Add `-PurgeProtectionApproved` when the client
-   approved purge protection at build kickoff, and the index records that approval instead of an email.
+   HTTPS only, encryption at host on virtual machines and on scale sets, minimum TLS 1.2 on Event Hubs). Add
+   `-PurgeProtectionApproved` when the client approved purge protection at build kickoff, and the index records that
+   approval instead of an email. AKS node pools without encryption at host get no change request: a pool takes it
+   only when it is created, so the index names each cluster and node pool for a planned node pool replacement with
+   the client.
 
 A pack collected without the vulnerability runs takes them later:
 

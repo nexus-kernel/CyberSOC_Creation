@@ -201,7 +201,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.2.0, based on the EBR collector 1.14.0
+    Version: 1.3.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -242,7 +242,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.2.0'
+$script:EbrVersion = '1.3.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2188,7 +2188,7 @@ resources
 | order by resourceGroup asc, Name asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'DP.4-ELIGIBILITY' -Phase 'P2 Data protection' -Engine 'COMPUTE-SKUS' -Title 'Virtual machines that can take encryption at host' -Notes 'Added in CyberSOC 1.1.0. The virtual machines DP.4-DETAIL lists, scale sets left out, with whether each can take encryption at host. Azure Disk Encryption is read from the disks (any encryptionSettingsCollection, enabled or not) and the ADE extensions, because a machine that ever used it cannot take encryption at host. An attached Ultra Disk or Premium SSD v2 with 512e sectors created before May 13, 2023 rules a machine out too. Size support is read per subscription and region from the Compute resource SKUs API (the EncryptionAtHostSupported capability, a GET that Reader can make), because Resource Graph does not index it. The change requests leave out every machine that is not proven eligible. Internal: names machines, the report embeds counts only.' -Query @'
+    $q.Add((New-EbrQuery -Id 'DP.4-ELIGIBILITY' -Phase 'P2 Data protection' -Engine 'COMPUTE-SKUS' -Title 'Virtual machines that can take encryption at host' -Notes 'Added in CyberSOC 1.1.0. The virtual machines DP.4-DETAIL lists, scale sets left out, with whether each can take encryption at host. Azure Disk Encryption is read from the disks (any encryptionSettingsCollection, enabled or not) and the ADE extensions, because a machine that ever used it cannot take encryption at host. An attached Ultra Disk or Premium SSD v2 with 512e sectors created before May 13, 2023 rules a machine out too. Size support is read per subscription and region from the Compute resource SKUs API (the EncryptionAtHostSupported capability, a GET that Reader can make), because Resource Graph does not index it. The change requests leave out every machine that is not proven eligible. Since CyberSOC 1.3.0 each row carries ScaleSet, the Flexible scale set the machine belongs to, so CR-09 can leave the instances of a scale set to CR-15. Internal: names machines, the report embeds counts only.' -Query @'
 resources
 | where type =~ "microsoft.compute/virtualmachines"
 | where id !contains "{{MRG}}"
@@ -2196,7 +2196,8 @@ resources
 | where not(coalesce(tobool(properties.securityProfile.encryptionAtHost), false))
 | project VmKey = tolower(id), ResourceId = id, Name = name, resourceGroup, subscriptionId, Location = tolower(location),
           Size = tostring(properties.hardwareProfile.vmSize),
-          PowerState = tostring(properties.extended.instanceView.powerState.code)
+          PowerState = tostring(properties.extended.instanceView.powerState.code),
+          ScaleSet = tolower(tostring(properties.virtualMachineScaleSet.id))
 | join kind=leftouter (
     resources
     | where type =~ "microsoft.compute/disks"
@@ -2219,7 +2220,37 @@ resources
   ) on VmKey
 | extend AdeUsed       = coalesce(AdeDisks, 0) > 0 or coalesce(AdeExtensions, 0) > 0,
          OldSectorDisk = coalesce(OldSectorDisks, 0) > 0
-| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, AdeUsed, OldSectorDisk
+| project Name, ResourceId, resourceGroup, subscriptionId, Location, Size, PowerState, ScaleSet, AdeUsed, OldSectorDisk
+| order by subscriptionId asc, resourceGroup asc, Name asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'DP.4-VMSS-ELIGIBILITY' -Phase 'P2 Data protection' -Engine 'COMPUTE-SKUS' -Title 'Scale sets that can take encryption at host' -Notes 'Added in CyberSOC 1.3.0. The scale sets DP.4-DETAIL lists, one row each with the orchestration mode, upgrade policy, instance count and size of the model, and whether the model can take encryption at host. Azure Disk Encryption is read from the extensions on the model, because a scale set that ever used it cannot take encryption at host. An Ultra Disk or Premium SSD v2 in the model of a scale set created before May 13, 2023 rules it out too, since its instance disks may use 512e sectors from before that date. Size support comes from the Compute resource SKUs API, as in DP.4-ELIGIBILITY. A scale set in the node resource group of an AKS cluster, or tagged aks-managed-, is an AKS node pool: AKS manages its model and sets encryption at host only when a node pool is created, so it is never eligible and its cluster and node pool are named. A Flexible scale set without a model has no setting to change, and its machines are in DP.4-ELIGIBILITY. The change requests leave out every scale set that is not proven eligible. Internal: names scale sets, the report embeds counts only.' -Query @'
+resources
+| where type =~ "microsoft.compute/virtualmachinescalesets"
+| where id !contains "{{MRG}}"
+| where not({{APPLIANCE}})   // network virtual appliances, see P0.6-APPLIANCES
+| where not(coalesce(tobool(properties.virtualMachineProfile.securityProfile.encryptionAtHost), false))
+// AKS creates the scale set of each node pool in the node resource group of its cluster.
+| extend NodeRgKey = strcat(tolower(subscriptionId), "/", tolower(resourceGroup))
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.containerservice/managedclusters"
+    | project NodeRgKey = strcat(tolower(subscriptionId), "/", tolower(tostring(properties.nodeResourceGroup))),
+              AksCluster = name, AksClusterResourceGroup = resourceGroup
+  ) on NodeRgKey
+| extend Model = properties.virtualMachineProfile
+| extend OrchestrationMode = coalesce(tostring(properties.orchestrationMode), "Uniform"),
+         UpgradePolicy     = tostring(properties.upgradePolicy.mode),
+         Instances         = toint(sku.capacity),
+         Size              = tostring(sku.name),
+         HasModel          = isnotnull(Model),
+         AdeUsed           = tostring(Model.extensionProfile.extensions) contains "AzureDiskEncryption",
+         OldSectorDisk     = tostring(Model.storageProfile.dataDisks) has_any ("UltraSSD_LRS", "PremiumV2_LRS")
+                             and coalesce(todatetime(properties.timeCreated), datetime(2000-01-01)) < datetime(2023-05-13),
+         AksNodePool       = tostring(tags["aks-managed-poolName"]),
+         Aks               = isnotempty(AksCluster) or tostring(bag_keys(tags)) contains "aks-managed-"
+| project Name = name, ResourceId = id, resourceGroup, subscriptionId, Location = tolower(location), OrchestrationMode,
+          UpgradePolicy, Instances, Size, HasModel, AdeUsed, OldSectorDisk, Aks, AksCluster, AksClusterResourceGroup, AksNodePool
 | order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
@@ -3902,19 +3933,17 @@ function Get-EbrEncryptionAtHostSizes {
     $sizes
 }
 
-function Get-EbrEncryptionAtHostRows {
-    # One row per virtual machine without encryption at host: whether its size supports it in its
-    # region, whether it ever used Azure Disk Encryption, and whether it can take the change. The SKU
-    # list is read once per subscription and region. A size the list cannot answer for reads Unknown,
-    # never eligible.
-    param([object[]]$Vms, [string]$Tenant)
-    # The capability belongs to the size in the region, so one list serves every subscription there. Each
-    # region is read once, through each of its subscriptions in turn until one read succeeds.
+function Get-EbrEncryptionAtHostSizeLists {
+    # The size lists of every region the items are in, keyed by lowercase region, each with Sizes (null when
+    # no read succeeded) and the last Error. The capability belongs to the size in the region, so one list
+    # serves every subscription there. Each region is read once, through each of its subscriptions in turn
+    # until one read succeeds.
+    param([object[]]$Items, [string]$Tenant)
     $regions = [ordered]@{}
-    foreach ($vm in $Vms) {
-        $region = ([string]$vm.Location).ToLowerInvariant()
+    foreach ($item in $Items) {
+        $region = ([string]$item.Location).ToLowerInvariant()
         if (-not $regions.Contains($region)) { $regions[$region] = [System.Collections.Generic.List[string]]::new() }
-        if (-not $regions[$region].Contains([string]$vm.subscriptionId)) { $regions[$region].Add([string]$vm.subscriptionId) }
+        if (-not $regions[$region].Contains([string]$item.subscriptionId)) { $regions[$region].Add([string]$item.subscriptionId) }
     }
     $lists = @{}
     foreach ($region in $regions.Keys) {
@@ -3924,10 +3953,26 @@ function Get-EbrEncryptionAtHostRows {
             catch { $lists[$region].Error = [string]$_.Exception.Message }
         }
     }
+    $lists
+}
+
+function Get-EbrEncryptionAtHostSupport {
+    # Yes, No or Unknown for one size in one region. A size the list cannot answer for reads Unknown.
+    param($List, [string]$Size)
+    $size = $Size.ToLowerInvariant()
+    if ($null -eq $List.Sizes -or -not $List.Sizes.ContainsKey($size)) { 'Unknown' } elseif ($List.Sizes[$size]) { 'Yes' } else { 'No' }
+}
+
+function Get-EbrEncryptionAtHostRows {
+    # One row per virtual machine without encryption at host: whether its size supports it in its
+    # region, whether it ever used Azure Disk Encryption, and whether it can take the change. The SKU
+    # list is read once per subscription and region. A size the list cannot answer for reads Unknown,
+    # never eligible.
+    param([object[]]$Vms, [string]$Tenant)
+    $lists = Get-EbrEncryptionAtHostSizeLists -Items $Vms -Tenant $Tenant
     foreach ($vm in $Vms) {
         $list = $lists[([string]$vm.Location).ToLowerInvariant()]
-        $size = ([string]$vm.Size).ToLowerInvariant()
-        $supported = if ($null -eq $list.Sizes -or -not $list.Sizes.ContainsKey($size)) { 'Unknown' } elseif ($list.Sizes[$size]) { 'Yes' } else { 'No' }
+        $supported = Get-EbrEncryptionAtHostSupport -List $list -Size ([string]$vm.Size)
         $ade = Test-EbrTrue $vm.AdeUsed
         $oldSector = Test-EbrTrue $vm.OldSectorDisk
         $reason = if ($ade) { 'Azure Disk Encryption used' }
@@ -3938,9 +3983,47 @@ function Get-EbrEncryptionAtHostRows {
         else { '' }
         [pscustomobject][ordered]@{
             subscriptionId = [string]$vm.subscriptionId; resourceGroup = [string]$vm.resourceGroup; Name = [string]$vm.Name
-            Location = [string]$vm.Location; Size = [string]$vm.Size; PowerState = [string]$vm.PowerState
+            Location = [string]$vm.Location; Size = [string]$vm.Size; PowerState = [string]$vm.PowerState; ScaleSet = [string]$vm.ScaleSet
             AdeUsed = $ade; OldSectorDisk = $oldSector; SizeSupported = $supported; SizeRead = $(if ($list.Error) { 'Not read: ' + $list.Error } else { 'OK' })
             Eligible = (-not $ade -and -not $oldSector -and $supported -eq 'Yes'); Reason = $reason; ResourceId = [string]$vm.ResourceId
+        }
+    }
+}
+
+function Get-EbrScaleSetEncryptionAtHostRows {
+    # One row per scale set whose model does not have encryption at host, with whether the model can take
+    # it. An AKS node pool and a Flexible scale set without a model are never eligible, and their size
+    # is not read. The others are read as Get-EbrEncryptionAtHostRows reads a machine.
+    param([object[]]$ScaleSets, [string]$Tenant)
+    $checked = @($ScaleSets | Where-Object { -not (Test-EbrTrue $_.Aks) -and (Test-EbrTrue $_.HasModel) })
+    $lists = if ($checked.Count) { Get-EbrEncryptionAtHostSizeLists -Items $checked -Tenant $Tenant } else { @{} }
+    foreach ($ss in $ScaleSets) {
+        $aks = Test-EbrTrue $ss.Aks
+        $model = Test-EbrTrue $ss.HasModel
+        $ade = Test-EbrTrue $ss.AdeUsed
+        $oldSector = Test-EbrTrue $ss.OldSectorDisk
+        $supported = ''; $read = ''; $readError = ''
+        if (-not $aks -and $model) {
+            $list = $lists[([string]$ss.Location).ToLowerInvariant()]
+            $supported = Get-EbrEncryptionAtHostSupport -List $list -Size ([string]$ss.Size)
+            $readError = $list.Error
+            $read = if ($readError) { 'Not read: ' + $readError } else { 'OK' }
+        }
+        $reason = if ($aks) { 'AKS node pool, set only when a node pool is created' }
+        elseif (-not $model) { 'no scale set model' }
+        elseif ($ade) { 'Azure Disk Encryption used' }
+        elseif ($oldSector) { 'Ultra Disk or Premium SSD v2 in a scale set created before May 13, 2023' }
+        elseif ($supported -eq 'No') { 'size not supported' }
+        elseif ($readError) { 'size support not read: ' + $readError }
+        elseif ($supported -eq 'Unknown') { 'size not listed for the region' }
+        else { '' }
+        [pscustomobject][ordered]@{
+            subscriptionId = [string]$ss.subscriptionId; resourceGroup = [string]$ss.resourceGroup; Name = [string]$ss.Name
+            Location = [string]$ss.Location; OrchestrationMode = [string]$ss.OrchestrationMode; UpgradePolicy = [string]$ss.UpgradePolicy
+            Instances = [string]$ss.Instances; Size = [string]$ss.Size; HasModel = $model; AdeUsed = $ade; OldSectorDisk = $oldSector
+            SizeSupported = $supported; SizeRead = $read; Aks = $aks; AksCluster = [string]$ss.AksCluster
+            AksClusterResourceGroup = [string]$ss.AksClusterResourceGroup; AksNodePool = [string]$ss.AksNodePool
+            Eligible = ($reason -eq ''); Reason = $reason; ResourceId = [string]$ss.ResourceId
         }
     }
 }
@@ -5228,18 +5311,30 @@ function Invoke-EbrCatalogItem {
         }
         'COMPUTE-SKUS' {
             Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the Microsoft.Compute/skus path of each subscription and region, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
-            $columns = @('subscriptionId', 'resourceGroup', 'Name', 'Location', 'Size', 'PowerState', 'AdeUsed', 'OldSectorDisk', 'SizeSupported', 'SizeRead', 'Eligible', 'Reason', 'ResourceId')
+            $scaleSets = $Item.Id -eq 'DP.4-VMSS-ELIGIBILITY'
+            $columns = if ($scaleSets) { @('subscriptionId', 'resourceGroup', 'Name', 'Location', 'OrchestrationMode', 'UpgradePolicy', 'Instances', 'Size', 'HasModel', 'AdeUsed', 'OldSectorDisk', 'SizeSupported', 'SizeRead', 'Aks', 'AksCluster', 'AksClusterResourceGroup', 'AksNodePool', 'Eligible', 'Reason', 'ResourceId') }
+            else { @('subscriptionId', 'resourceGroup', 'Name', 'Location', 'Size', 'PowerState', 'ScaleSet', 'AdeUsed', 'OldSectorDisk', 'SizeSupported', 'SizeRead', 'Eligible', 'Reason', 'ResourceId') }
             try { $arg = Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant }
             catch { return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed) }
-            $vms = @($arg.Rows)
-            if ($vms.Count -eq 0) { return New-EbrResult -ResultId $Item.Id -Status 'EMPTY' -Columns $columns -Source 'Resource Graph' -Detail 'No virtual machine without encryption at host in scope.' -DurationSec (& $elapsed) }
-            $rows = @(Get-EbrEncryptionAtHostRows -Vms $vms -Tenant $Ctx.ArmTenant)
+            $found = @($arg.Rows)
+            if ($found.Count -eq 0) { return New-EbrResult -ResultId $Item.Id -Status 'EMPTY' -Columns $columns -Source 'Resource Graph' -Detail $(if ($scaleSets) { 'No scale set without encryption at host in scope.' } else { 'No virtual machine without encryption at host in scope.' }) -DurationSec (& $elapsed) }
             # A machine whose size list was not read counts as unread even when Azure Disk Encryption already
-            # rules it out, and a truncated Resource Graph result makes the list partial.
-            $unread = @($rows | Where-Object { $_.SizeRead -ne 'OK' })
-            $detail = '{0} of {1} virtual machines can take encryption at host. {2} on a size without support, {3} with Azure Disk Encryption, {4} with size support not read.' -f @($rows | Where-Object Eligible).Count, $rows.Count, @($rows | Where-Object SizeSupported -eq 'No').Count, @($rows | Where-Object AdeUsed).Count, $unread.Count
+            # rules it out, and a truncated Resource Graph result makes the list partial. A scale set whose
+            # size is not read (an AKS node pool, or a Flexible scale set without a model) does not count.
+            if ($scaleSets) {
+                $rows = @(Get-EbrScaleSetEncryptionAtHostRows -ScaleSets $found -Tenant $Ctx.ArmTenant)
+                $sized = @($rows | Where-Object { $_.SizeRead })
+                $unread = @($sized | Where-Object { $_.SizeRead -ne 'OK' })
+                $detail = '{0} of {1} scale sets can take encryption at host. {2} AKS node pools, {3} without a model, {4} on a size without support, {5} with Azure Disk Encryption, {6} with size support not read.' -f @($rows | Where-Object Eligible).Count, $rows.Count, @($rows | Where-Object Aks).Count, @($rows | Where-Object { -not $_.HasModel }).Count, @($rows | Where-Object SizeSupported -eq 'No').Count, @($rows | Where-Object AdeUsed).Count, $unread.Count
+            }
+            else {
+                $rows = @(Get-EbrEncryptionAtHostRows -Vms $found -Tenant $Ctx.ArmTenant)
+                $sized = $rows
+                $unread = @($rows | Where-Object { $_.SizeRead -ne 'OK' })
+                $detail = '{0} of {1} virtual machines can take encryption at host. {2} on a size without support, {3} with Azure Disk Encryption, {4} with size support not read.' -f @($rows | Where-Object Eligible).Count, $rows.Count, @($rows | Where-Object SizeSupported -eq 'No').Count, @($rows | Where-Object AdeUsed).Count, $unread.Count
+            }
             if ($arg.Detail) { $detail += ' ' + $arg.Detail }
-            $status = if ($unread.Count -eq $rows.Count) { 'FAILED' } elseif ($unread.Count -or $arg.Detail) { 'PARTIAL' } else { 'OK' }
+            $status = if ($sized.Count -and $unread.Count -eq $sized.Count) { 'FAILED' } elseif ($unread.Count -or $arg.Detail) { 'PARTIAL' } else { 'OK' }
             return New-EbrResult -ResultId $Item.Id -Status $status -Rows $rows -Columns $columns -Source 'Resource Graph and the Compute resource SKUs API' -Detail $detail -DurationSec (& $elapsed)
         }
         'DEFENDER-SCORES' {

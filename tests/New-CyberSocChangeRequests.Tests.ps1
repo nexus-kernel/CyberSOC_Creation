@@ -29,7 +29,7 @@ BeforeAll {
     function New-ChangeFixture {
         param([string]$Path)
         New-Item -ItemType Directory -Path (Join-Path $Path 'results') -Force | Out-Null
-        @{ ClientName = 'Example Client'; TenantId = 'example-tenant'; ScriptVersion = '1.1.0'; Subscriptions = @($s1, $s2); Workspaces = @(@{ Name = 'law-example-sentinel' }) } |
+        @{ ClientName = 'Example Client'; TenantId = 'example-tenant'; ScriptVersion = '1.3.0'; Subscriptions = @($s1, $s2); Workspaces = @(@{ Name = 'law-example-sentinel' }) } |
             ConvertTo-Json -Depth 6 | Set-Content (Join-Path $Path '00-parameters.json')
         '"ResultId","Status","Rows","ReadTimeUtc"' | Set-Content (Join-Path $Path '00-manifest.csv')
         $sa = { param($name, $rg, $sub) "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Storage/storageAccounts/$name" }
@@ -56,13 +56,28 @@ BeforeAll {
             @{ Name = 'evh-audit'; ResourceId = (& $paas 'Microsoft.EventHub/namespaces' 'evh-audit' 'rg-logs' $s2); ResourceType = 'microsoft.eventhub/namespaces'; resourceGroup = 'rg-logs'; subscriptionId = $s2; MinimumTlsVersion = '1.1' }
             @{ Name = 'cosmos-catalog'; ResourceId = (& $paas 'Microsoft.DocumentDB/databaseAccounts' 'cosmos-catalog' 'rg-data' $s2); ResourceType = 'microsoft.documentdb/databaseaccounts'; resourceGroup = 'rg-data'; subscriptionId = $s2; MinimumTlsVersion = 'Tls' })
         $vm = { param($name, $sub) "/subscriptions/$sub/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/$name" }
+        $vmss = { param($name, $rg, $sub) "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Compute/virtualMachineScaleSets/$name" }
         Set-PackResult $Path 'DP.4-ELIGIBILITY' @(
-            @{ Name = 'vm-app01'; ResourceId = (& $vm 'vm-app01' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
-            @{ Name = 'vm-old'; ResourceId = (& $vm 'vm-old' $s2); resourceGroup = 'rg-app'; subscriptionId = $s2; Location = 'westus'; Size = 'Standard_B2s'; PowerState = 'PowerState/deallocated'; AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
-            @{ Name = 'vm-paused'; ResourceId = (& $vm 'vm-paused' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_B2s'; PowerState = 'PowerState/stopped'; AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
-            @{ Name = 'vm-ade'; ResourceId = (& $vm 'vm-ade' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D2s_v5'; PowerState = 'PowerState/running'; AdeUsed = $true; SizeSupported = 'Yes'; Eligible = $false; Reason = 'Azure Disk Encryption used' }
-            @{ Name = 'vm-a1'; ResourceId = (& $vm 'vm-a1' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_A1'; PowerState = 'PowerState/running'; AdeUsed = $false; SizeSupported = 'No'; Eligible = $false; Reason = 'size not supported' }
-            @{ Name = 'vm-unread'; ResourceId = (& $vm 'vm-unread' $s2); resourceGroup = 'rg-app'; subscriptionId = $s2; Location = 'westus'; Size = 'Standard_D2s_v5'; PowerState = 'PowerState/running'; AdeUsed = $false; SizeSupported = 'Unknown'; Eligible = $false; Reason = 'size support not read: HTTP 403; Forbidden' })
+            @{ Name = 'vm-app01'; ResourceId = (& $vm 'vm-app01' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; ScaleSet = ''; AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
+            @{ Name = 'vm-old'; ResourceId = (& $vm 'vm-old' $s2); resourceGroup = 'rg-app'; subscriptionId = $s2; Location = 'westus'; Size = 'Standard_B2s'; PowerState = 'PowerState/deallocated'; ScaleSet = ''; AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
+            @{ Name = 'vm-paused'; ResourceId = (& $vm 'vm-paused' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_B2s'; PowerState = 'PowerState/stopped'; ScaleSet = ''; AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
+            @{ Name = 'vm-ade'; ResourceId = (& $vm 'vm-ade' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D2s_v5'; PowerState = 'PowerState/running'; ScaleSet = ''; AdeUsed = $true; SizeSupported = 'Yes'; Eligible = $false; Reason = 'Azure Disk Encryption used' }
+            @{ Name = 'vm-a1'; ResourceId = (& $vm 'vm-a1' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_A1'; PowerState = 'PowerState/running'; ScaleSet = ''; AdeUsed = $false; SizeSupported = 'No'; Eligible = $false; Reason = 'size not supported' }
+            @{ Name = 'vm-unread'; ResourceId = (& $vm 'vm-unread' $s2); resourceGroup = 'rg-app'; subscriptionId = $s2; Location = 'westus'; Size = 'Standard_D2s_v5'; PowerState = 'PowerState/running'; ScaleSet = ''; AdeUsed = $false; SizeSupported = 'Unknown'; Eligible = $false; Reason = 'size support not read: HTTP 403; Forbidden' }
+            @{ Name = 'vm-flex-1'; ResourceId = (& $vm 'vm-flex-1' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; ScaleSet = (& $vmss 'vmss-flex' 'rg-app' $s1).ToLowerInvariant(); AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
+            @{ Name = 'vm-flex-2'; ResourceId = (& $vm 'vm-flex-2' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/deallocated'; ScaleSet = (& $vmss 'vmss-flex' 'rg-app' $s1).ToLowerInvariant(); AdeUsed = $false; SizeSupported = 'Yes'; Eligible = $true; Reason = '' }
+            @{ Name = 'vm-flexade-1'; ResourceId = (& $vm 'vm-flexade-1' $s1); resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; ScaleSet = (& $vmss 'vmss-flexade' 'rg-app' $s1).ToLowerInvariant(); AdeUsed = $true; SizeSupported = 'Yes'; Eligible = $false; Reason = 'Azure Disk Encryption used' })
+        $ss = { param($name, $rg, $sub, [hashtable]$extra = @{})
+            $o = @{ Name = $name; ResourceId = (& $vmss $name $rg $sub); resourceGroup = $rg; subscriptionId = $sub; Location = 'eastus'; OrchestrationMode = 'Uniform'; UpgradePolicy = 'Manual'; Instances = 2; Size = 'Standard_D4s_v5'; HasModel = $true; AdeUsed = $false; OldSectorDisk = $false; SizeSupported = 'Yes'; SizeRead = 'OK'; Aks = $false; AksCluster = ''; AksClusterResourceGroup = ''; AksNodePool = ''; Eligible = $true; Reason = '' }
+            foreach ($k in $extra.Keys) { $o[$k] = $extra[$k] }
+            $o }
+        Set-PackResult $Path 'DP.4-VMSS-ELIGIBILITY' @(
+            (& $ss 'vmss-web' 'rg-web' $s1 @{ UpgradePolicy = 'Rolling'; Instances = 4 })
+            (& $ss 'vmss-batch' 'rg-batch' $s2 @{ Instances = 1; Location = 'westus' })
+            (& $ss 'vmss-flex' 'rg-app' $s1 @{ OrchestrationMode = 'Flexible'; UpgradePolicy = '' })
+            (& $ss 'vmss-flexade' 'rg-app' $s1 @{ OrchestrationMode = 'Flexible'; UpgradePolicy = ''; Instances = 1 })
+            (& $ss 'vmss-legacy' 'rg-app' $s1 @{ AdeUsed = $true; Eligible = $false; Reason = 'Azure Disk Encryption used' })
+            (& $ss 'aks-nodepool1-12345678-vmss' 'MC_rg-aks_aks-prod_eastus' $s1 @{ Size = 'Standard_D2s_v5'; Instances = 3; SizeSupported = ''; SizeRead = ''; Aks = $true; AksCluster = 'aks-prod'; AksClusterResourceGroup = 'rg-aks'; AksNodePool = 'nodepool1'; Eligible = $false; Reason = 'AKS node pool, set only when a node pool is created' }))
         Set-PackResult $Path 'DP.4-DETAIL' @(
             @{ Name = 'vm-app01'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s1; PowerState = 'PowerState/running'; Size = 'Standard_D4s_v5' }
             @{ Name = 'vm-old'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s2; PowerState = 'PowerState/deallocated'; Size = 'Standard_B2s' }
@@ -104,13 +119,13 @@ Describe 'Change request generation' {
         @($crFiles.Name | Sort-Object) | Should -Be @(
             'CR-01-diagnostic-logging.txt', 'CR-02-storage-secure-transfer.txt', 'CR-03-storage-minimum-tls.txt', 'CR-04-app-service-minimum-tls.txt',
             'CR-06-key-vault-purge-protection.txt', 'CR-07-storage-anonymous-access.txt', 'CR-08-app-service-https-only.txt', 'CR-09-encryption-at-host.txt',
-            'CR-11-redis-minimum-tls.txt', 'CR-12-service-bus-minimum-tls.txt', 'CR-13-event-hubs-minimum-tls.txt', 'CR-14-cosmos-db-minimum-tls.txt')
-        @($emailFiles.Name | Sort-Object) | Should -Be @('CR-06-key-vault-purge-protection.email.txt', 'CR-07-storage-anonymous-access.email.txt', 'CR-08-app-service-https-only.email.txt', 'CR-09-encryption-at-host.email.txt', 'CR-13-event-hubs-minimum-tls.email.txt')
+            'CR-11-redis-minimum-tls.txt', 'CR-12-service-bus-minimum-tls.txt', 'CR-13-event-hubs-minimum-tls.txt', 'CR-14-cosmos-db-minimum-tls.txt', 'CR-15-scale-set-encryption-at-host.txt')
+        @($emailFiles.Name | Sort-Object) | Should -Be @('CR-06-key-vault-purge-protection.email.txt', 'CR-07-storage-anonymous-access.email.txt', 'CR-08-app-service-https-only.email.txt', 'CR-09-encryption-at-host.email.txt', 'CR-13-event-hubs-minimum-tls.email.txt', 'CR-15-scale-set-encryption-at-host.email.txt')
         $files.Count | Should -Be ($crFiles.Count + $emailFiles.Count + 2)
         $index | Should -Match '\| 05 \| Minimum TLS 1\.2 on Azure SQL servers \|  \| No gaps found \|'
         $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request and client email \| CR-06-key-vault-purge-protection\.txt, CR-06-key-vault-purge-protection\.email\.txt \|'
         $index | Should -Match '\| 07 \| Anonymous blob access disabled on storage accounts \| 2 \| Change request and client email \|'
-        $index | Should -Match 'Internal\. Built .* from evidence pack full \(collector 1\.1\.0\)'
+        $index | Should -Match 'Internal\. Built .* from evidence pack full \(collector 1\.3\.0\)'
     }
 
     It 'lays every change request out on the template, in order, with an empty notification list' {
@@ -237,8 +252,10 @@ Describe 'Change request generation' {
 
     It 'enables encryption at host on virtual machines only, with the feature registered per subscription' {
         $text = & $read 'CR-09-encryption-at-host.txt'
-        $text | Should -Not -Match 'aks-nodepool1-vmss'
-        $index | Should -Match '1 scale set left out of CR-09: aks-nodepool1-vmss\.'
+        $text | Should -Not -Match 'aks-nodepool1|vmss-' -Because 'scale sets have their own change, CR-15'
+        foreach ($name in 'vm-flex-1', 'vm-flex-2', 'vm-flexade-1') { $text | Should -Not -Match $name -Because "$name is an instance of a Flexible scale set with a model" }
+        $index | Should -Match '3 virtual machines left out of CR-09 because they belong to a Flexible scale set with a model, so CR-15 handles them with their scale set: vm-flex-1 \(vmss-flex\), vm-flex-2 \(vmss-flex\), vm-flexade-1 \(vmss-flexade\)\.'
+        $index | Should -Not -Match 'need their own change' -Because 'the old note pointed to a change that did not exist'
         foreach ($name in 'vm-ade', 'vm-a1', 'vm-unread') { $text | Should -Not -Match $name -Because "$name cannot take encryption at host as it stands" }
         $index | Should -Match '3 virtual machines left out of CR-09 because they cannot take encryption at host as they stand: vm-a1 \(Standard_A1, size not supported\), vm-ade \(Standard_D2s_v5, Azure Disk Encryption used\), vm-unread \(Standard_D2s_v5, size support not read\)\.'
         $index | Should -Match '\| 09 \| Encryption at host on virtual machines \| 3 \| Change request and client email \|'
@@ -258,6 +275,64 @@ Describe 'Change request generation' {
         $email | Should -Match '- vm-paused \(resource group rg-app, stopped at my last review\)' -Because 'a machine stopped but still allocated is not running either'
         $email | Should -Match 'a server that is already stopped will be left stopped'
         $email | Should -Match 'Could you suggest a maintenance window'
+    }
+
+    It 'enables encryption at host on the eligible scale sets through the model, then on each existing instance by orchestration mode' {
+        $text = & $read 'CR-15-scale-set-encryption-at-host.txt'
+        $text | Should -Match 'Title: Enable encryption at host on virtual machine scale sets'
+        $text | Should -Match 'Enable encryption at host on the model and the existing instances of the 3 virtual machine scale sets listed below, which needs a stop and start of each instance\.'
+        $text | Should -Match "Subscription: Example Production \($s1\)\r?\n- vmss-flex, resource group rg-app, Flexible, no upgrade policy, 2 instances, size Standard_D4s_v5, instances without encryption at host: vm-flex-1 \(running\), vm-flex-2 \(deallocated\)\r?\n- vmss-web, resource group rg-web, Uniform, upgrade policy Rolling, 4 instances, size Standard_D4s_v5"
+        $text | Should -Match '- vmss-batch, resource group rg-batch, Uniform, upgrade policy Manual, 1 instance, size Standard_D4s_v5'
+        foreach ($name in 'vmss-legacy', 'vmss-flexade', 'aks-nodepool1') { $text | Should -Not -Match $name -Because "$name is not proven eligible" }
+        $index | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \| 3 \| Change request and client email \| CR-15-scale-set-encryption-at-host\.txt, CR-15-scale-set-encryption-at-host\.email\.txt \|'
+        $index | Should -Match '1 scale set left out of CR-15 because its model cannot take encryption at host as it stands: vmss-legacy \(Standard_D4s_v5, Azure Disk Encryption used\)\.'
+        $index | Should -Match '1 Flexible scale set left out of CR-15 because it has a machine that cannot take encryption at host as it stands: vmss-flexade \(vm-flexade-1 Azure Disk Encryption used\)\.'
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        foreach ($s in $s1, $s2) {
+            $impl | Should -Contain "    az feature register --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s"
+            $impl | Should -Contain "    az feature show --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s --query properties.state -o tsv"
+        }
+        $impl | Should -Contain '3. In Cloud Shell, set encryption at host on the model of each scale set listed in the RESOURCES section. A scale set with an Automatic upgrade policy may take all its instances down at once to apply the new model, and one with a Rolling policy applies it in batches, so run this only inside the agreed maintenance window:'
+        $impl | Should -Contain "    az vmss update --subscription $s1 --resource-group rg-web --name vmss-web --set virtualMachineProfile.securityProfile.encryptionAtHost=true"
+        $impl | Should -Contain "    az vmss update --subscription $s2 --resource-group rg-batch --name vmss-batch --set virtualMachineProfile.securityProfile.encryptionAtHost=true"
+        $impl | Should -Contain '4. In the Azure portal, go to Virtual machine scale sets, open the first Uniform scale set listed in the RESOURCES section and go to Settings > Instances.'
+        $impl | Should -Contain '5. Select the first instance, note whether its status reads Running, then select Stop and wait for the status to read Stopped (deallocated).'
+        $impl | Should -Contain '6. With the instance still selected, select Upgrade if Latest model reads No, and wait for the upgrade to finish.'
+        $impl | Should -Contain '7. Select Start only if the instance read Running before the stop, so an instance that was not running stays stopped.'
+        $impl | Should -Contain '8. Repeat steps 5 to 7 for each remaining instance, then steps 4 to 7 for each remaining Uniform scale set listed.'
+        $impl | Should -Contain '9. In the Azure portal, go to Virtual machine scale sets, open the Flexible scale set listed in the RESOURCES section, go to Settings > Instances and open the first instance named for it.'
+        $impl | Should -Contain '11. Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.'
+        $impl | Should -Contain '12. Go back to Overview and select Start only if the status read Running before the stop, so an instance that was not running stays stopped.'
+        $impl[-1] | Should -Be '13. Repeat steps 10 to 12 for each remaining instance named.'
+        $testing = @(Get-Section $text 'B) TESTING PLAN')
+        $testing[0] | Should -Be '1. In the Azure portal, open each scale set listed in the RESOURCES section, select JSON View on Overview and confirm virtualMachineProfile.securityProfile.encryptionAtHost reads true.'
+        $testing[1] | Should -Match '^2\. For each Uniform scale set, go to Settings > Instances and confirm every instance shows Latest model Yes'
+        $testing[2] | Should -Match '^3\. For the Flexible scale set, open each instance named in the RESOURCES section, go to Settings > Disks > Additional settings and confirm Encryption at host shows Yes'
+        $rollback = @(Get-Section $text 'C) ROLLBACK PLAN')
+        $rollback | Should -Contain "    az vmss update --subscription $s1 --resource-group rg-web --name vmss-web --set virtualMachineProfile.securityProfile.encryptionAtHost=false"
+        ($rollback -join "`n") | Should -Match 'For a Uniform scale set, go to Settings > Instances and for each instance note whether its status reads Running, select Stop, wait for Stopped \(deallocated\), select Upgrade, and select Start only if it read Running before the stop\.'
+        ($rollback -join "`n") | Should -Match 'set Encryption at host to No under Settings > Disks > Additional settings, select Save, and select Start only if it read Running before the stop\.'
+        @(Get-Section $text 'A) AVAILABILITY/PERFORMANCE')[0] | Should -Be 'Each instance is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window, one instance at a time.' -Because 'no scale set here has an Automatic upgrade policy'
+        (Get-Section $text 'D) DR Impact') -join '|' | Should -Be 'Not a DR Client'
+        $text | Should -Match 'virtual-machine-scale-sets-perform-manual-upgrades'
+        @($csv | Where-Object CR -eq 'CR-15' | ForEach-Object Resource | Sort-Object) | Should -Be @('vmss-batch', 'vmss-flex', 'vmss-web')
+    }
+
+    It 'asks for a maintenance window for the scale sets, one instance at a time, and warns about automatic upgrades' {
+        $email = & $read 'CR-15-scale-set-encryption-at-host.email.txt'
+        $email | Should -Match '^Subject: Maintenance window request: encryption at host for Azure virtual machine scale sets\r?\n\r?\nHello Dana,'
+        $email | Should -Match 'I am planning to enable encryption at host on the 3 virtual machine scale sets below\.'
+        $email | Should -Match '- vmss-batch \(resource group rg-batch, 1 instance\)\r?\n- vmss-flex \(resource group rg-app, 2 instances\)\r?\n- vmss-web \(resource group rg-web, 4 instances\)'
+        $email | Should -Match 'which I will do one instance at a time'
+        $email | Should -Match 'an instance that is already stopped will be left stopped'
+        $email | Should -Match 'One scale set is set to update its instances automatically, so once the setting is applied it may also restart them on its own, all at the same time under the Automatic policy and in batches under the Rolling policy\. I will plan the window as if every instance could be unavailable at once: vmss-web \(Rolling\)\.'
+        $email | Should -Match 'Could you suggest a maintenance window that works for these scale sets'
+        $email | Should -Match 'Thank you,\r?\nScott Example\r?\n$'
+    }
+
+    It 'routes AKS node pools to a planned project in the index instead of a change request' {
+        $index | Should -Match '1 AKS node pool without encryption at host left out of CR-15 and routed to a planned project: cluster aks-prod \(resource group rg-aks\) node pool nodepool1 \(Standard_D2s_v5, 3 nodes\)\. AKS sets encryption at host only when a node pool is created, so each pool is replaced: a new node pool created with encryption at host, its workloads moved across and the old pool removed\. Plan that with the client as a project, not as a low-impact change\.'
+        @($files | Where-Object { $_ -match '(?i)aks' }) | Should -BeNullOrEmpty -Because 'no change request or email is written for AKS'
     }
 
     It 'checks the EncryptionAtHost registration state on each subscription, not only the last one set' {
@@ -429,6 +504,77 @@ Describe 'Change request variants' {
         Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Not -Match 'Run again with -DrClient'
     }
 
+    It 'writes singular scale set wording, the Automatic policy warning and the DR Playbook step for Flexible instances' {
+        $pack = Join-Path $TestDrive 'scale-set-single'
+        New-ChangeFixture $pack
+        $id = "/subscriptions/$s1/resourceGroups/rg-web/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-auto"
+        Set-PackResult $pack 'DP.4-VMSS-ELIGIBILITY' @(@{ Name = 'vmss-auto'; ResourceId = $id; resourceGroup = 'rg-web'; subscriptionId = $s1; OrchestrationMode = 'Uniform'; UpgradePolicy = 'Automatic'; Instances = 1; Size = 'Standard_D4s_v5'; HasModel = $true; Aks = $false; Eligible = $true; Reason = '' })
+        $null = & $generator -EvidencePath $pack -DrClient
+        $out = Join-Path $pack '05-change-requests'
+        $text = Get-Content (Join-Path $out 'CR-15-scale-set-encryption-at-host.txt') -Raw
+        $text | Should -Match 'on the model and the existing instances of the virtual machine scale set listed below'
+        $text | Should -Match 'The scale set below is listed with its orchestration mode'
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $impl | Should -Contain '4. In the Azure portal, go to Virtual machine scale sets, open the Uniform scale set listed in the RESOURCES section and go to Settings > Instances.'
+        $impl[-1] | Should -Be '8. Repeat steps 5 to 7 for each remaining instance.'
+        ($impl -join "`n") | Should -Not -Match 'Flexible'
+        @(Get-Section $text 'A) AVAILABILITY/PERFORMANCE')[0] | Should -Match 'a scale set with an Automatic upgrade policy may take all its instances down at once to apply the model\.$'
+        (Get-Section $text 'D) DR Impact') -join '|' | Should -Be 'N/A - No DR impact' -Because 'Azure Site Recovery does not replicate a Uniform scale set'
+        $email = Get-Content (Join-Path $out 'CR-15-scale-set-encryption-at-host.email.txt') -Raw
+        $email | Should -Match 'on the virtual machine scale set below\.'
+        $email | Should -Match 'vmss-auto \(Automatic\)'
+        $email | Should -Match 'Could you suggest a maintenance window that works for this scale set\?'
+        $flexId = "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-flex"
+        Set-PackResult $pack 'DP.4-VMSS-ELIGIBILITY' @(@{ Name = 'vmss-flex'; ResourceId = $flexId; resourceGroup = 'rg-app'; subscriptionId = $s1; OrchestrationMode = 'Flexible'; UpgradePolicy = ''; Instances = 2; Size = 'Standard_D4s_v5'; HasModel = $true; Aks = $false; Eligible = $true; Reason = '' })
+        $null = & $generator -EvidencePath $pack -DrClient
+        $text = Get-Content (Join-Path $out 'CR-15-scale-set-encryption-at-host.txt') -Raw
+        @(Get-Section $text 'D) DR Impact')[0] | Should -Match '^This is a DR client\. Azure Site Recovery does not carry encryption at host .* Flexible scale set instances in this change\.$'
+        @(Get-Section $text 'D) DR PLAN')[1] | Should -Match 'starts it again only if it was running before the stop\.$'
+        $text | Should -Match 'azure-to-azure-support-matrix'
+    }
+
+    It 'leaves Flexible scale sets out when their machines cannot be checked, and keeps the machines of a scale set without a model in CR-09' {
+        $pack = Join-Path $TestDrive 'scale-set-flexible'
+        New-ChangeFixture $pack
+        $sid = { param($name) "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachineScaleSets/$name" }
+        Set-PackResult $pack 'DP.4-VMSS-ELIGIBILITY' @(
+            @{ Name = 'vmss-flex'; ResourceId = (& $sid 'vmss-flex'); resourceGroup = 'rg-app'; subscriptionId = $s1; OrchestrationMode = 'Flexible'; Instances = 2; Size = 'Standard_D4s_v5'; HasModel = $true; Aks = $false; Eligible = $true; Reason = '' }
+            @{ Name = 'vmss-bare'; ResourceId = (& $sid 'vmss-bare'); resourceGroup = 'rg-app'; subscriptionId = $s1; OrchestrationMode = 'Flexible'; Instances = 1; Size = ''; HasModel = $false; Aks = $false; Eligible = $false; Reason = 'no scale set model' })
+        $vmId = "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-bare-1"
+        Set-PackResult $pack 'DP.4-ELIGIBILITY' @(@{ Name = 'vm-bare-1'; ResourceId = $vmId; resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; ScaleSet = (& $sid 'vmss-bare').ToLowerInvariant(); AdeUsed = $false; Eligible = $true; Reason = '' })
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        Get-Content (Join-Path $out 'CR-09-encryption-at-host.txt') -Raw | Should -Match '- vm-bare-1, resource group rg-app' -Because 'with no model the scale set has nothing to set, so its machine is a standalone change'
+        $text = Get-Content (Join-Path $out 'CR-15-scale-set-encryption-at-host.txt') -Raw
+        $text | Should -Match 'vmss-flex, resource group rg-app, Flexible, no upgrade policy, 2 instances, size Standard_D4s_v5, no instance without encryption at host'
+        $text | Should -Match 'open the Flexible scale set listed in the RESOURCES section'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '1 Flexible scale set without a scale set model left out of CR-15: vmss-bare\. With no model there is nothing to set on the scale set, so CR-09 covers its machines as standalone virtual machines\.'
+        Set-PackResult $pack 'DP.4-ELIGIBILITY' @(@{ Name = 'vm-x'; ResourceId = 'x'; resourceGroup = 'rg-app'; subscriptionId = $s1; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; Eligible = $true; Reason = '' })
+        $null = & $generator -EvidencePath $pack
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '1 Flexible scale set left out of CR-15 because DP\.4-ELIGIBILITY does not name the scale set of each machine, so its machines could not be checked: vmss-flex\.'
+        $index | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \|  \| No eligible scale sets \|'
+        Test-Path (Join-Path $out 'CR-15-scale-set-encryption-at-host.txt') | Should -BeFalse -Because 'the change request from the earlier run is removed'
+        Set-PackResult $pack 'DP.4-ELIGIBILITY' @() 'FAILED'
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match 'because DP\.4-ELIGIBILITY reads FAILED, so its machines could not be checked: vmss-flex\.'
+    }
+
+    It 'reads only AKS node pools as routed to a project, and no gaps when no scale set lacks encryption at host' {
+        $pack = Join-Path $TestDrive 'scale-set-aks'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'DP.4-VMSS-ELIGIBILITY' @(
+            @{ Name = 'aks-system-1-vmss'; ResourceId = 'a1'; resourceGroup = 'MC_rg_aks_eastus'; subscriptionId = $s1; Size = 'Standard_D2s_v5'; Instances = 1; HasModel = $true; Aks = $true; AksCluster = ''; AksNodePool = ''; Eligible = $false; Reason = 'AKS node pool, set only when a node pool is created' })
+        $null = & $generator -EvidencePath $pack
+        $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+        $index | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \|  \| Only AKS node pools remain, see the notes \|'
+        $index | Should -Match 'routed to a planned project: scale set aks-system-1-vmss in resource group MC_rg_aks_eastus node pool name not tagged \(Standard_D2s_v5, 1 node\)\.' -Because 'a node pool found by its tags alone is named by its scale set'
+        Set-PackResult $pack 'DP.4-VMSS-ELIGIBILITY' @()
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \|  \| No gaps found \|'
+    }
+
     It 'remediates the non-compliant resources when the initiative is assigned' {
         $pack = Join-Path $TestDrive 'remediate'
         New-ChangeFixture $pack
@@ -473,7 +619,7 @@ Describe 'Change request variants' {
         $pack = Join-Path $TestDrive 'old'
         New-ChangeFixture $pack
         $null = & $generator -EvidencePath $pack
-        foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'NB.6-PAAS-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL') { Remove-PackResult $pack $id }
+        foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'NB.6-PAAS-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DP.4-VMSS-ELIGIBILITY') { Remove-PackResult $pack $id }
         Set-PackResult $pack 'DP.4-ELIGIBILITY' @() 'FAILED'
         $null = & $generator -EvidencePath $pack
         $out = Join-Path $pack '05-change-requests'
@@ -482,6 +628,7 @@ Describe 'Change request variants' {
         $index | Should -Match '\| 02 \| Secure transfer required on storage accounts \|  \| Needs recollection with CyberSOC collector 1\.1\.0 or later \|'
         $index | Should -Match '\| 09 \| Encryption at host on virtual machines \|  \| Not collected \(DP\.4-ELIGIBILITY FAILED\) \|'
         foreach ($n in 11..14) { $index | Should -Match ('\| {0} \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.2\.0 or later \|' -f $n) -Because 'NB.6-PAAS-DETAIL was added in 1.2.0' }
+        $index | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \|  \| Needs recollection with CyberSOC collector 1\.3\.0 or later \|' -Because 'DP.4-VMSS-ELIGIBILITY was added in 1.3.0'
         $index | Should -Match 'Subscription names were not read \(P0\.7\)'
         Get-Content (Join-Path $out 'CR-01-diagnostic-logging.txt') -Raw | Should -Match "- $s1\r?\n"
     }
@@ -549,11 +696,15 @@ Describe 'Change request variants' {
         Set-PackResult $pack 'DP.1-CONTAINERS' @() 'FAILED'
         Set-PackResult $pack 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 6; Compliant = 5; NonCompliant = 1 })
         Set-PackResult $pack 'DR.6-NONCOMPLIANT' @(@{ ResourceId = "/subscriptions/$s1/resourcegroups/rg-app/providers/microsoft.keyvault/vaults/kv-app"; ResourceType = 'microsoft.keyvault/vaults'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; AssignmentId = "/subscriptions/$s1/providers/microsoft.authorization/policyassignments/a1"; Policies = 'ATMO-MXDR-KV-TOSENT' }) 'PARTIAL'
-        Set-PackResult $pack 'DP.4-DETAIL' @() 'SKIPPED'
+        Set-PackResult $pack 'DP.4-VMSS-ELIGIBILITY' @() 'FAILED'
         $null = & $generator -EvidencePath $pack
         $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
         $index | Should -Match 'CR-07 was written without DP\.1-CONTAINERS, which reads FAILED\.'
-        $index | Should -Match 'Scale sets were not checked for encryption at host, because DP\.4-DETAIL reads SKIPPED\.'
+        $index | Should -Match 'CR-09 was written without DP\.4-VMSS-ELIGIBILITY, which reads FAILED\.'
+        $index | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \|  \| Not collected \(DP\.4-VMSS-ELIGIBILITY FAILED\) \|'
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-09-encryption-at-host.txt') -Raw
+        $text | Should -Match 'vm-flex-1' -Because 'without the scale set list CR-09 keeps the Flexible instances, which take the setting as virtual machines'
+        $text | Should -Not -Match 'vm-flexade-1' -Because 'an ineligible instance stays out'
         $index | Should -Match '\| 10 \| .* \| 1 \| Change request, partial collection scope \|' -Because 'a partial resource list must not read as complete'
     }
 
