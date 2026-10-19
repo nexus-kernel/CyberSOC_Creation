@@ -249,7 +249,9 @@ function Read-EbrCaEvaluation {
         if ((& $status $id) -notin 'OK', 'EMPTY') { return $null }
         $file = Join-Path $Pack "results/$id.json"
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $null }
-        , @(Get-Content -LiteralPath $file -Raw | ConvertFrom-Json | Where-Object { $null -ne $_ -and (& $Filter $_) })
+        # Parenthesised, so Windows PowerShell 5.1 enumerates the array that ConvertFrom-Json returns as
+        # one object, as PowerShell 7 does. Without it all the policies or sign-ins of a result arrive as one row.
+        , @((Get-Content -LiteralPath $file -Raw | ConvertFrom-Json) | Where-Object { $null -ne $_ -and (& $Filter $_) })
     }
     $policies = & $load 'IA.8-POLICIES'
     $flat = if ($null -eq $policies) { & $load 'IA.8' } else { $null }

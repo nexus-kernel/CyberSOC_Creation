@@ -288,7 +288,10 @@ $issues = [System.Collections.Generic.List[string]]::new()
 function Read-ResultRows([string]$id) {
     $file = Join-Path $pack "results/$id.json"
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $null }
-    try { return @(Get-Content -LiteralPath $file -Raw | ConvertFrom-Json) }
+    # Parenthesised, so Windows PowerShell 5.1 enumerates the array that ConvertFrom-Json returns as one
+    # object, as PowerShell 7 does. Without it an empty result still runs its aggregate, which then embeds
+    # zero counts where PowerShell 7 embeds none.
+    try { return @((Get-Content -LiteralPath $file -Raw | ConvertFrom-Json)) }
     catch { $issues.Add("$id could not be read. Regenerate or recollect this result."); return @() }
 }
 foreach ($id in $fields.Keys) {
