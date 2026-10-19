@@ -255,6 +255,7 @@ Describe 'Change request generation' {
         $text = Get-Content (Join-Path $pack '05-change-requests/CR-01-diagnostic-logging.txt') -Raw
         $text | Should -Match 'The initiative is assigned at the subscription below, which has no ATMO-MXDR policy state yet,'
         $text | Should -Match "Subscriptions:\r?\n- Example, Dev Test \($s2\)\r?\n\r?\n"
+        $text | Should -Match '- Key vaults: 2\r?\n' -Because 'only the vaults of the subscription being assigned are counted, not the 4 in the covered one'
         $text | Should -Not -Match "\($s1\)" -Because 'the covered subscription already has the initiative'
         $text | Should -Not -Match 'management group mg-example' -Because 'an assignment at the group would overlap the existing one'
         $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
@@ -308,6 +309,7 @@ Describe 'Change request variants' {
         $text = Get-Content (Join-Path $pack '05-change-requests/CR-09-encryption-at-host.txt') -Raw
         @(Get-Section $text 'D) DR Impact')[0] | Should -Match '^This is a DR client\. Azure Site Recovery does not carry encryption at host'
         @(Get-Section $text 'D) DR PLAN')[0] | Should -Match '^1\. In the DR Playbook, add a post-failover step'
+        @(Get-Section $text 'D) DR PLAN')[1] | Should -Match 'starts it again only if it was running before the stop\.$' -Because 'a failover machine that was stopped stays stopped'
         $text | Should -Match 'azure-to-azure-support-matrix'
         $other = Get-Content (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.txt') -Raw
         (Get-Section $other 'D) DR Impact') -join '|' | Should -Be 'N/A - No DR impact'

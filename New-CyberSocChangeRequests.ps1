@@ -279,7 +279,8 @@ function New-DiagnosticAssignment([string[]]$Subscriptions, [bool]$Covered) {
     $counted = (Get-Status 'P0.5') -eq 'EMPTY' -or ($inventory.Count -and $inventory[0].PSObject.Properties.Name -contains 'ResourceType')
     $counts = [ordered]@{}
     if ($counted) {
-        foreach ($row in $inventory) {
+        # Only the subscriptions this assignment covers are counted.
+        foreach ($row in @($inventory | Where-Object { -not (Get-Text $_.subscriptionId) -or (ConvertTo-CopyText $_.subscriptionId).ToLowerInvariant() -in $subscriptions })) {
             $type = (Get-Text $row.ResourceType).ToLowerInvariant()
             if ($diagnosticTypes.Contains($type)) { $counts[$type] = [int]$counts[$type] + (Get-Number $row.Resources) }
         }
@@ -776,7 +777,7 @@ $catalog = @(
                 $spec.DrImpact = 'This is a DR client. Azure Site Recovery does not carry encryption at host to test failover or failover virtual machines, so the DR Playbook needs an update.'
                 $spec.DrPlan = @(
                     'In the DR Playbook, add a post-failover step for the virtual machines listed in this change.'
-                    'The step stops each failed over virtual machine, sets Encryption at host to Yes under Settings > Disks > Additional settings, selects Save and starts the machine again.'
+                    'The step notes whether each failed over virtual machine reads Running, stops it, sets Encryption at host to Yes under Settings > Disks > Additional settings, selects Save, and starts it again only if it was running before the stop.'
                     'Attach the link to the updated DR Playbook, or a screenshot of the new step, to this change request before it is closed.')
                 $spec.References = $references + , @('Support matrix for Azure VM disaster recovery, replicated machines storage', 'https://learn.microsoft.com/azure/site-recovery/azure-to-azure-support-matrix#replicated-machines---storage')
             }
