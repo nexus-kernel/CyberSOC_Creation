@@ -25,6 +25,10 @@ Safe local validation:
   or not-run Pester tests as failure.
 - Run actionlint and `git diff --check` after workflow changes.
 
+Every change request `New-CyberSocChangeRequests.ps1` writes also writes a client email: an approval,
+confirmation or maintenance window request when the change needs the client first, otherwise a notice of
+planned change. A new change request adds its email in the same PR. The Pester suite enforces this.
+
 Do not run evidence collection, Azure/Exchange sign-ins, vulnerability assessments or tenant operations for
 CI validation. Unit tests use fixtures and mocks. The safe controls-standard
 HTML/PPTX generation can be used as a local smoke test.
