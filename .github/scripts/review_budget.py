@@ -521,7 +521,7 @@ def trusted_ci(number, head, base, branch, evidence_digest):
         need(base64.b64decode(blob['content'])==(ROOT/name).read_bytes(), 'CI used obsolete control code')
     jobs=pages(f'{PREFIX}/actions/runs/{run["id"]}/attempts/1/jobs','jobs')
     expected={'Check Codex sign-off and unresolved items','Verify reviewed commit',
-              'Review controller offline tests','Report CI on the reviewed commit'}
+              'CyberSOC offline tests (Node and PowerShell)','Report CI on the reviewed commit'}
     need({j['name'] for j in jobs}==expected and all(j['conclusion']=='success' for j in jobs),
          'Incomplete trusted CI jobs')
     statuses=pages(f'{PREFIX}/commits/{head}/statuses')
