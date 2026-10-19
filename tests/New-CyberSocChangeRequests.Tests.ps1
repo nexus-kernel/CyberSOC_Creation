@@ -293,8 +293,8 @@ Describe 'Change request generation' {
             $impl | Should -Contain "    az feature show --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s --query properties.state -o tsv"
         }
         $impl | Should -Contain '3. In Cloud Shell, set encryption at host on the model of each scale set listed in the RESOURCES section. A scale set with an Automatic upgrade policy may take all its instances down at once to apply the new model, and one with a Rolling policy applies it in batches, so run this only inside the agreed maintenance window:'
-        $impl | Should -Contain "    az vmss update --subscription $s1 --resource-group rg-web --name vmss-web --set virtualMachineProfile.securityProfile.encryptionAtHost=true"
-        $impl | Should -Contain "    az vmss update --subscription $s2 --resource-group rg-batch --name vmss-batch --set virtualMachineProfile.securityProfile.encryptionAtHost=true"
+        $impl | Should -Contain "    az vmss update --subscription '$s1' --resource-group 'rg-web' --name 'vmss-web' --set virtualMachineProfile.securityProfile.encryptionAtHost=true"
+        $impl | Should -Contain "    az vmss update --subscription '$s2' --resource-group 'rg-batch' --name 'vmss-batch' --set virtualMachineProfile.securityProfile.encryptionAtHost=true"
         $impl | Should -Contain '4. In the Azure portal, go to Virtual machine scale sets, open the first Uniform scale set listed in the RESOURCES section and go to Settings > Instances.'
         $impl | Should -Contain '5. Select the first instance, note whether its status reads Running, then select Stop and wait for the status to read Stopped (deallocated).'
         $impl | Should -Contain '6. With the instance still selected, select Upgrade if Latest model reads No, and wait for the upgrade to finish.'
@@ -309,7 +309,7 @@ Describe 'Change request generation' {
         $testing[1] | Should -Match '^2\. For each Uniform scale set, go to Settings > Instances and confirm every instance shows Latest model Yes'
         $testing[2] | Should -Match '^3\. For the Flexible scale set, open each instance named in the RESOURCES section, go to Settings > Disks > Additional settings and confirm Encryption at host shows Yes'
         $rollback = @(Get-Section $text 'C) ROLLBACK PLAN')
-        $rollback | Should -Contain "    az vmss update --subscription $s1 --resource-group rg-web --name vmss-web --set virtualMachineProfile.securityProfile.encryptionAtHost=false"
+        $rollback | Should -Contain "    az vmss update --subscription '$s1' --resource-group 'rg-web' --name 'vmss-web' --set virtualMachineProfile.securityProfile.encryptionAtHost=false"
         ($rollback -join "`n") | Should -Match 'For a Uniform scale set, go to Settings > Instances and for each instance note whether its status reads Running, select Stop, wait for Stopped \(deallocated\), select Upgrade, and select Start only if it read Running before the stop\.'
         ($rollback -join "`n") | Should -Match 'set Encryption at host to No under Settings > Disks > Additional settings, select Save, and select Start only if it read Running before the stop\.'
         @(Get-Section $text 'A) AVAILABILITY/PERFORMANCE')[0] | Should -Be 'Each instance is unavailable for a few minutes while it is stopped and started inside the agreed maintenance window, one instance at a time.' -Because 'no scale set here has an Automatic upgrade policy'
@@ -559,6 +559,50 @@ Describe 'Change request variants' {
         Set-PackResult $pack 'DP.4-ELIGIBILITY' @() 'FAILED'
         $null = & $generator -EvidencePath $pack
         Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match 'because DP\.4-ELIGIBILITY reads FAILED, so its machines could not be checked: vmss-flex\.'
+    }
+
+    It 'quotes each argument of the scale set commands, so a resource group with parentheses stays valid Bash' {
+        $bash = Get-Command bash -ErrorAction Stop
+        $pack = Join-Path $TestDrive 'scale-set-quoting'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'DP.4-VMSS-ELIGIBILITY' @(@{ Name = 'vmss-app'; ResourceId = "/subscriptions/$s1/resourceGroups/rg-app(prod)/providers/Microsoft.Compute/virtualMachineScaleSets/vmss-app"; resourceGroup = 'rg-app(prod)'; subscriptionId = $s1; OrchestrationMode = 'Uniform'; UpgradePolicy = 'Manual'; Instances = 2; Size = 'Standard_D4s_v5'; HasModel = $true; Aks = $false; Eligible = $true; Reason = '' })
+        $null = & $generator -EvidencePath $pack
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-15-scale-set-encryption-at-host.txt') -Raw
+        foreach ($flag in 'true', 'false') {
+            $line = @($text -split "`r?`n" | Where-Object { $_ -match "az vmss update .*encryptionAtHost=$flag$" })
+            $line.Count | Should -Be 1 -Because "one scale set, one $flag command"
+            $command = $line[0].Trim()
+            $command | Should -Be "az vmss update --subscription '$s1' --resource-group 'rg-app(prod)' --name 'vmss-app' --set virtualMachineProfile.securityProfile.encryptionAtHost=$flag"
+            $script = Join-Path $TestDrive "command-$flag.sh"
+            [IO.File]::WriteAllText($script, $command + "`n")
+            & $bash.Source -n $script 2>&1 | Out-Null
+            $LASTEXITCODE | Should -Be 0 -Because "the $flag command parses as Bash"
+        }
+    }
+
+    It 'leaves a Flexible scale set out when DP.4-ELIGIBILITY is PARTIAL, since a machine missing from it may never have been checked' {
+        $pack = Join-Path $TestDrive 'scale-set-partial'
+        New-ChangeFixture $pack
+        $sid = { param($name) "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachineScaleSets/$name" }
+        $vm = { param($name, $set) @{ Name = $name; ResourceId = "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/$name"; resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; ScaleSet = $set; AdeUsed = $false; Eligible = $true; Reason = '' } }
+        Set-PackResult $pack 'DP.4-VMSS-ELIGIBILITY' @(@{ Name = 'vmss-flex'; ResourceId = (& $sid 'vmss-flex'); resourceGroup = 'rg-app'; subscriptionId = $s1; OrchestrationMode = 'Flexible'; Instances = 2; Size = 'Standard_D4s_v5'; HasModel = $true; Aks = $false; Eligible = $true; Reason = '' })
+        $out = Join-Path $pack '05-change-requests'
+        # Only unrelated machines returned: the members may be among the machines a truncated read lost.
+        Set-PackResult $pack 'DP.4-ELIGIBILITY' @((& $vm 'vm-other' '')) 'PARTIAL'
+        $null = & $generator -EvidencePath $pack
+        Test-Path (Join-Path $out 'CR-15-scale-set-encryption-at-host.txt') | Should -BeFalse -Because 'an incomplete list cannot show that the scale set has no instance left to change'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '1 Flexible scale set left out of CR-15 because DP\.4-ELIGIBILITY reads PARTIAL, so its machines could not be checked: vmss-flex\.'
+        $index | Should -Not -Match 'no instance without encryption at host'
+        # One eligible member returned and the other missing: the missing one may be ineligible.
+        Set-PackResult $pack 'DP.4-ELIGIBILITY' @((& $vm 'vm-flex-1' (& $sid 'vmss-flex').ToLowerInvariant())) 'PARTIAL'
+        $null = & $generator -EvidencePath $pack
+        Test-Path (Join-Path $out 'CR-15-scale-set-encryption-at-host.txt') | Should -BeFalse -Because 'the model change would cover a member that was never checked'
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match 'because DP\.4-ELIGIBILITY reads PARTIAL, so its machines could not be checked: vmss-flex\.'
+        # The same member on a complete list: a member missing from it already has encryption at host.
+        Set-PackResult $pack 'DP.4-ELIGIBILITY' @((& $vm 'vm-flex-1' (& $sid 'vmss-flex').ToLowerInvariant())) 'OK'
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $out 'CR-15-scale-set-encryption-at-host.txt') -Raw | Should -Match 'instances without encryption at host: vm-flex-1 \(running\)'
     }
 
     It 'reads only AKS node pools as routed to a project, and no gaps when no scale set lacks encryption at host' {

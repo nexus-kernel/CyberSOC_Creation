@@ -70,7 +70,9 @@ Resources a change leaves out are named in the index notes:
 - CR-15 leaves out every scale set that is not proven eligible, on the same rules as CR-09: Azure Disk Encryption
   on the model, an Ultra Disk or Premium SSD v2 in the model of a scale set created before May 13, 2023, a size
   without support or whose support could not be read. A Flexible scale set is left out too when one of its machines
-  without encryption at host is not eligible, or when DP.4-ELIGIBILITY cannot name them. A Flexible scale set
+  without encryption at host is not eligible, or when DP.4-ELIGIBILITY cannot prove the list of them complete: only an
+  OK or EMPTY result shows that a machine missing from it already has encryption at host, so a PARTIAL one (a
+  truncated read or an unread size list) leaves every Flexible scale set out. A Flexible scale set
   without a model has nothing to set, so its machines stay in CR-09.
 - AKS node pools (a scale set in the node resource group of a cluster, or tagged `aks-managed-`) get no change
   request. AKS sets encryption at host only when a node pool is created, so an existing pool is replaced: a new node
@@ -100,7 +102,8 @@ The sections follow the template headings, in order, so each one pastes into the
   registers the EncryptionAtHost feature on each subscription from Cloud Shell, since the portal has no other path
   for it. Each register and status command names its subscription, so the plan waits until the feature reads
   Registered on every subscription, not only the one Cloud Shell was left on. CR-15 also sets the scale set model
-  from Cloud Shell with `az vmss update --set virtualMachineProfile.securityProfile.encryptionAtHost=true`, because
+  from Cloud Shell with `az vmss update --set virtualMachineProfile.securityProfile.encryptionAtHost=true`, each
+  subscription, resource group and scale set name quoted for Bash (a resource group name may hold parentheses), because
   Microsoft Learn documents only the CLI and PowerShell for an existing scale set, and its rollback sets it back to
   false the same way.
 - The testing plan checks the setting in the Azure portal and nothing else. CR-15 reads the model from JSON View on
@@ -133,8 +136,8 @@ Each change reports one of these statuses in the index: a change request (and cl
 collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
 later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
 read as no gaps. A change request that also reads a result beyond its sources (DR.6-COVERAGE and P0.5 for CR-01,
-DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack, DP.4-ELIGIBILITY for CR-15
-when it holds a Flexible scale set) reads "partial collection scope" when that result
+DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack) reads "partial
+collection scope" when that result
 is PARTIAL, and gets a note in the index when it was not collected or is unreadable.
 
 Every file is built and checked against the copy rules before the folder is touched, so a run that stops leaves the

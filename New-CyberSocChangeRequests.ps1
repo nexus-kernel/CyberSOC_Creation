@@ -425,6 +425,8 @@ function New-EncryptionAtHostRegistration($resources) {
     , $register
     , $check
 }
+# A value quoted for Bash. Resource group names may hold parentheses, which Bash reads as syntax unquoted.
+function Format-ShellArgument([string]$Value) { "'" + ($Value -replace "'", "'\''") + "'" }
 function Format-UpgradePolicy($value) { $p = ConvertTo-CopyText $value; if ($p) { "upgrade policy $p" } else { 'no upgrade policy' } }
 
 $catalog = @(
@@ -988,7 +990,6 @@ $catalog = @(
             # each of them for a setting Azure would otherwise reject.
             $rows = @(Get-Rows 'DP.4-VMSS-ELIGIBILITY')
             $notes = [System.Collections.Generic.List[string]]::new()
-            $used = @()
             $aks = @($rows | Where-Object { Test-True $_.Aks })
             if ($aks.Count) {
                 $pools = @($aks | Sort-Object AksCluster, AksNodePool, Name | ForEach-Object {
@@ -1009,15 +1010,17 @@ $catalog = @(
             }
             $eligible = @($models | Where-Object { Test-True $_.Eligible })
             # The machines of each Flexible scale set, from DP.4-ELIGIBILITY. A pack whose list does not name
-            # the scale set of each machine cannot prove them eligible.
+            # the scale set of each machine cannot prove them eligible, and neither can a PARTIAL list, which may
+            # have lost machines to a truncated read or an unread size list. Only a complete list (OK or EMPTY)
+            # proves that a machine missing from it already has encryption at host.
             $instances = @{}
             $flexible = @($eligible | Where-Object { (Get-Text $_.OrchestrationMode) -ieq 'Flexible' })
             if ($flexible.Count) {
-                $used = @('DP.4-ELIGIBILITY')
-                $vms = @(if (Test-ResultRead 'DP.4-ELIGIBILITY') { Get-Rows 'DP.4-ELIGIBILITY' })
+                $complete = (Get-Status 'DP.4-ELIGIBILITY') -in 'OK', 'EMPTY' -and -not (Test-Unreadable 'DP.4-ELIGIBILITY')
+                $vms = @(if ($complete) { Get-Rows 'DP.4-ELIGIBILITY' })
                 $named = (Get-Status 'DP.4-ELIGIBILITY') -eq 'EMPTY' -or ($vms.Count -and $vms[0].PSObject.Properties.Name -contains 'ScaleSet')
-                if (-not (Test-ResultRead 'DP.4-ELIGIBILITY') -or -not $named) {
-                    $why = if (-not $named -and (Test-ResultRead 'DP.4-ELIGIBILITY')) { 'does not name the scale set of each machine' } elseif ((Get-Status 'DP.4-ELIGIBILITY') -eq 'MISSING') { 'was not collected' } elseif (Test-Unreadable 'DP.4-ELIGIBILITY') { 'is unreadable' } else { 'reads ' + (Get-Status 'DP.4-ELIGIBILITY') }
+                if (-not $complete -or -not $named) {
+                    $why = if ($complete) { 'does not name the scale set of each machine' } elseif ((Get-Status 'DP.4-ELIGIBILITY') -eq 'MISSING') { 'was not collected' } elseif (Test-Unreadable 'DP.4-ELIGIBILITY') { 'is unreadable' } else { 'reads ' + (Get-Status 'DP.4-ELIGIBILITY') }
                     $notes.Add(('{0} left out of CR-15 because DP.4-ELIGIBILITY {1}, so {2} could not be checked: {3}.' -f (Get-Count $flexible.Count 'Flexible scale set' 'Flexible scale sets'), $why, (Get-Pick $flexible.Count 'its machines' 'their machines'), (@($flexible | Sort-Object Name | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', ')))
                     $eligible = @($eligible | Where-Object { $_ -notin $flexible })
                 }
@@ -1051,14 +1054,14 @@ $catalog = @(
                     $r | Add-Member -NotePropertyName Instances -NotePropertyValue (Get-Number $_.Instances)
                     $r })
             $n = $resources.Count
-            if (-not $n) { return @{ Used = $used; Notes = $notes.ToArray(); State = $(if ($aks.Count -and $aks.Count -eq $rows.Count) { 'Only AKS node pools remain, see the notes' } elseif ($rows.Count) { 'No eligible scale sets' } else { 'No gaps found' }) } }
+            if (-not $n) { return @{ Notes = $notes.ToArray(); State = $(if ($aks.Count -and $aks.Count -eq $rows.Count) { 'Only AKS node pools remain, see the notes' } elseif ($rows.Count) { 'No eligible scale sets' } else { 'No gaps found' }) } }
             $uniform = @($resources | Where-Object Mode -eq 'Uniform')
             $flex = @($resources | Where-Object Mode -eq 'Flexible')
             $automatic = @($resources | Where-Object { $_.Policy -in 'Automatic', 'Rolling' })
             $impl = [System.Collections.Generic.List[object]]::new()
             foreach ($step in New-EncryptionAtHostRegistration $resources) { $impl.Add($step) }
             $set = @(('In Cloud Shell, set encryption at host on the model of {0}{1}:' -f (Get-EachStep $n 'scale set'), $(if ($automatic.Count) { '. A scale set with an Automatic upgrade policy may take all its instances down at once to apply the new model, and one with a Rolling policy applies it in batches, so run this only inside the agreed maintenance window' } else { '' })))
-            foreach ($r in @($resources | Sort-Object SubscriptionId, ResourceGroup, Name)) { $set += 'az vmss update --subscription {0} --resource-group {1} --name {2} --set virtualMachineProfile.securityProfile.encryptionAtHost=true' -f $r.SubscriptionId, $r.ResourceGroup, $r.Name }
+            foreach ($r in @($resources | Sort-Object SubscriptionId, ResourceGroup, Name)) { $set += 'az vmss update --subscription {0} --resource-group {1} --name {2} --set virtualMachineProfile.securityProfile.encryptionAtHost=true' -f (Format-ShellArgument $r.SubscriptionId), (Format-ShellArgument $r.ResourceGroup), (Format-ShellArgument $r.Name) }
             $impl.Add($set)
             # Existing instances take the setting only once deallocated and started again. A Uniform instance
             # takes it from the model through Upgrade, and a Flexible instance is a virtual machine that takes
@@ -1085,7 +1088,7 @@ $catalog = @(
             if ($flex.Count) { $testing.Add(('For {0}, open each instance named in the RESOURCES section, go to Settings > Disks > Additional settings and confirm Encryption at host shows Yes, and on Overview confirm each instance that was running before the change shows Running.' -f (Get-Pick $flex.Count 'the Flexible scale set' 'each Flexible scale set'))) }
             $rollback = [System.Collections.Generic.List[object]]::new()
             $off = @('In the Azure portal, open Cloud Shell in Bash and turn encryption at host off on the model of the scale set to revert, with the command for it below:')
-            foreach ($r in @($resources | Sort-Object SubscriptionId, ResourceGroup, Name)) { $off += 'az vmss update --subscription {0} --resource-group {1} --name {2} --set virtualMachineProfile.securityProfile.encryptionAtHost=false' -f $r.SubscriptionId, $r.ResourceGroup, $r.Name }
+            foreach ($r in @($resources | Sort-Object SubscriptionId, ResourceGroup, Name)) { $off += 'az vmss update --subscription {0} --resource-group {1} --name {2} --set virtualMachineProfile.securityProfile.encryptionAtHost=false' -f (Format-ShellArgument $r.SubscriptionId), (Format-ShellArgument $r.ResourceGroup), (Format-ShellArgument $r.Name) }
             $rollback.Add($off)
             if ($uniform.Count) { $rollback.Add('For a Uniform scale set, go to Settings > Instances and for each instance note whether its status reads Running, select Stop, wait for Stopped (deallocated), select Upgrade, and select Start only if it read Running before the stop.') }
             if ($flex.Count) { $rollback.Add('For a Flexible scale set, open each instance named in the RESOURCES section, note on Overview whether its status reads Running, select Stop, wait for Stopped (deallocated), set Encryption at host to No under Settings > Disks > Additional settings, select Save, and select Start only if it read Running before the stop.') }
@@ -1125,7 +1128,7 @@ $catalog = @(
                     'Attach the link to the updated DR Playbook, or a screenshot of the new step, to this change request before it is closed.')
                 $spec.References = $references + , @('Support matrix for Azure VM disaster recovery, replicated machines storage', 'https://learn.microsoft.com/azure/site-recovery/azure-to-azure-support-matrix#replicated-machines---storage')
             }
-            @{ Used = $used; Notes = $notes.ToArray(); Cr = New-ChangeRequest $spec } } }
+            @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest $spec } } }
 )
 #endregion
 
