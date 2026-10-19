@@ -1678,6 +1678,12 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
                 $rows = foreach ($t in $reach[$WorkspaceCustomerId]) { [pscustomobject]@{ SourceTable = $t[0]; EarliestRecord = $t[1]; LatestRecord = '2026-10-07T00:00:00Z'; Records = $t[2] } }
                 return [pscustomobject]@{ Columns = @('SourceTable', 'EarliestRecord', 'LatestRecord', 'Records'); Rows = @($rows); Detail = '' }
             }
+            if ($Query -match '^union withsource = SourceTable isfuzzy = true\s+ThreatIntelIndicators, ThreatIntelligenceIndicator, SecurityAlert') {
+                # TI.0: a separate Entra diagnostic setting sends the risk detections to ws1, the sign-ins go to ws2, email to ws3
+                $tiReach = @{ ws1 = @{ AADUserRiskEvents = 30 }; ws2 = @{ SigninLogs = 900; AADUserRiskEvents = 3 }; ws3 = @{ EmailEvents = 50 } }
+                $rows = foreach ($k in $tiReach.Keys) { if ($combined -or $k -eq $WorkspaceCustomerId) { foreach ($t in $tiReach[$k].GetEnumerator()) { [pscustomobject]@{ SourceTable = $t.Key; EarliestRecord = '2026-07-01T00:00:00Z'; LatestRecord = '2026-09-30T00:00:00Z'; Records = $t.Value } } } }
+                return [pscustomobject]@{ Columns = @('SourceTable', 'EarliestRecord', 'LatestRecord', 'Records'); Rows = @($rows); Detail = '' }
+            }
             if ($Query -match '^union isfuzzy = true' -and $Query -match 'take 1 \| project SourceTable') {
                 # Like SHB: the Sentinel workspaces hold UEBA IdentityInfo but no Defender device or email tables
                 return [pscustomobject]@{ Columns = @('SourceTable'); Rows = @([pscustomobject]@{ SourceTable = 'IdentityInfo' }); Detail = '' }
@@ -1810,8 +1816,10 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         (Get-M 'TI.0').Phase | Should -Be 'P5 Threat intelligence'
         Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match 'SprayIps' } -Times 1 -Exactly -Scope Describe
         Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match 'SprayIps' -and $WorkspaceCustomerId -eq 'ws2' } -Times 1 -Exactly -Scope Describe
-        Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match '^AADUserRiskEvents' -and $WorkspaceCustomerId -eq 'ws2' } -Times 1 -Exactly -Scope Describe -Because 'risk detections go where the sign-ins go'
+        Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match '^AADUserRiskEvents' } -Times 1 -Exactly -Scope Describe
+        Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match '^AADUserRiskEvents' -and $WorkspaceCustomerId -eq 'ws1' } -Times 1 -Exactly -Scope Describe -Because 'risk detections are read where TI.0 finds the most, not where the sign-ins are'
         Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match '^EmailEvents' } -Times 1 -Exactly -Scope Describe
+        Should -Invoke Invoke-EbrLaQuery -ParameterFilter { $Query -match '^EmailEvents' -and $WorkspaceCustomerId -eq 'ws3' } -Times 1 -Exactly -Scope Describe
         foreach ($id in 'TI.7', 'VA.1', 'VA.2', 'VA.3') {
             (Get-M $id).Status | Should -Be 'UNAVAILABLE' -Because $id
             (Get-M $id).Detail | Should -Match 'Not a zero' -Because $id

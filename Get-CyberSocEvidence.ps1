@@ -2568,7 +2568,7 @@ let Ticketed = SecurityIncident
 | project AlertId, IncidentKey, Classification, Month;
 '@
 
-    $q.Add((New-EbrQuery -Id 'TI.0' -Phase 'P5 Threat intelligence' -Engine 'LA' -AlwaysBreakdown -Title 'Threat intelligence and threat telemetry reach' -Notes 'CyberSOC. Records inside the window only, the same window the measures that read the tables use. A table missing from the output has no records in the window, so the measures that read it have no figure, not a zero. TI.0-BY-WORKSPACE picks the workspace EmailEvents is read from.' -Query @'
+    $q.Add((New-EbrQuery -Id 'TI.0' -Phase 'P5 Threat intelligence' -Engine 'LA' -AlwaysBreakdown -Title 'Threat intelligence and threat telemetry reach' -Notes 'CyberSOC. Records inside the window only, the same window the measures that read the tables use. A table missing from the output has no records in the window, so the measures that read it have no figure, not a zero. TI.0-BY-WORKSPACE picks the workspaces EmailEvents and AADUserRiskEvents are read from.' -Query @'
 union withsource = SourceTable isfuzzy = true
     ThreatIntelIndicators, ThreatIntelligenceIndicator, SecurityAlert, SigninLogs, AADUserRiskEvents, EmailEvents
 | where TimeGenerated between ({{WINDOW_START}} .. endofday({{WINDOW_END}}))
@@ -2682,7 +2682,7 @@ Base
 | order by Month asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'TI.5-RISK' -Phase 'P5 Threat intelligence' -Engine 'LA' -TenantTable 'AADUserRiskEvents' -Title 'Entra ID Protection risk detections by month and type' -Notes 'CyberSOC. Each risk detection at its latest record. Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace that holds the sign-ins. Counts only, no account names.' -Query @'
+    $q.Add((New-EbrQuery -Id 'TI.5-RISK' -Phase 'P5 Threat intelligence' -Engine 'LA' -TenantTable 'AADUserRiskEvents' -Title 'Entra ID Protection risk detections by month and type' -Notes 'CyberSOC. Each risk detection at its latest record. Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace holding the most AADUserRiskEvents in TI.0, else the one that holds the sign-ins. Counts only, no account names.' -Query @'
 AADUserRiskEvents
 | where TimeGenerated between ({{WINDOW_START}} .. now())
 | summarize arg_max(TimeGenerated, RiskEventType, RiskLevel, DetectedDateTime, UserId) by Id
@@ -5502,7 +5502,8 @@ function Invoke-EbrMain {
                 if ($ctx.Workspaces.Count -gt 1) { Write-EbrInfo ("Tenant-wide {0} will be read once, from {1} (it holds the most)." -f $table, $ctx.TenantWorkspace[$table].WorkspaceName) }
             }
         }
-        # Entra ID Protection risk detections (TI.5-RISK) go wherever the Entra diagnostic setting sends the sign-ins.
+        # Entra ID Protection risk detections (TI.5-RISK) start from the workspace of the sign-ins, the usual route.
+        # Step 10 moves them to the workspace TI.0 finds them in.
         if ($ctx.TenantWorkspace['SigninLogs']) { $ctx.TenantWorkspace['AADUserRiskEvents'] = $ctx.TenantWorkspace['SigninLogs'] }
         $inc = Get-EbrEarliestIncident -ReachRows $reach
         $earliest = $inc.Earliest
@@ -5564,6 +5565,11 @@ function Invoke-EbrMain {
                 $tiReach = if ($null -ne $single -and @($ctx.Workspaces).Count -eq 1) { Add-EbrWorkspaceColumns -Rows $single -Workspace @($ctx.Workspaces)[0] } else { @() }
             }
             $ctx.TenantWorkspace['EmailEvents'] = Select-EbrTenantWorkspace -Workspaces $ctx.Workspaces -ReachRows $tiReach -Table 'EmailEvents'
+            # An Entra diagnostic setting can send the risk detections to another workspace than the sign-ins, so TI.5-RISK
+            # reads the fullest copy TI.0 found, and stays on the sign-in workspace when TI.0 found none.
+            if (@($tiReach | Where-Object { $null -ne $_ -and [string](Get-EbrProp $_ 'SourceTable') -eq 'AADUserRiskEvents' }).Count) {
+                $ctx.TenantWorkspace['AADUserRiskEvents'] = Select-EbrTenantWorkspace -Workspaces $ctx.Workspaces -ReachRows $tiReach -Table 'AADUserRiskEvents'
+            }
         }
         Invoke-EbrPhase -Ctx $ctx -Items @($phase5 | Where-Object Id -ne 'TI.0') -Activity 'Phase 5 threat intelligence and vulnerability exposure'
         if ($VulnAssessmentPath) {

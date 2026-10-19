@@ -50,7 +50,7 @@ How the report reads them:
 | TI.3 | MITRE ATT&CK tactics on the detections in ticketed alerts, by month | A tactic is a detection-time label, not an investigation finding. Shown in attack chain order |
 | TI.4 | MITRE ATT&CK techniques on the same detections, top 25 | Named from the ATT&CK Enterprise matrix, an unknown ID reads as the ID |
 | TI.5 | Identity threat activity in interactive sign-ins by month: failed passwords (50126), smart lockouts and blocked addresses (50053), Conditional Access blocks (53003), password spraying sources, risky sign-ins | A password spraying source is an address that failed a password against 10 or more accounts in one day, a signal and not a confirmed attack. Risk levels need Entra ID P2: when most sign-ins carry the hidden level the risky sign-in row is left out |
-| TI.5-RISK | Microsoft Entra ID Protection risk detections by month and type | Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace that holds the sign-ins |
+| TI.5-RISK | Microsoft Entra ID Protection risk detections by month and type | Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace that holds the most of them, else the one that holds the sign-ins |
 | TI.6 | Inbound email threats by month from `EmailEvents` | Needs the Defender XDR connector to stream EmailEvents into Sentinel. Read once from the workspace holding the most, since a tenant-wide table streamed into several workspaces would otherwise double count |
 | TI.7 | Microsoft Defender Antivirus detections on Azure virtual machines, last 30 days | Advanced Hunting holds 30 days, so this reads the last 30 days whatever the window. Azure virtual machines only, as every device measure since EBR collector 1.14.0 |
 
@@ -171,7 +171,7 @@ SecurityIncident
 
 ### TI.0 Threat intelligence and threat telemetry reach
 
-Engine LA, always broken down per workspace. CyberSOC. Records inside the window only, the same window the measures that read the tables use. A table missing from the output has no records in the window, so the measures that read it have no figure, not a zero. TI.0-BY-WORKSPACE picks the workspace EmailEvents is read from.
+Engine LA, always broken down per workspace. CyberSOC. Records inside the window only, the same window the measures that read the tables use. A table missing from the output has no records in the window, so the measures that read it have no figure, not a zero. TI.0-BY-WORKSPACE picks the workspaces EmailEvents and AADUserRiskEvents are read from.
 
 ```kql
 union withsource = SourceTable isfuzzy = true
@@ -333,7 +333,7 @@ Base
 
 ### TI.5-RISK Entra ID Protection risk detections by month and type
 
-Engine LA, read once from the workspace holding the most AADUserRiskEvents. CyberSOC. Each risk detection at its latest record. Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace that holds the sign-ins. Counts only, no account names.
+Engine LA, read once from the workspace holding the most AADUserRiskEvents. CyberSOC. Each risk detection at its latest record. Needs Entra ID P2 and the AADUserRiskEvents diagnostic setting. Read from the workspace holding the most AADUserRiskEvents in TI.0, else the one that holds the sign-ins. Counts only, no account names.
 
 ```kql
 AADUserRiskEvents

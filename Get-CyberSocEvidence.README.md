@@ -278,8 +278,9 @@ the window still raises the EBR warning, and months before the data starts are n
 
 TI.0 runs first, per workspace and combined, and tells which threat intelligence and telemetry tables Sentinel
 holds in the window. A missing table makes the measure that reads it not collected, never a zero. EmailEvents
-(TI.6) is read once from the workspace that holds the most of it, and the Entra ID Protection risk detections
-(TI.5-RISK) from the workspace that holds the sign-ins, for the same reason SigninLogs is read once. TI.7 and VA.1
+(TI.6) and the Entra ID Protection risk detections (TI.5-RISK) are each read once from the workspace that holds the
+most of them, for the same reason SigninLogs is read once. The risk detections stay on the sign-in workspace when
+TI.0 finds none. TI.7 and VA.1
 to VA.3 use Advanced Hunting with the Sentinel fallback of every AH query, and read Azure virtual machines only.
 
 With `-VulnAssessmentPath` the run files are read offline after the queries (`Import-CyberSocVulnAssessment.ps1`,
