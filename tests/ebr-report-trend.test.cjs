@@ -30,7 +30,7 @@ for (const [name, values] of [['declining', [60, 55, 50]], ['flat', [50, 50, 50]
       body: { dataset: {} }, querySelectorAll: () => [],
       getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(data) : '', addEventListener() {} })
     }
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), EbrCyberSoc: require('../report/cybersoc-model.js'), document, window: {} })
     assert.equal(nodes.report.innerHTML.includes('aria-label="Defender for Cloud score by month"'), expectedChart)
     assert.ok(nodes.report.innerHTML.includes('measurement model'))
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ebr-trend-'))

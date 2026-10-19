@@ -1,0 +1,145 @@
+[
+  {
+    "Week": "2026-07-01",
+    "WeekEnd": "2026-07-07",
+    "Days": 7,
+    "Total": 7,
+    "High": 2,
+    "Medium": 2,
+    "Low": 3,
+    "TruePositive": 0,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-07-08",
+    "WeekEnd": "2026-07-14",
+    "Days": 7,
+    "Total": 6,
+    "High": 2,
+    "Medium": 2,
+    "Low": 2,
+    "TruePositive": 1,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-07-15",
+    "WeekEnd": "2026-07-21",
+    "Days": 7,
+    "Total": 8,
+    "High": 2,
+    "Medium": 3,
+    "Low": 3,
+    "TruePositive": 0,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-07-22",
+    "WeekEnd": "2026-07-28",
+    "Days": 7,
+    "Total": 7,
+    "High": 1,
+    "Medium": 3,
+    "Low": 3,
+    "TruePositive": 0,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-07-29",
+    "WeekEnd": "2026-08-04",
+    "Days": 7,
+    "Total": 7,
+    "High": 2,
+    "Medium": 2,
+    "Low": 3,
+    "TruePositive": 0,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-08-05",
+    "WeekEnd": "2026-08-11",
+    "Days": 7,
+    "Total": 8,
+    "High": 3,
+    "Medium": 2,
+    "Low": 3,
+    "TruePositive": 0,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-08-12",
+    "WeekEnd": "2026-08-18",
+    "Days": 7,
+    "Total": 7,
+    "High": 2,
+    "Medium": 3,
+    "Low": 2,
+    "TruePositive": 0,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-08-19",
+    "WeekEnd": "2026-08-25",
+    "Days": 7,
+    "Total": 8,
+    "High": 3,
+    "Medium": 2,
+    "Low": 3,
+    "TruePositive": 0,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-08-26",
+    "WeekEnd": "2026-09-01",
+    "Days": 7,
+    "Total": 7,
+    "High": 2,
+    "Medium": 3,
+    "Low": 2,
+    "TruePositive": 0,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-09-02",
+    "WeekEnd": "2026-09-08",
+    "Days": 7,
+    "Total": 9,
+    "High": 3,
+    "Medium": 3,
+    "Low": 3,
+    "TruePositive": 1,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-09-09",
+    "WeekEnd": "2026-09-15",
+    "Days": 7,
+    "Total": 9,
+    "High": 3,
+    "Medium": 2,
+    "Low": 4,
+    "TruePositive": 0,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-09-16",
+    "WeekEnd": "2026-09-22",
+    "Days": 7,
+    "Total": 8,
+    "High": 2,
+    "Medium": 3,
+    "Low": 3,
+    "TruePositive": 0,
+    "FalsePositive": 0
+  },
+  {
+    "Week": "2026-09-23",
+    "WeekEnd": "2026-09-29",
+    "Days": 7,
+    "Total": 9,
+    "High": 3,
+    "Medium": 2,
+    "Low": 4,
+    "TruePositive": 1,
+    "FalsePositive": 0
+  }
+]

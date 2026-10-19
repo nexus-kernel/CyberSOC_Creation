@@ -161,6 +161,8 @@
       if (late) presenter('Workspace start dates', `${plural(late, 'workspace starts', 'workspaces start')} after ${date(p.WindowStart)}. Earlier months reflect the workspaces that were already collecting.`)
     }
     const alertsAllowed = duplicateSafe && windowValid
+    // The CyberSOC model (cybersoc-model.js) applies the same gate to its monthly alert figures.
+    m.alertsAllowed = alertsAllowed
     m.ticketed = !!clean(p.TicketPattern)
     if (!m.ticketed) presenter('Alert scope', 'This pack was collected before the ticket scope rule. Alert counts include every Sentinel incident, including informational severity and incidents that never opened an Atmosera ticket. Recollect with collector 1.6 or later so only ticketed, non-informational alerts are counted.')
     else note('Alert scope', `Alerts are Sentinel incidents whose comments reference an Atmosera ticket (pattern ${clean(p.TicketPattern)}). Informational severity is excluded. Detections are limited to those linked to these alerts.`)
@@ -1375,7 +1377,9 @@
     }
     return m
   }
-  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, MIN_SAMPLE, smallSampleText, exceptionsText, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced' }
+  const api = { build, ACTION_KEYS, ACTION_STATUS, MFA_OUTCOME, fmt, clean, date, span, num, count, sum, duration, mark, pct, pctText, plural, MEDIAN_FLOOR, E_THRESHOLD, MIN_SAMPLE, smallSampleText, exceptionsText, RETIREMENT, TIERS, NULL_VALUE: '(null)', NA_VALUE: 'N/A', MOSTLY_VALUE: 'Mostly enforced',
+    // Shared with cybersoc-model.js, so the monthly figures use the same vocabulary, dates and sample rules.
+    TIMING_SAMPLE, STAGES, stageIndex, stageLabel, alertWords, validDate, iso, monthLabel, monthName, list, array, bool }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.EbrReport = api
 })(typeof globalThis !== 'undefined' ? globalThis : this)

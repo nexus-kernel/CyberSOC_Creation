@@ -1,8 +1,12 @@
 {
   "ClientName": "Synthetic validation only",
   "TenantId": "example-tenant",
+  "ReportType": "CyberSOC monthly",
+  "ReportMonth": "2026-09",
+  "TrendMonths": 3,
   "WindowStart": "2026-07-01",
   "WindowEnd": "2026-09-30",
+  "WindowBasis": "report month September 2026 and the 2 full months before it, the 90-day trend",
   "RecentStart": "2026-07-01",
   "PostureReadDate": "2026-10-08",
   "Subscriptions": [
@@ -38,5 +42,36 @@
   "GraphApi": "available",
   "Warnings": [
     "Subscription a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d could not list workspaces in rg-synthetic-private"
-  ]
+  ],
+  "VulnAssessment": {
+    "Source": "Atmosera.VulnAssessment",
+    "Runs": [
+      {
+        "RunDate": "2026-07-01",
+        "Status": "Complete"
+      },
+      {
+        "RunDate": "2026-08-01",
+        "Status": "Complete"
+      },
+      {
+        "RunDate": "2026-09-01",
+        "Status": "Complete"
+      },
+      {
+        "RunDate": "2026-10-01",
+        "Status": "Complete"
+      }
+    ],
+    "Files": [
+      "vuln_assessment_20260701_090000.csv",
+      "vuln_assessment_20260801_090000.csv",
+      "vuln_assessment_20260901_090000.csv",
+      "Synthetic_20261001_090000.csv"
+    ],
+    "Skipped": [
+      "20260601_090000: dated 2026-06-01, outside 2026-07-01 to 2026-10-08",
+      "20260915_120000: an -UrgentOnly run, which reviews only exploitable findings"
+    ]
+  }
 }

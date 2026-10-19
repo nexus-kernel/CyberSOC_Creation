@@ -1,0 +1,62 @@
+[
+  {
+    "Product": "Log4j Core",
+    "Severity": "Critical",
+    "Vms": 2,
+    "Findings": 2,
+    "Cves": 2,
+    "Kev": true,
+    "Exploit": true,
+    "MaxCvss": 10.0,
+    "FixStatus": "available",
+    "Owner": "CLIENT"
+  },
+  {
+    "Product": "Apache Tomcat",
+    "Severity": "High",
+    "Vms": 2,
+    "Findings": 2,
+    "Cves": 1,
+    "Kev": true,
+    "Exploit": true,
+    "MaxCvss": 7.5,
+    "FixStatus": "available",
+    "Owner": "CLIENT"
+  },
+  {
+    "Product": "Windows Server 2019",
+    "Severity": "Critical",
+    "Vms": 1,
+    "Findings": 1,
+    "Cves": 1,
+    "Kev": false,
+    "Exploit": false,
+    "MaxCvss": 9.8,
+    "FixStatus": "available",
+    "Owner": "PROVIDER"
+  },
+  {
+    "Product": "libxml2",
+    "Severity": "Medium",
+    "Vms": 1,
+    "Findings": 1,
+    "Cves": 1,
+    "Kev": false,
+    "Exploit": false,
+    "MaxCvss": 6.5,
+    "FixStatus": "not_available",
+    "Owner": "PROVIDER"
+  },
+  {
+    "Product": "@types/node",
+    "Severity": "Low",
+    "Vms": 1,
+    "Findings": 1,
+    "Cves": 1,
+    "Kev": false,
+    "Exploit": false,
+    "MaxCvss": 0.1,
+    "FixStatus": "unknown",
+    "Owner": "CLIENT"
+  }
+]

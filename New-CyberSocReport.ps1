@@ -1,9 +1,13 @@
 <#
 .SYNOPSIS
-    Creates a self-contained executive HTML report from an existing EBR evidence pack.
+    Creates the self-contained monthly CyberSOC security report from an existing CyberSOC evidence pack.
 .DESCRIPTION
     Offline only. Reads the manifest and selected aggregate evidence, then embeds the report
     assets in one HTML file. No Azure sign-in, network requests or source evidence changes.
+    The report covers the report month with the 90-day trend of the window: security operations, threat
+    intelligence, vulnerability management (from the imported Atmosera.VulnAssessment runs when the pack
+    holds them, else the Defender queries) and the control posture of the EBR report it was copied from.
+    Import vulnerability assessment runs into an existing pack first with Import-CyberSocVulnAssessment.ps1.
     Requires the adjacent report folder when generating a report. The generated HTML is portable.
     Writes two editions of the HTML. 03-security-report.html is the internal edition, with the embedded data, the
     presenter notes, the evidence review and the collection register. 03-security-report.client.html is the client
@@ -15,9 +19,9 @@
     through report/build-report-deck.cjs, when Node.js and pptxgenjs are available. Its speaker
     notes are talking points only, never the presenter notes. -SkipDeck writes the two HTML editions only.
 .EXAMPLE
-    ./New-EbrSecurityReport.ps1 -EvidencePath ./EBR-Evidence_Client_20261008-120000
+    ./New-CyberSocReport.ps1 -EvidencePath ./CyberSOC-Evidence_Client_20261008-120000
 .EXAMPLE
-    ./New-EbrSecurityReport.ps1 -EvidencePath ./EBR-Evidence_Client_20261008-120000 -ContextPath ./client-context.json -Depth Detailed
+    ./New-CyberSocReport.ps1 -EvidencePath ./CyberSOC-Evidence_Client_20261008-120000 -ContextPath ./client-context.json -Depth Detailed
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -87,6 +91,7 @@ $fields = [ordered]@{
     'POS.4' = @('Severity','Healthy','Total')
     'POS.5' = @('Standard','Passed','Failed')
     'POS.7' = @('Month','Current','Max','Percent')
+    'POS.8' = @('Week','Healthy','Unhealthy','PctHealthy')
     'BKL.1' = @('Scope','Software','VulnerabilitySeverityLevel','ExploitableCves','Devices')
     'BKL.2' = @('AlertId')
     # Graph and the controls added on Oct 11, 2026. Counts and flags only; names, domains and policy titles stay in the pack.
@@ -112,12 +117,31 @@ $fields = [ordered]@{
     'POS.6' = @('ReadDate','Current','Max','Percent','IdentityPct','DevicePct','AppsPct','DataPct','AllTenantsAverage','Snapshots')
     'POS.6-TREND' = @('Date','Current','Max','Percent')
     'POS.6-CATEGORIES' = @('Category','Earned','Available','Percent')
+    # CyberSOC monthly report (CyberSOC Monthly Report Runbook). Counts, months, tactic and technique IDs, indicator
+    # types, feed and software names only. Alert titles (OUT.9) and threat names (TI.7) are reduced below.
+    'OUT.2-MONTH' = @('Month','Scope','Incidents','AutoClosed','MedianTriageMin','MedianCloseMin','P90CloseMin')
+    'OUT.3-WEEK' = @('Week','WeekEnd','Days','Total','High','Medium','Low','TruePositive','FalsePositive')
+    'TI.0' = @('SourceTable','EarliestRecord','LatestRecord','Records')
+    'TI.1' = @('Source','Kind','Indicators','Active','LastIngested')
+    'TI.2' = @('Month','Indicator','AlertSeverity','Detections','Ticketed')
+    'TI.3' = @('Month','Tactic','Detections','Alerts','TruePositiveAlerts')
+    'TI.4' = @('Technique','Detections','Alerts','TruePositiveAlerts')
+    'TI.5' = @('Month','SignIns','FailedPassword','TargetedUsers','Lockouts','BlockedByCa','RiskySignIns','RiskyUsers','SuccessfulRisky','RiskHidden','SprayIps','SprayDays')
+    'TI.5-RISK' = @('Month','RiskEventType','Detections','Users','High','Medium')
+    'TI.6' = @('Month','Messages','Phish','Malware','Spam','ThreatsBlocked','ThreatsDelivered')
+    'VA.1' = @('VulnerabilitySeverityLevel','Cves','Devices','Exposures','ExploitableCves','ExploitableDevices')
+    'VA.2' = @('SoftwareVendor','SoftwareName','Devices','Cves','Critical','High','ExploitableCves')
+    'VA.3' = @('Month','Cves','Devices','Critical','High','ExploitableCves')
+    'VA.RUNS' = @('RunDate','Status','SubscriptionsCovered','SubscriptionsMissing','SubscriptionsIncomplete','Findings','Open','Critical','High','Medium','Low','Vms','Cves','KevChecked','KevOpen','KevVms','KevAddedInReportMonth','ExploitChecked','ExploitOpen','NoVendorFix','EosVms','OwnerProvider','OwnerClient','OwnerUnknown','Status_remediation_required','Status_scheduled','Status_pending_client_action','Status_pending_vendor_fix','Status_mitigation_applied','Status_mitigation_in_place','Status_pending_validation','Status_resolved')
+    'VA.CHANGE' = @('FromRun','ToRun','Compared','Reason','SeverityCompared','Earlier','Current','New','NoLongerReported','Persistent','OpenEarlier','OpenCurrent','OpenNew','OpenNoLonger')
+    'VA.TOP' = @('Product','Severity','Vms','Findings','Cves','Kev','Exploit','MaxCvss','FixStatus','Owner')
+    'VA.KEV' = @('Product','Severity','Vms','Findings','KevDateAdded','AddedThisMonth')
 }
 # Confirmed threat titles (OUT.4) reach the report only when they name no account, address, host, path,
 # GUID, long number, machine or ticket, and run to 200 characters or fewer. A bare account, a person's name and an
 # unhyphenated lowercase machine name are not recognised. Titles of true positives with no attack stage are left
 # out, since the report shows them nowhere.
-# The collector's default ticket reference, copied from $script:EbrTicketPattern in Get-EbrSecurityEvidence.ps1.
+# The collector's default ticket reference, copied from $script:EbrTicketPattern in Get-CyberSocEvidence.ps1.
 # It applies even when the pack carries its own TicketPattern.
 $script:EbrTicketPattern = '(?i)(([a-z0-9-]+\.)?zendesk\.com/agent/tickets/\d+|\bZD\s*(ticket|#)?\s*#?\s*\d{4,})'
 function Get-EbrScreenedTitle([string]$Title, [string]$TicketPattern) {
@@ -241,6 +265,23 @@ $aggregates = [ordered]@{
             }
         }
         if ($unscreened) { $issues.Add('An OUT.4 row could not be screened, so its title was withheld.') } }
+    # Alert types by title and month (CyberSOC). A title that names an account, address, host, path or ticket is
+    # withheld by the OUT.4 screen, and every withheld title of a month is counted on one row.
+    'OUT.9' = { param($rows)
+        $screened = foreach ($r in $rows) {
+            $t = try { Get-EbrScreenedTitle ([string]$r.Title) ([string]$parameters.TicketPattern) } catch { 'Title withheld' }
+            [pscustomobject]@{ Month = ConvertTo-EbrDay $r.Month; Title = $(if ($t) { $t } else { 'Title withheld' }); Alerts = [int]$r.Alerts; High = [int]$r.High; TruePositive = [int]$r.TruePositive; BenignPositive = [int]$r.BenignPositive; FalsePositive = [int]$r.FalsePositive }
+        }
+        @($screened) | Group-Object Month, Title | ForEach-Object {
+            $sumOf = { param($f) [int](@($_.Group | ForEach-Object { $_.$f }) | Measure-Object -Sum).Sum }
+            [pscustomobject]@{ Month = $_.Group[0].Month; Title = $_.Group[0].Title; Alerts = & $sumOf 'Alerts'; High = & $sumOf 'High'; TruePositive = & $sumOf 'TruePositive'; BenignPositive = & $sumOf 'BenignPositive'; FalsePositive = & $sumOf 'FalsePositive' }
+        } }
+    # Malware detected on Azure virtual machines (CyberSOC). Defender's own threat names, which name no client
+    # resource, cut to 120 characters. Device names and file paths stay in the pack.
+    'TI.7' = { param($rows) foreach ($r in $rows) {
+            $t = (([string]$r.Threat) -replace '[\r\n<>]', ' ').Trim()
+            if ($t.Length -gt 120) { $t = $t.Substring(0, 120) }
+            [pscustomobject]@{ Threat = $(if ($t) { $t } else { 'Not named' }); Detections = [int]$r.Detections; Devices = [int]$r.Devices; Remediated = [int]$r.Remediated; WasExecuting = [int]$r.WasExecuting } } }
 }
 $results = [ordered]@{}
 $issues = [System.Collections.Generic.List[string]]::new()
@@ -288,12 +329,14 @@ if ($ContextPath) {
         throw 'The context client and tenant must match the evidence pack.'
     }
     # Allow only the documented editorial inputs.
-    $context = $context | Select-Object ClientName, TenantId, ServiceStartDate, TenantScore, Delivered, Actions, OpenAlertNote, Impact, ResponseTargetMinutes
+    $context = $context | Select-Object ClientName, TenantId, ServiceStartDate, TenantScore, Delivered, Actions, OpenAlertNote, Impact, ResponseTargetMinutes, MonthHighlights
 }
 $data = [ordered]@{
     version = '2.0.0'
     depth = $Depth.ToLowerInvariant()
-    parameters = $parameters | Select-Object ClientName, WindowStart, WindowEnd, RecentStart, PostureReadDate, ManagedRgPattern, TicketPattern, AlertScope, Subscriptions, Workspaces, TenantWideTables, DefenderApi, GraphApi, PatchCadenceDays, PatchExclusionTagPattern, EdrVendorPattern
+    parameters = $parameters | Select-Object ClientName, ReportType, ReportMonth, TrendMonths, WindowStart, WindowEnd, WindowBasis, RecentStart, PostureReadDate, ManagedRgPattern, TicketPattern, AlertScope, Subscriptions, Workspaces, TenantWideTables, DefenderApi, GraphApi, PatchCadenceDays, PatchExclusionTagPattern, EdrVendorPattern,
+        @{ Name = 'VulnAssessmentRuns'; Expression = { @($_.VulnAssessment.Runs | Where-Object { $_ } | ForEach-Object { [ordered]@{ RunDate = [string]$_.RunDate; Status = [string]$_.Status } }) } },
+        @{ Name = 'VulnAssessmentSkipped'; Expression = { @($_.VulnAssessment.Skipped | Where-Object { $_ }).Count } }
     # AccessGap marks evidence that the collector's token was not permitted to read, so the deck can ask
     # for read access. Service errors and missing tables are not access gaps. A service that answers that
     # the tenant is not onboarded or not licensed (Defender for Identity returns that as a 403) is not an
@@ -301,6 +344,9 @@ $data = [ordered]@{
     # read access. Only the flags are embedded.
     manifest = @($manifest | Select-Object ResultId, Status, Rows, ReadTimeUtc,
         @{ Name = 'NotOnboarded'; Expression = { [string]$_.Detail -match '(?i)tenant is not onboarded|not onboarded to|not licensed|after license is purchased' } },
+        # NoTable marks an EMPTY result whose table no workspace holds, so the CyberSOC sections read not collected,
+        # never a measured zero (a missing Log Analytics table answers EMPTY, see Test-EbrMissingTableError).
+        @{ Name = 'NoTable'; Expression = { [string]$_.Status -eq 'EMPTY' -and [string]$_.Detail -match 'No workspace has the table|Failed to resolve table' } },
         @{ Name = 'AccessGap'; Expression = { ([string]$_.Detail -match 'token (lacks|cannot read)|Needs [A-Za-z]+(\.[A-Za-z]+)*\.Read|could not be read|Insufficient privileges|Authorization_RequestDenied|\b403\b') -and -not ([string]$_.Detail -match '(?i)tenant is not onboarded|not onboarded to|not licensed|after license is purchased') } })
     results = $results
     issues = @($issues)
@@ -315,6 +361,7 @@ $css = Get-Content -LiteralPath (Join-Path $assets 'report.css') -Raw
 $background = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $assets 'assets/template-background.jpg')))
 $css = $css.Replace('__BACKGROUND__', $background)
 $model = Get-Content -LiteralPath (Join-Path $assets 'report-model.js') -Raw
+$cybersoc = Get-Content -LiteralPath (Join-Path $assets 'cybersoc-model.js') -Raw
 $render = Get-Content -LiteralPath (Join-Path $assets 'report-render.js') -Raw
 $review = Get-Content -LiteralPath (Join-Path $assets 'report-review.js') -Raw
 $controls = Get-Content -LiteralPath (Join-Path $assets 'report-controls.js') -Raw
@@ -330,7 +377,7 @@ if (-not (Test-Path -LiteralPath $parent -PathType Container)) { [void](New-Item
 # The internal edition embeds the data, the report model and the renderer, and carries the presenter notes toggle,
 # the aside and the script that fills it.
 $scripts = "<noscript>This report requires JavaScript to display the embedded evidence. Enable JavaScript and reopen this local file.</noscript>`n" +
-    "<script id=""report-data"" type=""application/json"">__DATA__</script>`n<script>$model</script>`n<script>$render</script>`n<script>$review</script>"
+    "<script id=""report-data"" type=""application/json"">__DATA__</script>`n<script>$model</script>`n<script>$cybersoc</script>`n<script>$render</script>`n<script>$review</script>"
 $html = $template.Replace('__REVIEW_TOGGLE__', '    <button id="review-toggle" aria-expanded="false" aria-controls="review">Presenter notes</button>')
 $html = $html.Replace('__REVIEW_ASIDE__', '<aside id="review" hidden aria-label="Presenter notes and evidence review"></aside>').Replace('__REPORT__', '')
 $html = $html.Replace('__SCRIPTS__', $scripts).Replace('__DATA__', $json)
@@ -363,7 +410,7 @@ else {
     $mask = { param($text) [regex]::Replace([string]$text, $guidPattern, { param($match) $k = $match.Value.ToLowerInvariant(); if (-not $ids.ContainsKey($k)) { $ids[$k] = '[id {0}]' -f ($ids.Count + 1) }; $ids[$k] }) }
     $title = [Net.WebUtility]::HtmlEncode((& $mask $pages.title))
     $clientHtml = $template -replace '(?m)^__REVIEW_(TOGGLE|ASIDE)__\r?\n', ''
-    $clientHtml = $clientHtml.Replace('<title>Security business review</title>', "<title>$title</title>").Replace("<option value=""$($Depth.ToLowerInvariant())"">", "<option value=""$($Depth.ToLowerInvariant())"" selected>")
+    $clientHtml = $clientHtml.Replace('<title>CyberSOC monthly security report</title>', "<title>$title</title>").Replace("<option value=""$($Depth.ToLowerInvariant())"">", "<option value=""$($Depth.ToLowerInvariant())"" selected>")
     $clientHtml = $clientHtml -replace '(?m)^__SCRIPTS__\r?\n', ''
     $clientHtml = $clientHtml.Replace('__REPORT__', (& $mask $pages.html))
     if ($clientHtml -cmatch 'Presenter notes|review-toggle|report-data|EbrReport|__[A-Z_]+__' -or $clientHtml -match $guidPattern) { throw 'The client edition of the report still carries presenter material, report data or a GUID, so it was not written.' }

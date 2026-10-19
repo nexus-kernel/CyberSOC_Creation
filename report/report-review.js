@@ -4,7 +4,12 @@
 (function () {
   'use strict'
   const { build, fmt, clean } = EbrReport
-  const m = build(JSON.parse(document.getElementById('report-data').textContent))
+  const data = JSON.parse(document.getElementById('report-data').textContent)
+  const m = build(data)
+  // The CyberSOC monthly notes join the EBR ones, so the presenter sees both sets in one place.
+  const cs = EbrCyberSoc.build(data, m)
+  m.presenter.push(...cs.presenter)
+  m.review.push(...cs.review)
   const esc = value => clean(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
   const review = document.getElementById('review')
   const rationale = m.timingRationale?.length ? `<h3>Response timing cohort</h3><p>One fixed cohort supplies the timing: every high severity alert created in the alert period and closed by collection, automation closures included. A median under 20 minutes or a 90th percentile over one hour is presented with a note, never replaced by another cohort or period. Fewer than 5 closed alerts withholds the figures.</p><div class="table-scroll"><table><thead><tr><th scope="col">Cohort</th><th scope="col">Closed alerts</th><th scope="col">Median to acknowledge</th><th scope="col">Median to close</th><th scope="col">90th percentile</th><th scope="col">Presentation</th></tr></thead><tbody>${m.timingRationale.map(r => `<tr><td>${esc(r.cohort)}</td><td>${fmt(r.n)}</td><td>${esc(r.acknowledge ?? 'Not available')}</td><td>${esc(r.median ?? 'Not available')}</td><td>${esc(r.p90 ?? 'Not available')}</td><td>${esc(r.status)}</td></tr>`).join('')}</tbody></table></div>` : ''

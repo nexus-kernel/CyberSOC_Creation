@@ -1,4 +1,4 @@
-// The two HTML editions New-EbrSecurityReport.ps1 writes from the offline fixture. The client edition carries the
+// The two HTML editions New-CyberSocReport.ps1 writes from the offline fixture. The client edition carries the
 // rendered pages and the toolbar script only, so the whole written file holds no embedded data, no report model, no
 // presenter or evidence review text and no GUID, and its pages read the same as the internal edition's. Generation
 // runs the real builder, so PowerShell 7 (pwsh) and Node must be on PATH.
@@ -21,7 +21,7 @@ function generate() {
   fs.cpSync(path.join(__dirname, 'fixtures', 'offline-pack'), pack, { recursive: true })
   let out
   try {
-    out = execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', path.join(root, 'New-EbrSecurityReport.ps1'), '-EvidencePath', pack,
+    out = execFileSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', path.join(root, 'New-CyberSocReport.ps1'), '-EvidencePath', pack,
       '-ContextPath', path.join(__dirname, 'fixtures', 'offline-context.json'), '-Depth', 'Detailed', '-SkipDeck'], { encoding: 'utf8' })
   } catch (e) {
     if (e.code === 'ENOENT') assert.fail('PowerShell 7 (pwsh) must be on PATH to generate the report editions')

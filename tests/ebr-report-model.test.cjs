@@ -159,7 +159,7 @@ test('the operations page shows the fixed cohort with acknowledge, the labelled 
   p.context = { ResponseTargetMinutes: 60 }
   const nodes = {}
   const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(p) : '', addEventListener() {} }) }
-  for (const script of ['report-render.js', 'report-review.js']) vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report', script), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+  for (const script of ['report-render.js', 'report-review.js']) vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report', script), 'utf8'), { EbrReport: require('../report/report-model.js'), EbrCyberSoc: require('../report/cybersoc-model.js'), document, window: {} })
   const html = nodes.report.innerHTML, review = nodes.review.innerHTML
   const rowsOf = h => [...h.match(/<div class="timing">[\s\S]*?<\/table>/)[0].matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map(r => r[1].replace(/<[^>]+>/g, '|').replace(/\|+/g, '|').replace(/^\||\|$/g, ''))
   assert.deepEqual(rowsOf(html), ['Alerts|Closed|Median to acknowledge|Median to close|90th percentile close', 'All high severity alerts|30|2 min|7 min|1.6 hr', 'Analyst-handled|10|12 min|45 min|6.7 hr', 'Closed by automation rules|20|Not collected|Not collected|Not collected'])
@@ -503,7 +503,7 @@ test('presentation copy removes prohibited symbols and punctuation', () => {
 })
 test('real packs agree with their client-level source results and expose no private fields', t => {
   const root = path.resolve(__dirname, '..')
-  const dirs = fs.readdirSync(root).filter(n => n.startsWith('EBR-Evidence_') && fs.existsSync(path.join(root, n, '03-security-report.html')))
+  const dirs = fs.readdirSync(root).filter(n => n.startsWith('CyberSOC-Evidence_') && fs.existsSync(path.join(root, n, '03-security-report.html')))
   if (!dirs.length) { t.skip('No local evidence packs present'); return }
   for (const dir of dirs) {
     const html = fs.readFileSync(path.join(root, dir, '03-security-report.html'), 'utf8')
@@ -710,7 +710,7 @@ test('the controls page shows the accounts with excluded sign-ins beside In forc
   put(p, 'IA.3-DEVICECODE', [{ Attempts: 3, Succeeded: 3, BlockedByCa: 0, Users: 2, Apps: 1, InForce: false }])
   put(p, 'IA.8-CA', [caRow('Device code', { SignIns: 3, SucceededExcluded: 3, AccountsExcluded: 2 }), caRow('Location', { ExcludedIdentities: 2 })])
   const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(p) : '', addEventListener() {} }) }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), EbrCyberSoc: require('../report/cybersoc-model.js'), document, window: {} })
   const html = nodes.report.innerHTML
   assert.ok(html.includes('title="Enforced, 2 accounts with excluded sign-ins">E</span><div class="control-text"><h4>Device code flow sign-ins blocked</h4>'), 'the mark names the excluded accounts')
   assert.match(html, /<h4>Device code flow sign-ins blocked<\/h4>[\s\S]*?<strong>In force<\/strong><span><\/span><span class="exceptions">2 accounts with excluded sign-ins<\/span>/)
@@ -1107,7 +1107,7 @@ test('a reading at E that leaves resources out never reads every, all or none, a
 const renderHtml = data => {
   const nodes = {}
   const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(data) : '', addEventListener() {} }) }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), EbrCyberSoc: require('../report/cybersoc-model.js'), document, window: {} })
   return nodes.report.innerHTML
 }
 test('the detection statement says every alert only from a complete DR.10 reading and nothing open or unclassified', () => {
@@ -1201,7 +1201,7 @@ test('the controls page names the exceptions of a control at E beside its figure
   const html = data => {
     const nodes = {}
     const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(data) : '', addEventListener() {} }) }
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), EbrCyberSoc: require('../report/cybersoc-model.js'), document, window: {} })
     return nodes.report.innerHTML
   }
   const p = pack(); readings(p)
@@ -1541,7 +1541,7 @@ test('the MFA split reads for managed and federated tenants and is left out when
   const html = data => {
     const nodes = {}
     const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(data) : '', addEventListener() {} }) }
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), EbrCyberSoc: require('../report/cybersoc-model.js'), document, window: {} })
     return nodes.report.innerHTML
   }
   const p = pack()
@@ -1918,7 +1918,7 @@ test('the roadmap page words planned work as a recommendation and never promises
   put(p, 'BKL.1', [{ Scope: 'Azure VM', Software: 'Application', VulnerabilitySeverityLevel: 'Critical', ExploitableCves: 6, Devices: 3 }])
   const nodes = {}
   const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(p) : '', addEventListener() {} }) }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), EbrCyberSoc: require('../report/cybersoc-model.js'), document, window: {} })
   const html = nodes.report.innerHTML
   assert.ok(html.includes('Atmosera recommends staging each enforcement in an audit or report-only mode where the control supports one, reviewing it with your team, then turning it on.'))
   assert.ok(html.includes('<h3>How this order is proposed</h3><p>Every item on this board comes from a reading in the collected evidence. The order is a recommendation for agreement at this review'))
@@ -1944,7 +1944,7 @@ test('the posture page states how a score control earns points, the healthy reso
   ])
   const nodes = {}
   const document = { body: { dataset: {} }, querySelectorAll: () => [], getElementById: id => nodes[id] || (nodes[id] = { textContent: id === 'report-data' ? JSON.stringify(p) : '', addEventListener() {} }) }
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), document, window: {} })
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../report/report-render.js'), 'utf8'), { EbrReport: require('../report/report-model.js'), EbrCyberSoc: require('../report/cybersoc-model.js'), document, window: {} })
   const html = nodes.report.innerHTML
   assert.ok(!/all or nothing|no visible movement until a control completes/.test(html), 'the all-or-nothing claim is gone')
   assert.ok(html.includes('Microsoft score controls ranked by the points still available. Defender for Cloud secure score provides a standardized view of assessed cloud security controls. Within each subscription, a control earns points for every healthy resource it assesses, its maximum divided by its healthy and unhealthy resources in that subscription, so points can be gained before a control completes. The points and resource counts shown for each control are added across subscriptions, so the share of resources healthy can differ from the share of points earned.'))

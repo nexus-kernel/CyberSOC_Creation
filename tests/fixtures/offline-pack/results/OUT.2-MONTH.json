@@ -1,0 +1,56 @@
+[
+  {
+    "Month": "2026-07-01",
+    "Scope": "High",
+    "Incidents": 9,
+    "AutoClosed": 2,
+    "MedianTriageMin": 4,
+    "MedianCloseMin": 28,
+    "P90CloseMin": 80
+  },
+  {
+    "Month": "2026-07-01",
+    "Scope": "All",
+    "Incidents": 24,
+    "AutoClosed": 3,
+    "MedianTriageMin": 5,
+    "MedianCloseMin": 25,
+    "P90CloseMin": 62
+  },
+  {
+    "Month": "2026-08-01",
+    "Scope": "High",
+    "Incidents": 10,
+    "AutoClosed": 2,
+    "MedianTriageMin": 3,
+    "MedianCloseMin": 26,
+    "P90CloseMin": 76
+  },
+  {
+    "Month": "2026-08-01",
+    "Scope": "All",
+    "Incidents": 26,
+    "AutoClosed": 3,
+    "MedianTriageMin": 4,
+    "MedianCloseMin": 22,
+    "P90CloseMin": 60
+  },
+  {
+    "Month": "2026-09-01",
+    "Scope": "High",
+    "Incidents": 11,
+    "AutoClosed": 2,
+    "MedianTriageMin": 3,
+    "MedianCloseMin": 22,
+    "P90CloseMin": 70
+  },
+  {
+    "Month": "2026-09-01",
+    "Scope": "All",
+    "Incidents": 30,
+    "AutoClosed": 4,
+    "MedianTriageMin": 4,
+    "MedianCloseMin": 20,
+    "P90CloseMin": 58
+  }
+]

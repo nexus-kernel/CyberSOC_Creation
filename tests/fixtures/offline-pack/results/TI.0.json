@@ -1,0 +1,26 @@
+[
+  {
+    "SourceTable": "AADUserRiskEvents",
+    "EarliestRecord": "2026-07-01T00:00:00Z",
+    "LatestRecord": "2026-10-08T09:00:00Z",
+    "Records": 42
+  },
+  {
+    "SourceTable": "SecurityAlert",
+    "EarliestRecord": "2026-07-01T00:00:00Z",
+    "LatestRecord": "2026-10-08T09:00:00Z",
+    "Records": 512
+  },
+  {
+    "SourceTable": "SigninLogs",
+    "EarliestRecord": "2026-07-01T00:00:00Z",
+    "LatestRecord": "2026-10-08T09:00:00Z",
+    "Records": 123000
+  },
+  {
+    "SourceTable": "ThreatIntelIndicators",
+    "EarliestRecord": "2026-07-01T00:00:00Z",
+    "LatestRecord": "2026-10-08T09:00:00Z",
+    "Records": 15000
+  }
+]

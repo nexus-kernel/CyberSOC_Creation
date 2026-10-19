@@ -1,0 +1,164 @@
+[
+  {
+    "Month": "2026-07-01",
+    "Title": "Multi-stage incident involving Initial access and Execution",
+    "Alerts": 6,
+    "High": 3,
+    "TruePositive": 1,
+    "BenignPositive": 4,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-08-01",
+    "Title": "Multi-stage incident involving Initial access and Execution",
+    "Alerts": 7,
+    "High": 4,
+    "TruePositive": 0,
+    "BenignPositive": 6,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Title": "Multi-stage incident involving Initial access and Execution",
+    "Alerts": 9,
+    "High": 5,
+    "TruePositive": 2,
+    "BenignPositive": 6,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-07-01",
+    "Title": "Suspicious sign-in activity",
+    "Alerts": 10,
+    "High": 2,
+    "TruePositive": 0,
+    "BenignPositive": 9,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-08-01",
+    "Title": "Suspicious sign-in activity",
+    "Alerts": 11,
+    "High": 3,
+    "TruePositive": 0,
+    "BenignPositive": 10,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Title": "Suspicious sign-in activity",
+    "Alerts": 12,
+    "High": 3,
+    "TruePositive": 0,
+    "BenignPositive": 11,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-07-01",
+    "Title": "Sign-in from an anonymous IP address",
+    "Alerts": 7,
+    "High": 1,
+    "TruePositive": 0,
+    "BenignPositive": 6,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-08-01",
+    "Title": "Sign-in from an anonymous IP address",
+    "Alerts": 6,
+    "High": 1,
+    "TruePositive": 0,
+    "BenignPositive": 5,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Title": "Sign-in from an anonymous IP address",
+    "Alerts": 8,
+    "High": 2,
+    "TruePositive": 0,
+    "BenignPositive": 7,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-07-01",
+    "Title": "Mass download by a single user",
+    "Alerts": 3,
+    "High": 1,
+    "TruePositive": 0,
+    "BenignPositive": 2,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-08-01",
+    "Title": "Mass download by a single user",
+    "Alerts": 4,
+    "High": 1,
+    "TruePositive": 0,
+    "BenignPositive": 3,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Title": "Mass download by a single user",
+    "Alerts": 4,
+    "High": 1,
+    "TruePositive": 0,
+    "BenignPositive": 3,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-07-01",
+    "Title": "TI map IP entity to SigninLogs",
+    "Alerts": 2,
+    "High": 1,
+    "TruePositive": 0,
+    "BenignPositive": 1,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-08-01",
+    "Title": "TI map IP entity to SigninLogs",
+    "Alerts": 3,
+    "High": 1,
+    "TruePositive": 0,
+    "BenignPositive": 2,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Title": "TI map IP entity to SigninLogs",
+    "Alerts": 4,
+    "High": 1,
+    "TruePositive": 0,
+    "BenignPositive": 3,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-07-01",
+    "Title": "Suspicious inbox rule created by alex@example.test",
+    "Alerts": 2,
+    "High": 0,
+    "TruePositive": 0,
+    "BenignPositive": 1,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-08-01",
+    "Title": "Suspicious inbox rule created by alex@example.test",
+    "Alerts": 1,
+    "High": 0,
+    "TruePositive": 0,
+    "BenignPositive": 0,
+    "FalsePositive": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Title": "Suspicious inbox rule created by alex@example.test",
+    "Alerts": 1,
+    "High": 0,
+    "TruePositive": 0,
+    "BenignPositive": 0,
+    "FalsePositive": 1
+  }
+]

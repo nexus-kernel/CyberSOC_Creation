@@ -1,0 +1,44 @@
+[
+  {
+    "Month": "2026-07-01",
+    "Indicator": "IP address",
+    "AlertSeverity": "Medium",
+    "Detections": 3,
+    "Ticketed": 2
+  },
+  {
+    "Month": "2026-08-01",
+    "Indicator": "IP address",
+    "AlertSeverity": "Medium",
+    "Detections": 4,
+    "Ticketed": 3
+  },
+  {
+    "Month": "2026-08-01",
+    "Indicator": "Domain",
+    "AlertSeverity": "Medium",
+    "Detections": 1,
+    "Ticketed": 0
+  },
+  {
+    "Month": "2026-09-01",
+    "Indicator": "IP address",
+    "AlertSeverity": "Medium",
+    "Detections": 3,
+    "Ticketed": 3
+  },
+  {
+    "Month": "2026-09-01",
+    "Indicator": "IP address",
+    "AlertSeverity": "High",
+    "Detections": 1,
+    "Ticketed": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "Indicator": "URL",
+    "AlertSeverity": "Low",
+    "Detections": 2,
+    "Ticketed": 0
+  }
+]

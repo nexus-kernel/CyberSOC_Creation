@@ -1,5 +1,5 @@
 /* PowerPoint edition of the EBR security report (03-security-report.pptx), written by
-   New-EbrSecurityReport.ps1 beside the HTML. It reads the same embedded data and runs the same report
+   New-CyberSocReport.ps1 beside the HTML. It reads the same embedded data and runs the same report
    model, then the story layer (report-story.js) for the wins, decisions, drift and roadmap.
 
    Structure (docs/plans/2026-10-12-ebr-deck-restructure-design.md, grounding slides added Oct 14, 2026):

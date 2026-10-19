@@ -1,0 +1,86 @@
+[
+  {
+    "Week": "2026-06-28",
+    "Healthy": 400,
+    "Unhealthy": 120,
+    "PctHealthy": 76.9
+  },
+  {
+    "Week": "2026-07-05",
+    "Healthy": 404,
+    "Unhealthy": 117,
+    "PctHealthy": 77.5
+  },
+  {
+    "Week": "2026-07-12",
+    "Healthy": 408,
+    "Unhealthy": 114,
+    "PctHealthy": 78.2
+  },
+  {
+    "Week": "2026-07-19",
+    "Healthy": 412,
+    "Unhealthy": 111,
+    "PctHealthy": 78.8
+  },
+  {
+    "Week": "2026-07-26",
+    "Healthy": 416,
+    "Unhealthy": 108,
+    "PctHealthy": 79.4
+  },
+  {
+    "Week": "2026-08-02",
+    "Healthy": 420,
+    "Unhealthy": 105,
+    "PctHealthy": 80.0
+  },
+  {
+    "Week": "2026-08-09",
+    "Healthy": 424,
+    "Unhealthy": 102,
+    "PctHealthy": 80.6
+  },
+  {
+    "Week": "2026-08-16",
+    "Healthy": 428,
+    "Unhealthy": 99,
+    "PctHealthy": 81.2
+  },
+  {
+    "Week": "2026-08-23",
+    "Healthy": 432,
+    "Unhealthy": 96,
+    "PctHealthy": 81.8
+  },
+  {
+    "Week": "2026-08-30",
+    "Healthy": 436,
+    "Unhealthy": 93,
+    "PctHealthy": 82.4
+  },
+  {
+    "Week": "2026-09-06",
+    "Healthy": 440,
+    "Unhealthy": 90,
+    "PctHealthy": 83.0
+  },
+  {
+    "Week": "2026-09-13",
+    "Healthy": 444,
+    "Unhealthy": 87,
+    "PctHealthy": 83.6
+  },
+  {
+    "Week": "2026-09-20",
+    "Healthy": 448,
+    "Unhealthy": 84,
+    "PctHealthy": 84.2
+  },
+  {
+    "Week": "2026-09-27",
+    "Healthy": 452,
+    "Unhealthy": 81,
+    "PctHealthy": 84.8
+  }
+]

@@ -1,0 +1,66 @@
+[
+  {
+    "Month": "2026-07-01",
+    "RiskEventType": "unfamiliarFeatures",
+    "Detections": 8,
+    "Users": 6,
+    "High": 0,
+    "Medium": 5
+  },
+  {
+    "Month": "2026-07-01",
+    "RiskEventType": "anonymizedIPAddress",
+    "Detections": 4,
+    "Users": 3,
+    "High": 0,
+    "Medium": 2
+  },
+  {
+    "Month": "2026-08-01",
+    "RiskEventType": "unfamiliarFeatures",
+    "Detections": 9,
+    "Users": 7,
+    "High": 0,
+    "Medium": 6
+  },
+  {
+    "Month": "2026-08-01",
+    "RiskEventType": "leakedCredentials",
+    "Detections": 1,
+    "Users": 1,
+    "High": 1,
+    "Medium": 0
+  },
+  {
+    "Month": "2026-08-01",
+    "RiskEventType": "anonymizedIPAddress",
+    "Detections": 3,
+    "Users": 3,
+    "High": 0,
+    "Medium": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "RiskEventType": "unfamiliarFeatures",
+    "Detections": 10,
+    "Users": 8,
+    "High": 1,
+    "Medium": 6
+  },
+  {
+    "Month": "2026-09-01",
+    "RiskEventType": "passwordSpray",
+    "Detections": 2,
+    "Users": 2,
+    "High": 1,
+    "Medium": 1
+  },
+  {
+    "Month": "2026-09-01",
+    "RiskEventType": "anonymizedIPAddress",
+    "Detections": 5,
+    "Users": 4,
+    "High": 0,
+    "Medium": 2
+  }
+]
