@@ -73,7 +73,8 @@ Resources a change leaves out are named in the index notes:
   under the same name between collection and the change was never checked, and stopping it for a setting Azure then
   rejects is the downtime these changes avoid. The index explains that a machine or scale set whose ID differs when the
   change runs is skipped and left for the next pack. One whose ID was not read is left out of the change request with
-  a note, and a Flexible scale set with such a machine is left out of CR-15. On a pack from before collector 1.4.0, CR-09
+  a note, and a Flexible scale set with such a machine is left out of CR-15. A Flexible scale set that CR-15 leaves out
+  for its own missing unique ID keeps its checked machines in CR-09. On a pack from before collector 1.4.0, CR-09
   and CR-15 read "Needs recollection with CyberSOC collector 1.4.0 or later" whenever they have a machine or scale set
   to change. A rerun of the read-only collector is the only way to get the IDs, and a name-only fallback would bring
   back the gap the IDs close. The notes on machines and scale sets that are not eligible, and the AKS note, are kept.

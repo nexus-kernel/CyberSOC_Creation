@@ -414,9 +414,13 @@ function Get-PaasTlsResource([string]$Type) {
 function Get-VmId($row) { (ConvertTo-CopyText $row.VmId).ToLowerInvariant() }
 function Test-ResultRead([string]$Id) { (Get-Status $Id) -in 'OK', 'PARTIAL', 'EMPTY' -and -not (Test-Unreadable $Id) }
 function Get-ScaleSetText($value) { (Get-Text $value).ToLowerInvariant() }
-# The scale sets CR-15 can take on their model alone: not AKS, with a model, and eligible.
+# The scale sets CR-15 can take on their model alone: not AKS, with a model, eligible, and with the unique ID
+# CR-15 checks before changing it. CR-09 hands over the machines of these scale sets only, so a scale set
+# that CR-15 leaves out for a missing ID keeps its machines in CR-09.
+function Test-ScaleSetModel($row) { -not (Test-True $row.Aks) -and (Test-True $row.HasModel) }
+function Test-EligibleScaleSetModel($row) { (Test-ScaleSetModel $row) -and (Test-True $row.Eligible) -and [bool](ConvertTo-CopyText $row.UniqueId) }
 function Get-EligibleScaleSetModels {
-    @(if (Test-ResultRead 'DP.4-VMSS-ELIGIBILITY') { Get-Rows 'DP.4-VMSS-ELIGIBILITY' | Where-Object { -not (Test-True $_.Aks) -and (Test-True $_.HasModel) -and (Test-True $_.Eligible) } })
+    @(if (Test-ResultRead 'DP.4-VMSS-ELIGIBILITY') { Get-Rows 'DP.4-VMSS-ELIGIBILITY' | Where-Object { Test-EligibleScaleSetModel $_ } })
 }
 # Checks the machines of eligible Flexible scale sets against DP.4-ELIGIBILITY. A list that does not name
 # the scale set of each machine cannot prove them eligible, and neither can a PARTIAL list, which may have
@@ -1047,7 +1051,7 @@ $catalog = @(
             if ($bare.Count) {
                 $notes.Add(('{0} without a scale set model left out of CR-15: {1}. With no model there is nothing to set on the scale set, so CR-09 covers {2} machines as standalone virtual machines.' -f (Get-Count $bare.Count 'Flexible scale set' 'Flexible scale sets'), (@($bare | Sort-Object Name | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', '), (Get-Pick $bare.Count 'its' 'their')))
             }
-            $models = @($rows | Where-Object { -not (Test-True $_.Aks) -and (Test-True $_.HasModel) })
+            $models = @($rows | Where-Object { Test-ScaleSetModel $_ })
             $ineligible = @($models | Where-Object { -not (Test-True $_.Eligible) })
             if ($ineligible.Count) {
                 $notes.Add(('{0} left out of CR-15 because {1} encryption at host as {2}: {3}.' -f (Get-Count $ineligible.Count 'scale set' 'scale sets'), (Get-Pick $ineligible.Count 'its model cannot take' 'their models cannot take'), (Get-Pick $ineligible.Count 'it stands' 'they stand'),
@@ -1058,7 +1062,7 @@ $catalog = @(
             # A pack from before collector 1.4.0 has no unique ID, so it cannot tell the scale set that was
             # checked from one created again under its name.
             if ($eligible.Count -and $eligible[0].PSObject.Properties.Name -notcontains 'UniqueId') { return @{ State = $needsIdRecollection; Notes = $notes.ToArray() } }
-            $unnamed = @($eligible | Where-Object { -not (ConvertTo-CopyText $_.UniqueId) })
+            $unnamed = @($eligible | Where-Object { -not (Test-EligibleScaleSetModel $_) })
             if ($unnamed.Count) {
                 $notes.Add(('{0} left out of CR-15 because {1} unique ID was not read, so {2} cannot be told from a scale set created again under the same name: {3}.' -f (Get-Count $unnamed.Count 'scale set' 'scale sets'), (Get-Pick $unnamed.Count 'its' 'their'), (Get-Pick $unnamed.Count 'it' 'they'), (@($unnamed | Sort-Object Name | ForEach-Object { ConvertTo-CopyText $_.Name }) -join ', ')))
                 $eligible = @($eligible | Where-Object { $_ -notin $unnamed })

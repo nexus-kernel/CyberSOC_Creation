@@ -726,6 +726,24 @@ Describe 'Change request variants' {
         foreach ($f in 'CR-09-encryption-at-host.email.txt', 'CR-15-scale-set-encryption-at-host.email.txt') { Test-Path (Join-Path $out $f) | Should -BeTrue -Because "every change request keeps its client email ($f)" }
     }
 
+    It 'keeps the checked machines of a Flexible scale set in CR-09 when CR-15 leaves the scale set out for its missing unique ID' {
+        $pack = Join-Path $TestDrive 'flex-no-unique-id'
+        New-ChangeFixture $pack
+        $sid = { param($name) "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachineScaleSets/$name" }
+        $row = { param($name) @{ Name = $name; ResourceId = "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/$name"; resourceGroup = 'rg-app'; subscriptionId = $s1; Location = 'eastus'; Size = 'Standard_D4s_v5'; PowerState = 'PowerState/running'; ScaleSet = (& $sid 'vmss-flex').ToLowerInvariant(); VmId = (Get-TestId $name); AdeUsed = $false; Eligible = $true; Reason = '' } }
+        Set-PackResult $pack 'DP.4-VMSS-ELIGIBILITY' @(@{ Name = 'vmss-flex'; ResourceId = (& $sid 'vmss-flex'); resourceGroup = 'rg-app'; subscriptionId = $s1; OrchestrationMode = 'Flexible'; Instances = 2; Size = 'Standard_D4s_v5'; UniqueId = ''; HasModel = $true; Aks = $false; Eligible = $true; Reason = '' })
+        Set-PackResult $pack 'DP.4-ELIGIBILITY' @((& $row 'vm-flex-1'), (& $row 'vm-flex-2'))
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        Test-Path (Join-Path $out 'CR-15-scale-set-encryption-at-host.txt') | Should -BeFalse
+        $text = Get-Content (Join-Path $out 'CR-09-encryption-at-host.txt') -Raw
+        foreach ($name in 'vm-flex-1', 'vm-flex-2') { $text | Should -Match "- $name, resource group rg-app, size Standard_D4s_v5, running, VM ID $(Get-TestId $name)" -Because "CR-15 leaves vmss-flex out, so $name is changed as a virtual machine" }
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Not -Match 'CR-15 handles' -Because 'no machine is handed to a change request that leaves it out'
+        $index | Should -Match '1 scale set left out of CR-15 because its unique ID was not read, so it cannot be told from a scale set created again under the same name: vmss-flex\.'
+        $index | Should -Match '\| 09 \| Encryption at host on virtual machines \| 2 \| Change request and client email \|'
+    }
+
     It 'reads needs recollection for CR-09 and CR-15 on a pack collected before the machine and scale set IDs' {
         $pack = Join-Path $TestDrive 'no-ids'
         New-ChangeFixture $pack
