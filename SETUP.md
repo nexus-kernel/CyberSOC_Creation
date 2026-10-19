@@ -27,16 +27,16 @@ Get-ChildItem -Recurse -File | Unblock-File
 This writes the controls standard as HTML and PPTX without signing in anywhere. Both files appearing means the report assets, Node.js and pptxgenjs all work.
 
 ```powershell
-pwsh ./New-EbrControlsStandard.ps1 -OutputPath ./install-check/standard.html
+pwsh ./New-CyberSocControlsStandard.ps1 -OutputPath ./install-check/standard.html
 ```
 
 ## Collect evidence
 
 ```powershell
-pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <tenant> -SubscriptionId <subscription>
+pwsh ./Get-CyberSocEvidence.ps1 -TenantId <tenant> -SubscriptionId <subscription>
 ```
 
-Each run writes an evidence pack with the report in two HTML editions and a deck, and the SecOps worklist (`04-secops-worklist.md` and `.csv`). Send the client `03-security-report.client.html` and `03-security-report.pptx`. `03-security-report.html` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-EbrSecurityEvidence.README.md covers parameters, permissions and sign-ins.
+Each run writes an evidence pack with the report in two HTML editions and a deck, and the SecOps worklist (`04-secops-worklist.md` and `.csv`). Send the client `03-security-report.client.html` and `03-security-report.pptx`. `03-security-report.html` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-CyberSocEvidence.README.md covers parameters, permissions and sign-ins.
 
 ## Integrity
 

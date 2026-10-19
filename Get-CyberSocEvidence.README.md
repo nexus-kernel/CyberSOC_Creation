@@ -1,4 +1,4 @@
-# Get-EbrSecurityEvidence.ps1
+# Get-CyberSocEvidence.ps1
 
 **READ-ONLY.** This script runs every query in the *EBR Security Evidence Collection Runbook*
 (Oct 7, 2026) for one client and writes an evidence pack. Every figure in it traces back to a
@@ -7,22 +7,22 @@ query ID. You supply the client's tenant and subscription IDs; the script does t
 ## Quick start
 
 ```bash
-pwsh ./Get-EbrSecurityEvidence.ps1
+pwsh ./Get-CyberSocEvidence.ps1
 ```
 
 The script prompts for the tenant (a GUID or a domain) and the subscription IDs, then works
 through the run sequence: pre-flight, outcomes, control evidence, posture and backlog.
 
 ```bash
-pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId contoso.onmicrosoft.com -SubscriptionId a0c307ad-f1c3-4a7d-96c3-10a6eb7c9c62
+pwsh ./Get-CyberSocEvidence.ps1 -TenantId contoso.onmicrosoft.com -SubscriptionId a0c307ad-f1c3-4a7d-96c3-10a6eb7c9c62
 ```
 
 ```bash
-pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1>,<sub2> -WindowStart 2026-01-01 -WindowEnd 2026-07-31
+pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1>,<sub2> -WindowStart 2026-01-01 -WindowEnd 2026-07-31
 ```
 
 ```bash
-pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -DryRun
+pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -DryRun
 ```
 
 A dry run writes every expanded query to `queries/` without signing in, so you can paste
@@ -30,14 +30,14 @@ the queries by hand. Graph items are written as `queries/<ID>.graph.txt` with th
 they read.
 
 ```bash
-pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -SkipGraph -PatchCadenceDays 45
+pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -SkipGraph -PatchCadenceDays 45
 ```
 
 `-SkipGraph` restores the pre-1.7 behaviour (Graph items UNAVAILABLE with their portal path).
 `-PatchCadenceDays` is the agreed cadence for EW.10, default 30.
 
 ```bash
-pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -EdrVendorPattern 'crowdstrike|falcon' -PatchExclusionTagPattern ''
+pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1> -EdrVendorPattern 'crowdstrike|falcon' -PatchExclusionTagPattern ''
 ```
 
 `-EdrVendorPattern` names the third-party endpoint detection products in the environment (CrowdStrike
@@ -236,12 +236,12 @@ in the pack (`results/<ID>.csv`).
 ## Output
 
 Completed collections also create an offline executive HTML report. See
-[HTML report usage and metric rules](New-EbrSecurityReport.README.md) for report depth,
-existing-pack generation and dated delivery context. Keep `New-EbrSecurityReport.ps1` and
+[HTML report usage and metric rules](New-CyberSocReport.README.md) for report depth,
+existing-pack generation and dated delivery context. Keep `New-CyberSocReport.ps1` and
 the `report` folder beside the collector. The default depth is Balanced. Use
 `-ReportDepth Brief` or `-ReportDepth Detailed` to change it, or `-SkipHtmlReport` to opt out.
 
-The script writes `EBR-Evidence_<client>_<yyyyMMdd-HHmmss>/`:
+The script writes `CyberSOC-Evidence_<client>_<yyyyMMdd-HHmmss>/`:
 
 | File | Contents |
 |---|---|
@@ -249,10 +249,10 @@ The script writes `EBR-Evidence_<client>_<yyyyMMdd-HHmmss>/`:
 | `00-parameters.json` | Tenant, subscriptions, workspaces and how each is reached, which workspace supplied the tenant-wide tables, window and its basis, managed RG pattern, warnings |
 | `01-worksheet.csv` | The runbook's slide map (48 rows). Values are filled in wherever they can be derived, each with a read date and a note. `MANUAL` means a portal reading; `REVIEW` means the data is collected but an analyst has to do the calculation. The MFA rows quote **members**, with guests and other user types in the note. A user counts as challenged when any successful sign-in satisfied MFA through the requirement field, a step detail claim (in the token or from an external identity provider) or `MfaDetail`, so federated tenants are not under-counted. The note states how many members relied on an external provider claim. When automation rules closed at least half the incidents, the close-time rows quote the **analyst-handled** figures (OUT.2-ANALYST, per the runbook), labelled as such, with the all-incident figure in the note. Fewer than 20 incidents behind a median or P90 adds a small-sample caveat. The anti-malware row quotes the weakest check and lists every check, with scope and OS, in the note. Privileged roles read "N role assignments across M accounts", because PIM state is unknown without Graph |
 | `02-notes.txt` | Ticket notes ready to paste: scope, collection summary, key figures, attention items |
-| `04-secops-worklist.md`, `04-secops-worklist.csv` | Internal SecOps worklist written by `New-EbrSecOpsWorklist.ps1`: open alerts with incident number and Zendesk ticket, closures without a documented disposition, devices not onboarded or with an inactive sensor, virtual machines without backup, stale backup items and the row-level platform gaps. Names resources, so it stays with the SecOps team. `-SkipSecOpsWorklist` opts out. See [SecOps worklist](New-EbrSecOpsWorklist.README.md) |
+| `04-secops-worklist.md`, `04-secops-worklist.csv` | Internal SecOps worklist written by `New-CyberSocSecOpsWorklist.ps1`: open alerts with incident number and Zendesk ticket, closures without a documented disposition, devices not onboarded or with an inactive sensor, virtual machines without backup, stale backup items and the row-level platform gaps. Names resources, so it stays with the SecOps team. `-SkipSecOpsWorklist` opts out. See [SecOps worklist](New-CyberSocSecOpsWorklist.README.md) |
 | `03-security-report.pptx` | PowerPoint edition of the report, same figures, slides following the report depth, talking-point speaker notes only. Needs Node.js and pptxgenjs, skipped with a warning without them |
 | `03-security-report.html` | Self-contained executive security report: headline tiles, four tier posture block, measured outcomes by pillar, E, P, N control matrix, sequenced roadmap, score context and screen-only presenter notes. The internal edition, never sent to the client. Client-facing copy says alerts, never incidents |
-| `03-security-report.client.html` | Client edition of the same report, for sending to the client: the pages rendered ahead of time, with no embedded data, presenter notes, evidence review or collection register, and no GUIDs. Needs Node.js, skipped with a warning without it. See [Client edition](New-EbrSecurityReport.README.md#client-edition) |
+| `03-security-report.client.html` | Client edition of the same report, for sending to the client: the pages rendered ahead of time, with no embedded data, presenter notes, evidence review or collection register, and no GUIDs. Needs Node.js, skipped with a warning without it. See [Client edition](New-CyberSocReport.README.md#client-edition) |
 | `queries/<ID>.kql` | The exact query text that ran, with the dates filled in |
 | `results/<ID>.csv`, `results/<ID>.json` | The rows (client-level, combined). Nested values are JSON-encoded in the CSV, and decimals are written to 15 significant digits in invariant culture (`130.36`, never `130.35999999999999` or `130,36`) |
 | `results/<ID>-BY-WORKSPACE.csv` | The same query run once per workspace, with `Workspace`, `WorkspaceId` and `SubscriptionId` columns first |
@@ -321,7 +321,7 @@ subscription from another tenant.
 ## Tests
 
 ```bash
-pwsh -NoProfile -c "Invoke-Pester ./tests/Get-EbrSecurityEvidence.Tests.ps1 -Output Detailed"
+pwsh -NoProfile -c "Invoke-Pester ./tests/Get-CyberSocEvidence.Tests.ps1 -Output Detailed"
 ```
 
 The Pester suite covers:

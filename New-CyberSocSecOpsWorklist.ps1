@@ -8,13 +8,13 @@
     Each category is an item Atmosera resolves at the platform level under the managed security service.
     No Azure sign-in, network requests or source evidence changes.
 .PARAMETER EvidencePath
-    The evidence pack folder written by Get-EbrSecurityEvidence.ps1.
+    The evidence pack folder written by Get-CyberSocEvidence.ps1.
 .PARAMETER OutputPath
     Folder that receives the two files. Defaults to the evidence pack.
 .PARAMETER ZendeskTicketUrl
     Ticket URL prefix. The ticket number is appended. Defaults to the Atmosera Zendesk agent view.
 .EXAMPLE
-    ./New-EbrSecOpsWorklist.ps1 -EvidencePath ./EBR-Evidence_Client_20261012-120000
+    ./New-CyberSocSecOpsWorklist.ps1 -EvidencePath ./CyberSOC-Evidence_Client_20261012-120000
 .NOTES
     Categories whose result was added in collector 1.8.0 (OUT.1-OPEN, DR.10-GAPS, EW.1-DEVICES,
     DP.5-STALE), 1.10.0 (IA.8-SIGNINS, P0.6-APPLIANCES), 1.11.0 (DP.1-CONTAINERS) or 1.14.0 (EW.1-GAPS,

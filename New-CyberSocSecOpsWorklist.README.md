@@ -1,6 +1,6 @@
 # EBR SecOps worklist
 
-`New-EbrSecOpsWorklist.ps1` turns a finished evidence pack into the list of items the SecOps team
+`New-CyberSocSecOpsWorklist.ps1` turns a finished evidence pack into the list of items the SecOps team
 resolves at the platform level under the managed security service. It is the internal counterpart
 of the client report: the report shows counts and never names a resource, the worklist names every
 incident, ticket, device and resource so someone can act on it. Keep it inside Atmosera.
@@ -8,7 +8,7 @@ incident, ticket, device and resource so someone can act on it. Keep it inside A
 ## Generate from an existing evidence pack
 
 ```powershell
-./New-EbrSecOpsWorklist.ps1 -EvidencePath ./EBR-Evidence_Client_20261012-120000
+./New-CyberSocSecOpsWorklist.ps1 -EvidencePath ./CyberSOC-Evidence_Client_20261012-120000
 ```
 
 Writes `04-secops-worklist.md` and `04-secops-worklist.csv` into the pack. `-OutputPath <folder>`
@@ -51,5 +51,5 @@ The CSV has one row per item: Category, ControlId, Resource, Detail, Reference, 
 ## Validation
 
 ```powershell
-Invoke-Pester -Path tests/New-EbrSecOpsWorklist.Tests.ps1
+Invoke-Pester -Path tests/New-CyberSocSecOpsWorklist.Tests.ps1
 ```

@@ -3,7 +3,7 @@
     Packages the EBR evidence toolkit into one zip that runs on a fresh machine.
 
 .DESCRIPTION
-    Writes dist/EBR-Evidence-Toolkit_v<version>_<timestamp>.zip with the collector, the report,
+    Writes dist/CyberSOC-Toolkit_v<version>_<timestamp>.zip with the collector, the report,
     worklist and controls standard generators, the report assets and the pptxgenjs node_modules,
     so the target only needs PowerShell, Azure CLI and Node.js. The zip also carries SETUP.md
     (prerequisites and first commands) and MANIFEST.sha256 (a hash for every file).
@@ -27,10 +27,10 @@
     PowerPoint editions can be written.
 
 .EXAMPLE
-    pwsh ./Export-EbrToolkit.ps1
+    pwsh ./Export-CyberSocToolkit.ps1
 
 .EXAMPLE
-    pwsh ./Export-EbrToolkit.ps1 -IncludeTests -OutputDirectory ~/Desktop
+    pwsh ./Export-CyberSocToolkit.ps1 -IncludeTests -OutputDirectory ~/Desktop
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -47,23 +47,23 @@ Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 $root = $PSScriptRoot
 $junkNames = '.DS_Store', 'Thumbs.db', 'desktop.ini'
 # Client data lives in evidence packs and .report-build. Nothing under either may be packaged.
-$forbidden = '(^|/)(EBR-Evidence_[^/]*|\.report-build)(/|$)'
+$forbidden = '(^|/)((CyberSOC|EBR)-Evidence_[^/]*|\.report-build)(/|$)'
 
 # Path, whether the build fails without it, and an optional filter for folders.
 $items = [System.Collections.Generic.List[object]]::new()
 function Add-PackageItem([string]$Path, [bool]$Required = $true, [scriptblock]$Filter = { $true }) {
     $items.Add([pscustomobject]@{ Path = $Path; Required = $Required; Filter = $Filter })
 }
-Add-PackageItem 'Get-EbrSecurityEvidence.ps1'
-Add-PackageItem 'New-EbrSecurityReport.ps1'
-Add-PackageItem 'New-EbrSecOpsWorklist.ps1'
-Add-PackageItem 'New-EbrControlsStandard.ps1'
+Add-PackageItem 'Get-CyberSocEvidence.ps1'
+Add-PackageItem 'New-CyberSocReport.ps1'
+Add-PackageItem 'New-CyberSocSecOpsWorklist.ps1'
+Add-PackageItem 'New-CyberSocControlsStandard.ps1'
 Add-PackageItem 'report'
 Add-PackageItem 'package.json'
 Add-PackageItem 'package-lock.json'
-Add-PackageItem 'Get-EbrSecurityEvidence.README.md' $false
-Add-PackageItem 'New-EbrSecurityReport.README.md' $false
-Add-PackageItem 'New-EbrSecOpsWorklist.README.md' $false
+Add-PackageItem 'Get-CyberSocEvidence.README.md' $false
+Add-PackageItem 'New-CyberSocReport.README.md' $false
+Add-PackageItem 'New-CyberSocSecOpsWorklist.README.md' $false
 Add-PackageItem 'EBR Security Evidence Collection Runbook.md' $false
 # .bin holds symlinks to package CLIs, which the decks never call.
 if (-not $SkipNodeModules) { Add-PackageItem 'node_modules' $true { $args[0] -notmatch '^node_modules/\.bin/' } }
@@ -72,8 +72,8 @@ if (-not $SkipNodeModules) { Add-PackageItem 'node_modules' $true { $args[0] -no
 if ($IncludeTests) { Add-PackageItem 'tests' $true { $args[0] -match '\.(Tests\.ps1|test\.cjs)$|^tests/fixtures/(offline-pack/|offline-context\.json$)' } }
 if ($IncludeDocs) { Add-PackageItem 'docs' }
 
-$collector = Get-Content -LiteralPath (Join-Path $root 'Get-EbrSecurityEvidence.ps1') -Raw
-if ($collector -notmatch "\`$script:EbrVersion\s*=\s*'([^']+)'") { throw 'Could not read $script:EbrVersion from Get-EbrSecurityEvidence.ps1.' }
+$collector = Get-Content -LiteralPath (Join-Path $root 'Get-CyberSocEvidence.ps1') -Raw
+if ($collector -notmatch "\`$script:EbrVersion\s*=\s*'([^']+)'") { throw 'Could not read $script:EbrVersion from Get-CyberSocEvidence.ps1.' }
 $version = $Matches[1]
 
 if (-not $SkipNodeModules) {
@@ -136,16 +136,16 @@ Get-ChildItem -Recurse -File | Unblock-File
 This writes the controls standard as HTML and PPTX without signing in anywhere. Both files appearing means the report assets, Node.js and pptxgenjs all work.
 
 ``````powershell
-pwsh ./New-EbrControlsStandard.ps1 -OutputPath ./install-check/standard.html
+pwsh ./New-CyberSocControlsStandard.ps1 -OutputPath ./install-check/standard.html
 ``````
 
 ## Collect evidence
 
 ``````powershell
-pwsh ./Get-EbrSecurityEvidence.ps1 -TenantId <tenant> -SubscriptionId <subscription>
+pwsh ./Get-CyberSocEvidence.ps1 -TenantId <tenant> -SubscriptionId <subscription>
 ``````
 
-Each run writes an evidence pack with the report in two HTML editions and a deck, and the SecOps worklist (``04-secops-worklist.md`` and ``.csv``). Send the client ``03-security-report.client.html`` and ``03-security-report.pptx``. ``03-security-report.html`` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-EbrSecurityEvidence.README.md covers parameters, permissions and sign-ins.
+Each run writes an evidence pack with the report in two HTML editions and a deck, and the SecOps worklist (``04-secops-worklist.md`` and ``.csv``). Send the client ``03-security-report.client.html`` and ``03-security-report.pptx``. ``03-security-report.html`` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-CyberSocEvidence.README.md covers parameters, permissions and sign-ins.
 
 ## Integrity
 
@@ -153,7 +153,7 @@ MANIFEST.sha256 holds the SHA-256 of every other file in this folder. On macOS o
 "@
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$top = "EBR-Evidence-Toolkit_v$version"
+$top = "CyberSOC-Toolkit_v$version"
 [void](New-Item -ItemType Directory -Path $OutputDirectory -Force)
 $zipPath = Join-Path (Resolve-Path -LiteralPath $OutputDirectory).Path "${top}_$stamp.zip"
 
@@ -191,7 +191,7 @@ finally { $zip.Dispose(); $sha.Dispose() }
 
 # Reopen the zip and confirm it can run on its own.
 $expected = @(
-    'Get-EbrSecurityEvidence.ps1', 'New-EbrSecurityReport.ps1', 'New-EbrSecOpsWorklist.ps1', 'New-EbrControlsStandard.ps1',
+    'Get-CyberSocEvidence.ps1', 'New-CyberSocReport.ps1', 'New-CyberSocSecOpsWorklist.ps1', 'New-CyberSocControlsStandard.ps1',
     'report/Get-EbrCaEvaluation.ps1', 'report/report-model.js', 'report/report-render.js', 'report/report-review.js', 'report/report-controls.js', 'report/build-client-report.cjs', 'report/report-story.js',
     'report/report.html', 'report/report.css', 'report/standard.html', 'report/standard-render.js', 'report/controls-standard.json',
     'report/deck-common.cjs', 'report/build-report-deck.cjs', 'report/build-controls-deck.cjs', 'report/assets/template-background.jpg',

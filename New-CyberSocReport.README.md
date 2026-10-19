@@ -15,16 +15,16 @@ The report follows the navy, cyan and white theme of the EBR decks and the struc
 ## Generate from an existing evidence pack
 
 ```powershell
-./New-EbrSecurityReport.ps1 -EvidencePath './EBR-Evidence_Client_20261008-120000'
+./New-CyberSocReport.ps1 -EvidencePath './CyberSOC-Evidence_Client_20261008-120000'
 ```
 
 ```powershell
-./New-EbrSecurityReport.ps1 -EvidencePath './EBR-Evidence_Client_20261008-120000' -Depth Detailed -ContextPath './client-review-context.json' -OutputPath './Client-Security-Review.html'
+./New-CyberSocReport.ps1 -EvidencePath './CyberSOC-Evidence_Client_20261008-120000' -Depth Detailed -ContextPath './client-review-context.json' -OutputPath './Client-Security-Review.html'
 ```
 
 Generation requires PowerShell 5.1 or later and the adjacent `report` folder. No Azure session, browser automation package, Node installation or Python installation is required to generate or view the internal HTML edition. The client edition needs Node.js, and the PowerPoint edition needs Node.js and pptxgenjs (`npm ci` in this folder, see [Windows setup](#windows-setup-for-the-powerpoint-edition)). Without them the internal HTML is still written and a warning says which editions were skipped. `-SkipDeck` writes the two HTML editions only. With `-OutputPath` the client edition takes the same name ending in `.client.html`, for example `Client-Security-Review.client.html`. `-OutputPath` names the internal edition, so a path that already ends in `.client.html` is refused. The browser must support JavaScript. The completed HTML has no dependency on the original evidence folder.
 
-To change the default for a new collection use `./Get-EbrSecurityEvidence.ps1 -ReportDepth Brief`. Use `-SkipHtmlReport` to collect evidence without generating HTML. A report generation error preserves the collected evidence and returns exit code 2. Re-run the standalone generator after correcting the error.
+To change the default for a new collection use `./Get-CyberSocEvidence.ps1 -ReportDepth Brief`. Use `-SkipHtmlReport` to collect evidence without generating HTML. A report generation error preserves the collected evidence and returns exit code 2. Re-run the standalone generator after correcting the error.
 
 ### Windows setup for the PowerPoint edition
 
@@ -224,7 +224,7 @@ Evidence IDs and read dates stay in the source lines, since they carry no identi
 ## Controls standard for executives
 
 ```powershell
-./New-EbrControlsStandard.ps1
+./New-CyberSocControlsStandard.ps1
 ```
 
 Writes `docs/The Controls That Matter.html` and `docs/The Controls That Matter.pptx`: page 04 on its own, as a standard rather than a client reading. Both are informational. They outline every control by pillar and tier with the reading that grades it, explain the tiers and the E, P and N marks, count the controls per pillar and close with an invitation for feedback. They do not ask for sign-off and carry no measure IDs, change list or page footers, and they hold no client data. The control list comes from `report/report-model.js` run on an empty pack in standards mode, so both always match the client report. Set the title and version in `report/controls-standard.json`, then regenerate after any change to a control, its tier or its measure.
@@ -234,7 +234,7 @@ The deck is built by `node report/build-controls-deck.cjs [output.pptx]` (pptxge
 ## Validation
 
 ```powershell
-Invoke-Pester ./tests/Get-EbrSecurityEvidence.Tests.ps1, ./tests/New-EbrSecurityReport.Tests.ps1 -Output Detailed
+Invoke-Pester ./tests/Get-CyberSocEvidence.Tests.ps1, ./tests/New-CyberSocReport.Tests.ps1 -Output Detailed
 ```
 
 ```bash

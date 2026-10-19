@@ -5,3 +5,8 @@ __pycache__/
 *.pyc
 /.dev-cache/
 /.venv/
+
+# Evidence packs hold client data and never belong in the repository.
+/CyberSOC-Evidence_*/
+/EBR-Evidence_*/
+/dist/

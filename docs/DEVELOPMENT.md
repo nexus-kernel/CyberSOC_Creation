@@ -57,7 +57,7 @@ if ($result.TotalCount -eq 0 -or $result.Result -ne 'Passed' -or
 ```
 
 Optional safe smoke test (writes only local HTML/PPTX):
-`pwsh ./New-EbrControlsStandard.ps1 -OutputPath /tmp/ebr-install-check/standard.html`.
+`pwsh ./New-CyberSocControlsStandard.ps1 -OutputPath /tmp/ebr-install-check/standard.html`.
 The Node suite intentionally skips its real-evidence-pack comparison when no local
 packs exist. Do not add client data merely to remove that optional skip.
 
@@ -142,7 +142,7 @@ not validation against real customer packs. Reproduce without client data:
 # Require that this destination does not already exist.
 test ! -e EBR-Evidence_synthetic-validation
 cp -R tests/fixtures/offline-pack EBR-Evidence_synthetic-validation
-pwsh -NoProfile -File ./New-EbrSecurityReport.ps1 -EvidencePath ./EBR-Evidence_synthetic-validation -SkipDeck
+pwsh -NoProfile -File ./New-CyberSocReport.ps1 -EvidencePath ./EBR-Evidence_synthetic-validation -SkipDeck
 node --test tests/*.test.cjs
 # Remove only the temporary synthetic copy created above after inspecting results.
 rm -rf -- EBR-Evidence_synthetic-validation

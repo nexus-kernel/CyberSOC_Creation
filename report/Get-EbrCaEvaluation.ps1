@@ -1,5 +1,5 @@
 <#
-    Conditional Access evaluation shared by New-EbrSecurityReport.ps1 and New-EbrSecOpsWorklist.ps1.
+    Conditional Access evaluation shared by New-CyberSocReport.ps1 and New-CyberSocSecOpsWorklist.ps1.
     Offline. Reads three collector results (1.10.0 and later):
       IA.8-POLICIES  the policies exactly as Graph returned them, with excluded user, group and role IDs
       IA.8-DEFAULTS  security defaults on or off
