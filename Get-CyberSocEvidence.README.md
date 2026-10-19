@@ -81,7 +81,8 @@ pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1>,<sub2> -
 After the SecOps worklist, the collector runs `New-CyberSocChangeRequests.ps1` on the pack. It writes
 `05-change-requests`: one change request for each low-impact hardening item that still has resources to fix, with a
 client email for each, and `00-index.md`, which lists every change with its status and the resources left out.
-These options are passed to it and recorded under `ChangeRequests` in `00-parameters.json`:
+These options are passed to it and recorded under `ChangeRequests` in `00-parameters.json`, with `Requested`
+(false with `-SkipChangeRequests`) and `Written`, which turns true only once the generator has finished:
 
 | Parameter | Effect on the change requests |
 |---|---|

@@ -6004,8 +6004,10 @@ function Invoke-EbrMain {
             EdrVendorPattern    = $ctx.EdrVendorPattern
             ExchangeAndPurview  = $(if ($SkipExchange) { 'skipped' } else { 'attempted' })
             # The options New-CyberSocChangeRequests.ps1 runs with. Run it on its own with others to write the files again.
+            # Written turns true only once the generator has finished, and the file is written again then.
             ChangeRequests      = [ordered]@{
-                Written                 = -not $SkipChangeRequests
+                Requested               = -not $SkipChangeRequests
+                Written                 = $false
                 DrClient                = [bool]$DrClient
                 SentinelWorkspace       = $(if ($SentinelWorkspace) { $SentinelWorkspace } else { $null })
                 ManagementGroup         = $(if ($ManagementGroup) { $ManagementGroup } else { $null })
@@ -6056,6 +6058,8 @@ function Invoke-EbrMain {
                 foreach ($k in 'SentinelWorkspace', 'ManagementGroup', 'ClientContact', 'SenderName') { if ($PSBoundParameters[$k]) { $crOptions[$k] = $PSBoundParameters[$k] } }
                 $crFiles = @(Invoke-EbrChangeRequestGenerator -EvidencePath $ctx.OutDir -Options $crOptions)
                 Write-EbrLog -Level INFO -Component Report -Message ('Change requests created: {0}' -f ($crFiles -join ', '))
+                $params.ChangeRequests.Written = $true
+                Write-EbrTextFile -Path (Join-Path $ctx.OutDir '00-parameters.json') -Text (ConvertTo-Json -InputObject $params -Depth 6)
                 $crNames = @($crFiles | ForEach-Object { Split-Path -Leaf $_ })
                 $crCount = @($crNames | Where-Object { $_ -match '^CR-\d+-.+(?<!\.email)\.txt$' }).Count
                 $emailCount = @($crNames | Where-Object { $_ -match '^CR-\d+-.+\.email\.txt$' }).Count

@@ -2089,7 +2089,8 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
             $text | Should -Match '\r?\n\r?\nHello Dana,\r?\n' -Because "-ClientContact reached the generator ($($email.Name))"
             $text | Should -Match 'Thank you,\r?\nScott Example\r?\n$' -Because "-SenderName reached the generator ($($email.Name))"
         }
-        $params.ChangeRequests.Written | Should -BeTrue
+        $params.ChangeRequests.Requested | Should -BeTrue
+        $params.ChangeRequests.Written | Should -BeTrue -Because 'the generator finished'
         $params.ChangeRequests.DrClient | Should -BeTrue
         $params.ChangeRequests.SentinelWorkspace | Should -Be 'ws-2'
         $params.ChangeRequests.ManagementGroup | Should -Be 'mg-contoso'
@@ -2121,6 +2122,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $notes = Get-Content (Join-Path $pack.FullName '02-notes.txt') -Raw
         $notes | Should -Match '1 change request and 1 client email in 05-change-requests\.'
         $params2 = Get-Content (Join-Path $pack.FullName '00-parameters.json') -Raw | ConvertFrom-Json
+        $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
         $params2.ScriptVersion | Should -Be '1.5.0'
@@ -2136,6 +2138,9 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $log = Get-Content (Join-Path $pack.FullName 'run.log') -Raw
         $log | Should -Match 'WARNING Console - Evidence collection completed\. Change request generation needs attention: CR-03 has no client email\.'
         Get-Content (Join-Path $pack.FullName '02-notes.txt') -Raw | Should -Match 'Not written: CR-03 has no client email\. Every change request writes one\. Run New-CyberSocChangeRequests\.ps1 -EvidencePath on this pack to write them\.'
+        $failedParams = (Get-Content (Join-Path $pack.FullName '00-parameters.json') -Raw | ConvertFrom-Json).ChangeRequests
+        $failedParams.Requested | Should -BeTrue
+        $failedParams.Written | Should -BeFalse -Because 'the pack must not claim change requests the generator failed to write'
     }
 
     It 'warns and stays complete, not fatal, when the <Name> generator fails, and still runs the ones after it' -ForEach @(
@@ -2167,7 +2172,9 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         Should -Invoke Invoke-EbrChangeRequestGenerator -Times 0 -Exactly
         $pack = Get-ChildItem -Path $dest -Directory -Filter 'CyberSOC-Evidence_*' | Select-Object -First 1
         Test-Path (Join-Path $pack.FullName '05-change-requests') | Should -BeFalse
-        (Get-Content (Join-Path $pack.FullName '00-parameters.json') -Raw | ConvertFrom-Json).ChangeRequests.Written | Should -BeFalse
+        $skippedParams = (Get-Content (Join-Path $pack.FullName '00-parameters.json') -Raw | ConvertFrom-Json).ChangeRequests
+        $skippedParams.Requested | Should -BeFalse
+        $skippedParams.Written | Should -BeFalse
         Get-Content (Join-Path $pack.FullName '02-notes.txt') -Raw | Should -Match 'Not written \(-SkipChangeRequests\)\. Run New-CyberSocChangeRequests\.ps1 -EvidencePath on this pack to write them\.'
     }
 
