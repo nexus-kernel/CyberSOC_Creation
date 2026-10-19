@@ -213,7 +213,8 @@ Describe 'Change request generation' {
         foreach ($name in 'vm-ade', 'vm-a1', 'vm-unread') { $text | Should -Not -Match $name -Because "$name cannot take encryption at host as it stands" }
         $index | Should -Match '3 virtual machines left out of CR-09 because they cannot take encryption at host as they stand: vm-a1 \(Standard_A1, size not supported\), vm-ade \(Standard_D2s_v5, Azure Disk Encryption used\), vm-unread \(Standard_D2s_v5, size support not read\)\.'
         $index | Should -Match '\| 09 \| Encryption at host on virtual machines \| 3 \| Change request and client email \|'
-        foreach ($s in $s1, $s2) { $text | Should -Match "    az account set --subscription $s" }
+        foreach ($s in $s1, $s2) { $text | Should -Match "    az feature register --name EncryptionAtHost --namespace Microsoft\.Compute --subscription $s" }
+        $text | Should -Not -Match 'az account set' -Because 'each command names its subscription'
         $text | Should -Match 'Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save\.'
         $text | Should -Match '7\. Repeat steps 3 to 6 for each remaining virtual machine listed\.'
         $text | Should -Match '4\. On Overview, note whether the status reads Running, then select Stop'
@@ -228,6 +229,19 @@ Describe 'Change request generation' {
         $email | Should -Match '- vm-paused \(resource group rg-app, stopped at my last review\)' -Because 'a machine stopped but still allocated is not running either'
         $email | Should -Match 'a server that is already stopped will be left stopped'
         $email | Should -Match 'Could you suggest a maintenance window'
+    }
+
+    It 'checks the EncryptionAtHost registration state on each subscription, not only the last one set' {
+        # Step 2 alone: from its numbered line to the next numbered step.
+        $impl = @(Get-Section (& $read 'CR-09-encryption-at-host.txt') 'A) IMPLEMENTATION PLAN')
+        $from = [array]::IndexOf($impl, @($impl -match '^2\. ')[0])
+        $to = [array]::IndexOf($impl, @($impl -match '^3\. ')[0])
+        $step = $impl[$from..($to - 1)] -join "`n"
+        $step | Should -Match '2\. Wait for the registration on each subscription, running these until every one returns Registered:'
+        foreach ($s in $s1, $s2) {
+            $step | Should -Match "    az feature show --name EncryptionAtHost --namespace Microsoft\.Compute --subscription $s --query properties\.state -o tsv" -Because "step 2 checks $s itself"
+        }
+        $step | Should -Not -Match 'az feature show --name EncryptionAtHost --namespace Microsoft\.Compute on each subscription'
     }
 
     It 'assigns the diagnostic logging initiative when it is not assigned yet' {

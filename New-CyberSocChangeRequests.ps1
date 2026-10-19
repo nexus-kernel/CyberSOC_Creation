@@ -734,10 +734,14 @@ $catalog = @(
             if (-not $n) { return @{ State = $(if ($rows.Count) { 'No eligible virtual machines' } else { 'No gaps found' }); Notes = $notes.ToArray() } }
             $subscriptions = @($resources | ForEach-Object SubscriptionId | Sort-Object -Unique)
             $register = @('In the Azure portal, open Cloud Shell in Bash and register the EncryptionAtHost feature on each subscription in the RESOURCES section:')
-            foreach ($s in $subscriptions) { $register += "az account set --subscription $s"; $register += 'az feature register --name EncryptionAtHost --namespace Microsoft.Compute' }
+            # Each command names its subscription, so neither step depends on the subscription Cloud Shell
+            # was left on and step 2 checks every one, not only the last registered.
+            foreach ($s in $subscriptions) { $register += "az feature register --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s" }
+            $check = @('Wait for the registration on each subscription, running these until every one returns Registered:')
+            foreach ($s in $subscriptions) { $check += "az feature show --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s --query properties.state -o tsv" }
             $impl = [System.Collections.Generic.List[object]]::new()
             $impl.Add($register)
-            $impl.Add('Run az feature show --name EncryptionAtHost --namespace Microsoft.Compute on each subscription and continue once the state reads Registered.')
+            $impl.Add($check)
             $impl.Add((Get-OpenStep $n 'Virtual machines' 'virtual machine'))
             $impl.Add('On Overview, note whether the status reads Running, then select Stop and wait for the status to read Stopped (deallocated).')
             $impl.Add('Go to Settings > Disks > Additional settings, set Encryption at host to Yes and select Save.')
