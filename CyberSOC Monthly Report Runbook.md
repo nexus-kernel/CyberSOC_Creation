@@ -556,7 +556,7 @@ resources
 
 ### DP.1-DETAIL Storage accounts without secure transfer, minimum TLS 1.2 or anonymous access off
 
-Engine ARG. One row per storage account DP.1 counts against secure transfer, minimum TLS 1.2 or anonymous blob access, read the same way: a missing allowBlobPublicAccess means anonymous access is allowed. NfsV3 and the FileStorage kind mark accounts that may serve NFS, which CR-02 leaves out because NFS mounts are refused once secure transfer is required. CR-07 also leaves out FileStorage accounts, which hold no blob service. Feeds CR-02, CR-03 and CR-07, with DP.1-CONTAINERS naming the public containers.
+Engine ARG. One row per storage account DP.1 counts against secure transfer, minimum TLS 1.2 or anonymous blob access, read the same way: a missing allowBlobPublicAccess means anonymous access is allowed. NfsV3 and the FileStorage kind mark accounts that may serve NFS, which CR-02 leaves out because NFS mounts are refused once secure transfer is required. CR-07 also leaves out FileStorage accounts, which hold no blob service. Feeds CR-02, CR-03 and CR-07. CR-07 takes only the accounts whose containers DP.1-CONTAINERS listed in full with none set to Blob or Container access, and names the others in the index.
 
 ```kql
 resources

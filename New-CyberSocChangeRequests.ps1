@@ -681,71 +681,87 @@ $catalog = @(
 
     @{ Number = 7; Key = 'storage-anonymous-access'; Change = 'Anonymous blob access disabled on storage accounts'; Sources = @('DP.1-DETAIL')
        Build = {
-            # The containers each account holds (DP.1-CONTAINERS) name what anonymous readers lose.
+            # Turning the account setting off stops every anonymous read, so CR-07 takes only the accounts whose
+            # containers DP.1-CONTAINERS listed in full, with none set to Blob or Container access. The index names
+            # the others: an account with a public container waits until its containers are private, and an account
+            # whose containers were not listed waits for a pack that lists them.
+            $containersStatus = Get-Status 'DP.1-CONTAINERS'
+            $containersRead = $containersStatus -in 'OK', 'PARTIAL', 'EMPTY' -and -not (Test-Unreadable 'DP.1-CONTAINERS')
             $containers = @{}
-            $containersRead = (Get-Status 'DP.1-CONTAINERS') -in 'OK', 'PARTIAL', 'EMPTY' -and -not (Test-Unreadable 'DP.1-CONTAINERS')
             if ($containersRead) { foreach ($c in @(Get-Rows 'DP.1-CONTAINERS')) { $containers[(Get-Text $c.ResourceId).ToLowerInvariant()] = $c } }
             $public = [System.Collections.Generic.List[string]]::new()
-            $closed = [System.Collections.Generic.List[string]]::new()
-            $unread = [System.Collections.Generic.List[string]]::new()
-            $exposed = 0
+            $unlisted = [System.Collections.Generic.List[string]]::new()
+            $failed = [System.Collections.Generic.List[string]]::new()
             # A FileStorage account holds no blob service, so the setting does not apply to it.
-            $resources = @(Get-Rows 'DP.1-DETAIL' | Where-Object { (Test-True $_.AllowBlobPublicAccess) -and (Get-Text $_.Kind) -ine 'FileStorage' } | ForEach-Object {
-                    $c = $containers[(Get-Text $_.ResourceId).ToLowerInvariant()]
-                    $label = '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup)
-                    $setting = if ($null -eq $c) { $unread.Add($label); '' }
-                    elseif ((Get-Text $c.ReadStatus) -ne 'OK') { $unread.Add($label); 'containers not listed' }
-                    elseif ((Get-Number $c.PublicContainers) -gt 0) {
-                        $exposed += Get-Number $c.PublicContainers
-                        $public.Add(('{0}: {1}' -f $label, (ConvertTo-CopyText $c.PublicContainerNames)))
-                        '{0} open to anonymous read: {1}' -f (Get-Count (Get-Number $c.PublicContainers) 'container' 'containers'), (ConvertTo-CopyText $c.PublicContainerNames)
-                    }
-                    else { $closed.Add($label); 'no container open to anonymous read' }
-                    New-Resource $_.Name $_.resourceGroup $_.subscriptionId $setting $_.ResourceId })
+            $resources = @(foreach ($a in @(Get-Rows 'DP.1-DETAIL' | Where-Object { (Test-True $_.AllowBlobPublicAccess) -and (Get-Text $_.Kind) -ine 'FileStorage' })) {
+                    $c = $containers[(Get-Text $a.ResourceId).ToLowerInvariant()]
+                    $label = '{0} (resource group {1})' -f (ConvertTo-CopyText $a.Name), (ConvertTo-CopyText $a.resourceGroup)
+                    # A row without a whole number of public containers cannot show the account is safe to change.
+                    if ($null -eq $c -or (Get-Text $c.PublicContainers) -notmatch '^\d+$') { $unlisted.Add($label); continue }
+                    if ((Get-Text $c.ReadStatus) -ne 'OK') { $failed.Add($label); continue }
+                    if ((Get-Number $c.PublicContainers) -gt 0 -or (Get-Text $c.PublicContainerNames)) { $public.Add(('{0}: {1}' -f $label, (ConvertTo-CopyText $c.PublicContainerNames))); continue }
+                    $count = Get-Number $c.Containers
+                    New-Resource $a.Name $a.resourceGroup $a.subscriptionId $(if ($count -eq 1) { '1 container, private' } elseif ($count) { "$count containers, all private" } else { 'no containers' }) $a.ResourceId
+                })
+            $notes = [System.Collections.Generic.List[string]]::new()
+            if ($public.Count) {
+                $notes.Add(('{0} left out of CR-07 because {1} a container set to Blob or Container access, which anyone can read today without signing in: {2}. Turning the account setting off would stop those anonymous reads, so the owner of each container confirms first that it serves no public content and the container is set to private. A later pack picks each account up for CR-07 once every container in it is private.' -f (Get-Count $public.Count 'storage account' 'storage accounts'), (Get-Pick $public.Count 'it has' 'each has'), ($public -join ' / ')))
+            }
+            if ($unlisted.Count) {
+                $why = if ($containersRead) { 'DP.1-CONTAINERS did not list {0} containers' -f (Get-Pick $unlisted.Count 'its' 'their') }
+                elseif ($containersStatus -eq 'MISSING') { '{0} containers were not read, since DP.1-CONTAINERS was not collected' -f (Get-Pick $unlisted.Count 'its' 'their') }
+                elseif (Test-Unreadable 'DP.1-CONTAINERS') { '{0} containers were not read, since the DP.1-CONTAINERS result file is unreadable' -f (Get-Pick $unlisted.Count 'its' 'their') }
+                else { '{0} containers were not read, since DP.1-CONTAINERS reads {1}' -f (Get-Pick $unlisted.Count 'its' 'their'), $containersStatus }
+                $notes.Add(('{0} left out of CR-07 because {1}: {2}. Without the container list it cannot be shown that turning the setting off is safe, so recollect the pack.' -f (Get-Count $unlisted.Count 'storage account' 'storage accounts'), $why, ($unlisted -join ', ')))
+            }
+            if ($failed.Count) {
+                $notes.Add(('{0} left out of CR-07 because DP.1-CONTAINERS reads {1} and could not list {2} containers: {3}. Only an account whose containers were all listed can qualify, so recollect the pack.' -f (Get-Count $failed.Count 'storage account' 'storage accounts'), $containersStatus, (Get-Pick $failed.Count 'its' 'their'), ($failed -join ', ')))
+            }
             $n = $resources.Count
-            if (-not $n) { return @{ State = 'No gaps found' } }
+            if (-not $n) { return @{ State = 'No gaps found'; Notes = $notes.ToArray() } }
+            # A container can be made public between collection and the change, so each account is checked again
+            # before Save and left unchanged if any container reads Blob or Container.
             $impl = [System.Collections.Generic.List[object]]::new()
             $impl.Add((Get-OpenStep $n 'Storage accounts' 'storage account'))
+            $impl.Add('Go to Data storage > Containers and confirm the Anonymous access level of every container reads Private.')
+            $impl.Add('If any container reads Blob or Container, stop here and leave the account unchanged, and note it in the change record for the next pack.')
             $impl.Add('Go to Settings > Configuration.')
             $impl.Add('Set Allow Blob anonymous access to Disabled and select Save.')
             Add-RepeatStep $impl $n 1 'storage account'
-            $userExperience = if ($exposed) { 'Anyone who reads the public containers named in the RESOURCES section without signing in loses access, while signed-in users see no change.' }
-            elseif ($unread.Count) { 'Signed-in users see no change, and only an anonymous reader of a public container would lose access.' }
-            else { 'No change, since no listed account has a container open to anonymous access today.' }
-            $dependencies = if ($exposed) { 'Websites or applications that read the public containers anonymously need a shared access signature or another authorized path.' }
-            else { 'None expected, since only anonymous reads of a public container depend on this setting.' }
             $body = [System.Collections.Generic.List[object]]::new()
-            $body.Add(('I am planning a security hardening change that turns off anonymous read access to Azure Blob Storage on {0}. Once it is off, every request to read blob data has to be authorized, which closes a common path for unintended data exposure.' -f $(if ($n -eq 1) { 'one of your storage accounts' } else { "$n of your storage accounts" })))
-            if ($public.Count) {
-                $body.Add(('My review found {0} that anyone can read today without signing in. Any website, application or person that reads {1} anonymously will lose access when the change is applied:' -f (Get-Pick $exposed 'a container' 'containers'), (Get-Pick $exposed 'it' 'them')))
-                $body.Add($public.ToArray())
+            $body.Add(('I am planning a security hardening change that turns off anonymous access to Azure Blob Storage at the account level on {0}. Today the account setting still allows a container to be made public, and turning it off means no container in {1} can be opened to anonymous access later, by mistake or by a misconfigured deployment.' -f $(if ($n -eq 1) { 'one of your storage accounts' } else { "$n of your storage accounts" }), (Get-Pick $n 'it' 'them')))
+            $body.Add((Get-Pick $n 'The account is listed below:' 'The accounts are listed below by subscription:'))
+            foreach ($g in @($resources | Group-Object SubscriptionId | Sort-Object { Format-Subscription $_.Name })) {
+                $body.Add(('Subscription {0}:' -f (Format-Subscription $g.Name)))
+                $body.Add(@($g.Group | Sort-Object ResourceGroup, Name | ForEach-Object { '{0} (resource group {1})' -f $_.Name, $_.ResourceGroup }))
             }
-            if ($closed.Count) {
-                $body.Add($(if ($public.Count -or $unread.Count) { Get-Pick $closed.Count 'This account has no container open to anonymous access, so I do not expect the change to affect it:' 'These accounts have no container open to anonymous access, so I do not expect the change to affect them:' } else { Get-Pick $closed.Count 'The account has no container open to anonymous access today, so I do not expect any impact:' 'None of these accounts has a container open to anonymous access today, so I do not expect any impact:' }))
-                $body.Add($closed.ToArray())
-            }
-            if ($unread.Count) {
-                $body.Add((Get-Pick $unread.Count 'I could not read the container settings on this account, so please let me know if it serves public content:' 'I could not read the container settings on these accounts, so please let me know if any of them serve public content:'))
-                $body.Add($unread.ToArray())
-            }
-            $body.Add($(if ($public.Count -or $unread.Count) { 'If a container is meant to be public, please tell me which one. I can leave its account out of this change and work with you on an authorized alternative, such as a shared access signature or Azure Front Door. Otherwise, could you confirm that I can go ahead and schedule the change?' }
-                    else { 'Could you confirm that I can go ahead and schedule the change?' }))
-            @{ Used = @('DP.1-CONTAINERS'); Cr = New-ChangeRequest @{
+            $body.Add(('I do not expect this change to affect anything that uses {0} today, for these reasons:' -f (Get-Pick $n 'the account' 'these accounts')))
+            $body.Add(@(
+                    ('Every container in {0} is private today, so no one reads {1} blob data without signing in.' -f (Get-Pick $n 'the account' 'these accounts'), (Get-Pick $n 'its' 'their'))
+                    'Applications and people that sign in, or that use a shared access signature or an account key, keep working as they do now. The setting only affects requests made without any credentials.'
+                    'A static website hosted in a storage account keeps serving as it does now, since the setting does not apply to it.'
+                    (Get-Pick $n 'Just before the change, I will check the containers of the account again, and leave it unchanged if a container has been made public since my review.' 'Just before the change, I will check the containers of each account again, and skip any account where a container has been made public since my review.')))
+            $body.Add('If anything unexpected comes up, I can turn the setting back on straight away. It takes up to 30 seconds to apply, and the containers stay as they are.')
+            $body.Add('Could you confirm that I can go ahead and schedule the change?')
+            @{ Used = @('DP.1-CONTAINERS'); Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
                     Number = 7; Key = 'storage-anonymous-access'; Title = 'Disable anonymous blob access on storage accounts'
-                    Description = 'Set Allow Blob anonymous access to Disabled on {0}.' -f (Get-Listed $n 'storage account' 'storage accounts')
-                    Purpose = 'Anonymous access lets anyone read the data in a public container without signing in. Disabling it at the account level blocks every anonymous request, whatever access level a container is set to.'
-                    ResourceIntro = '{0} anonymous blob access, with the containers open to anonymous read today.' -f $(if ($n -eq 1) { 'The storage account below allows' } else { "The $n storage accounts below allow" })
+                    Description = 'Set Allow Blob anonymous access to Disabled on {0}, none of which has a container open to anonymous access.' -f (Get-Listed $n 'storage account' 'storage accounts')
+                    Purpose = 'Turning the setting off stops a container being opened to anonymous access later, by mistake or by a misconfigured deployment. No container in {0} is open to anonymous access today.' -f (Get-Pick $n 'this account' 'these accounts')
+                    ResourceIntro = '{0} anonymous blob access, with the containers listed at collection. No container in {1} is set to Blob or Container access.' -f $(if ($n -eq 1) { 'The storage account below allows' } else { "The $n storage accounts below allow" }), (Get-Pick $n 'it' 'them')
                     ResourceLines = Format-ResourceList $resources
                     Availability = 'No impact on the storage service, since authorized requests are unaffected.'
-                    UserExperience = $userExperience; Dependencies = $dependencies
+                    UserExperience = 'No change, since no container in {0} allows anonymous access and a static website hosted in a storage account is not affected by the setting.' -f (Get-Pick $n 'this account' 'these accounts')
+                    Dependencies = 'None, since access through Microsoft Entra ID, shared access signatures or account keys is unaffected.'
                     Implementation = $impl.ToArray()
                     Testing = @(
                         ('In the Azure portal, open {0} and go to Settings > Configuration.' -f (Get-EachStep $n 'storage account'))
                         'Confirm Allow Blob anonymous access shows Disabled.')
                     Rollback = @(
                         'In the Azure portal, open the storage account to revert and go to Settings > Configuration.'
-                        'Set Allow Blob anonymous access to Enabled and select Save. The container access levels are kept, so anonymous access returns as it was.')
-                    References = @(, @('Remediate anonymous read access to blob data', 'https://learn.microsoft.com/azure/storage/blobs/anonymous-read-access-prevent'))
+                        'Set Allow Blob anonymous access to Enabled and select Save. The setting takes up to 30 seconds to apply, and the containers keep their Private access level, so nothing else changes.')
+                    References = @(
+                        , @('Remediate anonymous read access to blob data', 'https://learn.microsoft.com/azure/storage/blobs/anonymous-read-access-prevent')
+                        , @('Configure anonymous read access for containers and blobs', 'https://learn.microsoft.com/azure/storage/blobs/anonymous-read-access-configure'))
                     Csv = $resources
                     Email = @{ Subject = 'Planned change: turning off anonymous access to Azure Blob Storage'; Body = $body.ToArray() }
                 } } } }

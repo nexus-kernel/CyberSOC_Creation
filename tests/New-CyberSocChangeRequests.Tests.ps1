@@ -129,7 +129,7 @@ Describe 'Change request generation' {
         $files.Count | Should -Be ($crFiles.Count + $emailFiles.Count + 2)
         $index | Should -Match '\| 05 \| Minimum TLS 1\.2 on Azure SQL servers \|  \| No gaps found \|'
         $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request and client email \| CR-06-key-vault-purge-protection\.txt, CR-06-key-vault-purge-protection\.email\.txt \|'
-        $index | Should -Match '\| 07 \| Anonymous blob access disabled on storage accounts \| 2 \| Change request and client email \|'
+        $index | Should -Match '\| 07 \| Anonymous blob access disabled on storage accounts \| 1 \| Change request and client email \|' -Because 'an account with a public container is left out'
         $index | Should -Match 'Internal\. Built .* from evidence pack full \(collector 1\.4\.0\)'
     }
 
@@ -221,16 +221,52 @@ Describe 'Change request generation' {
         $index | Should -Match '2 storage accounts that may serve NFS left out of CR-02: stnfsblob, stpremfiles\. Add each one only once it is confirmed to host no NFS share\.'
     }
 
-    It 'names the public containers in the anonymous access change and its client email' {
+    It 'turns off anonymous access only where every container was listed and none is public' {
         $text = & $read 'CR-07-storage-anonymous-access.txt'
-        $text | Should -Match 'stweb, resource group rg-web, 2 containers open to anonymous read: images \(Blob\), downloads \(Container\)'
-        $text | Should -Match 'stdata, resource group rg-data, no container open to anonymous read' -Because 'container rows match the account whatever the case of the resource ID'
+        @(Get-Section $text 'C) RESOURCES') | Should -Be @(
+            'The storage account below allows anonymous blob access, with the containers listed at collection. No container in it is set to Blob or Container access.'
+            "Subscription: Example Production ($s1)"
+            '- stdata, resource group rg-data, 4 containers, all private') -Because 'container rows match the account whatever the case of the resource ID'
+        $text | Should -Not -Match 'stweb' -Because 'an account with a public container is left out'
         $text | Should -Not -Match 'stpremfiles' -Because 'a FileStorage account holds no blob service'
-        @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Match '^Anyone who reads the public containers'
+        $text | Should -Not -Match 'stnfsblob' -Because 'an account that already blocks anonymous access needs no change'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Set Allow Blob anonymous access to Disabled on the storage account listed below, none of which has a container open to anonymous access.'
+        @(Get-Section $text 'B) PURPOSE')[0] | Should -Be 'Turning the setting off stops a container being opened to anonymous access later, by mistake or by a misconfigured deployment. No container in this account is open to anonymous access today.'
+        @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Be 'No change, since no container in this account allows anonymous access and a static website hosted in a storage account is not affected by the setting.'
+        @(Get-Section $text 'C) DEPENDENCIES')[0] | Should -Be 'None, since access through Microsoft Entra ID, shared access signatures or account keys is unaffected.'
+        (Get-Section $text 'E) MITIGATION') -join '|' | Should -Be 'If changes need to be reverted, follow the rollback plan.'
+        @(Get-Section $text 'A) IMPLEMENTATION PLAN') | Should -Be @(
+            '1. In the Azure portal, go to Storage accounts and open the storage account listed in the RESOURCES section.'
+            '2. Go to Data storage > Containers and confirm the Anonymous access level of every container reads Private.'
+            '3. If any container reads Blob or Container, stop here and leave the account unchanged, and note it in the change record for the next pack.'
+            '4. Go to Settings > Configuration.'
+            '5. Set Allow Blob anonymous access to Disabled and select Save.') -Because 'the containers are checked again at change time, before Save'
+        @(Get-Section $text 'B) TESTING PLAN') | Should -Be @(
+            '1. In the Azure portal, open the storage account listed in the RESOURCES section and go to Settings > Configuration.'
+            '2. Confirm Allow Blob anonymous access shows Disabled.')
+        @(Get-Section $text 'C) ROLLBACK PLAN') | Should -Be @(
+            '1. In the Azure portal, open the storage account to revert and go to Settings > Configuration.'
+            '2. Set Allow Blob anonymous access to Enabled and select Save. The setting takes up to 30 seconds to apply, and the containers keep their Private access level, so nothing else changes.')
+        $text | Should -Match '- Configure anonymous read access for containers and blobs: https://learn\.microsoft\.com/azure/storage/blobs/anonymous-read-access-configure'
+        $text | Should -Not -Match '(?i)lose access|loses access'
+        @($csv | Where-Object CR -eq 'CR-07' | ForEach-Object { '{0}|{1}' -f $_.Resource, $_.CurrentSetting }) | Should -Be @('stdata|4 containers, all private')
+        $index | Should -Match ([regex]::Escape('- 1 storage account left out of CR-07 because it has a container set to Blob or Container access, which anyone can read today without signing in: stweb (resource group rg-web): images (Blob), downloads (Container). Turning the account setting off would stop those anonymous reads, so the owner of each container confirms first that it serves no public content and the container is set to private. A later pack picks each account up for CR-07 once every container in it is private.'))
+    }
+
+    It 'writes the anonymous access email as a no-risk notice with the fallback' {
         $email = & $read 'CR-07-storage-anonymous-access.email.txt'
         $email | Should -Match '^Subject: Planned change: turning off anonymous access to Azure Blob Storage\r?\n\r?\nHello Dana,'
-        $email | Should -Match '- stweb \(resource group rg-web\): images \(Blob\), downloads \(Container\)'
-        $email | Should -Match 'This account has no container open to anonymous access, so I do not expect the change to affect it:\r?\n\r?\n- stdata \(resource group rg-data\)'
+        $email | Should -Match '\bI am planning a security hardening change that turns off anonymous access to Azure Blob Storage at the account level on one of your storage accounts\.'
+        $email | Should -Match 'no container in it can be opened to anonymous access later, by mistake or by a misconfigured deployment\.'
+        $email | Should -Match "The account is listed below:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- stdata \(resource group rg-data\)\r?\n"
+        $email | Should -Match 'I do not expect this change to affect anything that uses the account today, for these reasons:'
+        $email | Should -Match '- Every container in the account is private today, so no one reads its blob data without signing in\.'
+        $email | Should -Match '- A static website hosted in a storage account keeps serving as it does now, since the setting does not apply to it\.' -Because 'the static website container stays public whatever the account setting'
+        $email | Should -Match '- Applications and people that sign in, or that use a shared access signature or an account key, keep working as they do now\.'
+        $email | Should -Match '- Just before the change, I will check the containers of the account again, and leave it unchanged if a container has been made public since my review\.'
+        $email | Should -Match 'If anything unexpected comes up, I can turn the setting back on straight away\. It takes up to 30 seconds to apply, and the containers stay as they are\.'
+        $email | Should -Match 'Could you confirm that I can go ahead and schedule the change\?'
+        $email | Should -Not -Match '(?i)lose access|loses access|stweb|images|downloads' -Because 'the email lists only the accounts in the change'
         $email | Should -Match 'Thank you,\r?\nScott Example\r?\n$'
     }
 
@@ -876,10 +912,78 @@ Describe 'Change request variants' {
         $index | Should -Match '\| 04 \| .* \| Result file unreadable \(NB\.5-DETAIL\), recollect or restore the pack \|'
         $index | Should -Match '\| 06 \| .* \| Result file unreadable \(DP\.2-DETAIL\), recollect or restore the pack \|'
         $index | Should -Match '\| 08 \| .* \| Result file unreadable \(NB\.4-DETAIL\), recollect or restore the pack \|'
-        $index | Should -Match 'CR-07 was written without DP\.1-CONTAINERS, whose result file is unreadable\.'
+        Test-Path (Join-Path $out 'CR-07-storage-anonymous-access.txt') | Should -BeFalse -Because 'without the container list no account can be shown safe to change'
+        Test-Path (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') | Should -BeFalse
+        $index | Should -Match '\| 07 \| Anonymous blob access disabled on storage accounts \|  \| No gaps found \|  \|'
+        $index | Should -Match ([regex]::Escape('- 2 storage accounts left out of CR-07 because their containers were not read, since the DP.1-CONTAINERS result file is unreadable: stdata (resource group rg-data), stweb (resource group rg-web). Without the container list it cannot be shown that turning the setting off is safe, so recollect the pack.'))
+    }
+
+    It 'leaves out of the anonymous access change every account whose containers were not all listed' {
+        $pack = Join-Path $TestDrive 'containers'
+        New-ChangeFixture $pack
+        $sa = { param($name, $rg, $sub) "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Storage/storageAccounts/$name" }
+        $account = { param($name, $rg, $sub, $allow = $true, $kind = 'StorageV2') @{ Name = $name; ResourceId = (& $sa $name $rg $sub); Kind = $kind; resourceGroup = $rg; subscriptionId = $sub; SecureTransfer = $true; MinimumTlsVersion = 'TLS1_2'; AllowBlobPublicAccess = $allow; NfsV3 = $false } }
+        $listed = { param($name, $rg, $sub, $count, $public = 0, $names = '', $status = 'OK') @{ Account = $name; ResourceId = (& $sa $name $rg $sub); Containers = $count; PublicContainers = $public; ExposedContainers = $public; PublicContainerNames = $names; ReadStatus = $status } }
+        Set-PackResult $pack 'DP.1-DETAIL' @(
+            (& $account 'stclosed' 'rg-data' $s1)
+            (& $account 'stempty' 'rg-data' $s2)
+            (& $account 'stone' 'rg-app' $s2)
+            (& $account 'stpublic' 'rg-web' $s1)
+            (& $account 'stmissing' 'rg-data' $s1)
+            (& $account 'stdenied' 'rg-data' $s2)
+            (& $account 'stblocked' 'rg-data' $s1 $false)
+            (& $account 'stfiles' 'rg-files' $s2 $true 'FileStorage'))
+        Set-PackResult $pack 'DP.1-CONTAINERS' @(
+            (& $listed 'stclosed' 'rg-data' $s1 6)
+            (& $listed 'stempty' 'rg-data' $s2 0)
+            (& $listed 'stone' 'rg-app' $s2 1)
+            (& $listed 'stpublic' 'rg-web' $s1 3 1 'assets (Container)')
+            (& $listed 'stdenied' 'rg-data' $s2 0 0 '' 'HTTP 403: Forbidden')
+            (& $listed 'stblocked' 'rg-data' $s1 2)) 'PARTIAL'
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 07 \| Anonymous blob access disabled on storage accounts \| 3 \| Change request and client email, partial collection scope \|'
+        $text = Get-Content (Join-Path $out 'CR-07-storage-anonymous-access.txt') -Raw
+        @(Get-Section $text 'C) RESOURCES') | Should -Be @(
+            'The 3 storage accounts below allow anonymous blob access, with the containers listed at collection. No container in them is set to Blob or Container access.'
+            "Subscription: Example Production ($s1)"
+            '- stclosed, resource group rg-data, 6 containers, all private'
+            "Subscription: Example, Dev Test ($s2)"
+            '- stone, resource group rg-app, 1 container, private'
+            '- stempty, resource group rg-data, no containers')
+        $text | Should -Match '6\. Repeat steps 1 to 5 for each remaining storage account listed\.' -Because 'the change-time check repeats for every account'
+        @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Be 'No change, since no container in these accounts allows anonymous access and a static website hosted in a storage account is not affected by the setting.'
+        $text | Should -Not -Match 'stpublic|stmissing|stdenied|stblocked|stfiles'
         $email = Get-Content (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') -Raw
-        $email | Should -Match 'I could not read the container settings on these accounts' -Because 'without the container list no account is presented as closed'
-        $email | Should -Not -Match 'no container open'
+        $email | Should -Match 'at the account level on 3 of your storage accounts\.'
+        $email | Should -Match "The accounts are listed below by subscription:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- stclosed \(resource group rg-data\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- stone \(resource group rg-app\)\r?\n- stempty \(resource group rg-data\)"
+        $email | Should -Match '- Every container in these accounts is private today, so no one reads their blob data without signing in\.'
+        $email | Should -Match '- Just before the change, I will check the containers of each account again, and skip any account where a container has been made public since my review\.'
+        $email | Should -Match 'I can turn the setting back on straight away'
+        $email | Should -Not -Match '(?i)lose access|loses access|stpublic|stmissing|stdenied|could not read'
+        @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-07' | ForEach-Object Resource) | Should -Be @('stclosed', 'stempty', 'stone')
+        $index | Should -Match ([regex]::Escape('- 1 storage account left out of CR-07 because it has a container set to Blob or Container access, which anyone can read today without signing in: stpublic (resource group rg-web): assets (Container).'))
+        $index | Should -Match ([regex]::Escape('- 1 storage account left out of CR-07 because DP.1-CONTAINERS did not list its containers: stmissing (resource group rg-data). Without the container list it cannot be shown that turning the setting off is safe, so recollect the pack.'))
+        $index | Should -Match ([regex]::Escape('- 1 storage account left out of CR-07 because DP.1-CONTAINERS reads PARTIAL and could not list its containers: stdenied (resource group rg-data). Only an account whose containers were all listed can qualify, so recollect the pack.'))
+        $index | Should -Not -Match 'stblocked|stfiles' -Because 'an account that blocks anonymous access, or holds no blob service, is not a gap'
+    }
+
+    It 'reads No gaps found when no account qualifies, and still names the accounts left out' {
+        $pack = Join-Path $TestDrive 'containers-none'
+        New-ChangeFixture $pack
+        $sa = { param($name, $rg, $sub) "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Storage/storageAccounts/$name" }
+        Set-PackResult $pack 'DP.1-CONTAINERS' @(
+            @{ Account = 'stdata'; ResourceId = (& $sa 'stdata' 'rg-data' $s1); Containers = 2; PublicContainers = 1; ExposedContainers = 1; PublicContainerNames = 'exports (Blob)'; ReadStatus = 'OK' }
+            @{ Account = 'stweb'; ResourceId = (& $sa 'stweb' 'rg-web' $s1); Containers = 3; PublicContainers = 2; ExposedContainers = 2; PublicContainerNames = 'images (Blob), downloads (Container)'; ReadStatus = 'OK' })
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        Test-Path (Join-Path $out 'CR-07-storage-anonymous-access.txt') | Should -BeFalse
+        Test-Path (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') | Should -BeFalse
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 07 \| Anonymous blob access disabled on storage accounts \|  \| No gaps found \|  \|'
+        $index | Should -Match ([regex]::Escape('- 2 storage accounts left out of CR-07 because each has a container set to Blob or Container access, which anyone can read today without signing in: stdata (resource group rg-data): exports (Blob) / stweb (resource group rg-web): images (Blob), downloads (Container).'))
+        @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-07').Count | Should -Be 0
     }
 
     It 'cleans every character the copy check rejects from pack values instead of stopping' {
@@ -901,7 +1005,8 @@ Describe 'Change request variants' {
         Set-PackResult $pack 'DP.4-VMSS-ELIGIBILITY' @() 'FAILED'
         $null = & $generator -EvidencePath $pack
         $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
-        $index | Should -Match 'CR-07 was written without DP\.1-CONTAINERS, which reads FAILED\.'
+        $index | Should -Match ([regex]::Escape('- 2 storage accounts left out of CR-07 because their containers were not read, since DP.1-CONTAINERS reads FAILED: stdata (resource group rg-data), stweb (resource group rg-web).'))
+        $index | Should -Match '\| 07 \| Anonymous blob access disabled on storage accounts \|  \| No gaps found \|'
         $index | Should -Match 'CR-09 was written without DP\.4-VMSS-ELIGIBILITY, which reads FAILED\.'
         $index | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \|  \| Not collected \(DP\.4-VMSS-ELIGIBILITY FAILED\) \|'
         $text = Get-Content (Join-Path $pack '05-change-requests/CR-09-encryption-at-host.txt') -Raw
