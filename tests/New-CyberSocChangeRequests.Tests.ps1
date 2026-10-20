@@ -712,17 +712,20 @@ Describe 'Change request generation' {
         $impl[0] | Should -Match '^1\. Where the client agreed just-in-time VM access, in the Azure portal go to Microsoft Defender for Cloud > Workload protections > Just-in-time VM access, select the Not configured tab, .*select Enable JIT on VMs, keep the ports it proposes and select Save\. The rules listed keep priority over its deny rules until they are removed below\.$' -Because 'the replacement path is in place before a rule is removed'
         $impl[1] | Should -Match '^2\. Where the client agreed Azure Bastion, go to the virtual network of the machines behind each rule and select Connect > Bastion\.'
         $impl[2] | Should -Be '3. Where Azure Bastion is the path, open each network security group on the subnet or network interface of the machines behind each rule and go to Settings > Inbound security rules. Unless a rule already allows ports 22 and 3389 from the AzureBastionSubnet address range ahead of every deny rule for those ports, select + Add and add one with Source set to IP Addresses and that range, at a lower priority number than those deny rules. Then open a Bastion session to one machine behind each rule from its Connect > Bastion page, and if it does not open, stop here and leave every rule listed unchanged.' -Because 'a deny rule behind the public allow would otherwise block Bastion too once the allow goes'
-        $impl | Should -Contain '6. If the source of the rule is Any, 0.0.0.0/0 or ::/0, which also matches private addresses, select + Add and add an allow rule with the protocol and destination of the rule, Destination port ranges set to the management ports it lists, Source set to Service Tag and VirtualNetwork, and a free priority number lower than any deny rule for those ports, then select Add. This keeps connections from the virtual network, peered networks and connected on-premises networks working. Leave this rule out only where the client confirmed nothing connects from those networks.' -Because 'nsg-jump allows any address, which includes private networks a deny rule behind it would cut off'
+        $impl | Should -Contain '6. If the source of the rule is Any, 0.0.0.0/0 or ::/0, which also matches private addresses, select + Add and add an allow rule with the protocol and destination of the rule, Destination port ranges set to the management ports it lists, Source set to IP Addresses with the private ranges the client confirmed, the address spaces of the virtual networks, peered virtual networks and on-premises networks that connect to the machines, and a free priority number lower than any deny rule for those ports, then select Add. Enter each range as a CIDR block, never a service tag, Any, 0.0.0.0/0 or ::/0, and check that each is a private range or one the client owns. Leave this rule out only where the client confirmed nothing connects from those networks. If the client has confirmed neither the ranges nor that nothing connects, leave the rule unchanged and note it in the change record.' -Because 'nsg-jump allows any address, which includes private networks a deny rule behind it would cut off, and a service tag for the virtual network can hold 0.0.0.0/0'
         $impl | Should -Contain '7. If the client named source addresses that still need direct access and the rule allows only ports 22, 3389, 5985 or 5986, select the rule, set Source to IP Addresses, enter those addresses in Source IP addresses/CIDR ranges and select Save.'
         $impl | Should -Contain '8. If the client named such addresses and the rule also allows other ports, select + Add and add an allow rule with the protocol and destination of the rule, Destination port ranges set to the management ports it lists, Source set to IP Addresses with those addresses, and a free priority number lower than any deny rule for those ports, including one just-in-time VM access added, then select Add. Have the client confirm a connection from one of those addresses before going on. Then select the original rule, remove 22, 3389, 5985 and 5986 from Destination port ranges and select Save, so its other ports keep the source they have.' -Because 'narrowing the whole rule would narrow 443 too'
         $impl | Should -Contain '9. If the client named no addresses, select the rule. If it allows only ports 22, 3389, 5985 or 5986, select Delete and then Yes. If it also allows other ports, remove 22, 3389, 5985 and 5986 from Destination port ranges and select Save.'
-        $impl[-1] | Should -Be '10. Repeat steps 4 to 9 for each remaining rule listed.'
+        $impl | Should -Contain '10. Repeat steps 4 to 9 for each remaining rule listed.'
+        $impl[-1] | Should -Match '^11\. For each network interface the rules applied to, directly or through its subnet, go to Virtual machines, open the machine it belongs to, select Networking, select the network interface and select Effective security rules under Help\. .* If any lists 0\.0\.0\.0/0 or ::/0, or prefixes that together span the internet such as 0\.0\.0\.0/1 and 128\.0\.0\.0/1, the ports are still open to the internet\. Then open the network security group of that network interface or its subnet, select \+ Add and add a deny rule with protocol Any, Source set to Service Tag and Internet, Destination port ranges set to 22, 3389, 5985 and 5986, and a free priority number lower than that allow rule and higher than every other allow rule for those ports' -Because 'another allow, such as the default rule for the virtual network behind a 0.0.0.0/0 route, can still let the internet in'
         $impl | Should -Contain '5. Go to Settings > Inbound security rules and find the rule. If its priority, access, direction, protocol, source, ports or destination no longer read as listed, or the group is no longer attached to what is listed, leave it unchanged and note it in the change record for the next pack.' -Because 'a rule changed since collection, such as TCP 22 turned into UDP 22, is no longer the one checked'
-        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'Any rule added for the VirtualNetwork service tag allows only the management ports\.'
+        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'Any rule added for the private ranges allows only the management ports, from the ranges the client confirmed\.'
+        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'select Networking, select the network interface and select Effective security rules under Help\. .* confirm none of its source prefixes is 0\.0\.0\.0/0 or ::/0, that its prefixes do not together span the internet, and that any other public address is one the client named or already allowed, apart from the Azure platform address 168\.63\.129\.16, so no internet source reaches those ports\.' -Because 'the listed rules alone do not show what the effective rules still let in'
+        $text | Should -Not -Match 'VirtualNetwork' -Because 'the service tag for the virtual network can hold 0.0.0.0/0 behind a user-defined route'
         (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'no other rule allows those ports over TCP from Any, Internet, 0\.0\.0\.0/0 or ::/0'
         $rollback = @(Get-Section $text 'C) ROLLBACK PLAN')
         $rollback[1] | Should -Match 'For a rule that was deleted, select \+ Add, enter the name, priority, source, source port ranges, destination, destination port ranges, protocol, action Allow and description recorded for it in the RESOURCES section and in change-requests\.csv'
-        $rollback | Should -Contain '4. Delete any rule this change added for the named addresses or the VirtualNetwork service tag, and the rule added for the AzureBastionSubnet address range if Azure Bastion is no longer wanted.'
+        $rollback | Should -Contain '4. Delete the rules this change added: any for the named addresses or the private ranges, any deny on the management ports from the Internet service tag, and the rule for the AzureBastionSubnet address range if Azure Bastion is no longer wanted.'
         $rollback[-1] | Should -Match 'If just-in-time VM access added a deny rule for the same ports at a lower priority number than the restored rule, give the restored rule a priority number below it'
         @(Get-Section $text 'E) MITIGATION') -join '|' | Should -Be 'If changes need to be reverted, follow the rollback plan.'
         $index | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \| 2 \| Change request and client email \| CR-16-management-ports\.txt, CR-16-management-ports\.email\.txt \|'
@@ -743,13 +746,14 @@ Describe 'Change request generation' {
         $email | Should -Match 'I would like your approval to close the 2 network security group rules that let anyone on the internet reach RDP, SSH or WinRM, the remote management ports, on your Azure virtual machines\. In their place, administrators would connect through just-in-time VM access or Azure Bastion\.'
         $email | Should -Match 'A connection that is already open stays up, because a rule change applies only to new connections\.'
         $email | Should -Match 'Where a rule also allows other ports, only 22, 3389, 5985 and 5986 are removed from it, and its other ports stay as they are\.' -Because 'nsg-jump also allows 443'
-        $email | Should -Match 'Connections from your own networks, such as a VPN, a peered virtual network or an office linked to Azure over a private connection, keep working\. One of the rules is open to every address, which includes those networks, so I will keep that private access in a rule of its own unless you tell me nobody uses it\.' -Because 'nsg-jump allows any address'
+        $email | Should -Match 'Connections from your own networks, such as a VPN, a peered virtual network or an office linked to Azure over a private connection, can keep working\. One of the rules is open to every address, which includes those networks, so I will keep that private access in a rule of its own, built only from the address ranges of those networks that you confirm, unless you tell me nobody uses it\.' -Because 'nsg-jump allows any address'
         $email | Should -Match "- Just-in-time VM access keeps the ports closed .* It is part of Microsoft Defender for Servers Plan 2\. Plan 2 is on in subscription Example Production \($s1\), and not on in subscription Example, Dev Test \($s2\), where this path would add the cost of Plan 2 for the servers\.\r?\n- Azure Bastion lets administrators connect from the Azure portal over an encrypted connection on port 443"
         $email | Should -Match 'It is billed by the hour from the moment it is deployed in a virtual network, and its free Developer tier is meant for development and test only\.'
         $email | Should -Match 'I suggest just-in-time VM access where Plan 2 is on and Azure Bastion elsewhere'
         $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- Allow-RDP in network security group nsg-web \(resource group rg-web, priority 300, TCP port 3389 from Internet, on subnet snet-web of virtual network vnet-app\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- Allow-SSH-HTTPS in network security group nsg-jump \(resource group rg-ops, priority 310, TCP ports 22 and 443 from any address, on network interface nic-jump01 of virtual machine vm-jump01\)"
         $email | Should -Match '\r?\n\r?\nIf anything unexpected comes up, I can recreate any of the rules exactly as they are today, since every setting of each rule is recorded\.'
-        $email | Should -Match '\r?\n\r?\nCould you tell me who still needs RDP, SSH or WinRM to these machines from the internet, and from which addresses, and which replacement you would like, just-in-time VM access or Azure Bastion\? With that agreed, could you approve this change for \w+day, [^?]+\? Please reply by '
+        $email | Should -Match '\r?\n\r?\nCould you tell me who still needs RDP, SSH or WinRM to these machines from the internet, and from which addresses, and which replacement you would like, just-in-time VM access or Azure Bastion\? Could you also send me the address ranges of the virtual networks, peered networks and on-premises networks that connect to these machines, or tell me that nothing connects from them\? With that agreed, could you approve this change for \w+day, [^?]+\? Please reply by '
+        $email | Should -Not -Match 'VirtualNetwork|cannot replace WinRM' -Because 'no rule listed opens WinRM'
         $email | Should -Match 'Where someone still needs direct access, I can keep the management ports open to their named addresses only, and any other port a rule allows keeps the access it has today\.'
         foreach ($left in 'nsg-fw-untrust', 'nsg-hub-untrust', 'nsg-old', 'Allow-HighPorts', 'Allow-Any') { $email | Should -Not -Match $left -Because "$left is not in the change" }
     }
@@ -1273,7 +1277,77 @@ Describe 'Change request variants' {
         Set-PackResult $pack 'NB.2-DETAIL' @((& $row 'Allow-RDP-Internet' 'Tcp' 'Internet' '3389'))
         $null = & $generator -EvidencePath $pack
         Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw | Should -Not -Match 'VirtualNetwork' -Because 'the Internet service tag holds no private addresses, so nothing private needs a rule of its own'
-        Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw | Should -Not -Match 'your own networks'
+        Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw | Should -Not -Match 'your own networks|address ranges of the virtual networks' -Because 'no private ranges are needed for an Internet-only source'
+    }
+
+    It 'keeps WinRM off Azure Bastion, builds the private access rule from confirmed ranges and checks the effective security rules' {
+        $pack = Join-Path $TestDrive 'mgmt-winrm'
+        New-ChangeFixture $pack
+        $row = { param($name, $group, $sub, $source, [string[]]$ports, $association, $attached)
+            $id = "/subscriptions/$sub/resourceGroups/rg-win/providers/Microsoft.Network/networkSecurityGroups/$group"
+            @{ subscriptionId = $sub; resourceGroup = 'rg-win'; NSG = $group; NsgId = $id; RuleName = $name; RuleId = "$id/securityRules/$name"; Priority = 200; Direction = 'Inbound'; Access = 'Allow'; Protocol = 'Tcp'
+                SourcePrefixes = @($source); SourcePorts = @('*'); DestinationPrefixes = @('*'); DestinationAsgs = @(); DestinationPorts = $ports; Description = ''; Association = $association; RangeNeedsReview = $false
+                Subnets = @(if ($association -eq 'Subnet') { $attached }); Nics = @(if ($association -eq 'NIC') { $attached }); NicVms = @(); ApplianceNicIds = @(); ApplianceSubnetIds = @() } }
+        $subnet = @{ id = "/subscriptions/$s1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-ops/subnets/snet-mgmt" }
+        $nic = @{ id = "/subscriptions/$s2/resourceGroups/rg-win/providers/Microsoft.Network/networkInterfaces/nic-win01" }
+        # A WinRM-only rule where Plan 2 is on, a mixed RDP and WinRM rule open to 0.0.0.0/0 and an SSH rule open to
+        # ::/0 where Plan 2 is off, so Azure Bastion is suggested there and both broad rules need private access.
+        Set-PackResult $pack 'NB.2-DETAIL' @(
+            (& $row 'Allow-WinRM' 'nsg-mgmt' $s1 'Internet' @('5985', '5986') 'Subnet' $subnet)
+            (& $row 'Allow-RDP-WinRM' 'nsg-win' $s2 '0.0.0.0/0' @('3389', '5986') 'NIC' $nic)
+            (& $row 'Allow-SSH-v6' 'nsg-win' $s2 '::/0' @('22') 'NIC' $nic))
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $text = Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw
+        $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        foreach ($rule in 'nsg-mgmt/Allow-WinRM', 'nsg-win/Allow-RDP-WinRM', 'nsg-win/Allow-SSH-v6') { $text | Should -Match ([regex]::Escape("- $rule,")) }
+
+        # Azure Bastion provides RDP and SSH sessions only, so it is never offered for WinRM.
+        foreach ($doc in $text, $email) {
+            $sentences = @($doc -split '(?<=[.?:])\s+' | Where-Object { $_ -match 'Bastion' -and $_ -match 'WinRM|5985|5986' })
+            $sentences.Count | Should -BeGreaterThan 0
+            foreach ($s in $sentences) { $s | Should -Match 'never|cannot|does not provide|RDP and SSH|just-in-time VM access or|named source addresses' -Because "a sentence that names Bastion with WinRM must keep WinRM off it: $s" }
+        }
+        $text | Should -Match "- Example, Dev Test \($s2\): not on, so Azure Bastion is the path for RDP and SSH and named source addresses for WinRM, unless the client turns Plan 2 on"
+        $text | Should -Match "- Example Production \($s1\): on, so just-in-time VM access is the path"
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $impl[1] | Should -Match 'Azure Bastion provides RDP and SSH sessions only, so it never replaces WinRM on 5985 or 5986\.$'
+        $impl[2] | Should -Match 'Unless a rule already allows ports 22 and 3389 from the AzureBastionSubnet address range' -Because 'the Bastion rule never opens 5985 or 5986'
+        $impl[2] | Should -Not -Match '5985|5986'
+        $impl[3] | Should -Be '4. A rule that opens 5985 or 5986 keeps WinRM only through just-in-time VM access or the source addresses the client named for WinRM, never through Azure Bastion. Where the client still needs WinRM to the machines behind such a rule and neither is agreed, leave the rule unchanged and note it in the change record.'
+        $impl | Should -Contain '11. Repeat steps 5 to 10 for each remaining rule listed.'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match 'in their place, with WinRM through just-in-time VM access or named source addresses only\.$'
+        $text | Should -Match 'Administrators who connect straight from the internet over RDP, SSH or WinRM move to just-in-time VM access or Azure Bastion, as agreed with the client, and remote PowerShell over WinRM to just-in-time VM access or named source addresses, since Azure Bastion does not provide WinRM\.'
+        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'Where a rule opened 5985 or 5986 and WinRM is still needed, have the client confirm a WinRM connection to one machine behind it, through an approved just-in-time request or from a named address\.'
+        ($testing = (Get-Section $text 'B) TESTING PLAN') -join "`n") | Should -Not -Match '\baz |Get-Az|Cloud Shell|PowerShell|curl' -Because 'the testing plan stays in the portal'
+        $text | Should -Match ([regex]::Escape('What is Azure Bastion: https://learn.microsoft.com/azure/bastion/bastion-overview'))
+
+        # The private access rule names the ranges the client confirms, never the service tag for the virtual network.
+        foreach ($doc in $text, $email, $index) { $doc | Should -Not -Match 'VirtualNetwork' -Because 'the service tag for the virtual network can hold 0.0.0.0/0 behind a user-defined route' }
+        @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-16' | Where-Object { $_.CurrentSetting -match 'VirtualNetwork' }).Count | Should -Be 0
+        $private = @($impl | Where-Object { $_ -match 'which also matches private addresses' })
+        $private.Count | Should -Be 1
+        $private[0] | Should -Match 'Source set to IP Addresses with the private ranges the client confirmed, the address spaces of the virtual networks, peered virtual networks and on-premises networks that connect to the machines'
+        $private[0] | Should -Match 'never a service tag, Any, 0\.0\.0\.0/0 or ::/0'
+        $private[0] | Should -Match 'If the client has confirmed neither the ranges nor that nothing connects, leave the rule unchanged'
+        $text | Should -Match 'and for a rule open to every address, the private ranges the client confirmed or its word that nothing connects from its own networks\.'
+        $email | Should -Match 'Some of the rules are open to every address, which includes those networks, so I will keep that private access in a rule of its own, built only from the address ranges of those networks that you confirm, unless you tell me nobody uses it\.'
+        $email | Should -Match 'Could you also send me the address ranges of the virtual networks, peered networks and on-premises networks that connect to these machines, or tell me that nothing connects from them\?'
+
+        # The testing step reads the effective security rules of a network interface, not only the rules listed.
+        $testing = (Get-Section $text 'B) TESTING PLAN') -join "`n"
+        $testing | Should -Match 'For each network interface the rules applied to, directly or through its subnet, go to Virtual machines, open the machine it belongs to, select Networking, select the network interface and select Effective security rules under Help\.'
+        $testing | Should -Match 'Select each inbound allow rule that covers 22, 3389, 5985 or 5986 and sits ahead of every deny rule for those ports from any source, and confirm none of its source prefixes is 0\.0\.0\.0/0 or ::/0, that its prefixes do not together span the internet'
+        $text | Should -Match ([regex]::Escape('View effective security rules of a network interface: https://learn.microsoft.com/azure/virtual-network/virtual-network-network-interface#view-effective-security-rules'))
+
+        # The email asks for approval, keeps WinRM off Bastion and keeps the copy rules.
+        Assert-ApprovalEmail $email 'CR-16 with WinRM'
+        $email | Should -Match 'In their place, administrators would connect through just-in-time VM access or Azure Bastion, and remote PowerShell over WinRM through just-in-time VM access or from addresses you name\.'
+        $email | Should -Match 'It provides RDP and SSH sessions only, so it cannot replace WinRM, which remote PowerShell uses\.'
+        $email | Should -Match 'I suggest just-in-time VM access where Plan 2 is on and Azure Bastion elsewhere, unless you would rather turn Plan 2 on there\. Azure Bastion does not provide WinRM, so remote PowerShell would continue through just-in-time VM access or only from addresses you name\.'
+        $email | Should -Match 'and which replacement you would like, just-in-time VM access or Azure Bastion for RDP and SSH\?'
+        $email | Should -Not -Match '[;>]|->|=>|<-'
     }
 
     It 'writes no management port change when only rules for cleanup or review remain, and no gaps when NB.2-DETAIL is empty' {

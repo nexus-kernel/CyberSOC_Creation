@@ -83,7 +83,9 @@ missing evidence never becomes a favorable zero.
    `-PurgeProtectionApproved` when the client approved purge protection at build kickoff: its email then refers to
    that approval and asks the client to confirm it still stands and to approve the proposed date, and the index
    records it. The management port email asks who still needs RDP, SSH or WinRM from the internet and which replacement
-   the client wants, just-in-time VM access (which needs Defender for Servers Plan 2) or Azure Bastion, and the index
+   the client wants, just-in-time VM access (which needs Defender for Servers Plan 2) or Azure Bastion for RDP and SSH
+   (WinRM continues through just-in-time access or named addresses, since Bastion does not provide it), asks for the
+   private ranges that connect where a rule is open to every address, and the index
    names the rules left out: appliance untrust interfaces, groups attached to nothing (a cleanup item) and `*` or port
    range rules (for review). AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
