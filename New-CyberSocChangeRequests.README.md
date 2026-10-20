@@ -75,7 +75,9 @@ Resources a change leaves out are named in the index notes:
   - an account with a container set to Blob or Container access, named with its public containers. Turning the
     setting off would stop those anonymous reads, so CR-18 asks each container's owner to confirm first that it serves
     no public content, and sets the container to private. A later pack picks the account up for CR-07 once every
-    container in it is private.
+    container in it is private. CR-18 never changes the static website container (`$web`), so the note says so when one
+    of these accounts also has a public `$web`, and an account whose only public container is `$web` gets a note of its
+    own: `$web` is set to Private on its own, as the CR-18 notes say, before the account can reach CR-07.
   - an account whose containers were not listed, because DP.1-CONTAINERS has no row for it or was not collected,
     failed or is unreadable. Recollect the pack.
   - an account whose containers DP.1-CONTAINERS could not list when it reads PARTIAL (a `ReadStatus` other than OK).

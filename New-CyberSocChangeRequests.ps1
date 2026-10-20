@@ -878,6 +878,9 @@ $catalog = @(
             $containers = @{}
             if ($containersRead) { foreach ($c in @(Get-Rows 'DP.1-CONTAINERS')) { $containers[(Get-Text $c.ResourceId).ToLowerInvariant()] = $c } }
             $public = [System.Collections.Generic.List[string]]::new()
+            # CR-18 leaves the static website container ($web) out, so an account whose only public container is
+            # $web gets a note of its own pointing to the separate change the CR-18 notes describe.
+            $webOnly = [System.Collections.Generic.List[string]]::new()
             $unlisted = [System.Collections.Generic.List[string]]::new()
             $failed = [System.Collections.Generic.List[string]]::new()
             # A FileStorage account holds no blob service, so the setting does not apply to it.
@@ -887,13 +890,21 @@ $catalog = @(
                     # A row without a whole number of public containers cannot show the account is safe to change.
                     if ($null -eq $c -or (Get-Text $c.PublicContainers) -notmatch '^\d+$') { $unlisted.Add($label); continue }
                     if ((Get-Text $c.ReadStatus) -ne 'OK') { $failed.Add($label); continue }
-                    if ((Get-Number $c.PublicContainers) -gt 0 -or (Get-Text $c.PublicContainerNames)) { $public.Add(('{0}: {1}' -f $label, (ConvertTo-CopyText $c.PublicContainerNames))); continue }
+                    if ((Get-Number $c.PublicContainers) -gt 0 -or (Get-Text $c.PublicContainerNames)) {
+                        $names = ConvertTo-CopyText $c.PublicContainerNames
+                        if ((Get-Number $c.PublicContainers) -le 1 -and $names -match '^\$web \((Blob|Container)\)$') { $webOnly.Add(('{0}: {1}' -f $label, $names)) }
+                        else { $public.Add(('{0}: {1}' -f $label, $names)) }
+                        continue
+                    }
                     $count = Get-Number $c.Containers
                     New-Resource $a.Name $a.resourceGroup $a.subscriptionId $(if ($count -eq 1) { '1 container, private' } elseif ($count) { "$count containers, all private" } else { 'no containers' }) $a.ResourceId
                 })
             $notes = [System.Collections.Generic.List[string]]::new()
             if ($public.Count) {
-                $notes.Add(('{0} left out of CR-07 because {1} a container set to Blob or Container access, which anyone can read today without signing in: {2}. Turning the account setting off would stop those anonymous reads, so CR-18 asks the owner of each container to confirm first that it serves no public content, and sets the container to private. A later pack picks each account up for CR-07 once every container in it is private.' -f (Get-Count $public.Count 'storage account' 'storage accounts'), (Get-Pick $public.Count 'it has' 'each has'), ($public -join ' / ')))
+                $notes.Add(('{0} left out of CR-07 because {1} a container set to Blob or Container access, which anyone can read today without signing in: {2}. Turning the account setting off would stop those anonymous reads, so CR-18 asks the owner of each container to confirm first that it serves no public content, and sets the container to private.{3} A later pack picks each account up for CR-07 once every container in it is private.' -f (Get-Count $public.Count 'storage account' 'storage accounts'), (Get-Pick $public.Count 'it has' 'each has'), ($public -join ' / '), $(if (@($public | Where-Object { $_ -match '\$web \(' }).Count) { ' CR-18 leaves out the static website container ($web), which is set to Private on its own, as the CR-18 notes say.' } else { '' })))
+            }
+            if ($webOnly.Count) {
+                $notes.Add(('{0} left out of CR-07 because {1} only public container is the static website container ($web), set to Blob or Container access: {2}. CR-18 does not change $web, since the site is served from the web endpoint whatever its level. Set $web to Private on its own, as the CR-18 notes say, once the owner confirms nothing links to the blob endpoint addresses of the site, and a later pack picks {3} up for CR-07.' -f (Get-Count $webOnly.Count 'storage account' 'storage accounts'), (Get-Pick $webOnly.Count 'its' 'their'), ($webOnly -join ' / '), (Get-Pick $webOnly.Count 'the account' 'each account')))
             }
             if ($unlisted.Count) {
                 $why = if ($containersRead) { 'DP.1-CONTAINERS did not list {0} containers' -f (Get-Pick $unlisted.Count 'its' 'their') }

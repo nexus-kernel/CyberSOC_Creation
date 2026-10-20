@@ -1709,6 +1709,7 @@ Describe 'Change request variants' {
         # DP.1-DETAIL lists the accounts that allow anonymous access. starchive blocks it and passes every other check.
         Set-PackResult $pack 'DP.1-DETAIL' @(
             (& $account 'stwebassets' 'rg-web' $s1)
+            (& $account 'stsite' 'rg-web' $s1)
             (& $account 'stmediaprod' 'rg-media' $s1)
             (& $account 'stpartners' 'rg-share' $s2)
             (& $account 'stdenied' 'rg-data' $s2)
@@ -1720,6 +1721,7 @@ Describe 'Change request variants' {
         $level = { param($i) if ($i % 3) { 'Blob' } else { 'Container' } }
         Set-PackResult $pack 'DP.1-CONTAINERS' @(
             (& $listed 'stwebassets' 'rg-web' $s1 'Allowed' 4 @('images (Blob)', 'downloads (Container)', '$web (Blob)'))
+            (& $listed 'stsite' 'rg-web' $s1 'Allowed' 2 @('$web (Blob)'))
             (& $listed 'stmediaprod' 'rg-media' $s1 'Not set, allowed' 34 @(for ($i = 1; $i -le 30; $i++) { '{0} ({1})' -f $media[$i - 1], (& $level $i) }))
             (& $listed 'stpartners' 'rg-share' $s2 'Allowed' 2 @('partner-drop (Container)'))
             (& $listed 'starchive' 'rg-data' $s2 'Disabled' 5 @('legacy-exports (Container)', 'old-site (Blob)'))
@@ -1731,6 +1733,7 @@ Describe 'Change request variants' {
             (& $container 'stwebassets' 'rg-web' $s1 'images' 'Blob' 'Allowed')
             (& $container 'stwebassets' 'rg-web' $s1 'downloads' 'Container' 'Allowed')
             (& $container 'stwebassets' 'rg-web' $s1 '$web' 'Blob' 'Allowed')
+            (& $container 'stsite' 'rg-web' $s1 '$web' 'Blob' 'Allowed')
             @(for ($i = 1; $i -le 30; $i++) { & $container 'stmediaprod' 'rg-media' $s1 $media[$i - 1] (& $level $i) 'Not set, allowed' })
             (& $container 'stpartners' 'rg-share' $s2 'partner-drop' 'Container' 'Allowed')
             (& $container 'starchive' 'rg-data' $s2 'legacy-exports' 'Container' 'Disabled')
@@ -1750,7 +1753,7 @@ Describe 'Change request variants' {
             "Subscription: Example, Dev Test ($s2)"
             '- stpartners, resource group rg-share, 1 container: partner-drop (Container)') -Because 'a large account reads as one line, with every container named and counted'
         $text | Should -Match '6\. Repeat steps 1 to 5 for each remaining storage account listed\.'
-        $text | Should -Not -Match 'starchive|stdenied|stpremfiles|legacy-exports' -Because 'only containers anyone can read today are changed'
+        $text | Should -Not -Match 'starchive|stdenied|stpremfiles|legacy-exports|stsite' -Because 'only containers anyone can read today are changed, $web never'
         $text | Should -Match '5\. If another container in the account, other than \$web, shows Blob or Container' -Because '$web is never set to private by CR-18'
         $email = Get-Content (Join-Path $out 'CR-18-storage-private-containers.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-18 for a large estate'
@@ -1763,12 +1766,15 @@ Describe 'Change request variants' {
         @($private | Where-Object Resource -like '*$web*').Count | Should -Be 0
         @($private | Where-Object Resource -like 'stmediaprod/*').Count | Should -Be 30
         ($private | Where-Object Resource -eq 'stmediaprod/media-003').CurrentSetting | Should -Be 'anonymous access level Container, readable anonymously today'
-        $index | Should -Match ([regex]::Escape('- 1 static website container ($web) set to Blob or Container access left out of CR-18: stwebassets (resource group rg-web), Blob access. A static website is served from the web endpoint of its account whatever the access level of $web, so setting it to Private would not close the site and would only stop anonymous reads of the same files through the blob endpoint. Set it to Private on its own once the owner confirms nothing links to the blob endpoint addresses of the site. An account that allows anonymous access stays out of CR-07 until then.'))
+        $index | Should -Match ([regex]::Escape('- 2 static website containers ($web) set to Blob or Container access left out of CR-18: stsite (resource group rg-web), Blob access, stwebassets (resource group rg-web), Blob access. A static website is served from the web endpoint of its account whatever the access level of $web, so setting it to Private would not close the site and would only stop anonymous reads of the same files through the blob endpoint. Set it to Private on its own once the owner confirms nothing links to the blob endpoint addresses of the site. An account that allows anonymous access stays out of CR-07 until then.'))
         $index | Should -Match ([regex]::Escape('- 2 containers set to Blob or Container access in a storage account that blocks anonymous access left out of CR-18: starchive (resource group rg-data), 2 containers: legacy-exports (Container), old-site (Blob). The account setting keeps them closed, so no one can read them anonymously today'))
         $index | Should -Match ([regex]::Escape('They would open again as soon as the account allowed anonymous access, so any change that relaxes the account setting also sets them to Private.'))
         $index | Should -Match ([regex]::Escape('- 1 storage account left out of CR-18 because DP.1-CONTAINERS could not list its containers: stdenied (resource group rg-data). A container set to Blob or Container there is not in CR-18, so recollect the pack.'))
         $index | Should -Match ([regex]::Escape('- 1 FileStorage account left out of CR-18 because it holds no blob service, so it has no blob containers to change: stpremfiles (resource group rg-files).'))
         $index | Should -Match ([regex]::Escape('- 3 storage accounts left out of CR-07 because each has a container set to Blob or Container access, which anyone can read today without signing in: ')) -Because 'the same accounts wait for CR-18 before CR-07'
+        $index | Should -Match ([regex]::Escape('and sets the container to private. CR-18 leaves out the static website container ($web), which is set to Private on its own, as the CR-18 notes say. A later pack picks each account up for CR-07')) -Because 'stwebassets also has a public $web, which CR-18 does not change'
+        $index | Should -Match ([regex]::Escape('- 1 storage account left out of CR-07 because its only public container is the static website container ($web), set to Blob or Container access: stsite (resource group rg-web): $web (Blob). CR-18 does not change $web, since the site is served from the web endpoint whatever its level. Set $web to Private on its own, as the CR-18 notes say, once the owner confirms nothing links to the blob endpoint addresses of the site, and a later pack picks the account up for CR-07.')) -Because 'an account whose only public container is $web never reaches CR-07 through CR-18'
+        @($index -split "`n" | Where-Object { $_ -match 'CR-18 asks the owner' -and $_ -match 'stsite' }).Count | Should -Be 0
     }
 
     It 'writes singular wording for one container in one account' {
