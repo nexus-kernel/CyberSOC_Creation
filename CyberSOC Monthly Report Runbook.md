@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, and 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, and 1.6.0 for NB.2-DETAIL. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -492,6 +492,78 @@ resourcecontainers
 | where type =~ "microsoft.resources/subscriptions"
 | project subscriptionId, SubscriptionName = name
 | order by SubscriptionName asc
+```
+
+### NB.2-DETAIL Internet-exposed management port rules with their properties and attachments
+
+Engine ARG. CyberSOC collector 1.6.0. The rules NB.2 lists, read the same way: allow inbound from any address (`*`), `Internet`, `0.0.0.0/0` or `::/0` (from collector 1.6.0, in NB.2 too) on 22, 3389, 5985, 5986, `*` or a port range. One row per rule with everything CR-16 needs to change it and to recreate it on rollback: the subscription, the network security group and rule resource IDs, priority, direction, access, protocol, the source and destination prefixes and ports as lists (the single and the list form of each property together, so an empty single form shows as an empty entry), the description, the destination application security groups, and the association (Subnet, NIC or Unassociated, as in NB.2). `Subnets` and `Nics` list what the group is attached to, and `NicVms` names the virtual machine of each network interface that names the group. `ApplianceNicIds` and `ApplianceSubnetIds` list every network interface of a network virtual appliance (the P0.6-APPLIANCES pattern) and the subnets it sits in, the same on every row, so a rule that reaches an appliance through its network interface or through the group on its subnet is found. A missing property reads as an empty list. `mv-expand` takes up to 1,000 rules per group, the most a group can hold, rather than its default of 128. CR-16 closes the rules on a workload subnet or network interface that name their ports over TCP or any protocol, leaves a rule for another protocol for review, and leaves to the index notes a group attached only to appliance network interfaces (an untrust interface takes internet traffic by design), a group that reaches an appliance through a subnet or as well as other resources (for review), a group attached to nothing (a cleanup item) and a rule whose ports are `*` or a range (for review). Feeds CR-16 and its client email, with P0.3 for Defender for Servers Plan 2 by subscription, which just-in-time VM access needs.
+
+```kql
+resources
+| where type =~ "microsoft.network/networksecuritygroups"
+| where id !contains "{{MRG}}"
+| extend NsgKey  = tolower(id),
+         Subnets = coalesce(properties.subnets, dynamic([])),
+         Nics    = coalesce(properties.networkInterfaces, dynamic([]))
+| mv-expand Rule = properties.securityRules limit 1000
+| where tostring(Rule.properties.access) =~ "Allow"
+    and tostring(Rule.properties.direction) =~ "Inbound"
+| extend SourcePrefixes   = array_concat(pack_array(tostring(Rule.properties.sourceAddressPrefix)),
+                                         coalesce(Rule.properties.sourceAddressPrefixes, dynamic([]))),
+         DestinationPorts = array_concat(pack_array(tostring(Rule.properties.destinationPortRange)),
+                                         coalesce(Rule.properties.destinationPortRanges, dynamic([])))
+| extend SourceText = tostring(SourcePrefixes), PortText = tostring(DestinationPorts)
+| where SourceText contains '"*"' or SourceText contains '"Internet"' or SourceText contains '"0.0.0.0/0"'
+     or SourceText contains '"::/0"'
+| where PortText contains '"*"' or PortText contains '"22"' or PortText contains '"3389"'
+     or PortText contains '"5985"' or PortText contains '"5986"' or PortText contains "-"
+// Each network interface the group is attached to directly, with its virtual machine.
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/networkinterfaces"
+    | extend NsgKey = tolower(tostring(properties.networkSecurityGroup.id))
+    | where isnotempty(NsgKey)
+    | summarize NicVms = make_list(pack("NicId", tolower(id), "VmId", tolower(tostring(properties.virtualMachine.id)))) by NsgKey
+  ) on NsgKey
+// Every network interface of a network virtual appliance and the subnets it sits in, so CR-16 can leave out a
+// rule that reaches an appliance through its network interface or through a subnet group.
+| extend ApplianceKey = 1
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.network/networkinterfaces"
+    | extend VmKey = tolower(tostring(properties.virtualMachine.id))
+    | join kind=inner (
+        resources
+        | where type =~ "microsoft.compute/virtualmachines"
+        | where {{APPLIANCE}}   // network virtual appliances, see P0.6-APPLIANCES
+        | project VmKey = tolower(id)
+      ) on VmKey
+    | mv-expand IpConfig = properties.ipConfigurations
+    | summarize ApplianceNicIds    = make_set(tolower(id)),
+                ApplianceSubnetIds = make_set(tolower(tostring(IpConfig.properties.subnet.id)))
+    | extend ApplianceKey = 1
+  ) on ApplianceKey
+| extend Association = case(0 < array_length(Subnets), "Subnet", 0 < array_length(Nics), "NIC", "Unassociated"),
+         RangeNeedsReview = PortText contains "-"
+| project subscriptionId, resourceGroup, NSG = name, NsgId = id,
+          RuleName    = tostring(Rule.name), RuleId = tostring(Rule.id),
+          Priority    = toint(Rule.properties.priority),
+          Direction   = tostring(Rule.properties.direction), Access = tostring(Rule.properties.access),
+          Protocol    = tostring(Rule.properties.protocol),
+          SourcePrefixes,
+          SourcePorts = array_concat(pack_array(tostring(Rule.properties.sourcePortRange)),
+                                     coalesce(Rule.properties.sourcePortRanges, dynamic([]))),
+          DestinationPrefixes = array_concat(pack_array(tostring(Rule.properties.destinationAddressPrefix)),
+                                             coalesce(Rule.properties.destinationAddressPrefixes, dynamic([]))),
+          DestinationAsgs = coalesce(Rule.properties.destinationApplicationSecurityGroups, dynamic([])),
+          DestinationPorts,
+          Description = tostring(Rule.properties.description),
+          Association, RangeNeedsReview,
+          Subnets, Nics,
+          NicVms             = coalesce(NicVms, dynamic([])),
+          ApplianceNicIds    = coalesce(ApplianceNicIds, dynamic([])),
+          ApplianceSubnetIds = coalesce(ApplianceSubnetIds, dynamic([]))
+| order by subscriptionId asc, resourceGroup asc, NSG asc, Priority asc
 ```
 
 ### NB.4-DETAIL Web and Function Apps without HTTPS only

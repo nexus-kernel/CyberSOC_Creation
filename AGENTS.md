@@ -27,8 +27,10 @@ Safe local validation:
 
 Every change request `New-CyberSocChangeRequests.ps1` writes also writes a client email that asks for the
 client's approval and follows the shared structure of `New-ApprovalEmail` (what, why, what it means, resources,
-reversal, then approval with a reply-by date). A new change request adds its email in the same PR. The Pester
-suite enforces this.
+reversal, then approval with a reply-by date). An email reads as a letter: it has no titles or heading lines, and
+each paragraph opens in its own words for that part and that change ("I would like your approval to ...", "I recommend
+... because ..."), with no two paragraphs opening the same way. A new change request adds its email in the same PR.
+The Pester suite enforces this.
 
 Do not run evidence collection, Azure/Exchange sign-ins, vulnerability assessments or tenant operations for
 CI validation. Unit tests use fixtures and mocks. The safe controls-standard

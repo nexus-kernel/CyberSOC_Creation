@@ -158,6 +158,45 @@ Describe 'Query catalog' {
         ([regex]::Matches($ss.Query, 'join kind=')).Count | Should -BeLessOrEqual 3 -Because 'Resource Graph allows three joins per query'
     }
 
+    It 'lists each internet-exposed management port rule with its properties and attachments, read as NB.2 reads them (1.6.0)' {
+        $nb2 = ($catalog | Where-Object Id -eq 'NB.2').Query
+        $d = $catalog | Where-Object Id -eq 'NB.2-DETAIL'
+        $d.Engine | Should -Be 'ARG'
+        $d.Phase | Should -Be 'P2 Network'
+        $d.Notes | Should -Match '^Added in CyberSOC 1\.6\.0\.'
+        $d.Notes | Should -Match 'Internal: names rules, the report embeds counts only\.'
+        $d.Query | Should -Match 'where type =~ "microsoft\.network/networksecuritygroups"\r?\n\| where id !contains "\{\{MRG\}\}"'
+        foreach ($filter in @(
+                'where tostring\(Rule\.properties\.access\) =~ "Allow"\s+and tostring\(Rule\.properties\.direction\) =~ "Inbound"',
+                [regex]::Escape(@'
+| where SourceText contains '"*"' or SourceText contains '"Internet"' or SourceText contains '"0.0.0.0/0"'
+     or SourceText contains '"::/0"'
+'@.Trim()),
+                [regex]::Escape(@'
+| where PortText contains '"*"' or PortText contains '"22"' or PortText contains '"3389"'
+'@.Trim()))) {
+            $nb2 | Should -Match $filter -Because 'NB.2-DETAIL reads the rules NB.2 counts'
+            $d.Query | Should -Match $filter
+        }
+        $d.Query | Should -Match 'mv-expand Rule = properties\.securityRules limit 1000' -Because 'a network security group holds up to 1,000 rules and mv-expand stops at 128 by default'
+        foreach ($c in 'Subnets = coalesce\(properties\.subnets, dynamic\(\[\]\)\)', 'Nics\s+= coalesce\(properties\.networkInterfaces, dynamic\(\[\]\)\)', 'coalesce\(Rule\.properties\.sourceAddressPrefixes, dynamic\(\[\]\)\)',
+            'coalesce\(Rule\.properties\.destinationPortRanges, dynamic\(\[\]\)\)', 'coalesce\(Rule\.properties\.sourcePortRanges, dynamic\(\[\]\)\)', 'coalesce\(Rule\.properties\.destinationAddressPrefixes, dynamic\(\[\]\)\)',
+            'DestinationAsgs = coalesce\(Rule\.properties\.destinationApplicationSecurityGroups, dynamic\(\[\]\)\)', 'NicVms\s+= coalesce\(NicVms, dynamic\(\[\]\)\)', 'ApplianceNicIds\s+= coalesce\(ApplianceNicIds, dynamic\(\[\]\)\)', 'ApplianceSubnetIds = coalesce\(ApplianceSubnetIds, dynamic\(\[\]\)\)') {
+            $d.Query | Should -Match $c -Because 'a missing property reads as an empty list'
+        }
+        $d.Query | Should -Match 'where type =~ "microsoft\.network/networkinterfaces"' -Because 'each network interface names its virtual machine'
+        $d.Query | Should -Match '\| where \{\{APPLIANCE\}\}   // network virtual appliances, see P0\.6-APPLIANCES' -Because 'an appliance untrust interface is left to the index'
+        $d.Query | Should -Match 'mv-expand IpConfig = properties\.ipConfigurations' -Because 'an appliance interface without a group of its own is reached through the group on its subnet'
+        $d.Query | Should -Match 'ApplianceNicIds\s+= make_set\(tolower\(id\)\),\s+ApplianceSubnetIds = make_set\(tolower\(tostring\(IpConfig\.properties\.subnet\.id\)\)\)'
+        $d.Query | Should -Match 'Association = case\(0 < array_length\(Subnets\), "Subnet", 0 < array_length\(Nics\), "NIC", "Unassociated"\)'
+        $d.Query | Should -Match 'project subscriptionId, resourceGroup, NSG = name, NsgId = id,\s+RuleName\s+= tostring\(Rule\.name\), RuleId = tostring\(Rule\.id\),'
+        foreach ($col in 'Priority', 'Direction', 'Access', 'Protocol', 'SourcePrefixes', 'SourcePorts', 'DestinationPrefixes', 'DestinationPorts', 'Description', 'RangeNeedsReview') { $d.Query | Should -Match "\b$col\b" -Because "CR-16 records $col" }
+        ([regex]::Matches($d.Query, 'join kind=')).Count | Should -BeLessOrEqual 3 -Because 'Resource Graph allows three joins per query'
+        ([regex]::Matches($d.Query, 'mv-expand')).Count | Should -BeLessOrEqual 3 -Because 'Resource Graph allows three mv-expand per query'
+        $expanded = Expand-EbrQuery -Query $d.Query -WindowStart ([datetime]'2026-07-01') -WindowEnd ([datetime]'2026-09-30') -ManagedRgPattern 'aznativesol0'
+        $expanded | Should -Not -Match '\{\{' -Because 'every placeholder is filled in'
+    }
+
     It 'scopes the SecOps worklist incident lists like OUT.1 and DR.10 and extracts the ticket with the raw pattern' {
         foreach ($id in 'OUT.1-OPEN', 'DR.10-GAPS') {
             $item = $catalog | Where-Object Id -eq $id
@@ -2125,7 +2164,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.5.0'
+        $params2.ScriptVersion | Should -Be '1.6.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

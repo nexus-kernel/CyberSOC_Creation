@@ -56,6 +56,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 13 | Minimum TLS 1.2 on Event Hubs namespaces. Event Hubs still documents namespaces that accept TLS 1.0 and 1.1 below a minimum of 1.2, so a client on an older version would be refused. The rollback sets the recorded version back | NB.6-PAAS-DETAIL | Yes, approval request |
 | 14 | Minimum TLS 1.2 on Azure Cosmos DB accounts. Azure Cosmos DB retired TLS 1.0 and 1.1 on August 31, 2025 and accepts only TLS 1.2 as an account minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | Yes, approval request |
 | 15 | Encryption at host on the virtual machine scale sets whose model can take it. The model is set from Cloud Shell, then each existing instance is stopped (deallocated), brought to the model (Upgrade on a Uniform instance, Settings > Disks > Additional settings on a Flexible one) and started again only if it was running. A scale set with an Automatic or Rolling upgrade policy may apply the model on its own, all at once or in batches, so the change runs inside the maintenance window and the availability impact says so. RESOURCES lists the unique ID of each scale set and the VM ID of each Flexible instance to change. Before the model is set, the steps check under Overview > JSON View that `properties.uniqueId` still reads the listed ID, and a scale set whose ID differs is left out of every step. The Flexible steps work through the instances the scale set holds when the change is made and change only an instance whose `properties.vmId` is listed for that scale set, so an instance that joined after collection, or one created again under a listed name, is skipped and left for the next pack. The rollback covers any instance created after the model was changed. AKS node pools are routed to a planned project in the index | DP.4-VMSS-ELIGIBILITY, DP.4-ELIGIBILITY | Yes, approval request |
+| 16 | Internet-facing RDP, SSH and WinRM rules closed: each allow inbound rule open to any address, Internet, 0.0.0.0/0 or ::/0 on 22, 3389, 5985 or 5986 over TCP or any protocol, on a workload subnet or network interface. The replacement path the client agrees goes in first: just-in-time VM access (Defender for Cloud > Workload protections > Just-in-time VM access), which needs Defender for Servers Plan 2 on the subscription, or Azure Bastion (Connect > Bastion on the virtual network). The existing rules keep priority over the just-in-time deny rules until they are removed. Where Bastion is the path, every network security group of the machines gets an allow on 22 and 3389 from the AzureBastionSubnet address range ahead of any deny rule, and a Bastion session is opened before any rule changes. A rule whose source is Any, 0.0.0.0/0 or ::/0 also matches private addresses, so its management ports first get an allow from the VirtualNetwork service tag (the virtual network, peered networks and connected on-premises networks), unless the client confirmed nothing connects from them. Then each rule is deleted, or narrowed to the source addresses the client named, and a rule that also allows other ports loses only the management ports: when addresses were named, its management ports move to a new rule from those addresses, so its other ports keep the source they have. RESOURCES lists every property of each rule, and the path that fits each subscription from P0.3. The rollback recreates the rule from those properties, also in the CSV, ahead of any just-in-time deny rule, and deletes the rules the change added | NB.2-DETAIL, P0.3 | Yes, approval request |
 
 Resources a change leaves out are named in the index notes:
 
@@ -104,6 +105,22 @@ Resources a change leaves out are named in the index notes:
   OK or EMPTY result shows that a machine missing from it already has encryption at host, so a PARTIAL one (a
   truncated read or an unread size list) leaves every Flexible scale set out. A Flexible scale set
   without a model has nothing to set, so its machines stay in CR-09.
+- CR-16 leaves out, each with its own note:
+  - a rule whose network security group is attached to no subnet or network interface. It exposes nothing today, so
+    it is a cleanup item: delete the rule, or the group if it is unused, since attaching the group later would open
+    the port.
+  - a rule whose group is attached only to network interfaces of network virtual appliances (P0.6-APPLIANCES), where
+    an untrust interface takes internet traffic by design. It is reviewed against the appliance's management design.
+  - a rule whose group reaches an appliance through a subnet the appliance sits in, or through its network interface
+    as well as other resources, since changing it would change the appliance too. It is reviewed with the client.
+    NB.2-DETAIL lists every appliance network interface and its subnets, so an appliance interface without a group of
+    its own is found through the group on its subnet.
+  - a rule for a protocol other than TCP or any protocol, such as UDP 22 used by an application, which may not carry
+    RDP, SSH or WinRM. It is reviewed with the client.
+  - a rule whose destination ports include `*` or a range, which may not mean a management port is meant to be
+    open. It is reviewed with the client and narrowed, and a later pack picks it up once it names a management port.
+
+  When only those remain, CR-16 reads "Only rules for cleanup or review remain, see the notes".
 - AKS node pools (a scale set in the node resource group of a cluster, or tagged `aks-managed-`) get no change
   request. AKS sets encryption at host only when a node pool is created, so an existing pool is replaced: a new node
   pool created with `--enable-encryption-at-host`, its workloads moved across and the old pool removed. That needs
@@ -142,26 +159,35 @@ The sections follow the template headings, in order, so each one pastes into the
 - The notification list is left empty to fill in.
 - Every change request writes a client email (`CR-NN-<change>.email.txt`) that asks for the client's approval,
   built by the one shared builder, `New-ApprovalEmail`. The generator stops before writing anything when a change
-  request has no approval request, and the Pester suite fails when any change request from CR-01 to CR-15 is written
-  without one, or with an email that leaves the shared structure. A new change request builds its email the same way.
+  request has no approval request, and the Pester suite fails when any change request from CR-01 to CR-16 is written
+  without one, or with an email that leaves the shared structure, carries a title, or opens two paragraphs the same
+  way. A new change request builds its email the same way.
 
-Every client email asks for the client's approval and never presents the change as decided. Each one is written in
-the first person singular, in plain, complete sentences, explains any technical term once, and has the same parts in
-the same order:
+Every client email asks for the client's approval and never presents the change as decided. Each one reads as a
+letter: it is written in the first person singular, in plain, complete sentences, explains any technical term once,
+and has no titles or heading lines. Each part is a plain paragraph whose opening sentence says what the part is, in
+its own words for that change, and no two paragraphs open with the same words. The parts always come in the same
+order:
 
 1. The subject, `Approval requested: <change>`.
 2. The greeting, `Hello <-ClientContact>,` or `Hello,`.
-3. **What I am asking to change,** in one or two sentences.
-4. **Why I recommend it:** the risk the change reduces.
-5. **What it means for you:** the expected effect and the reason for it, usually no visible effect because the
+3. The ask, in one or two sentences, opening "I would like your approval to ...".
+4. Why, as a because sentence, for example "I recommend setting this minimum because TLS 1.0 and 1.1 have known
+   weaknesses ...": the risk the change reduces.
+5. What it means for the client: the expected effect and the reason for it, usually no visible effect because the
    platform already refuses what the setting turns off, or a restart that needs a maintenance window.
-6. **The resources,** listed by subscription.
-7. **How it can be reversed,** or that it cannot.
-8. **Your approval:** a request to approve the proposed date (`-ChangeDate`, two weeks after the build by default),
-   or, for CR-09 and CR-15, which restart each machine, to approve the change and suggest a maintenance window. It
-   asks for a reply by a week before the proposed date and always ends with "I will not schedule this change until I
-   have your approval."
+6. The resources, introduced in a sentence and listed by subscription.
+7. How the change can be reversed, or that it cannot.
+8. The request: approval of the proposed date (`-ChangeDate`, two weeks after the build by default), or, for CR-09
+   and CR-15, which restart each machine, approval of the change and a maintenance window. It asks for a reply by a
+   week before the proposed date and always ends with "I will not schedule this change until I have your approval."
 9. The sign-off, `Thank you,` and `-SenderName`.
+
+`New-ApprovalEmail` turns the first sentence of the ask into "I would like your approval to ...", and stops the run
+when the why is not an "I recommend ... because" sentence or two paragraphs open with the same three words.
+`Assert-ApprovalEmail` in the Pester suite reads every generated email the same way: no old title line and no short
+line standing alone as a heading, the parts in order by what each paragraph says, a because sentence for the why,
+distinct openings, and the request with its reply-by date and closing promise.
 
 Each change keeps its own content inside that structure:
 
@@ -181,6 +207,12 @@ Each change keeps its own content inside that structure:
   or 1.1, before asking for approval.
 - CR-09 and CR-15 explain the restart of each machine or instance, and CR-15 the scale sets whose upgrade policy may
   restart instances on their own.
+- CR-16 says that a new RDP, SSH or WinRM connection from the internet will be refused while an open one stays up,
+  explains just-in-time VM access and Azure Bastion with their cost (Defender for Servers Plan 2, or Bastion by the
+  hour, whose free Developer tier is for development and test only), states which subscriptions have Plan 2 (a
+  subscription P0.3 did not read stays unknown, never off) and suggests the path that fits, and lists each rule with its group, priority, ports, source and where it applies. Before
+  asking for approval it asks who still needs those ports from the internet and from which addresses, and which
+  replacement the client wants, and offers to narrow a rule to named addresses instead of removing it.
 - CR-05, CR-11, CR-12 and CR-14 say that the change cannot be reversed, because the service takes no lower minimum,
   and why no reversal should be needed.
 
@@ -190,7 +222,12 @@ Each claim in the emails was checked on Microsoft Learn: secure transfer rejects
 encryption (Require secure transfer to ensure secure connections), the TLS retirement dates and minimums of each
 service (the pages each change request cites), the Log Analytics ingestion charge for resource logs sent through
 diagnostic settings (Azure Monitor cost and usage), and the Activity log collected at no charge (Azure Monitor data
-sources, Microsoft Sentinel free data sources).
+sources, Microsoft Sentinel free data sources). For CR-16: a security rule change applies only to new connections
+and an open one stays up (Azure network security groups overview), just-in-time VM access needs Defender for Servers
+Plan 2 on the subscription and an existing rule on the selected ports keeps priority over its deny rules (Enable
+just-in-time access, Just-in-time machine access), and Bastion connects over TLS on port 443, is billed hourly from
+deployment and offers a Developer tier for development and test only (What is Azure Bastion, Bastion SKU comparison,
+Deploy Azure Bastion from the Azure portal).
 
 Every change request, email and the index keep to the copy rules: no semicolons, arrows (Unicode arrows and `->`,
 `<-`, `=>`), emoji or angle brackets, and the greater-than sign only in navigation steps such as Settings >
@@ -209,10 +246,11 @@ rejects, and a file that still breaks a rule stops the run before any file is wr
 
 Each change reports one of these statuses in the index: change request and client email, no gaps found, not
 collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
-later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15, and 1.4.0 or later for CR-09 and CR-15 when they
-have a machine or scale set to change). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
+later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15, 1.4.0 or later for CR-09 and CR-15 when they
+have a machine or scale set to change, and 1.6.0 or later for CR-16). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
 read as no gaps. A change request that also reads a result beyond its sources (DR.6-COVERAGE and P0.5 for CR-01,
-DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack) reads "partial
+DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack, P0.3 for
+CR-16) reads "partial
 collection scope" when that result
 is PARTIAL, and gets a note in the index when it was not collected or is unreadable.
 
@@ -223,7 +261,8 @@ DR.6-COVERAGE, DR.6-NONCOMPLIANT) were added in collector 1.1.0, and NB.6-PAAS-D
 Service Bus and Event Hubs namespaces and Cosmos DB accounts below TLS 1.2 for CR-11 to CR-14, in 1.2.0.
 DP.4-VMSS-ELIGIBILITY, which lists the scale sets without encryption at host for CR-15, and the ScaleSet column of
 DP.4-ELIGIBILITY were added in 1.3.0, and the VmId column of DP.4-ELIGIBILITY and the UniqueId column of
-DP.4-VMSS-ELIGIBILITY in 1.4.0. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
+DP.4-VMSS-ELIGIBILITY in 1.4.0. NB.2-DETAIL, which lists the internet-exposed management port rules for CR-16
+with every property and attachment, was added in 1.6.0. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
 
 ## Validation
 
