@@ -1664,39 +1664,40 @@ Describe 'Change request variants' {
         $email | Should -Not -Match 'central network policy|Virtual Network Manager' -Because 'an Allow or Deny admin rule leaves nothing for the client to escalate, and no machine was named'
         Assert-ApprovalEmail $email 'CR-16 without an admin rule'
 
-        # vm-web01 behind Allow-RDP on snet-web: an Always Allow admin rule keeps 3389 open to the internet.
-        $null = & $generator -EvidencePath $pack -AdminRuleOpen 'vm-web01:3389'
+        # vm-web01 behind Allow-RDP on snet-web: an Always Allow admin rule keeps 3389 open to the internet. Each
+        # machine is named by its resource ID, since a machine name is unique only within its resource group.
+        $vm = { param($sub, $group, $name) "/subscriptions/$sub/resourceGroups/$group/providers/Microsoft.Compute/virtualMachines/$name" }
+        $web01 = & $vm $s1 'rg-web' 'vm-web01'
+        $web01Label = 'vm-web01 in resource group rg-web of subscription Example Production \({0}\)' -f $s1
+        $null = & $generator -EvidencePath $pack -AdminRuleOpen "$($web01):3389"
         $text = Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw
         $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         Assert-ApprovalEmail $email 'CR-16 with one machine an admin rule keeps open'
-        $email | Should -Match '\r?\n\r?\nOn virtual machine vm-web01, a central network policy, a security admin rule in Azure Virtual Network Manager, keeps port 3389 open to the internet\. That policy applies before any network security group rule, so this change cannot close that port there, and it stays open until the policy changes\. Could you tell me who manages your Virtual Network Manager configuration, so I can raise this with them\?\r?\n'
-        $text | Should -Match "Kept open by an Azure Virtual Network Manager security admin rule with Always Allow \(-AdminRuleOpen\), which CR-16 cannot close:\r?\n- vm-web01: port 3389"
+        $email | Should -Match ('\r?\n\r?\nOn virtual machine {0}, a central network policy, a security admin rule in Azure Virtual Network Manager, keeps port 3389 open to the internet\. That policy applies before any network security group rule, so this change cannot close that port there, and it stays open until the policy changes\. Could you tell me who manages your Virtual Network Manager configuration, so I can raise this with them\?\r?\n' -f $web01Label)
+        $text | Should -Match ("Kept open by an Azure Virtual Network Manager security admin rule with Always Allow \(-AdminRuleOpen\), which CR-16 cannot close:\r?\n- {0}: port 3389" -f $web01Label)
         $text | Should -Match 'The last lines give the path that fits each subscription, and the machines a security admin rule keeps open\.'
-        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'Report vm-web01 \(port 3389\), which -AdminRuleOpen names as held open by a security admin rule with Always Allow, as still open and escalated, never closed\.'
-        $index | Should -Match '- CR-16 names 1 machine that a security admin rule with Always Allow keeps open to the internet \(-AdminRuleOpen\): vm-web01 \(port 3389\)\. Its email says a central network policy keeps the port open and asks who manages it\.'
+        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match ('Report {0} \(port 3389\), which -AdminRuleOpen names as held open by a security admin rule with Always Allow, as still open and escalated, never closed\.' -f $web01Label)
+        $index | Should -Match ('- CR-16 names 1 machine that a security admin rule with Always Allow keeps open to the internet \(-AdminRuleOpen\): {0} \(port 3389\)\. Its email says a central network policy keeps the port open and asks who manages it\.' -f $web01Label)
 
-        # Two machines, one named twice in another case, read as one machine with both ports.
-        $null = & $generator -EvidencePath $pack -AdminRuleOpen 'vm-web01:3389', 'vm-web02:3389', 'VM-WEB02:22'
-        $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
-        Assert-ApprovalEmail $email 'CR-16 with two machines an admin rule keeps open'
-        $email | Should -Match 'On virtual machines vm-web01 \(port 3389\) and vm-web02 \(ports 22 and 3389\), a central network policy, a security admin rule in Azure Virtual Network Manager, keeps those ports open to the internet\. That policy applies before any network security group rule, so this change cannot close those ports there, and they stay open until the policy changes\.'
-        # A machine name is unique only within its resource group, so machines of the same name in different
-        # scopes stay apart, named by resource group or by resource ID.
-        $vmId = "/subscriptions/$s2/resourceGroups/rg-dev/providers/Microsoft.Compute/virtualMachines/vm-web01"
-        $null = & $generator -EvidencePath $pack -AdminRuleOpen 'rg-web/vm-web01:3389', "$($vmId):3389", 'RG-WEB/VM-WEB01:22'
+        # The same machine named twice, in another case, is one machine with both ports, and a machine of the same
+        # name in another resource group stays apart.
+        $dev01 = & $vm $s2 'rg-dev' 'vm-web01'
+        $null = & $generator -EvidencePath $pack -AdminRuleOpen "$($web01):3389", "$($dev01):3389", "$($web01.ToUpperInvariant()):22", "$($web01):3389"
         $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-16 with two machines of the same name'
-        $email | Should -Match ('On virtual machines vm-web01 in resource group rg-web \(ports 22 and 3389\) and vm-web01 in resource group rg-dev of subscription Example, Dev Test \({0}\) \(port 3389\), a central network policy' -f $s2)
+        $email | Should -Match ('On virtual machines {0} \(ports 22 and 3389\) and vm-web01 in resource group rg-dev of subscription Example, Dev Test \({1}\) \(port 3389\), a central network policy, a security admin rule in Azure Virtual Network Manager, keeps those ports open to the internet\. That policy applies before any network security group rule, so this change cannot close those ports there, and they stay open until the policy changes\.' -f $web01Label, $s2)
         Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '- CR-16 names 2 machines that a security admin rule with Always Allow keeps open'
-        { & $generator -EvidencePath $pack -AdminRuleOpen 'a/b/vm-web01:3389' } | Should -Throw '*-AdminRuleOpen takes each machine as name:port, resourceGroup/name:port or the resource ID*'
-        { & $generator -EvidencePath $pack -AdminRuleOpen 'vm-web01:443' } | Should -Throw '*-AdminRuleOpen takes each machine as name:port*with port 22, 3389, 5985 or 5986*'
-        { & $generator -EvidencePath $pack -AdminRuleOpen 'vm-web01' } | Should -Throw '*-AdminRuleOpen takes each machine as name:port*'
+        # Only the resource ID names a machine once, so a bare name, a resource group path, another resource type,
+        # another port and a missing port are refused.
+        foreach ($wrong in 'vm-web01:3389', 'rg-web/vm-web01:3389', "$(& $vm $s1 'rg-web' 'vm-web01')/extensions/x:3389", ($web01 -replace 'virtualMachines', 'virtualMachineScaleSets') + ':3389', "$($web01):443", $web01) {
+            { & $generator -EvidencePath $pack -AdminRuleOpen $wrong } | Should -Throw '*-AdminRuleOpen takes each machine as the resource ID of the virtual machine followed by :port, with port 22, 3389, 5985 or 5986*' -Because "$wrong does not name one virtual machine and one management port"
+        }
 
         # With nothing for CR-16 to close, the index still names the machine for escalation.
         Set-PackResult $pack 'NB.2-DETAIL' @()
-        $null = & $generator -EvidencePath $pack -AdminRuleOpen 'vm-web01:3389'
-        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '- -AdminRuleOpen names 1 machine that a security admin rule with Always Allow keeps open to the internet: vm-web01 \(port 3389\)\. CR-16 has no rule to close in this pack, so no email names it\.'
+        $null = & $generator -EvidencePath $pack -AdminRuleOpen "$($web01):3389"
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match ('- -AdminRuleOpen names 1 machine that a security admin rule with Always Allow keeps open to the internet: {0} \(port 3389\)\. CR-16 has no rule to close in this pack, so no email names it\.' -f $web01Label)
     }
 
     It 'writes no management port change when only rules for cleanup or review remain, and no gaps when NB.2-DETAIL is empty' {
