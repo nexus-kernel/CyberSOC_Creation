@@ -63,8 +63,8 @@ missing evidence never becomes a favorable zero.
    fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service, Azure SQL, Redis, Service Bus,
    Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
    machines and on scale sets, closing internet-facing RDP, SSH and WinRM rules, turning off plain FTP on App
-   Service apps, and setting the blob containers anyone can read today to private), and a ready-to-send client email
-   for every change request. Every email asks for the
+   Service apps, setting the blob containers anyone can read today to private, and removing the Azure and Microsoft
+   Entra roles that disabled accounts still hold), and a ready-to-send client email for every change request. Every email asks for the
    client's approval and reads as a letter, with no titles and each paragraph opening in its own words, in one order:
    what is to change, why, what it means for the client, the resources
    by subscription, how it can be reversed, and the request. It asks the client to approve the proposed date, two
@@ -99,7 +99,14 @@ missing evidence never becomes a favorable zero.
    FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled suits each app, and the index names the apps whose FTP state Resource Graph
    returned empty, for a portal check, and says that deployment slots are not covered. AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
-   pool replacement with the client.
+   pool replacement with the client. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
+   account the collection read as disabled, after checking that the account still shows as disabled. Its email lists
+   each account with its roles, the Azure roles by subscription and the Entra roles on their own, says nobody loses
+   access today, since the accounts cannot sign in, offers to restore any role from the record, and asks whether any
+   account is expected back in use, such as someone on leave or a seasonal worker, so it stays out of the change. The
+   index names the roles held through groups, for review and left unchanged, the accounts synced from on-premises,
+   eligible assignments the collection could not see, the Lighthouse limit, and which side is missing when only one
+   side was read.
 
 A pack collected without the vulnerability runs takes them later:
 

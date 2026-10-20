@@ -18,7 +18,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
 - **Pack name.** `CyberSOC-Evidence_<client>_<report month>_<yyyyMMdd-HHmmss>/`.
 - **Change requests.** Each collection ends by writing the hardening change requests and a client email for each
   one into `05-change-requests` (`New-CyberSocChangeRequests.ps1`). See [Change requests](#change-requests).
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.8.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.9.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -147,7 +147,7 @@ ATMOSERA_SCRIPT_REQUIREMENTS.md 1.4 still forbids Graph; that standard has not b
 | Log Analytics | `api.loganalytics.io/v1/workspaces/{id}/query`. A combined query adds the other workspaces in the `workspaces` body field | same |
 | Advanced Hunting | `api.security.microsoft.com/api/advancedqueries/run` | resource `api.securitycenter.microsoft.com`, client tenant |
 | Sentinel rules (DR.9) | `{workspace}/providers/Microsoft.SecurityInsights/alertRules` | ARM |
-| Microsoft Graph (IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, POS.6, DP.8, DP.10, DR.11, EW.13) | `graph.microsoft.com/v1.0`, GET only, `@odata.nextLink` paging | resource `https://graph.microsoft.com/`, client tenant, same reauth prompt as Defender |
+| Microsoft Graph (IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, POS.6, DP.8, DP.10, DR.11, EW.13) | `graph.microsoft.com/v1.0`, GET only, `@odata.nextLink` paging | resource `https://graph.microsoft.com/`, client tenant, same reauth prompt as Defender |
 | Exchange Online and Purview (IA.9, DP.7-ZAP, DP.6) | `ExchangeOnlineManagement` module, browser sign-in | module |
 
 **What the Graph token can read.** The Azure CLI application carries a fixed set of delegated
@@ -238,6 +238,7 @@ Details:
 | IA.5 Registered methods | `reports/authenticationMethods/userRegistrationDetails` | AuditLog.Read.All | Portal path in the manifest |
 | IA.6 Privileged roles | `roleManagement/directory/roleAssignmentScheduleInstances` and `roleEligibilityScheduleInstances`, falling back to `roleAssignments` without PIM | RoleManagement.Read.Directory | **IA.6-SUB**: current privileged role holders from `IdentityInfo` |
 | IA.8 Conditional Access inventory | `identity/conditionalAccess/policies` | Policy.Read.All | **IA.8-SUB**: every CA policy seen in 30 days of sign-ins |
+| IA.15-DISABLED Roles held by disabled accounts (engine DISABLED-ROLES) | `users?$filter=accountEnabled eq false`, then the IA.6 `roleAssignments` read (cached, every directory role), `roleDefinitions`, the PIM schedule instances, and `groups/{id}/transitiveMembers` for each group that holds a role. Also reads the Azure role assignments from Resource Graph and writes IA.15-RBAC and IA.15-ENTRA | User.Read.All (users), RoleManagement.Read.Directory (Entra roles, eligible ones), GroupMember.Read.All (group members) | None. Users unreadable makes all three UNAVAILABLE, Entra roles unreadable makes IA.15-ENTRA UNAVAILABLE only |
 | IA.11 Risk policies in force | the cached IA.8 list, plus `directory/onPremisesSynchronization` | Policy.Read.All (and OnPremDirectorySynchronization.Read.All for password hash sync) | none |
 | IA.13 Consent governance | `policies/authorizationPolicy`, `policies/adminConsentRequestPolicy` | Policy.Read.All | none |
 | POS.6 Tenant Secure Score | `security/secureScores?$top=90`, `security/secureScoreControlProfiles`. Also writes POS.6-TREND and POS.6-CATEGORIES | SecurityEvents.Read.All | **POS.6-SUB**: device secure score and exposure score from the Defender API |
@@ -290,6 +291,38 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.9.0 (October 20, 2026): `IA.15-DISABLED` (engine `DISABLED-ROLES`, phase P2 Identity) reads
+  the roles still held by disabled accounts, for change request CR-19. It writes three results, all internal since
+  they name accounts:
+  - `IA.15-DISABLED`: the user accounts Graph returns for `users?$filter=accountEnabled eq false` (paged, `$top=999`),
+    with `PrincipalId`, `DisplayName`, `UserPrincipalName`, `AccountEnabled` and `OnPremisesSyncEnabled`. An account
+    is kept only when Graph returns it with `accountEnabled` false, so an enabled account is never listed. Disabled
+    service principals are not read: CR-19 asks the client about people (leave, seasonal work, emergency access), and
+    its pre-change check reads a user's account status.
+  - `IA.15-RBAC`: every Azure role assignment those accounts hold, from `authorizationresources` joined to the role
+    definitions, with the `{{MRG}}` exclusion. Microsoft Learn (Resource Graph query language, query scope) says the
+    `authorizationScopeFilter` request option defaults to `AtScopeAndBelow`, which returns the assignments at and
+    below the subscriptions in the request and so leaves out those at the management groups and root above them. The
+    query therefore runs with `AtScopeAboveAndBelow` (API 2021-06-01-preview or later, the collector uses 2022-10-01),
+    which brings back the management group and root scope assignments, and each assignment is kept once. One row per
+    assignment with the subscription, resource group, `ScopeLevel` (Root, Management group, Subscription, Resource group,
+    Resource), scope, role name and definition ID, the ABAC `Condition` and `ConditionVersion` (a condition narrows what
+    the role grants, so the rollback recreates it), the account, `HeldThrough` (Direct or Group, with the group) and
+    the assignment ID. Learn also lists only `roleassignments`, `roledefinitions` and `classicadministrators` in
+    `authorizationresources`, so the eligible assignments of PIM for Azure resources are not read, and CR-19 says so.
+    Through Lighthouse it reads PARTIAL with IA.7's caveat.
+  - `IA.15-ENTRA`: every Microsoft Entra role assignment they hold, from the `roleAssignments` read IA.6 already makes
+    (now cached and shared, and without IA.6's privileged role filter), with `AssignmentType` Standing, Time-bound,
+    Activated (from `roleAssignmentScheduleInstances`) or Eligible (from `roleEligibilityScheduleInstances`). When the
+    PIM schedule instances answer 403 the result reads PARTIAL with "Eligible assignments not visible, needs
+    RoleManagement.Read.Directory", and `PimRead` reads NoPermission on its rows.
+  - A role held through a group lists the group's disabled members (`transitiveMembers`, nested groups included, read
+    as an advanced query with `$count=true` and `ConsistencyLevel: eventual`, which Graph requires for the user cast) with
+    the group. An eligibility a user inherits from a group (`memberType` Group) is the group's, never listed as the user's. A group whose members cannot be read is named and makes that side PARTIAL.
+  - Users unreadable (403) makes all three UNAVAILABLE ("Not a zero") with User.Read.All named. Entra roles unreadable
+    makes only IA.15-ENTRA UNAVAILABLE, and a Resource Graph failure only IA.15-RBAC FAILED. No disabled account
+    makes all three EMPTY, and nothing more is read. The queries are in section 6 of the CyberSOC Monthly Report
+    Runbook. On an earlier pack CR-19 reads "Needs recollection with CyberSOC collector 1.9.0 or later".
 - CyberSOC collector 1.8.0 (October 20, 2026): `DP.1-CONTAINERS` also writes `DP.1-CONTAINERS-DETAIL`, one row per
   blob container set to Blob or Container access, with the subscription, resource group, account, container name,
   access level, the account setting, whether it is readable anonymously today and the container resource ID, from the

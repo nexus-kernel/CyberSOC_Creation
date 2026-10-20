@@ -37,8 +37,8 @@
          their client emails from the finished pack, offline.
 
     Microsoft Graph is read with GET requests only, on the instruction of Oct 11, 2026, for the
-    measures that have no other source: IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, POS.6,
-    DP.8, DP.10, DR.11 and EW.13. The Graph token comes from the Azure CLI exactly as the Defender token
+    measures that have no other source: IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED,
+    POS.6, DP.8, DP.10, DR.11 and EW.13. The Graph token comes from the Azure CLI exactly as the Defender token
     does (az account get-access-token --resource https://graph.microsoft.com/). An endpoint the
     token cannot read makes that measure UNAVAILABLE with the permission it needs, never a zero,
     and the non-Graph substitute still runs. ATMOSERA_SCRIPT_REQUIREMENTS.md 1.4 still forbids
@@ -57,8 +57,10 @@
       - GET  <storage account>/blobServices/default/containers (container access levels, DP.1-CONTAINERS and DP.1-CONTAINERS-DETAIL)
       - GET  https://graph.microsoft.com/v1.0/organization, domains,
         domains/<id>/federationConfiguration, reports/authenticationMethods/
-        userRegistrationDetails, roleManagement/directory/roleAssignments and
-        roleEligibilityScheduleInstances, identity/conditionalAccess/policies,
+        userRegistrationDetails, roleManagement/directory/roleAssignments,
+        roleDefinitions, roleAssignmentScheduleInstances and roleEligibilityScheduleInstances,
+        users (disabled accounts, IA.15-DISABLED), groups/<id>/transitiveMembers,
+        identity/conditionalAccess/policies,
         directory/onPremisesSynchronization, policies/authorizationPolicy,
         policies/adminConsentRequestPolicy, security/secureScores,
         security/secureScoreControlProfiles, admin/sharepoint/settings,
@@ -230,7 +232,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.8.0, based on the EBR collector 1.14.0
+    Version: 1.9.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -278,7 +280,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.8.0'
+$script:EbrVersion = '1.9.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -1592,6 +1594,32 @@ authorizationresources
                     "Owner", "User Access Administrator")
 | summarize Assignments = count() by Role, PrincipalType, subscriptionId
 | order by Role asc, Assignments desc
+'@))
+
+    # IA.15 (CyberSOC 1.9.0): the roles still held by disabled accounts, for change request CR-19. The engine reads
+    # the disabled users from Graph, then every Azure role assignment with this query, run with the Resource Graph
+    # authorizationScopeFilter AtScopeAboveAndBelow so assignments at the management groups and root above the
+    # subscriptions come back too, and the Entra role assignments through Graph.
+    $q.Add((New-EbrQuery -Id 'IA.15-DISABLED' -Phase 'P2 Identity' -Engine 'DISABLED-ROLES' -LighthouseIncomplete -Title 'Roles held by disabled accounts' -Notes ('Added in CyberSOC 1.9.0. Writes IA.15-DISABLED (the disabled user accounts, GET /v1.0/users?$filter=accountEnabled eq false, needs User.Read.All), IA.15-RBAC (every Azure role assignment those accounts hold, directly or through a group, from authorizationresources with the query here) and IA.15-ENTRA (every Microsoft Entra role assignment they hold: GET /v1.0/roleManagement/directory/roleAssignments, roleDefinitions, roleAssignmentScheduleInstances and roleEligibilityScheduleInstances, needs RoleManagement.Read.Directory for the eligible ones). Roles held through a group are read from the transitiveMembers of each such group (GroupMember.Read.All). Through Lighthouse, Resource Graph shows the managing tenant''s delegations instead of the client''s role assignments, so IA.15-RBAC is incomplete there. Feeds change request CR-19. Internal: names accounts.') -Query @'
+authorizationresources
+| where type =~ "microsoft.authorization/roleassignments"
+| where id !contains "{{MRG}}"
+| extend PrincipalId      = tolower(tostring(properties.principalId)),
+         PrincipalType    = tostring(properties.principalType),
+         Scope            = tostring(properties.scope),
+         RoleDefinitionId = tolower(tostring(properties.roleDefinitionId)),
+         Condition        = tostring(properties.condition),
+         ConditionVersion = tostring(properties.conditionVersion)
+| extend RoleGuid = tostring(split(RoleDefinitionId, "/")[-1])
+| join kind=leftouter (
+    authorizationresources
+    | where type =~ "microsoft.authorization/roledefinitions"
+    | extend RoleGuid = tolower(name), Role = tostring(properties.roleName)
+    | summarize Role = take_any(Role) by RoleGuid
+  ) on RoleGuid
+| where PrincipalType !~ "ServicePrincipal"   // users and groups, and any assignment without a type
+| project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, Condition, ConditionVersion, PrincipalId, PrincipalType
+| order by PrincipalId asc, Scope asc
 '@))
 
     $q.Add((New-EbrQuery -Id 'IA.8' -Phase 'P2 Identity' -Engine 'GRAPH' -Title 'Conditional Access policy inventory' -Query @'
@@ -3869,7 +3897,10 @@ function New-EbrResult {
 }
 
 function Invoke-EbrArgQuery {
-    param([string]$Query, [string[]]$Subscriptions, [string]$Tenant)
+    # RequestOptions adds request options, such as the authorizationScopeFilter IA.15-DISABLED uses to read the role
+    # assignments at the management groups above the subscriptions too. It keeps its own name because PowerShell
+    # variable names ignore case, so $Options would be the $options built for each page below.
+    param([string]$Query, [string[]]$Subscriptions, [string]$Tenant, [hashtable]$RequestOptions = @{})
     $uri = 'https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01'
     $rows = [System.Collections.Generic.List[object]]::new()
     $skip = $null
@@ -3878,6 +3909,7 @@ function Invoke-EbrArgQuery {
     do {
         $page++
         $options = @{ '$top' = 1000; resultFormat = 'objectArray' }
+        foreach ($k in $RequestOptions.Keys) { $options[$k] = $RequestOptions[$k] }
         if ($skip) { $options['$skipToken'] = $skip }
         # Scoped to the client's subscriptions every single time. Tenant scope from the
         # Atmosera tenant returns every delegated customer, and nobody wants that slide.
@@ -4228,7 +4260,7 @@ function Resolve-EbrAccessPath {
     if (-not $direct.Ok) {
         $why = if ($direct.Error) { Get-EbrAzErrorSummary $direct.Error } else { 'it cannot see ' + ($direct.Missing -join ', ') }
         Write-EbrWarn "No direct sign-in to the client tenant covers every subscription ($why)."
-        Write-EbrQuip "Through Lighthouse, Resource Graph shows your own delegations instead of the client's role assignments, so IA.7 comes out wrong."
+        Write-EbrQuip "Through Lighthouse, Resource Graph shows your own delegations instead of the client's role assignments, so IA.7 and IA.15-RBAC come out wrong."
         $answer = 'n'
         try {
             $answer = Read-EbrInput -Prompt ('Run az login --tenant {0} now for direct access? (y/n)' -f $TenantInput) -Default 'y' -Hint 'y or n.' -Validator { param($v) $v -match '^(y|yes|n|no)$' }
@@ -4254,7 +4286,7 @@ function Resolve-EbrAccessPath {
     $path = if ($arm -eq $TenantGuid) { 'Direct' } else { 'Lighthouse' }
     $warning = $null
     if ($path -eq 'Lighthouse') {
-        $warning = "Azure data was read through Lighthouse (managing tenant $arm). Resource Graph then returns the managing tenant's Lighthouse delegations instead of the client's own role assignments, so IA.7 (Owner and User Access Administrator) is incomplete. For a complete IA.7, run az login --tenant $TenantInput and rerun. Every other Azure query reads the same through either path."
+        $warning = "Azure data was read through Lighthouse (managing tenant $arm). Resource Graph then returns the managing tenant's Lighthouse delegations instead of the client's own role assignments, so IA.7 (Owner and User Access Administrator) and IA.15-RBAC (the Azure roles of disabled accounts) are incomplete. For a complete IA.7 and IA.15-RBAC, run az login --tenant $TenantInput and rerun. Every other Azure query reads the same through either path."
     }
     [pscustomobject]@{ Path = $path; ArmTenant = $arm; SubAccess = $fallback; Warning = $warning }
 }
@@ -4634,6 +4666,14 @@ function Get-EbrGraphList {
     }
 }
 
+function Get-EbrGraphCachedList {
+    # A collection read once per run and shared, such as the role assignments that IA.6 and IA.15 both read. A
+    # read that fails is not cached, so a later caller tries again and records the same error for its own measure.
+    param($Ctx, [string]$Key, [string]$Path)
+    if (-not $Ctx.GraphCache.ContainsKey($Key)) { $Ctx.GraphCache[$Key] = @(Get-EbrGraphList -Ctx $Ctx -Path $Path) }
+    , @($Ctx.GraphCache[$Key])
+}
+
 function Get-EbrGraphObject {
     param($Ctx, [string]$Path)
     Invoke-EbrGraphGet -Uri (Get-EbrGraphUri $Path) -Tenant $Ctx.TenantGuid
@@ -4800,11 +4840,11 @@ function Get-EbrGraphIA6 {
     $pimRead = 'Yes'
     $detail = 'Standing is a permanent active assignment. Activated is a PIM activation in progress. Eligible needs activation. Exclude documented break-glass accounts before quoting a standing count.'
     try {
-        foreach ($a in @(Get-EbrGraphList -Ctx $Ctx -Path 'roleManagement/directory/roleAssignmentScheduleInstances?$expand=principal')) {
+        foreach ($a in (Get-EbrGraphCachedList -Ctx $Ctx -Key 'roleAssignmentScheduleInstances' -Path 'roleManagement/directory/roleAssignmentScheduleInstances?$expand=principal')) {
             $kind = if ([string](Get-EbrProp $a 'assignmentType') -eq 'Activated') { 'Activated' } elseif (Get-EbrProp $a 'endDateTime') { 'Time-bound' } else { 'Standing' }
             & $add $a $kind
         }
-        foreach ($e in @(Get-EbrGraphList -Ctx $Ctx -Path 'roleManagement/directory/roleEligibilityScheduleInstances?$expand=principal')) { & $add $e 'Eligible' }
+        foreach ($e in (Get-EbrGraphCachedList -Ctx $Ctx -Key 'roleEligibilityScheduleInstances' -Path 'roleManagement/directory/roleEligibilityScheduleInstances?$expand=principal')) { & $add $e 'Eligible' }
     }
     catch {
         # No PIM (no Entra ID P2) answers 400 here, and a token without RoleManagement.Read.Directory
@@ -4819,9 +4859,262 @@ function Get-EbrGraphIA6 {
         else {
             $detail = 'PIM schedule instances were not readable (' + (Get-EbrAzErrorSummary $why) + '), so every privileged assignment is listed as Standing from roleAssignments. Without Entra ID P2 that is the whole picture.'
         }
-        foreach ($a in @(Get-EbrGraphList -Ctx $Ctx -Path 'roleManagement/directory/roleAssignments?$expand=principal')) { & $add $a 'Standing' }
+        foreach ($a in (Get-EbrGraphCachedList -Ctx $Ctx -Key 'roleAssignments' -Path 'roleManagement/directory/roleAssignments?$expand=principal')) { & $add $a 'Standing' }
     }
     New-EbrGraphResult -Rows $rows.ToArray() -Columns @('Role', 'RoleDefinitionId', 'AssignmentType', 'PrincipalType', 'PrincipalId', 'PrincipalDisplayName', 'PrincipalUpn', 'DirectoryScope', 'EndDateUtc', 'PimRead') -Detail $detail
+}
+
+function Get-EbrScopeLevel {
+    # The level of an Azure role assignment scope, read from its path. The root scope (/) sits above every
+    # management group.
+    param([string]$Scope)
+    $s = $Scope.Trim().TrimEnd('/')
+    if (-not $s) { 'Root' }
+    elseif ($s -match '^/providers/Microsoft\.Management/managementGroups/[^/]+$') { 'Management group' }
+    elseif ($s -match '^/subscriptions/[^/]+$') { 'Subscription' }
+    elseif ($s -match '^/subscriptions/[^/]+/resourceGroups/[^/]+$') { 'Resource group' }
+    elseif ($s -match '^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/.+') { 'Resource' }
+    else { 'Other' }
+}
+
+function Invoke-EbrDisabledRoles {
+    # IA.15 (CyberSOC 1.9.0), for change request CR-19. Returns three results: IA.15-DISABLED, the disabled user
+    # accounts, IA.15-RBAC, every Azure role assignment they hold, and IA.15-ENTRA, every Microsoft Entra role
+    # assignment they hold, directly or through a group. An account is kept only when Graph returns it with
+    # accountEnabled false, so an enabled account is never listed, even if the filter were ignored. Disabled
+    # service principals are not read: CR-19 asks about people, and the portal check it makes before removing a
+    # role reads a user's account status. When the users cannot be read, the roles cannot be tied to anyone, so
+    # all three results are UNAVAILABLE. When only one side cannot be read, only that side is.
+    param($Ctx, [string]$Query)
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $elapsed = { $sw.Elapsed.TotalSeconds }
+    $userColumns = @('PrincipalId', 'PrincipalType', 'DisplayName', 'UserPrincipalName', 'AccountEnabled', 'OnPremisesSyncEnabled')
+    $rbacColumns = @('subscriptionId', 'resourceGroup', 'ScopeLevel', 'Scope', 'Role', 'RoleDefinitionId', 'Condition', 'ConditionVersion', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'AssignmentId')
+    $entraColumns = @('Role', 'RoleDefinitionId', 'DirectoryScope', 'AssignmentType', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'EndDateUtc', 'AssignmentId', 'PimRead')
+    $graphFix = { param([string]$Permission) 'Fix: az login --tenant {0} --scope https://graph.microsoft.com/{1}, then rerun.' -f $Ctx.TenantGuid, $Permission }
+    $all = {
+        param([string]$Status, [string]$Detail)
+        @{
+            Disabled = New-EbrResult -ResultId 'IA.15-DISABLED' -Status $Status -Columns $userColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
+            Rbac     = New-EbrResult -ResultId 'IA.15-RBAC' -Status $Status -Columns $rbacColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
+            Entra    = New-EbrResult -ResultId 'IA.15-ENTRA' -Status $Status -Columns $entraColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
+        }
+    }
+    if (-not $Ctx.GraphAvailable) {
+        $why = if ($Ctx.GraphReason) { $Ctx.GraphReason } else { 'Microsoft Graph was not initialised.' }
+        return & $all 'UNAVAILABLE' ('Not a zero: Microsoft Graph was not reachable, so the disabled accounts, and the roles they hold, are unknown. ' + $why).Trim()
+    }
+
+    try { $users = @(Get-EbrGraphList -Ctx $Ctx -Path 'users?$filter=accountEnabled eq false&$select=id,displayName,userPrincipalName,accountEnabled,onPremisesSyncEnabled&$top=999') }
+    catch {
+        $m = $_.Exception.Message -replace '\s+', ' '
+        if ($m -match '^GRAPH-403') {
+            Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'User.Read.All'
+            return & $all 'UNAVAILABLE' ('Not a zero: the Graph token cannot read user accounts, so the disabled accounts, and the roles they hold, are unknown. Needs User.Read.All. {0} {1}' -f (& $graphFix 'User.Read.All'), $m)
+        }
+        return & $all 'FAILED' ('The disabled user accounts could not be read, so the roles they hold are unknown. ' + $m)
+    }
+    $disabled = @{}
+    foreach ($u in $users) {
+        if ([string](Get-EbrProp $u 'accountEnabled') -ine 'false') { continue }
+        $id = ([string](Get-EbrProp $u 'id')).ToLowerInvariant()
+        if (-not $id -or $disabled.ContainsKey($id)) { continue }
+        $disabled[$id] = [pscustomobject]@{
+            PrincipalId = $id; PrincipalType = 'User'; DisplayName = [string](Get-EbrProp $u 'displayName'); UserPrincipalName = [string](Get-EbrProp $u 'userPrincipalName')
+            AccountEnabled = $false; OnPremisesSyncEnabled = (Test-EbrTrue (Get-EbrProp $u 'onPremisesSyncEnabled'))
+        }
+    }
+    $userRows = @($disabled.Values | Sort-Object UserPrincipalName, PrincipalId)
+    if (-not $userRows.Count) {
+        $none = 'No disabled user account, so no disabled account holds a role.'
+        $r = & $all 'EMPTY' $none
+        $r.Disabled.Detail = 'No disabled user account. Disabled service principals are not read.'
+        return $r
+    }
+
+    # A row for each disabled account a role reaches: the account itself, or the disabled members of the group that
+    # holds it. A group is read once, with its nested groups, and one that cannot be read is named in the detail.
+    # Microsoft Graph takes the user cast on transitiveMembers only as an advanced query, so the request carries
+    # $count=true and Invoke-EbrGraphGet adds ConsistencyLevel eventual.
+    $groups = @{}
+    $groupFor = {
+        param([string]$GroupId, [string]$Name)
+        if ($groups.ContainsKey($GroupId)) { return $groups[$GroupId] }
+        $g = [pscustomobject]@{ Id = $GroupId; Name = $Name; Members = @(); Read = $true }
+        try {
+            if (-not $g.Name) { $g.Name = [string](Get-EbrProp (Get-EbrGraphObject -Ctx $Ctx -Path ('groups/{0}?$select=id,displayName' -f $GroupId)) 'displayName') }
+            $g.Members = @(Get-EbrGraphList -Ctx $Ctx -Path ('groups/{0}/transitiveMembers/microsoft.graph.user?$count=true&$select=id&$top=999' -f $GroupId) |
+                    ForEach-Object { ([string](Get-EbrProp $_ 'id')).ToLowerInvariant() } | Where-Object { $disabled.ContainsKey($_) } | Sort-Object -Unique)
+        }
+        catch {
+            $m = $_.Exception.Message
+            # A group deleted since the role was given to it holds the role for no one.
+            if ($m -notmatch '^HTTP 404\b|Request_ResourceNotFound') {
+                $g.Read = $false
+                if ($m -match '^GRAPH-403') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'GroupMember.Read.All' -Partial 'IA.15 (roles held through groups)' }
+            }
+        }
+        $groups[$GroupId] = $g
+        $g
+    }
+    $reach = {
+        param([string]$PrincipalId, [bool]$IsGroup, [string]$GroupName, [hashtable]$Fields, $Unread)
+        if ($disabled.ContainsKey($PrincipalId)) {
+            $u = $disabled[$PrincipalId]
+            $o = [ordered]@{}
+            foreach ($k in $Fields.Keys) { $o[$k] = $Fields[$k] }
+            $o.PrincipalId = $u.PrincipalId; $o.UserPrincipalName = $u.UserPrincipalName; $o.DisplayName = $u.DisplayName; $o.OnPremisesSyncEnabled = $u.OnPremisesSyncEnabled
+            $o.HeldThrough = 'Direct'; $o.GroupId = ''; $o.GroupName = ''
+            [pscustomobject]$o
+        }
+        elseif ($IsGroup -and $PrincipalId) {
+            $g = & $groupFor $PrincipalId $GroupName
+            if (-not $g.Read -and $g.Id -notin $Unread) { $Unread.Add($g.Id) }
+            foreach ($member in $g.Members) {
+                $u = $disabled[$member]
+                $o = [ordered]@{}
+                foreach ($k in $Fields.Keys) { $o[$k] = $Fields[$k] }
+                $o.PrincipalId = $u.PrincipalId; $o.UserPrincipalName = $u.UserPrincipalName; $o.DisplayName = $u.DisplayName; $o.OnPremisesSyncEnabled = $u.OnPremisesSyncEnabled
+                $o.HeldThrough = 'Group'; $o.GroupId = $g.Id; $o.GroupName = $g.Name
+                [pscustomobject]$o
+            }
+        }
+    }
+    $groupText = { param($Unread, [string]$Side)
+        if ($Unread.Count) { ' The members of {0} could not be read, so {1} roles held through {2} are not listed: {3}.' -f (Format-EbrCount $Unread.Count 'group' 'groups'), $Side, $(if ($Unread.Count -eq 1) { 'it' } else { 'them' }), ($Unread -join ', ') } else { '' } }
+
+    # Microsoft Entra roles: the active assignments from roleAssignments, read once with IA.6, every directory role
+    # rather than the 12 privileged ones, and the eligible ones from PIM when the token can read them.
+    $entra = $null
+    $entraRows = [System.Collections.Generic.List[object]]::new()
+    $entraUnread = [System.Collections.Generic.List[string]]::new()
+    try { $assignments = Get-EbrGraphCachedList -Ctx $Ctx -Key 'roleAssignments' -Path 'roleManagement/directory/roleAssignments?$expand=principal' }
+    catch {
+        $m = $_.Exception.Message -replace '\s+', ' '
+        if ($m -match '^GRAPH-403') {
+            Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'RoleManagement.Read.Directory'
+            $entra = New-EbrResult -ResultId 'IA.15-ENTRA' -Status 'UNAVAILABLE' -Columns $entraColumns -Source 'Microsoft Graph' -Detail ('Not a zero: the Graph token cannot read Microsoft Entra role assignments, so the Entra roles held by the disabled accounts are unknown. Needs RoleManagement.Read.Directory. {0} {1}' -f (& $graphFix 'RoleManagement.Read.Directory'), $m) -DurationSec (& $elapsed)
+        }
+        else { $entra = New-EbrResult -ResultId 'IA.15-ENTRA' -Status 'FAILED' -Columns $entraColumns -Source 'Microsoft Graph' -Detail ('The Microsoft Entra role assignments could not be read. ' + $m) -DurationSec (& $elapsed) }
+    }
+    if (-not $entra) {
+        $roleNames = @{}
+        try {
+            foreach ($d in (Get-EbrGraphCachedList -Ctx $Ctx -Key 'roleDefinitions' -Path 'roleManagement/directory/roleDefinitions?$select=id,displayName,templateId')) {
+                foreach ($k in (Get-EbrProp $d 'id'), (Get-EbrProp $d 'templateId')) { if ($k) { $roleNames[([string]$k).ToLowerInvariant()] = [string](Get-EbrProp $d 'displayName') } }
+            }
+        }
+        catch { $null = $_ }   # names fall back to the privileged role list, then to the role definition ID
+        $roleName = { param([string]$Id) if ($roleNames[$Id]) { $roleNames[$Id] } elseif ($script:EbrPrivilegedRoleTemplates[$Id]) { $script:EbrPrivilegedRoleTemplates[$Id] } else { $Id } }
+        $keyOf = { param($a) '{0}|{1}|{2}' -f ([string](Get-EbrProp $a 'principalId')).ToLowerInvariant(), ([string](Get-EbrProp $a 'roleDefinitionId')).ToLowerInvariant(), [string](Get-EbrProp $a 'directoryScopeId') }
+        $active = @{}
+        $eligible = @()
+        $pimRead = 'Yes'
+        $pimWhy = ''
+        $classify = { param([string]$Why) if ($Why -match '^GRAPH-403') { 'NoPermission' } elseif ($Why -match '^HTTP 400\b|AadPremiumLicenseRequired') { 'NoLicense' } else { 'Error' } }
+        # The two schedule reads fail on their own. When only the eligible one fails, the active instances read before
+        # it still mark each assignment Activated or Time-bound with its end date, so the rollback never restores a
+        # temporary assignment as a permanent one.
+        $activeRead = $true
+        try {
+            foreach ($a in (Get-EbrGraphCachedList -Ctx $Ctx -Key 'roleAssignmentScheduleInstances' -Path 'roleManagement/directory/roleAssignmentScheduleInstances?$expand=principal')) {
+                $active[(& $keyOf $a)] = $a
+            }
+        }
+        catch {
+            $pimWhy = $_.Exception.Message -replace '\s+', ' '
+            $active.Clear(); $activeRead = $false
+            $pimRead = & $classify $pimWhy
+        }
+        if ($activeRead) {
+            try { $eligible = Get-EbrGraphCachedList -Ctx $Ctx -Key 'roleEligibilityScheduleInstances' -Path 'roleManagement/directory/roleEligibilityScheduleInstances?$expand=principal' }
+            catch {
+                $pimWhy = $_.Exception.Message -replace '\s+', ' '
+                $eligible = @()
+                $pimRead = & $classify $pimWhy
+            }
+        }
+        if ($pimRead -eq 'NoPermission') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'RoleManagement.Read.Directory' -Partial 'IA.15-ENTRA (eligible role assignments)' }
+        $entraRow = {
+            param($a, [string]$Kind, [string]$End)
+            $p = Get-EbrProp $a 'principal'
+            $roleId = ([string](Get-EbrProp $a 'roleDefinitionId')).ToLowerInvariant()
+            $fields = [ordered]@{
+                Role = (& $roleName $roleId); RoleDefinitionId = $roleId; DirectoryScope = [string](Get-EbrProp $a 'directoryScopeId'); AssignmentType = $Kind
+                EndDateUtc = $End; AssignmentId = [string](Get-EbrProp $a 'id'); PimRead = $pimRead
+            }
+            $isGroup = (([string](Get-EbrProp $p '@odata.type')) -replace '^#microsoft\.graph\.', '') -eq 'group'
+            foreach ($row in @(& $reach ([string](Get-EbrProp $a 'principalId')).ToLowerInvariant() $isGroup ([string](Get-EbrProp $p 'displayName')) $fields $entraUnread)) { $entraRows.Add($row) }
+        }
+        foreach ($a in $assignments) {
+            $instance = $active[(& $keyOf $a)]
+            $end = Format-EbrUtc (Get-EbrProp $instance 'endDateTime')
+            $kind = if ([string](Get-EbrProp $instance 'assignmentType') -eq 'Activated') { 'Activated' } elseif ($end) { 'Time-bound' } else { 'Standing' }
+            & $entraRow $a $kind $end
+        }
+        # An eligibility a user inherits from a group (memberType Group) is the group's own assignment, which is read
+        # with the group and listed for review, so it is never listed as the user's to remove.
+        foreach ($e in $eligible) {
+            if ([string](Get-EbrProp $e 'memberType') -in 'Group', 'Inherited') { continue }
+            & $entraRow $e 'Eligible' (Format-EbrUtc (Get-EbrProp $e 'endDateTime'))
+        }
+        $rows = @($entraRows | Sort-Object UserPrincipalName, Role, AssignmentType)
+        $detail = '{0} held by {1} of the {2}, {3} through a group.' -f (Format-EbrCount $rows.Count 'Microsoft Entra role assignment' 'Microsoft Entra role assignments'), @($rows | ForEach-Object PrincipalId | Sort-Object -Unique).Count, (Format-EbrCount $userRows.Count 'disabled account' 'disabled accounts'), @($rows | Where-Object HeldThrough -eq 'Group').Count
+        $partial = $false
+        switch ($pimRead) {
+            'NoPermission' { $partial = $true; $detail = 'Eligible assignments not visible, needs RoleManagement.Read.Directory, so only active assignments are listed{0}. ' -f $(if ($activeRead) { '' } else { ' and an activated one reads as Standing' }) + $detail }
+            'Error' { $partial = $true; $detail = ('Eligible assignments not visible, the PIM schedule instances could not be read ({0}), so only active assignments are listed. ' -f (Get-EbrAzErrorSummary $pimWhy)) + $detail }
+            'NoLicense' { $detail += ' PIM is not licensed (no Microsoft Entra ID P2), so there are no eligible assignments and every active one is standing.' }
+        }
+        if ($entraUnread.Count) { $partial = $true; $detail += & $groupText $entraUnread 'the Entra' }
+        $status = if ($partial) { 'PARTIAL' } elseif ($rows.Count) { 'OK' } else { 'EMPTY' }
+        $entra = New-EbrResult -ResultId 'IA.15-ENTRA' -Status $status -Rows $rows -Columns $entraColumns -Source 'Microsoft Graph' -Detail $detail -DurationSec (& $elapsed)
+    }
+
+    # Azure roles: every role assignment Resource Graph returns for the subscriptions and, through the
+    # authorizationScopeFilter, for the management groups and root above them. Microsoft Learn: the filter defaults
+    # to AtScopeAndBelow, which leaves out assignments at a parent scope. Each assignment is kept once.
+    $source = 'Resource Graph ({0}) and Microsoft Graph' -f $(if ($Ctx.AccessPath) { $Ctx.AccessPath.ToLowerInvariant() } else { 'direct' })
+    $rbacUnread = [System.Collections.Generic.List[string]]::new()
+    try {
+        $arg = Invoke-EbrArgQuery -Query $Query -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant -RequestOptions @{ authorizationScopeFilter = 'AtScopeAboveAndBelow' }
+        $seen = @{}
+        $rbacRows = [System.Collections.Generic.List[object]]::new()
+        foreach ($a in @($arg.Rows)) {
+            $assignmentId = [string](Get-EbrProp $a 'AssignmentId')
+            if (-not $assignmentId -or $seen.ContainsKey($assignmentId.ToLowerInvariant())) { continue }
+            $seen[$assignmentId.ToLowerInvariant()] = $true
+            $scope = [string](Get-EbrProp $a 'Scope')
+            $fields = [ordered]@{
+                subscriptionId = $(if ($scope -match '^/subscriptions/([^/]+)') { $Matches[1].ToLowerInvariant() } else { '' })
+                resourceGroup = $(if ($scope -match '^/subscriptions/[^/]+/resourceGroups/([^/]+)') { $Matches[1] } else { '' })
+                ScopeLevel = Get-EbrScopeLevel $scope; Scope = $scope
+                Role = $(if ([string](Get-EbrProp $a 'Role')) { [string](Get-EbrProp $a 'Role') } else { [string](Get-EbrProp $a 'RoleDefinitionId') })
+                RoleDefinitionId = ([string](Get-EbrProp $a 'RoleDefinitionId')).ToLowerInvariant(); AssignmentId = $assignmentId
+                # An ABAC condition narrows what the role grants, so the rollback recreates it exactly.
+                Condition = [string](Get-EbrProp $a 'Condition'); ConditionVersion = [string](Get-EbrProp $a 'ConditionVersion')
+            }
+            foreach ($row in @(& $reach ([string](Get-EbrProp $a 'PrincipalId')).ToLowerInvariant() ([string](Get-EbrProp $a 'PrincipalType') -eq 'Group') '' $fields $rbacUnread)) { $rbacRows.Add($row) }
+        }
+        $rows = @($rbacRows | Sort-Object UserPrincipalName, Scope, Role)
+        $detail = '{0} held by {1} of the {2}, {3} through a group, read in the subscriptions of the pack and at the management groups and root scope above them.' -f (Format-EbrCount $rows.Count 'Azure role assignment' 'Azure role assignments'), @($rows | ForEach-Object PrincipalId | Sort-Object -Unique).Count, (Format-EbrCount $userRows.Count 'disabled account' 'disabled accounts'), @($rows | Where-Object HeldThrough -eq 'Group').Count
+        if ($arg.Detail) { $detail += ' ' + $arg.Detail }
+        $partial = [bool]$arg.Detail
+        if ($Ctx.AccessPath -eq 'Lighthouse') { $partial = $true; $detail += " Read through Lighthouse, which shows the managing tenant's delegations rather than the client's own role assignments, so this is incomplete. Sign in directly (az login --tenant followed by the client domain) and rerun." }
+        if ($rbacUnread.Count) { $partial = $true; $detail += & $groupText $rbacUnread 'the Azure' }
+        $status = if ($partial) { 'PARTIAL' } elseif ($rows.Count) { 'OK' } else { 'EMPTY' }
+        $rbac = New-EbrResult -ResultId 'IA.15-RBAC' -Status $status -Rows $rows -Columns $rbacColumns -Source $source -Detail $detail -DurationSec (& $elapsed)
+    }
+    catch { $rbac = New-EbrResult -ResultId 'IA.15-RBAC' -Status 'FAILED' -Columns $rbacColumns -Source $source -Detail ('The Azure role assignments could not be read. ' + ($_.Exception.Message -replace '\s+', ' ')) -DurationSec (& $elapsed) }
+
+    $withAzure = @(@($rbac.Rows) | ForEach-Object PrincipalId | Sort-Object -Unique).Count
+    $withEntra = @(@($entra.Rows) | ForEach-Object PrincipalId | Sort-Object -Unique).Count
+    $userDetail = '{0}, {1} synced from on-premises. {2} hold an Azure role (IA.15-RBAC {3}) and {4} a Microsoft Entra role (IA.15-ENTRA {5}), directly or through a group. Disabled service principals are not read.' -f (Format-EbrCount $userRows.Count 'disabled user account' 'disabled user accounts'), @($userRows | Where-Object OnPremisesSyncEnabled).Count, $withAzure, $rbac.Status, $withEntra, $entra.Status
+    @{
+        Disabled = New-EbrResult -ResultId 'IA.15-DISABLED' -Status 'OK' -Rows $userRows -Columns $userColumns -Source 'Microsoft Graph' -Detail $userDetail -DurationSec (& $elapsed)
+        Rbac     = $rbac
+        Entra    = $entra
+    }
 }
 
 function Get-EbrGraphCaPolicies {
@@ -5457,6 +5750,14 @@ function Invoke-EbrCatalogItem {
             if ($failed.Count) { $detailText += ' Accounts not listed add no rows, see DP.1-CONTAINERS.' }
             $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-CONTAINERS-DETAIL' -Status $detailStatus -Rows $details.ToArray() -Columns $detailColumns -Source $source -Detail $detailText -DurationSec (& $elapsed)))
             return New-EbrResult -ResultId $Item.Id -Status $status -Rows $rows.ToArray() -Columns $columns -Source $source -Detail $detail -DurationSec (& $elapsed)
+        }
+        'DISABLED-ROLES' {
+            # IA.15-DISABLED, with IA.15-RBAC and IA.15-ENTRA as its detail (CyberSOC 1.9.0).
+            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Microsoft Graph, then Resource Graph with authorizationScopeFilter AtScopeAboveAndBelow, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
+            $r = Invoke-EbrDisabledRoles -Ctx $Ctx -Query $text
+            $Ctx.Pending.Add($r.Rbac)
+            $Ctx.Pending.Add($r.Entra)
+            return $r.Disabled
         }
         'COMPUTE-SKUS' {
             Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the Microsoft.Compute/skus path of each subscription and region, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
