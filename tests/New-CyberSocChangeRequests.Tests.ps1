@@ -1681,7 +1681,16 @@ Describe 'Change request variants' {
         $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-16 with two machines an admin rule keeps open'
         $email | Should -Match 'On virtual machines vm-web01 \(port 3389\) and vm-web02 \(ports 22 and 3389\), a central network policy, a security admin rule in Azure Virtual Network Manager, keeps those ports open to the internet\. That policy applies before any network security group rule, so this change cannot close those ports there, and they stay open until the policy changes\.'
-        { & $generator -EvidencePath $pack -AdminRuleOpen 'vm-web01:443' } | Should -Throw '*-AdminRuleOpen takes each machine as name:port with port 22, 3389, 5985 or 5986*'
+        # A machine name is unique only within its resource group, so machines of the same name in different
+        # scopes stay apart, named by resource group or by resource ID.
+        $vmId = "/subscriptions/$s2/resourceGroups/rg-dev/providers/Microsoft.Compute/virtualMachines/vm-web01"
+        $null = & $generator -EvidencePath $pack -AdminRuleOpen 'rg-web/vm-web01:3389', "$($vmId):3389", 'RG-WEB/VM-WEB01:22'
+        $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-16 with two machines of the same name'
+        $email | Should -Match ('On virtual machines vm-web01 in resource group rg-web \(ports 22 and 3389\) and vm-web01 in resource group rg-dev of subscription Example, Dev Test \({0}\) \(port 3389\), a central network policy' -f $s2)
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '- CR-16 names 2 machines that a security admin rule with Always Allow keeps open'
+        { & $generator -EvidencePath $pack -AdminRuleOpen 'a/b/vm-web01:3389' } | Should -Throw '*-AdminRuleOpen takes each machine as name:port, resourceGroup/name:port or the resource ID*'
+        { & $generator -EvidencePath $pack -AdminRuleOpen 'vm-web01:443' } | Should -Throw '*-AdminRuleOpen takes each machine as name:port*with port 22, 3389, 5985 or 5986*'
         { & $generator -EvidencePath $pack -AdminRuleOpen 'vm-web01' } | Should -Throw '*-AdminRuleOpen takes each machine as name:port*'
 
         # With nothing for CR-16 to close, the index still names the machine for escalation.

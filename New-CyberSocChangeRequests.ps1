@@ -51,8 +51,9 @@
     before it. Defaults to two weeks after the build date, and must be at least eight days after it.
 .PARAMETER AdminRuleOpen
     The virtual machines whose effective security rules show an Azure Virtual Network Manager security
-    admin rule with Always Allow on a management port from an internet source, each as name:port, such as
-    vm-jump01:3389. Security admin rules apply before network security groups, so CR-16 cannot close those
+    admin rule with Always Allow on a management port from an internet source, each as name:port,
+    resourceGroup/name:port or the resource ID of the virtual machine followed by :port, such as
+    rg-web/vm-web01:3389. Name the resource group where machines in different resource groups share a name. Security admin rules apply before network security groups, so CR-16 cannot close those
     ports. The CR-16 email then says a central network policy keeps them open and asks who manages it, and
     the change request and the index name them.
 .EXAMPLE
@@ -610,14 +611,22 @@ function Join-Words([string[]]$Words) {
 # The management ports CR-16 closes, and how a rule source reads in a sentence.
 $managementPorts = '22', '3389', '5985', '5986'
 # The machines -AdminRuleOpen names, each with the management ports a security admin rule with Always Allow keeps
-# open to the internet. That rule applies before every network security group, so CR-16 cannot close them.
+# open to the internet. That rule applies before every network security group, so CR-16 cannot close them. A
+# machine name is unique only within its resource group, so a machine can be named with its resource group or by
+# its resource ID, and machines of the same name in different scopes stay apart.
 $heldOpen = [ordered]@{}
 foreach ($entry in @($AdminRuleOpen | Where-Object { $_ })) {
-    if ($entry -notmatch '^\s*([^:\s][^:]*?)\s*:\s*(22|3389|5985|5986)\s*$') { throw ('-AdminRuleOpen takes each machine as name:port with port 22, 3389, 5985 or 5986, such as vm-jump01:3389, not "{0}".' -f (ConvertTo-CopyText $entry)) }
+    $bad = '-AdminRuleOpen takes each machine as name:port, resourceGroup/name:port or the resource ID of the virtual machine followed by :port, with port 22, 3389, 5985 or 5986, such as rg-web/vm-web01:3389, not "{0}".' -f (ConvertTo-CopyText $entry)
+    if ($entry -notmatch '^\s*(.+?)\s*:\s*(22|3389|5985|5986)\s*$') { throw $bad }
     $port = $Matches[2]
-    $machine = ConvertTo-CopyText $Matches[1]
-    $key = $machine.ToLowerInvariant()
-    if (-not $heldOpen.Contains($key)) { $heldOpen[$key] = [pscustomobject]@{ Name = $machine; Ports = [System.Collections.Generic.List[string]]::new() } }
+    $machine = $Matches[1]
+    $subscription, $group = '', ''
+    if ($machine -match '^(?i)/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.Compute/virtualMachines/([^/]+)$') { $subscription, $group, $machine = $Matches[1], $Matches[2], $Matches[3] }
+    elseif ($machine -match '^([^/\s][^/]*)/([^/\s][^/]*)$') { $group, $machine = $Matches[1], $Matches[2] }
+    elseif ($machine -notmatch '^[^/\s][^/]*$') { throw $bad }
+    $label = (ConvertTo-CopyText $machine) + $(if ($group) { ' in resource group ' + (ConvertTo-CopyText $group) } else { '' }) + $(if ($subscription) { ' of subscription ' + (Format-Subscription $subscription) } else { '' })
+    $key = ('{0}|{1}|{2}' -f $subscription, $group, $machine).ToLowerInvariant()
+    if (-not $heldOpen.Contains($key)) { $heldOpen[$key] = [pscustomobject]@{ Name = $label; Ports = [System.Collections.Generic.List[string]]::new() } }
     if ($port -notin $heldOpen[$key].Ports) { $heldOpen[$key].Ports.Add($port) }
 }
 # Each machine with its ports, such as vm-jump01 (ports 22 and 3389).
