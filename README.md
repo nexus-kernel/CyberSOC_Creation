@@ -62,8 +62,8 @@ missing evidence never becomes a favorable zero.
    `05-change-requests/` holds one change request for each low-impact hardening item that still has resources to
    fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service, Azure SQL, Redis, Service Bus,
    Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
-   machines and on scale sets, and closing internet-facing RDP, SSH and WinRM rules), and a ready-to-send client email
-   for every change request. Every email asks for the
+   machines and on scale sets, closing internet-facing RDP, SSH and WinRM rules, and turning off plain FTP on App
+   Service apps), and a ready-to-send client email for every change request. Every email asks for the
    client's approval and reads as a letter, with no titles and each paragraph opening in its own words, in one order:
    what is to change, why, what it means for the client, the resources
    by subscription, how it can be reversed, and the request. It asks the client to approve the proposed date, two
@@ -87,7 +87,9 @@ missing evidence never becomes a favorable zero.
    (WinRM continues through just-in-time access or named addresses, since Bastion does not provide it), asks for the
    private ranges that connect where a rule is open to every address, and the index
    names the rules left out: appliance untrust interfaces, groups attached to nothing (a cleanup item) and `*` or port
-   range rules (for review). AKS node pools without encryption at host get no change
+   range rules (for review). The FTP email asks whether any deployment tool, process or person still connects over FTP or
+   FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled suits each app, and the index names the apps whose FTP state Resource Graph
+   returned empty, for a portal check, and says that deployment slots are not covered. AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
    pool replacement with the client.
 

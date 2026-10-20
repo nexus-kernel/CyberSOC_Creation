@@ -230,7 +230,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.6.0, based on the EBR collector 1.14.0
+    Version: 1.7.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -278,7 +278,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.6.0'
+$script:EbrVersion = '1.7.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2144,6 +2144,20 @@ appserviceresources
 | extend Parts = split(id, "/")
 | project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
           resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), MinTlsVersion
+| order by subscriptionId asc, resourceGroup asc, Name asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'NB.5-FTPS-DETAIL' -Phase 'P2 Network' -Engine 'ARG' -Title 'App Service sites that still allow plain FTP' -Notes 'Added in CyberSOC 1.7.0. The site configurations whose FTP state is not FtpsOnly or Disabled, an empty state included, one row per site, for change request CR-17, with the minimum TLS version, since FTPS only needs TLS 1.2. The site name, resource group and subscription are read from the configuration ID. Deployment slots (sites/slots/config) are not read. CR-17 changes the sites whose state reads AllAllowed and names the others in the index notes. Internal: names sites, the report embeds counts only.' -Query @'
+appserviceresources
+| where type =~ "microsoft.web/sites/config"
+| where id !contains "{{MRG}}"
+// appserviceresources returns site config keys in PascalCase and dynamic access is case-sensitive.
+| extend FtpsState     = tostring(coalesce(properties.FtpsState, properties.ftpsState)),
+         MinTlsVersion = tostring(coalesce(properties.MinTlsVersion, properties.minTlsVersion))
+| where not(FtpsState in~ ("FtpsOnly", "Disabled"))
+| extend Parts = split(id, "/")
+| project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
+          resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), FtpsState, MinTlsVersion
 | order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 

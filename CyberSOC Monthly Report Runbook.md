@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, and 1.6.0 for NB.2-DETAIL. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, and 1.7.0 for NB.5-FTPS-DETAIL. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -594,6 +594,24 @@ appserviceresources
 | extend Parts = split(id, "/")
 | project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
           resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), MinTlsVersion
+| order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### NB.5-FTPS-DETAIL App Service sites that still allow plain FTP
+
+Engine ARG. CyberSOC collector 1.7.0. The site configurations whose FTP state is not `FtpsOnly` or `Disabled`, one row per site, read as NB.5-DETAIL reads them: the site name, resource group and subscription from the configuration ID, and the PascalCase keys. An empty state is kept, so a site whose state Resource Graph did not return is never read as enforced. The minimum TLS version is read too, since FTPS only does not support TLS 1.0 or 1.1. Deployment slots (`sites/slots/config`) are not read. Feeds CR-17, which changes the sites whose state reads `AllAllowed` and leaves to the index notes a site whose state reads empty, since Microsoft Learn documents no state App Service applies when none is set.
+
+```kql
+appserviceresources
+| where type =~ "microsoft.web/sites/config"
+| where id !contains "{{MRG}}"
+// appserviceresources returns site config keys in PascalCase and dynamic access is case-sensitive.
+| extend FtpsState     = tostring(coalesce(properties.FtpsState, properties.ftpsState)),
+         MinTlsVersion = tostring(coalesce(properties.MinTlsVersion, properties.minTlsVersion))
+| where not(FtpsState in~ ("FtpsOnly", "Disabled"))
+| extend Parts = split(id, "/")
+| project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
+          resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), FtpsState, MinTlsVersion
 | order by subscriptionId asc, resourceGroup asc, Name asc
 ```
 
