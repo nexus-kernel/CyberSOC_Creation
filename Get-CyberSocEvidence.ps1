@@ -4934,6 +4934,8 @@ function Invoke-EbrDisabledRoles {
 
     # A row for each disabled account a role reaches: the account itself, or the disabled members of the group that
     # holds it. A group is read once, with its nested groups, and one that cannot be read is named in the detail.
+    # Microsoft Graph takes the user cast on transitiveMembers only as an advanced query, so the request carries
+    # $count=true and Invoke-EbrGraphGet adds ConsistencyLevel eventual.
     $groups = @{}
     $groupFor = {
         param([string]$GroupId, [string]$Name)
@@ -4941,7 +4943,7 @@ function Invoke-EbrDisabledRoles {
         $g = [pscustomobject]@{ Id = $GroupId; Name = $Name; Members = @(); Read = $true }
         try {
             if (-not $g.Name) { $g.Name = [string](Get-EbrProp (Get-EbrGraphObject -Ctx $Ctx -Path ('groups/{0}?$select=id,displayName' -f $GroupId)) 'displayName') }
-            $g.Members = @(Get-EbrGraphList -Ctx $Ctx -Path ('groups/{0}/transitiveMembers/microsoft.graph.user?$select=id&$top=999' -f $GroupId) |
+            $g.Members = @(Get-EbrGraphList -Ctx $Ctx -Path ('groups/{0}/transitiveMembers/microsoft.graph.user?$count=true&$select=id&$top=999' -f $GroupId) |
                     ForEach-Object { ([string](Get-EbrProp $_ 'id')).ToLowerInvariant() } | Where-Object { $disabled.ContainsKey($_) } | Sort-Object -Unique)
         }
         catch {

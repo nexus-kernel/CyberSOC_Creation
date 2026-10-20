@@ -1875,6 +1875,7 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
         Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -match 'roleManagement/directory/roleAssignments\?' }
         Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "*groups/$($script:fx.Ops)/transitiveMembers*" } -Because 'the group holds an Azure and an Entra role, and is read once'
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "*groups/$($script:fx.Ops)/transitiveMembers/microsoft.graph.user?*" -and $Uri -match '[?&]\$count=true(&|$)' } -Because 'Graph takes the user cast only as an advanced query, with $count=true and ConsistencyLevel eventual'
         $entra = $ctx.Pending | Where-Object ResultId -eq 'IA.15-ENTRA'
         $entra.Status | Should -Be 'OK'
         $entra.Detail | Should -Match 'PIM is not licensed'

@@ -2087,9 +2087,12 @@ Describe 'Change request variants' {
         $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
         $text | Should -Match ', with a condition \(version 2\.0\) kept exactly in change-requests\.csv: \(\(!\(ActionMatches'
         $rollback = @(Get-Section $text 'C) ROLLBACK PLAN') -join "`n"
-        $rollback | Should -Match 'An assignment recorded with a condition is recreated with that condition, copied exactly from change-requests\.csv, since without it the role grants more than it did\.'
-        $rollback | Should -Match 'The portal cannot add a condition at a management group or root scope'
-        $rollback | Should -Match '    az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope SCOPE --condition "CONDITION" --condition-version VERSION'
+        $rollback | Should -Match 'For an Azure role assignment recorded with a condition, recreate it with that condition, copied exactly from change-requests\.csv, since without it the role grants more than it did\.'
+        $rollback | Should -Match 'then on the Conditions tab select Add condition, set Editor type to Code, paste the condition, select Save and then Review \+ assign\.'
+        $rollback | Should -Match 'The portal cannot add a condition at a management group or root scope, so recreate one there from Azure Cloud Shell in Bash'
+        $rollback | Should -Match 'run code condition\.txt, paste the condition, save the file'
+        ($rollback -split "`n") | Should -Contain '    az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope SCOPE --condition "$(cat condition.txt)" --condition-version VERSION' -Because 'the condition is read from a file, so a token such as $key_case_sensitive$ is never expanded by the shell'
+        $rollback | Should -Not -Match 'For an Azure role assignment(, open| recorded without)' -Because 'the only Azure assignment has a condition, so it matches the condition step alone'
         $rollback | Should -Match 'one recorded for a single application or other object \(a directory scope of the form /OBJECT-ID\) from that object, such as App registrations > the application > Roles and administrators, never from the tenant-wide list'
         $rollback | Should -Match 'For a role recorded with an administrative unit or a single application, select that scope and the recorded unit or application on the Add assignments page'
         (@(Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n") | Should -Match 'Where the account holds the role at more than one scope, remove only the assignment whose scope matches the one listed\.'
@@ -2099,6 +2102,25 @@ Describe 'Change request variants' {
         $email | Should -Match 'Storage Blob Data Contributor on resource stdataprod in resource group rg-data with a condition\r?\n'
         $email | Should -Match "Application Administrator \(for the single application or other Microsoft Entra object with ID $app\)"
         $email | Should -Not -Match 'ActionMatches' -Because 'the email names the condition, the change request and CSV carry it'
+    }
+
+    It 'restores each Azure assignment through one rollback step only, so a conditioned root role is never restored without its condition' {
+        $pack = Join-Path $TestDrive 'roles-root-condition'
+        New-ChangeFixture $pack
+        $root = & $azureRole '/' 'User Access Administrator' $roleIds.Uaa $lee
+        $root.Condition = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {acdd72a7-3385-48ef-bd42-f606fba81ae7}))"
+        $root.ConditionVersion = '2.0'
+        Set-PackResult $pack 'IA.15-RBAC' @($root, (& $azureRole "/subscriptions/$s1" 'Owner' $roleIds.Owner $morgan), (& $azureRole '/' 'Reader' $roleIds.Reader $morgan))
+        Set-PackResult $pack 'IA.15-ENTRA' @()
+        $null = & $generator -EvidencePath $pack
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-19-disabled-account-roles.txt') -Raw
+        $rollback = @(Get-Section $text 'C) ROLLBACK PLAN')
+        $rollback[0] | Should -Match '^1\. For an Azure role assignment recorded without a condition, open the scope recorded for it'
+        $rollback[1] | Should -Match '^2\. For an Azure role assignment recorded with a condition, recreate it with that condition'
+        ($rollback -join "`n") | Should -Match '\. For an assignment at the root scope recorded without a condition, run in Azure Cloud Shell' -Because 'the unconditioned root Reader still has its own step'
+        $email = Get-Content (Join-Path $pack '05-change-requests/CR-19-disabled-account-roles.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-19 with a conditioned root role'
+        $email | Should -Match 'User Access Administrator on the root scope with a condition'
     }
 
     It 'removes a role at the Azure root scope from the command line, since the portal cannot, and lists it under the root scope' {

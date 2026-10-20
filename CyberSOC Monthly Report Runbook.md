@@ -513,11 +513,12 @@ GET https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentSche
 GET https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilityScheduleInstances?$expand=principal
 ```
 
-A role held by a group, on either side, is followed to the group's disabled members, nested groups included (GroupMember.Read.All). Each row names the group (`HeldThrough` Group), and CR-19 leaves it unchanged for review.
+A role held by a group, on either side, is followed to the group's disabled members, nested groups included (GroupMember.Read.All). Graph takes the user cast on `transitiveMembers` only as an advanced query, so the request carries `$count=true` and the `ConsistencyLevel: eventual` header. Each row names the group (`HeldThrough` Group), and CR-19 leaves it unchanged for review.
 
 ```http
 GET https://graph.microsoft.com/v1.0/groups/{id}?$select=id,displayName
-GET https://graph.microsoft.com/v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$select=id&$top=999
+GET https://graph.microsoft.com/v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$count=true&$select=id&$top=999
+ConsistencyLevel: eventual
 ```
 
 IA.15-RBAC, every Azure role assignment the accounts hold, with the query below. It is sent with the request option `"authorizationScopeFilter": "AtScopeAboveAndBelow"`. Microsoft Learn (Understanding the Azure Resource Graph query language, query scope) documents that the filter defaults to `AtScopeAndBelow`, which returns the assignments at and below the subscriptions in the request, so the management group and root scope assignments above them come back only with `AtScopeAboveAndBelow`. Each assignment is kept once, with its ABAC `Condition` and `ConditionVersion`, which narrow what the role grants, so CR-19's rollback recreates the assignment with them. `ScopeLevel` is read from the scope: Root (`/`), Management group, Subscription, Resource group or Resource. Learn lists only `roleassignments`, `roledefinitions` and `classicadministrators` in `authorizationresources`, so the eligible assignments of Privileged Identity Management for Azure resources are not read, and the CR-19 index says so. As with IA.7, through Lighthouse Resource Graph shows the managing tenant's delegations instead of the client's own role assignments, so IA.15-RBAC reads PARTIAL there.

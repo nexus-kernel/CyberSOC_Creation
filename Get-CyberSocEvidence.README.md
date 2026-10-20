@@ -316,8 +316,9 @@ in the pack (`results/<ID>.csv`).
     Activated (from `roleAssignmentScheduleInstances`) or Eligible (from `roleEligibilityScheduleInstances`). When the
     PIM schedule instances answer 403 the result reads PARTIAL with "Eligible assignments not visible, needs
     RoleManagement.Read.Directory", and `PimRead` reads NoPermission on its rows.
-  - A role held through a group lists the group's disabled members (`transitiveMembers`, nested groups included) with
-    the group. A group whose members cannot be read is named and makes that side PARTIAL.
+  - A role held through a group lists the group's disabled members (`transitiveMembers`, nested groups included, read
+    as an advanced query with `$count=true` and `ConsistencyLevel: eventual`, which Graph requires for the user cast) with
+    the group. An eligibility a user inherits from a group (`memberType` Group) is the group's, never listed as the user's. A group whose members cannot be read is named and makes that side PARTIAL.
   - Users unreadable (403) makes all three UNAVAILABLE ("Not a zero") with User.Read.All named. Entra roles unreadable
     makes only IA.15-ENTRA UNAVAILABLE, and a Resource Graph failure only IA.15-RBAC FAILED. No disabled account
     makes all three EMPTY, and nothing more is read. The queries are in section 6 of the CyberSOC Monthly Report
