@@ -112,9 +112,15 @@ Resources a change leaves out are named in the index notes:
     re-enabling one there turns it back on at the next sync, without the roles.
   - an account holding Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator or
     a role at the Azure root scope, to ask the client whether it is an emergency access account before sending.
-  - when IA.15-ENTRA could not see eligible assignments ("Eligible assignments not visible, needs
-    RoleManagement.Read.Directory"), that only active Entra assignments are listed, an activated one reads as
-    Standing, and an account whose only roles are eligible is missing.
+  - when IA.15-ENTRA could not see eligible assignments ("Eligible assignments not visible", for a missing
+    RoleManagement.Read.Directory or a failed schedule read), that only active Entra assignments are listed, that an
+    activated one reads as Standing when no Activated or Time-bound row shows the active schedules were read, and that
+    an account whose only roles are eligible is missing.
+  - each role listed as Activated with no Eligible row for the same account, role and directory scope. The CSV holds
+    only the activation's expiry, so implementation step 6 has the eligible assignment's start, end, role and directory
+    scope recorded from Privileged Identity Management in the change record before it is removed, and leaves one held
+    by a group in place. The rollback restores it from that record, never as permanent unless the record shows no end
+    date. An Activated role with its Eligible row is removed and restored through that row, as before.
   - when the Azure side was read through Lighthouse, that Resource Graph showed the managing tenant's delegations, so
     Azure roles may be missing. Whenever the Azure side was read, that only the subscriptions in the pack and the
     management groups and root scope above them were read, and that Resource Graph never holds the eligible
@@ -333,8 +339,11 @@ it was made, and an inherited one cannot be removed at a child scope (Remove Azu
 the root scope is removed with Azure PowerShell, the Azure CLI or the REST API rather than the portal (Elevate access
 to manage all Azure subscriptions and management groups), a Microsoft Entra role is removed under Roles and admins and
 a role held through a group by removing the account from the group (Remove Microsoft Entra role assignments), an
-eligible one in Privileged Identity Management, which does not remove the last Global Administrator assignment (Assign
-Microsoft Entra roles in Privileged Identity Management), and Resource Graph returns assignments at parent scopes only
+eligible one in Privileged Identity Management, which does not remove the last Global Administrator assignment, and an
+eligible assignment is recreated there with its start and end date and time, or as permanent (Assign Microsoft Entra
+roles in Privileged Identity Management), an Azure role assignment's State column reads Active time-bound and Edit
+columns shows its start and end time (List Azure role assignments using the Azure portal), and it is recreated as
+Active and Time bound with that end on the Assignment type tab (Assign Azure roles using the Azure portal), and Resource Graph returns assignments at parent scopes only
 with the `AtScopeAboveAndBelow` scope filter and holds role assignments, role definitions and classic administrators
 only (Understanding the Azure Resource Graph query language, Azure Resource Graph table and resource type reference). A role assignment condition filters down what the role grants and is added under Conditions in the code editor, except at a management group scope, where the portal cannot add one (Azure role assignment conditions, Add or edit Azure role assignment conditions using the Azure portal, using Azure CLI), and an Entra role can be scoped to a single app registration, which is assigned from App registrations, the application, Roles and administrators (Assign Microsoft Entra roles).
 

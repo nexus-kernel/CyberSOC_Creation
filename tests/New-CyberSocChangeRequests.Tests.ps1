@@ -957,9 +957,9 @@ Describe 'Change request generation' {
         $impl[0] | Should -Be '1. In the Azure portal, go to Microsoft Entra ID > Users and open the first account listed in the RESOURCES section.'
         $impl[1] | Should -Match '^2\. On the Overview page, read Account status, .+If it shows the account as enabled, the account has been turned back on since collection, so leave every role it holds unchanged, note it in the change record for the next pack and skip the remaining steps for it\. Leave out too any account the client asked to keep out of the change\.$'
         $impl[2] | Should -Match 'go to Access control \(IAM\) and select the Role assignments tab\.$'
-        $impl[3] | Should -Match 'whose Scope column reads This resource, select Remove and then Yes\. An assignment shown as Inherited was made at a parent scope and is removed there'
+        $impl[3] | Should -Match 'whose Scope column reads This resource\. Where the tab shows a State column and it reads Active time-bound, record in the change record the end time of the assignment, shown by selecting Edit columns and then End time, since the collection does not hold it and the rollback restores the assignment as time-bound with that end\. Select Remove and then Yes\. An assignment shown as Inherited was made at a parent scope and is removed there'
         $impl[4] | Should -Match 'Microsoft Entra ID > Roles and administrators, open the role, select the account, select Remove assignment'
-        $impl[5] | Should -Match 'Privileged Identity Management > Microsoft Entra roles > Roles, open the role, find the account on the Eligible assignments tab, with the scope listed for the role, and select Remove\. A role listed as Activated'
+        $impl[5] | Should -Be '6. For each Microsoft Entra role listed as Eligible for the account, go to Privileged Identity Management > Microsoft Entra roles > Roles, open the role, find the account on the Eligible assignments tab, with the scope listed for the role, and select Remove. A role listed as Activated comes from an eligible assignment and ends when its activation expires, so remove that eligible assignment the same way, and where the Active assignments tab still lists the activation with a Remove link, select it as well.' -Because 'an Activated role with its Eligible row keeps the wording it had'
         $impl[6] | Should -Be '7. Repeat steps 1 to 6 for each remaining account listed.'
         ($impl -join ' ') | Should -Not -Match 'az role' -Because 'only an assignment at the root scope needs the command line'
         $testing = @(Get-Section $text 'B) TESTING PLAN')
@@ -968,7 +968,11 @@ Describe 'Change request generation' {
         $testing[2] | Should -Match 'Select Assigned roles and confirm that none of the Microsoft Entra roles recorded for the account appears under Active assignments or Eligible assignments'
         $rollback = (@(Get-Section $text 'C) ROLLBACK PLAN') -join "`n")
         $rollback | Should -Match 'Access control \(IAM\) > Add > Add role assignment, select the recorded role'
+        $rollback | Should -Match 'For an Azure role assignment recorded in the change record as Active time-bound at step 4, select Active on the Assignment type tab, set Assignment duration to Time bound with the recorded end date and time, and never Permanent' -Because 'Resource Graph holds no schedule, so the end is read from the portal before removal'
         $rollback | Should -Match 'set Assignment type to Eligible with the recorded end date'
+        $rollback | Should -Match 'A role recorded as Activated needs no rollback of its own, since it came from the eligible assignment recorded with it\.'
+        $rollback | Should -Not -Match 'no Eligible line|recorded in the change record at step|Permanently eligible'
+        $text | Should -Not -Match 'no Eligible line|pim-how-to-add-role-to-user#assign-a-role'
         $rollback | Should -Match 'change-requests\.csv carries each assignment in full, with the role, role definition ID, scope, any condition and the account object ID\.'
         foreach ($r in @(Get-Section $text 'A) REFERENCES')) { $r | Should -Match '^- [^:]+: https://learn\.microsoft\.com/(azure|entra)/' }
         $text | Should -Match 'learn\.microsoft\.com/entra/identity/role-based-access-control/groups-remove-assignment'
@@ -2111,6 +2115,91 @@ Describe 'Change request variants' {
         $index | Should -Match "- The Azure role assignments were read through Azure Lighthouse, where Resource Graph shows the managing tenant's delegations instead of the client's own role assignments, so CR-19 may miss Azure roles the disabled accounts hold\."
         $index | Should -Match '- IA\.15-ENTRA was read in part, so CR-19 may miss some Microsoft Entra roles: Eligible assignments not visible'
         $index | Should -Match '- IA\.15-RBAC was read in part, so CR-19 may miss some Azure roles: '
+    }
+
+    It 'records the eligibility schedule behind an Activated role before removing it when the eligible assignments were not read' {
+        # roleAssignmentScheduleInstances read, so the activation keeps its type and expiry, but
+        # roleEligibilityScheduleInstances failed, so no Eligible row holds the eligibility behind it.
+        $pack = Join-Path $TestDrive 'roles-pim-error'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'IA.15-ENTRA' @(
+            (& $entraRole 'User Administrator' $roleIds.UserAdmin 'Standing' $morgan -PimRead 'Error')
+            (& $entraRole 'Security Reader' $roleIds.SecReader 'Activated' $lee -End '2026-10-12T14:30:00Z' -PimRead 'Error')) 'PARTIAL' 'Eligible assignments not visible, the PIM schedule instances could not be read (HTTP 503: Service Unavailable), so only active assignments are listed. 2 Microsoft Entra role assignments held by 2 of the 4 disabled accounts, 0 through a group.'
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
+        $res = @(Get-Section $text 'C) RESOURCES')
+        @($res | Where-Object { $_ -match '^- Lee Ashford .+: Security Reader, Activated, ' }) | Should -Match ', with no Eligible line, so its eligibility schedule is recorded before removal$'
+        @($res | Where-Object { $_ -match 'User Administrator, Standing' }) | Should -Not -Match 'no Eligible line'
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $impl[4] | Should -Match '^5\. For each Microsoft Entra role listed as Standing or Time-bound'
+        $impl[4] | Should -Not -Match 'could not read the Privileged Identity Management schedules' -Because 'the Activated row shows the active schedule instances were read, so Standing is trusted'
+        $impl[5] | Should -Match '^6\. For each Microsoft Entra role listed as Activated with no Eligible line for the same role and directory scope, the eligible assignment it comes from was not collected'
+        $impl[5] | Should -Match 'Before removing it, record in the change record its start time, end time, role and directory scope as the tab shows them, then select Remove\.'
+        $impl[5] | Should -Match 'Where the eligible assignment is held by a group rather than the account, leave it in place'
+        $impl[5] | Should -Not -Match 'listed as Eligible|so remove that eligible assignment the same way' -Because 'no eligibility was recorded, so none is removed unrecorded'
+        $rollback = (@(Get-Section $text 'C) ROLLBACK PLAN') -join "`n")
+        $rollback | Should -Match 'For a role recorded as Activated with no Eligible line, restore the eligible assignment it came from with the schedule recorded in the change record at step 6, never from change-requests\.csv, which holds only the activation''s expiry'
+        $rollback | Should -Match 'set Assignment type to Eligible, clear Permanently eligible, set the recorded end date and time and select Assign\. Never restore it as permanent, unless the change record shows that it had no end date, in which case leave Permanently eligible selected\.'
+        $rollback | Should -Not -Match 'needs no rollback of its own|recorded as Eligible' -Because 'the activation has no eligibility recorded with it'
+        $rollback | Should -Match 'and the change record carries each schedule recorded before removal\.'
+        $text | Should -Match 'learn\.microsoft\.com/entra/id-governance/privileged-identity-management/pim-how-to-add-role-to-user#assign-a-role'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '- 1 Microsoft Entra role listed as Activated in CR-19 has no Eligible line for the same account, role and directory scope, since eligible assignments were not visible to the collection: Lee Ashford \(lee\.ashford@contoso\.com\), Security Reader at directory scope /\. Step 6 of the implementation records the schedule of the eligible assignment behind it from Privileged Identity Management in the change record before removing it, and the rollback restores it from that record\.'
+        $index | Should -Match '- Eligible Microsoft Entra role assignments were not visible to the collection \(the Privileged Identity Management schedules could not be read\), so CR-19 lists only the active ones, and a disabled account whose only roles are eligible is not listed at all\. Collect again, or check'
+        $index | Should -Not -Match 'reads as Standing|RoleManagement\.Read\.Directory' -Because 'the active instances were read and the failure was not a permission'
+        $row = @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-19' | Where-Object Resource -eq 'lee.ashford@contoso.com, Security Reader')
+        $row.Count | Should -Be 1
+        $row[0].CurrentSetting | Should -Match 'Activated until 2026-10-12T14:30:00Z, .+, eligible assignment not collected, its schedule is recorded in the change record before removal$'
+        $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-19 with an Activated role and no eligibility recorded'
+        $email | Should -Match '- Lee Ashford \(lee\.ashford@contoso\.com\): Security Reader \(activated from an eligible assignment\)'
+    }
+
+    It 'keeps the record-first wording to the Activated role whose eligibility was not collected, matching account, role and directory scope' {
+        # Morgan's activation has its Eligible row. Lee's eligibility is held at an administrative unit, not the
+        # tenant scope of the activation, so it does not match.
+        $pack = Join-Path $TestDrive 'roles-pim-mixed'
+        New-ChangeFixture $pack
+        $unit = '/administrativeUnits/7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f'
+        Set-PackResult $pack 'IA.15-ENTRA' @(
+            (& $entraRole 'Helpdesk Administrator' $roleIds.Helpdesk 'Activated' $morgan -End '2026-10-12T15:00:00Z')
+            (& $entraRole 'Helpdesk Administrator' $roleIds.Helpdesk 'Eligible' $morgan -End '2027-06-30T00:00:00Z')
+            (& $entraRole 'Security Reader' $roleIds.SecReader 'Activated' $lee -End '2026-10-12T13:00:00Z')
+            (& $entraRole 'Security Reader' $roleIds.SecReader 'Eligible' $lee -Scope $unit -End '2027-01-31T00:00:00Z'))
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
+        $res = @(Get-Section $text 'C) RESOURCES')
+        @($res | Where-Object { $_ -match 'no Eligible line' }).Count | Should -Be 1
+        @($res | Where-Object { $_ -match 'no Eligible line' })[0] | Should -Match '^- Lee Ashford .+: Security Reader, Activated, .+directory scope /, '
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $impl[4] | Should -Match '^5\. For each Microsoft Entra role listed as Eligible for the account, go to Privileged Identity Management > Microsoft Entra roles > Roles, open the role, find the account on the Eligible assignments tab, with the scope listed for the role, and select Remove\. A role listed as Activated with an Eligible line for the same role and directory scope comes from that eligible assignment and ends when its activation expires, so remove that eligible assignment the same way'
+        $impl[4] | Should -Match 'For each Microsoft Entra role listed as Activated with no Eligible line for the same role and directory scope, the eligible assignment it comes from was not collected'
+        $rollback = (@(Get-Section $text 'C) ROLLBACK PLAN') -join "`n")
+        $rollback | Should -Match 'set Assignment type to Eligible with the recorded end date, if any'
+        $rollback | Should -Match 'A role recorded as Activated with an Eligible line for the same role and directory scope needs no rollback of its own'
+        $rollback | Should -Match 'with the schedule recorded in the change record at step 5, never from change-requests\.csv'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '- 1 Microsoft Entra role listed as Activated in CR-19 has no Eligible line for the same account, role and directory scope, since the collection holds no eligible assignment for it: Lee Ashford \(lee\.ashford@contoso\.com\), Security Reader at directory scope /\. Step 5 of the implementation records'
+        $index | Should -Not -Match 'Activated in CR-19 ha(s|ve) no Eligible line[^\r\n]*Morgan Reyes' -Because "Morgan's activation has its Eligible row"
+        $index | Should -Not -Match 'Eligible Microsoft Entra role assignments were not visible' -Because 'the eligible assignments were read'
+        $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-19 with matched and unmatched activations'
+    }
+
+    It 'records the end of a Standing Entra role before removing it when the active schedules were not read, and never restores it as permanent' {
+        $pack = Join-Path $TestDrive 'roles-pim-standing'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'IA.15-ENTRA' @((& $entraRole 'User Administrator' $roleIds.UserAdmin 'Standing' $morgan -PimRead 'NoPermission')) 'PARTIAL' 'Eligible assignments not visible, needs RoleManagement.Read.Directory, so only active assignments are listed and an activated one reads as Standing. 1 Microsoft Entra role assignment held by 1 of the 4 disabled accounts, 0 through a group.'
+        $null = & $generator -EvidencePath $pack
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-19-disabled-account-roles.txt') -Raw
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $step = @($impl | Where-Object { $_ -match 'listed as Standing or Time-bound' })[0]
+        $n = ($step -split '\.')[0]
+        $step | Should -Match 'so a role listed as Standing may be time-bound or activated from an eligible assignment\. Before removing it, open the role in Privileged Identity Management > Microsoft Entra roles > Roles and record in the change record the start time, end time and directory scope the Active assignments tab shows for the account'
+        $rollback = (@(Get-Section $text 'C) ROLLBACK PLAN') -join "`n")
+        $rollback | Should -Match ('For a role listed as Standing, use what step {0} recorded in the change record: where it recorded an end time, assign the role as active with that end date and time, never as permanent\.' -f $n)
     }
 
     It 'writes singular wording for one account and names an account with a top role as a possible emergency access account' {
