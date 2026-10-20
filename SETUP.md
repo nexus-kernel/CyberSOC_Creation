@@ -1,4 +1,4 @@
-# CyberSOC Monthly Report Toolkit v1.7.0
+# CyberSOC Monthly Report Toolkit v1.8.0
 
 `Export-CyberSocToolkit.ps1` writes this file into each release zip with the packaging date.
 
