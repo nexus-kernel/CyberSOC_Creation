@@ -1720,6 +1720,8 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
             $sub = if ($Scope -match '^/subscriptions/([^/]+)') { $Matches[1] } else { '' }
             [pscustomobject]@{ AssignmentId = "$Scope/providers/Microsoft.Authorization/roleAssignments/$name"; subscriptionId = $sub; Scope = $Scope; RoleDefinitionId = "/subscriptions/$($f.S1)/providers/Microsoft.Authorization/roleDefinitions/$Role"; Role = $RoleName; PrincipalId = $Principal; PrincipalType = $Type } }
         function script:Get-TestGuid([string]$Seed) { ([guid]::new([Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($Seed)))).ToString() }
+        # A real ABAC condition shape from Microsoft Learn, with the angle brackets a tag key uses.
+        $script:fxCondition = "((!(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'} AND NOT SubOperationMatches{'Blob.List'})) OR (@Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<`$key_case_sensitive`$>] StringEquals 'Cascade'))"
         $rg = "/subscriptions/$($f.S1)/resourceGroups/rg-app"
         $script:fxArg = @(
             (& $ra $f.Mg $f.Reader 'Reader' $f.Morgan)
@@ -1727,6 +1729,7 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
             (& $ra $rg $f.Contributor 'Contributor' $f.Morgan)
             (& $ra "$rg/providers/Microsoft.KeyVault/vaults/kv-app-prod" $f.KvAdmin 'Key Vault Administrator' $f.Morgan)
             (& $ra "/subscriptions/$($f.S2)/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stdataprod" $f.BlobContributor 'Storage Blob Data Contributor' $f.Lee)
+            | ForEach-Object { $_ | Add-Member -NotePropertyName Condition -NotePropertyValue $script:fxCondition -PassThru | Add-Member -NotePropertyName ConditionVersion -NotePropertyValue '2.0' -PassThru }
             (& $ra '/' $f.Uaa 'User Access Administrator' $f.Lee)
             (& $ra "/subscriptions/$($f.S2)" $f.Owner 'Owner' $f.Ann)
             (& $ra "/subscriptions/$($f.S2)/resourceGroups/rg-ops" $f.Contributor 'Contributor' $f.Ops 'Group')
@@ -1744,7 +1747,9 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
             [pscustomobject]@{ id = 's2'; roleDefinitionId = $f.SecReader; principalId = $f.Lee; directoryScopeId = '/'; assignmentType = 'Activated'; endDateTime = '2026-10-11T20:00:00Z' })
         $script:fxEligible = @(
             [pscustomobject]@{ id = 'e1'; roleDefinitionId = $f.SecReader; principalId = $f.Lee; directoryScopeId = '/'; endDateTime = '2027-03-31T00:00:00Z'; principal = (& $principal $f.Lee 'user' 'Lee Ashford' 'lee.ashford@contoso.com') }
-            [pscustomobject]@{ id = 'e2'; roleDefinitionId = $f.Billing; principalId = $f.Ann; directoryScopeId = '/'; endDateTime = $null; principal = (& $principal $f.Ann 'user' 'Ann Larsen' 'ann.larsen@contoso.com') })
+            [pscustomobject]@{ id = 'e2'; roleDefinitionId = $f.Billing; principalId = $f.Ann; directoryScopeId = '/'; endDateTime = $null; principal = (& $principal $f.Ann 'user' 'Ann Larsen' 'ann.larsen@contoso.com') }
+            # Kim's eligibility inherited from a group is the group's assignment, never Kim's own to remove.
+            [pscustomobject]@{ id = 'e3'; roleDefinitionId = $f.SecReader; principalId = $f.Kim; directoryScopeId = '/'; memberType = 'Group'; endDateTime = $null; principal = (& $principal $f.Kim 'user' 'Kim Osei' 'kim.osei@contoso.com') })
         $script:fxDefinitions = @(
             foreach ($d in @(@($f.Ga, 'Global Administrator'), @($f.UserAdmin, 'User Administrator'), @($f.Helpdesk, 'Helpdesk Administrator'), @($f.SecReader, 'Security Reader'), @($f.Billing, 'Billing Administrator'))) {
                 [pscustomobject]@{ id = $d[0]; templateId = $d[0]; displayName = $d[1] } })
@@ -1796,7 +1801,8 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $q | Should -Match '^authorizationresources\r?\n\| where type =~ "microsoft\.authorization/roleassignments"'
         $q | Should -Match '\| where id !contains "\{\{MRG\}\}"'
         $q | Should -Match 'join kind=leftouter \(\s+authorizationresources\s+\| where type =~ "microsoft\.authorization/roledefinitions"'
-        $q | Should -Match 'project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, PrincipalId, PrincipalType'
+        $q | Should -Match 'Condition        = tostring\(properties\.condition\),\r?\n\s+ConditionVersion = tostring\(properties\.conditionVersion\)'
+        $q | Should -Match 'project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, Condition, ConditionVersion, PrincipalId, PrincipalType'
         $q | Should -Not -Match 'principalType in' -Because 'an assignment without a principal type must not be dropped'
         $script:item.Notes | Should -Match 'User\.Read\.All'
         $script:item.Notes | Should -Match 'RoleManagement\.Read\.Directory'
@@ -1837,6 +1843,10 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $kv = $rows | Where-Object Role -eq 'Key Vault Administrator'
         @($kv.subscriptionId, $kv.resourceGroup, $kv.RoleDefinitionId) | Should -Be @($script:fx.S1, 'rg-app', "/subscriptions/$($script:fx.S1)/providers/microsoft.authorization/roledefinitions/$($script:fx.KvAdmin)")
         $kv.AssignmentId | Should -Match '^/subscriptions/.+/providers/Microsoft\.KeyVault/vaults/kv-app-prod/providers/Microsoft\.Authorization/roleAssignments/[0-9a-f-]{36}$'
+        $blob = $rows | Where-Object Role -eq 'Storage Blob Data Contributor'
+        @($blob.Condition, $blob.ConditionVersion) | Should -Be @($script:fxCondition, '2.0') -Because 'the rollback recreates the condition exactly, since without it the role grants more'
+        ($rows | Where-Object Role -eq 'Owner').Condition | Should -Be ''
+        $rbac.Columns | Should -Contain 'Condition'
         $group = @($rows | Where-Object HeldThrough -eq 'Group')
         @($group | ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.UserPrincipalName, $_.GroupName, $_.GroupId, $_.Role }) | Should -Be @("kim.osei@contoso.com|platform-operators|$($script:fx.Ops)|Contributor") -Because 'the disabled member of a group is listed with the group, and the enabled member is not'
         $rbac.Detail | Should -Match '^7 Azure role assignments held by 3 of the 3 disabled accounts, 1 through a group, read in the subscriptions of the pack and at the management groups and root scope above them\.'

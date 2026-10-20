@@ -959,7 +959,7 @@ Describe 'Change request generation' {
         $impl[2] | Should -Match 'go to Access control \(IAM\) and select the Role assignments tab\.$'
         $impl[3] | Should -Match 'whose Scope column reads This resource, select Remove and then Yes\. An assignment shown as Inherited was made at a parent scope and is removed there'
         $impl[4] | Should -Match 'Microsoft Entra ID > Roles and administrators, open the role, select the account, select Remove assignment'
-        $impl[5] | Should -Match 'Privileged Identity Management > Microsoft Entra roles > Roles, open the role, find the account on the Eligible assignments tab and select Remove\. A role listed as Activated'
+        $impl[5] | Should -Match 'Privileged Identity Management > Microsoft Entra roles > Roles, open the role, find the account on the Eligible assignments tab, with the scope listed for the role, and select Remove\. A role listed as Activated'
         $impl[6] | Should -Be '7. Repeat steps 1 to 6 for each remaining account listed.'
         ($impl -join ' ') | Should -Not -Match 'az role' -Because 'only an assignment at the root scope needs the command line'
         $testing = @(Get-Section $text 'B) TESTING PLAN')
@@ -969,7 +969,7 @@ Describe 'Change request generation' {
         $rollback = (@(Get-Section $text 'C) ROLLBACK PLAN') -join "`n")
         $rollback | Should -Match 'Access control \(IAM\) > Add > Add role assignment, select the recorded role'
         $rollback | Should -Match 'set Assignment type to Eligible with the recorded end date'
-        $rollback | Should -Match 'change-requests\.csv carries each assignment in full, with the role, role definition ID, scope and account object ID\.'
+        $rollback | Should -Match 'change-requests\.csv carries each assignment in full, with the role, role definition ID, scope, any condition and the account object ID\.'
         foreach ($r in @(Get-Section $text 'A) REFERENCES')) { $r | Should -Match '^- [^:]+: https://learn\.microsoft\.com/(azure|entra)/' }
         $text | Should -Match 'learn\.microsoft\.com/entra/identity/role-based-access-control/groups-remove-assignment'
     }
@@ -2069,6 +2069,36 @@ Describe 'Change request variants' {
         $index | Should -Match '- 1 account in CR-19 holds Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator or a role at the Azure root scope: Morgan Reyes \(morgan\.reyes@contoso\.com\)\. Ask the client whether any of them is an emergency access account before sending'
         $index | Should -Match '- The Azure roles of the disabled accounts are unknown, not a zero, because IA\.15-RBAC could not be used: it reads FAILED: The Azure role assignments could not be read\. HTTP 429'
         $index | Should -Not -Match 'Resource Graph also holds the active Azure role assignments only' -Because 'the Azure side was not read'
+    }
+
+    It 'keeps an ABAC condition for the rollback, and restores an application-scoped Entra role at that application only' {
+        $pack = Join-Path $TestDrive 'roles-condition'
+        New-ChangeFixture $pack
+        $condition = "((!(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'} AND NOT SubOperationMatches{'Blob.List'})) OR (@Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags:Project<`$key_case_sensitive`$>] StringEquals 'Cascade'))"
+        $blob = & $azureRole "/subscriptions/$s2/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stdataprod" 'Storage Blob Data Contributor' $roleIds.BlobContributor $lee
+        $blob.Condition = $condition; $blob.ConditionVersion = '2.0'
+        $app = '0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0'
+        Set-PackResult $pack 'IA.15-RBAC' @($blob)
+        Set-PackResult $pack 'IA.15-ENTRA' @((& $entraRole 'Application Administrator' '9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3' 'Standing' $lee -Scope "/$app"), (& $entraRole 'Application Administrator' '9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3' 'Eligible' $morgan -Scope "/$app"))
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $row = @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-19' | Where-Object Resource -eq 'lee.ashford@contoso.com, Storage Blob Data Contributor')
+        $row.CurrentSetting.EndsWith(", condition version 2.0: $condition", [StringComparison]::Ordinal) | Should -BeTrue -Because 'the CSV keeps the condition exactly, angle brackets included, for the rollback'
+        $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
+        $text | Should -Match ', with a condition \(version 2\.0\) kept exactly in change-requests\.csv: \(\(!\(ActionMatches'
+        $rollback = @(Get-Section $text 'C) ROLLBACK PLAN') -join "`n"
+        $rollback | Should -Match 'An assignment recorded with a condition is recreated with that condition, copied exactly from change-requests\.csv, since without it the role grants more than it did\.'
+        $rollback | Should -Match 'The portal cannot add a condition at a management group or root scope'
+        $rollback | Should -Match '    az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope SCOPE --condition "CONDITION" --condition-version VERSION'
+        $rollback | Should -Match 'one recorded for a single application or other object \(a directory scope of the form /OBJECT-ID\) from that object, such as App registrations > the application > Roles and administrators, never from the tenant-wide list'
+        $rollback | Should -Match 'For a role recorded with an administrative unit or a single application, select that scope and the recorded unit or application on the Add assignments page'
+        (@(Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n") | Should -Match 'Where the account holds the role at more than one scope, remove only the assignment whose scope matches the one listed\.'
+        $text | Should -Match "Application Administrator, Standing, role definition 9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3, directory scope /$app, "
+        $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-19 with a condition and an application scope'
+        $email | Should -Match 'Storage Blob Data Contributor on resource stdataprod in resource group rg-data with a condition\r?\n'
+        $email | Should -Match "Application Administrator \(for the single application or other Microsoft Entra object with ID $app\)"
+        $email | Should -Not -Match 'ActionMatches' -Because 'the email names the condition, the change request and CSV carry it'
     }
 
     It 'removes a role at the Azure root scope from the command line, since the portal cannot, and lists it under the root scope' {

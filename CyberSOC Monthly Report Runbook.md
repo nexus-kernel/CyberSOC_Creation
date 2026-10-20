@@ -504,7 +504,7 @@ IA.15-DISABLED, the disabled user accounts, paged through `@odata.nextLink`. An 
 GET https://graph.microsoft.com/v1.0/users?$filter=accountEnabled eq false&$select=id,displayName,userPrincipalName,accountEnabled,onPremisesSyncEnabled&$top=999
 ```
 
-IA.15-ENTRA, every Microsoft Entra role the accounts hold. `roleAssignments` is the read IA.6 makes, shared, and every directory role counts, not only the 12 privileged ones. The schedule instances mark an active assignment Activated or Time-bound and add the Eligible ones. When they answer 403 the result is PARTIAL and reads "Eligible assignments not visible, needs RoleManagement.Read.Directory". When `roleAssignments` cannot be read, IA.15-ENTRA alone is UNAVAILABLE and the Azure side still runs.
+IA.15-ENTRA, every Microsoft Entra role the accounts hold. `roleAssignments` is the read IA.6 makes, shared, and every directory role counts, not only the 12 privileged ones. The schedule instances mark an active assignment Activated or Time-bound and add the Eligible ones. An eligibility a user inherits from a group (`memberType` Group) is the group's own assignment, so it is read with the group, never as the user's. A role scoped to one application or other object keeps its `/<object ID>` directory scope, and CR-19 restores it there. When they answer 403 the result is PARTIAL and reads "Eligible assignments not visible, needs RoleManagement.Read.Directory". When `roleAssignments` cannot be read, IA.15-ENTRA alone is UNAVAILABLE and the Azure side still runs.
 
 ```http
 GET https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?$expand=principal
@@ -520,7 +520,7 @@ GET https://graph.microsoft.com/v1.0/groups/{id}?$select=id,displayName
 GET https://graph.microsoft.com/v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$select=id&$top=999
 ```
 
-IA.15-RBAC, every Azure role assignment the accounts hold, with the query below. It is sent with the request option `"authorizationScopeFilter": "AtScopeAboveAndBelow"`. Microsoft Learn (Understanding the Azure Resource Graph query language, query scope) documents that the filter defaults to `AtScopeAndBelow`, which returns the assignments at and below the subscriptions in the request, so the management group and root scope assignments above them come back only with `AtScopeAboveAndBelow`. Each assignment is kept once. `ScopeLevel` is read from the scope: Root (`/`), Management group, Subscription, Resource group or Resource. Learn lists only `roleassignments`, `roledefinitions` and `classicadministrators` in `authorizationresources`, so the eligible assignments of Privileged Identity Management for Azure resources are not read, and the CR-19 index says so. As with IA.7, through Lighthouse Resource Graph shows the managing tenant's delegations instead of the client's own role assignments, so IA.15-RBAC reads PARTIAL there.
+IA.15-RBAC, every Azure role assignment the accounts hold, with the query below. It is sent with the request option `"authorizationScopeFilter": "AtScopeAboveAndBelow"`. Microsoft Learn (Understanding the Azure Resource Graph query language, query scope) documents that the filter defaults to `AtScopeAndBelow`, which returns the assignments at and below the subscriptions in the request, so the management group and root scope assignments above them come back only with `AtScopeAboveAndBelow`. Each assignment is kept once, with its ABAC `Condition` and `ConditionVersion`, which narrow what the role grants, so CR-19's rollback recreates the assignment with them. `ScopeLevel` is read from the scope: Root (`/`), Management group, Subscription, Resource group or Resource. Learn lists only `roleassignments`, `roledefinitions` and `classicadministrators` in `authorizationresources`, so the eligible assignments of Privileged Identity Management for Azure resources are not read, and the CR-19 index says so. As with IA.7, through Lighthouse Resource Graph shows the managing tenant's delegations instead of the client's own role assignments, so IA.15-RBAC reads PARTIAL there.
 
 ```kql
 authorizationresources
@@ -529,7 +529,9 @@ authorizationresources
 | extend PrincipalId      = tolower(tostring(properties.principalId)),
          PrincipalType    = tostring(properties.principalType),
          Scope            = tostring(properties.scope),
-         RoleDefinitionId = tolower(tostring(properties.roleDefinitionId))
+         RoleDefinitionId = tolower(tostring(properties.roleDefinitionId)),
+         Condition        = tostring(properties.condition),
+         ConditionVersion = tostring(properties.conditionVersion)
 | extend RoleGuid = tostring(split(RoleDefinitionId, "/")[-1])
 | join kind=leftouter (
     authorizationresources
@@ -538,7 +540,7 @@ authorizationresources
     | summarize Role = take_any(Role) by RoleGuid
   ) on RoleGuid
 | where PrincipalType !~ "ServicePrincipal"   // users and groups, and any assignment without a type
-| project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, PrincipalId, PrincipalType
+| project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, Condition, ConditionVersion, PrincipalId, PrincipalType
 | order by PrincipalId asc, Scope asc
 ```
 

@@ -1607,7 +1607,9 @@ authorizationresources
 | extend PrincipalId      = tolower(tostring(properties.principalId)),
          PrincipalType    = tostring(properties.principalType),
          Scope            = tostring(properties.scope),
-         RoleDefinitionId = tolower(tostring(properties.roleDefinitionId))
+         RoleDefinitionId = tolower(tostring(properties.roleDefinitionId)),
+         Condition        = tostring(properties.condition),
+         ConditionVersion = tostring(properties.conditionVersion)
 | extend RoleGuid = tostring(split(RoleDefinitionId, "/")[-1])
 | join kind=leftouter (
     authorizationresources
@@ -1616,7 +1618,7 @@ authorizationresources
     | summarize Role = take_any(Role) by RoleGuid
   ) on RoleGuid
 | where PrincipalType !~ "ServicePrincipal"   // users and groups, and any assignment without a type
-| project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, PrincipalId, PrincipalType
+| project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, Condition, ConditionVersion, PrincipalId, PrincipalType
 | order by PrincipalId asc, Scope asc
 '@))
 
@@ -4887,7 +4889,7 @@ function Invoke-EbrDisabledRoles {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $elapsed = { $sw.Elapsed.TotalSeconds }
     $userColumns = @('PrincipalId', 'PrincipalType', 'DisplayName', 'UserPrincipalName', 'AccountEnabled', 'OnPremisesSyncEnabled')
-    $rbacColumns = @('subscriptionId', 'resourceGroup', 'ScopeLevel', 'Scope', 'Role', 'RoleDefinitionId', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'AssignmentId')
+    $rbacColumns = @('subscriptionId', 'resourceGroup', 'ScopeLevel', 'Scope', 'Role', 'RoleDefinitionId', 'Condition', 'ConditionVersion', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'AssignmentId')
     $entraColumns = @('Role', 'RoleDefinitionId', 'DirectoryScope', 'AssignmentType', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'EndDateUtc', 'AssignmentId', 'PimRead')
     $graphFix = { param([string]$Permission) 'Fix: az login --tenant {0} --scope https://graph.microsoft.com/{1}, then rerun.' -f $Ctx.TenantGuid, $Permission }
     $all = {
@@ -5036,7 +5038,12 @@ function Invoke-EbrDisabledRoles {
             $kind = if ([string](Get-EbrProp $instance 'assignmentType') -eq 'Activated') { 'Activated' } elseif ($end) { 'Time-bound' } else { 'Standing' }
             & $entraRow $a $kind $end
         }
-        foreach ($e in $eligible) { & $entraRow $e 'Eligible' (Format-EbrUtc (Get-EbrProp $e 'endDateTime')) }
+        # An eligibility a user inherits from a group (memberType Group) is the group's own assignment, which is read
+        # with the group and listed for review, so it is never listed as the user's to remove.
+        foreach ($e in $eligible) {
+            if ([string](Get-EbrProp $e 'memberType') -in 'Group', 'Inherited') { continue }
+            & $entraRow $e 'Eligible' (Format-EbrUtc (Get-EbrProp $e 'endDateTime'))
+        }
         $rows = @($entraRows | Sort-Object UserPrincipalName, Role, AssignmentType)
         $detail = '{0} held by {1} of the {2}, {3} through a group.' -f (Format-EbrCount $rows.Count 'Microsoft Entra role assignment' 'Microsoft Entra role assignments'), @($rows | ForEach-Object PrincipalId | Sort-Object -Unique).Count, (Format-EbrCount $userRows.Count 'disabled account' 'disabled accounts'), @($rows | Where-Object HeldThrough -eq 'Group').Count
         $partial = $false
@@ -5070,6 +5077,8 @@ function Invoke-EbrDisabledRoles {
                 ScopeLevel = Get-EbrScopeLevel $scope; Scope = $scope
                 Role = $(if ([string](Get-EbrProp $a 'Role')) { [string](Get-EbrProp $a 'Role') } else { [string](Get-EbrProp $a 'RoleDefinitionId') })
                 RoleDefinitionId = ([string](Get-EbrProp $a 'RoleDefinitionId')).ToLowerInvariant(); AssignmentId = $assignmentId
+                # An ABAC condition narrows what the role grants, so the rollback recreates it exactly.
+                Condition = [string](Get-EbrProp $a 'Condition'); ConditionVersion = [string](Get-EbrProp $a 'ConditionVersion')
             }
             foreach ($row in @(& $reach ([string](Get-EbrProp $a 'PrincipalId')).ToLowerInvariant() ([string](Get-EbrProp $a 'PrincipalType') -eq 'Group') '' $fields $rbacUnread)) { $rbacRows.Add($row) }
         }

@@ -306,8 +306,9 @@ in the pack (`results/<ID>.csv`).
     query therefore runs with `AtScopeAboveAndBelow` (API 2021-06-01-preview or later, the collector uses 2022-10-01),
     which brings back the management group and root scope assignments, and each assignment is kept once. One row per
     assignment with the subscription, resource group, `ScopeLevel` (Root, Management group, Subscription, Resource group,
-    Resource), scope, role name and definition ID, the account, `HeldThrough` (Direct or Group, with the group) and the
-    assignment ID. Learn also lists only `roleassignments`, `roledefinitions` and `classicadministrators` in
+    Resource), scope, role name and definition ID, the ABAC `Condition` and `ConditionVersion` (a condition narrows what
+    the role grants, so the rollback recreates it), the account, `HeldThrough` (Direct or Group, with the group) and
+    the assignment ID. Learn also lists only `roleassignments`, `roledefinitions` and `classicadministrators` in
     `authorizationresources`, so the eligible assignments of PIM for Azure resources are not read, and CR-19 says so.
     Through Lighthouse it reads PARTIAL with IA.7's caveat.
   - `IA.15-ENTRA`: every Microsoft Entra role assignment they hold, from the `roleAssignments` read IA.6 already makes

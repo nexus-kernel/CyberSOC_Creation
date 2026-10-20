@@ -1904,6 +1904,8 @@ $catalog = @(
                 if ($v -is [datetime]) { $v.ToUniversalTime().ToString($(if ($Day) { 'yyyy-MM-dd' } else { "yyyy-MM-dd'T'HH:mm:ss'Z'" }), $inv) }
                 elseif ($Day) { $t = Get-Text $v; $t.Substring(0, [Math]::Min(10, $t.Length)) }
                 else { Get-Text $v } }
+            # Azure takes 2.0 when a condition is given without a version.
+            $conditionVersion = { param($r) $v = Get-Text $r.ConditionVersion; if ($v) { $v } else { '2.0' } }
             $entraKind = { param($r)
                 $parts = @(switch (Get-Text $r.AssignmentType) {
                         'Eligible' { 'eligible in Privileged Identity Management' }
@@ -1914,6 +1916,7 @@ $catalog = @(
                 if ($end -and (Get-Text $r.AssignmentType) -ne 'Activated') { $parts += 'until ' + $end }
                 $scope = ConvertTo-CopyText $r.DirectoryScope
                 if ($scope -match '^/administrativeUnits/(.+)$') { $parts += 'in administrative unit ' + $Matches[1] }
+                elseif ($scope -match '^/([^/]+)$') { $parts += 'for the single application or other Microsoft Entra object with ID ' + $Matches[1] }
                 elseif ($scope -and $scope -ne '/') { $parts += 'at directory scope ' + $scope }
                 $role = ConvertTo-CopyText $r.Role
                 if ($parts.Count) { '{0} ({1})' -f $role, ($parts -join ', ') } else { $role } }
@@ -1980,7 +1983,7 @@ $catalog = @(
                 foreach ($g in @($azure | Group-Object { & $heading $_ } | Sort-Object { & $headingOrder $_.Name })) {
                     $lines.Add(''); $lines.Add($(if ($g.Name -eq 'Root scope') { 'Root scope: /' } else { $g.Name -replace '^(Subscription|Management group) ', '$1: ' }))
                     foreach ($r in @($g.Group | Sort-Object { & $who $_ }, { Get-Text $_.Scope }, { Get-Text $_.Role })) {
-                        $lines.Add(('- {0}, object ID {1}: {2} on {3}, role definition {4}, scope {5}, assignment {6}' -f (& $who $r), (Get-Text $r.PrincipalId), (ConvertTo-CopyText $r.Role), (& $scopeWords $r), ((Get-Text $r.RoleDefinitionId) -split '/')[-1], (ConvertTo-CopyText $r.Scope), ((Get-Text $r.AssignmentId) -split '/')[-1]))
+                        $lines.Add(('- {0}, object ID {1}: {2} on {3}, role definition {4}, scope {5}, assignment {6}{7}' -f (& $who $r), (Get-Text $r.PrincipalId), (ConvertTo-CopyText $r.Role), (& $scopeWords $r), ((Get-Text $r.RoleDefinitionId) -split '/')[-1], (ConvertTo-CopyText $r.Scope), ((Get-Text $r.AssignmentId) -split '/')[-1], $(if (Get-Text $r.Condition) { ', with a condition (version {0}) kept exactly in change-requests.csv: {1}' -f (& $conditionVersion $r), (ConvertTo-CopyText $r.Condition) } else { '' })))
                     }
                 }
             }
@@ -1994,7 +1997,10 @@ $catalog = @(
             # The CSV keeps each assignment in full, role, role definition, scope and account, for the rollback.
             $csv = @(
                 foreach ($r in @($azure | Sort-Object { & $who $_ }, { Get-Text $_.Scope })) {
-                    New-Resource ('{0}, {1}' -f (Get-Text $r.UserPrincipalName), (Get-Text $r.Role)) $r.resourceGroup $r.subscriptionId ('Azure role {0} ({1}) at {2} scope {3}, assigned to {4} (object ID {5})' -f (Get-Text $r.Role), (Get-Text $r.RoleDefinitionId), (Get-Text $r.ScopeLevel).ToLowerInvariant(), (Get-Text $r.Scope), (Get-Text $r.UserPrincipalName), (Get-Text $r.PrincipalId)) $r.AssignmentId
+                    $row = New-Resource ('{0}, {1}' -f (Get-Text $r.UserPrincipalName), (Get-Text $r.Role)) $r.resourceGroup $r.subscriptionId '' $r.AssignmentId
+                    # The CSV is data, so a condition is kept exactly as Azure has it, angle brackets and all.
+                    $row.Setting = 'Azure role {0} ({1}) at {2} scope {3}, assigned to {4} (object ID {5}){6}' -f (Get-Text $r.Role), (Get-Text $r.RoleDefinitionId), (Get-Text $r.ScopeLevel).ToLowerInvariant(), (Get-Text $r.Scope), (Get-Text $r.UserPrincipalName), (Get-Text $r.PrincipalId), $(if (Get-Text $r.Condition) { ', condition version {0}: {1}' -f (& $conditionVersion $r), [string]$r.Condition } else { '' })
+                    $row
                 }
                 foreach ($r in @($entra | Sort-Object { & $who $_ }, { Get-Text $_.Role })) {
                     New-Resource ('{0}, {1}' -f (Get-Text $r.UserPrincipalName), (Get-Text $r.Role)) '' '' ('Microsoft Entra role {0} ({1}), {2}{3}, directory scope {4}, assigned to {5} (object ID {6})' -f (Get-Text $r.Role), (Get-Text $r.RoleDefinitionId), (Get-Text $r.AssignmentType), $(if (& $endOf $r) { ' until ' + (& $endOf $r) } else { '' }), (Get-Text $r.DirectoryScope), (Get-Text $r.UserPrincipalName), (Get-Text $r.PrincipalId)) $r.AssignmentId
@@ -2002,6 +2008,7 @@ $catalog = @(
             $activeEntra = @($entra | Where-Object { (Get-Text $_.AssignmentType) -in 'Standing', 'Time-bound' })
             $pimEntra = @($entra | Where-Object { (Get-Text $_.AssignmentType) -in 'Eligible', 'Activated' })
             $rootAzure = @($azure | Where-Object { (Get-Text $_.ScopeLevel) -eq 'Root' })
+            $conditioned = @($azure | Where-Object { Get-Text $_.Condition })
             # Each account is read again first. One turned back on since collection keeps every role, and is noted.
             $impl = [System.Collections.Generic.List[object]]::new()
             $impl.Add((Get-OpenStep $m 'Microsoft Entra ID > Users' 'account'))
@@ -2016,10 +2023,10 @@ $catalog = @(
                         'az role assignment list --assignee OBJECT-ID --scope "/"'))
             }
             if ($activeEntra.Count) {
-                $impl.Add('For each Microsoft Entra role listed as Standing or Time-bound for the account, go to Microsoft Entra ID > Roles and administrators, open the role, select the account, select Remove assignment and then Yes. A role listed with an administrative unit is opened from Microsoft Entra ID > Administrative units > the unit > Roles and administrators. With Privileged Identity Management the role opens on its Active assignments tab, where the account has a Remove link.')
+                $impl.Add('For each Microsoft Entra role listed as Standing or Time-bound for the account, go to Microsoft Entra ID > Roles and administrators, open the role, select the account, select Remove assignment and then Yes. A role listed with an administrative unit is opened from Microsoft Entra ID > Administrative units > the unit > Roles and administrators, and one listed for a single application or other object from that object, such as App registrations > the application > Roles and administrators. Where the account holds the role at more than one scope, remove only the assignment whose scope matches the one listed. With Privileged Identity Management the role opens on its Active assignments tab, where the account has a Remove link.')
             }
             if ($pimEntra.Count) {
-                $impl.Add('For each Microsoft Entra role listed as Eligible for the account, go to Privileged Identity Management > Microsoft Entra roles > Roles, open the role, find the account on the Eligible assignments tab and select Remove. A role listed as Activated comes from an eligible assignment and ends when its activation expires, so remove that eligible assignment the same way, and where the Active assignments tab still lists the activation with a Remove link, select it as well.')
+                $impl.Add('For each Microsoft Entra role listed as Eligible for the account, go to Privileged Identity Management > Microsoft Entra roles > Roles, open the role, find the account on the Eligible assignments tab, with the scope listed for the role, and select Remove. A role listed as Activated comes from an eligible assignment and ends when its activation expires, so remove that eligible assignment the same way, and where the Active assignments tab still lists the activation with a Remove link, select it as well.')
             }
             Add-RepeatStep $impl $m 1 'account'
             $testing = [System.Collections.Generic.List[object]]::new()
@@ -2029,17 +2036,22 @@ $catalog = @(
             if ($entra.Count) { $testing.Add('Select Assigned roles and confirm that none of the Microsoft Entra roles recorded for the account appears under Active assignments or Eligible assignments, apart from any left unchanged and noted in the change record.') }
             $rollback = [System.Collections.Generic.List[object]]::new()
             if ($azure.Count - $rootAzure.Count) { $rollback.Add('For an Azure role assignment, open the scope recorded for it in the RESOURCES section, go to Access control (IAM) > Add > Add role assignment, select the recorded role, select User, group, or service principal, select the account by its object ID and select Review + assign.') }
+            if ($conditioned.Count) {
+                # A condition narrows what the role grants, so recreating the assignment without it would grant more.
+                $rollback.Add(@('An assignment recorded with a condition is recreated with that condition, copied exactly from change-requests.csv, since without it the role grants more than it did. In the portal, on the Conditions tab select Add condition, set Editor type to Code, paste the condition and select Save before Review + assign. The portal cannot add a condition at a management group or root scope, so recreate one there from Azure Cloud Shell, with the recorded object ID, role definition ID, scope, condition and condition version:'
+                        'az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope SCOPE --condition "CONDITION" --condition-version VERSION'))
+            }
             if ($rootAzure.Count) { $rollback.Add('For an assignment at the root scope, run in Azure Cloud Shell, as a Global Administrator with elevated access: az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope "/"') }
-            if ($activeEntra.Count) { $rollback.Add('For a Microsoft Entra role recorded as Standing or Time-bound, go to Microsoft Entra ID > Roles and administrators, open the recorded role, select Add assignments, select the account and assign it, as active with the recorded end date where one is recorded. A role recorded with an administrative unit is assigned from that unit.') }
-            if ($pimEntra.Count) { $rollback.Add('For a Microsoft Entra role recorded as Eligible, go to Privileged Identity Management > Microsoft Entra roles > Roles, open the role, select Add assignments, select the account, set Assignment type to Eligible with the recorded end date, if any, and select Assign. A role recorded as Activated needs no rollback of its own, since it came from the eligible assignment recorded with it.') }
-            $rollback.Add('change-requests.csv carries each assignment in full, with the role, role definition ID, scope and account object ID. An account left unchanged during the change needs no rollback.')
+            if ($activeEntra.Count) { $rollback.Add('For a Microsoft Entra role recorded as Standing or Time-bound, go to Microsoft Entra ID > Roles and administrators, open the recorded role, select Add assignments, select the account and assign it, as active with the recorded end date where one is recorded. A role recorded with an administrative unit is assigned from that unit, and one recorded for a single application or other object (a directory scope of the form /OBJECT-ID) from that object, such as App registrations > the application > Roles and administrators, never from the tenant-wide list, which would grant the role across the tenant.') }
+            if ($pimEntra.Count) { $rollback.Add('For a Microsoft Entra role recorded as Eligible, go to Privileged Identity Management > Microsoft Entra roles > Roles, open the role, select Add assignments, select the account, set Assignment type to Eligible with the recorded end date, if any, and select Assign. For a role recorded with an administrative unit or a single application, select that scope and the recorded unit or application on the Add assignments page, so the role is not restored across the tenant. A role recorded as Activated needs no rollback of its own, since it came from the eligible assignment recorded with it.') }
+            $rollback.Add('change-requests.csv carries each assignment in full, with the role, role definition ID, scope, any condition and the account object ID. An account left unchanged during the change needs no rollback.')
 
             # The email: Azure roles by subscription, then the management groups and root scope, then the Entra roles.
             $emailResources = [System.Collections.Generic.List[object]]::new()
             foreach ($g in @($azure | Group-Object { & $heading $_ } | Sort-Object { & $headingOrder $_.Name })) {
                 $emailResources.Add("$($g.Name):")
                 $emailResources.Add([string[]]@($g.Group | Group-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Sort-Object { & $who $_.Group[0] } | ForEach-Object {
-                            '{0}: {1}' -f (& $who $_.Group[0]), (@($_.Group | Sort-Object { Get-Text $_.Scope } | ForEach-Object { '{0} on {1}' -f (ConvertTo-CopyText $_.Role), (& $scopeWords $_) }) -join ', ') }))
+                            '{0}: {1}' -f (& $who $_.Group[0]), (@($_.Group | Sort-Object { Get-Text $_.Scope } | ForEach-Object { '{0} on {1}{2}' -f (ConvertTo-CopyText $_.Role), (& $scopeWords $_), $(if (Get-Text $_.Condition) { ' with a condition' } else { '' }) }) -join ', ') }))
             }
             if ($entra.Count) {
                 $emailResources.Add('Microsoft Entra ID directory roles:')
