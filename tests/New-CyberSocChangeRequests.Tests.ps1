@@ -957,7 +957,7 @@ Describe 'Change request generation' {
         $impl[0] | Should -Be '1. In the Azure portal, go to Microsoft Entra ID > Users and open the first account listed in the RESOURCES section.'
         $impl[1] | Should -Match '^2\. On the Overview page, read Account status, .+If it shows the account as enabled, the account has been turned back on since collection, so leave every role it holds unchanged, note it in the change record for the next pack and skip the remaining steps for it\. Leave out too any account the client asked to keep out of the change\.$'
         $impl[2] | Should -Match 'go to Access control \(IAM\) and select the Role assignments tab\.$'
-        $impl[3] | Should -Match 'whose Scope column reads This resource\. Where the tab shows a State column and it reads Active time-bound, record in the change record the end time of the assignment, shown by selecting Edit columns and then End time, since the collection does not hold it and the rollback restores the assignment as time-bound with that end\. Select Remove and then Yes\. An assignment shown as Inherited was made at a parent scope and is removed there'
+        $impl[3] | Should -Match 'whose Scope column reads This resource\. Where the tab shows a State column and it reads Active time-bound, record in the change record the end time of the assignment, shown by selecting Edit columns and then End time, since the collection does not hold it and the rollback restores the assignment as time-bound with that end\. A resource scope shows no State column, so for an assignment on a resource, where the client uses Privileged Identity Management, read its end on the Active roles tab of Privileged Identity Management > Azure resources > the resource > Roles > the role instead\. Select Remove and then Yes\. An assignment shown as Inherited was made at a parent scope and is removed there'
         $impl[4] | Should -Match 'Microsoft Entra ID > Roles and administrators, open the role, select the account, select Remove assignment'
         $impl[5] | Should -Be '6. For each Microsoft Entra role listed as Eligible for the account, go to Privileged Identity Management > Microsoft Entra roles > Roles, open the role, find the account on the Eligible assignments tab, with the scope listed for the role, and select Remove. A role listed as Activated comes from an eligible assignment and ends when its activation expires, so remove that eligible assignment the same way, and where the Active assignments tab still lists the activation with a Remove link, select it as well.' -Because 'an Activated role with its Eligible row keeps the wording it had'
         $impl[6] | Should -Be '7. Repeat steps 1 to 6 for each remaining account listed.'
@@ -968,12 +968,14 @@ Describe 'Change request generation' {
         $testing[2] | Should -Match 'Select Assigned roles and confirm that none of the Microsoft Entra roles recorded for the account appears under Active assignments or Eligible assignments'
         $rollback = (@(Get-Section $text 'C) ROLLBACK PLAN') -join "`n")
         $rollback | Should -Match 'Access control \(IAM\) > Add > Add role assignment, select the recorded role'
-        $rollback | Should -Match 'For an Azure role assignment recorded in the change record as Active time-bound at step 4, select Active on the Assignment type tab, set Assignment duration to Time bound with the recorded end date and time, and never Permanent' -Because 'Resource Graph holds no schedule, so the end is read from the portal before removal'
+        $azureRollback = @(Get-Section $text 'C) ROLLBACK PLAN')[0]
+        $azureRollback | Should -Match '^1\. For an Azure role assignment, open the scope recorded for it in the RESOURCES section, go to Access control \(IAM\) > Add > Add role assignment, select the recorded role, select User, group, or service principal and select the account by its object ID\. Where step 4 recorded the assignment in the change record as Active time-bound, select Active on the Assignment type tab and set Assignment duration to Time bound with the recorded end date and time, never Permanent, so the role is not restored for longer than it was held\. A resource scope has no Assignment type tab, so recreate a time-bound assignment on a resource from Privileged Identity Management > Azure resources > the resource > Roles > Add assignments instead, as Active with the recorded end date and time\. Then select Review \+ assign\.$' -Because 'the time bound is set before Review + assign creates the assignment'
+        $rollback | Should -Not -Match 'Review \+ assign\.[^\n]*\n[^\n]*Active time-bound at step' -Because 'no time-bound step follows an assignment already created as permanent'
         $rollback | Should -Match 'set Assignment type to Eligible with the recorded end date'
         $rollback | Should -Match 'A role recorded as Activated needs no rollback of its own, since it came from the eligible assignment recorded with it\.'
         $rollback | Should -Not -Match 'no Eligible line|recorded in the change record at step|Permanently eligible'
         $text | Should -Not -Match 'no Eligible line|pim-how-to-add-role-to-user#assign-a-role'
-        $rollback | Should -Match 'change-requests\.csv carries each assignment in full, with the role, role definition ID, scope, any condition and the account object ID\.'
+        $rollback | Should -Match 'change-requests\.csv carries each assignment in full, with the role, role definition ID, scope, any condition and the account object ID, and the change record carries each end time or schedule recorded before removal\.'
         foreach ($r in @(Get-Section $text 'A) REFERENCES')) { $r | Should -Match '^- [^:]+: https://learn\.microsoft\.com/(azure|entra)/' }
         $text | Should -Match 'learn\.microsoft\.com/entra/identity/role-based-access-control/groups-remove-assignment'
     }
@@ -2142,7 +2144,7 @@ Describe 'Change request variants' {
         $rollback | Should -Match 'For a role recorded as Activated with no Eligible line, restore the eligible assignment it came from with the schedule recorded in the change record at step 6, never from change-requests\.csv, which holds only the activation''s expiry'
         $rollback | Should -Match 'set Assignment type to Eligible, clear Permanently eligible, set the recorded end date and time and select Assign\. Never restore it as permanent, unless the change record shows that it had no end date, in which case leave Permanently eligible selected\.'
         $rollback | Should -Not -Match 'needs no rollback of its own|recorded as Eligible' -Because 'the activation has no eligibility recorded with it'
-        $rollback | Should -Match 'and the change record carries each schedule recorded before removal\.'
+        $rollback | Should -Match 'and the change record carries each end time or schedule recorded before removal\.'
         $text | Should -Match 'learn\.microsoft\.com/entra/id-governance/privileged-identity-management/pim-how-to-add-role-to-user#assign-a-role'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         $index | Should -Match '- 1 Microsoft Entra role listed as Activated in CR-19 has no Eligible line for the same account, role and directory scope, since eligible assignments were not visible to the collection: Lee Ashford \(lee\.ashford@contoso\.com\), Security Reader at directory scope /\. Step 6 of the implementation records the schedule of the eligible assignment behind it from Privileged Identity Management in the change record before removing it, and the rollback restores it from that record\.'
@@ -2197,9 +2199,9 @@ Describe 'Change request variants' {
         $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
         $step = @($impl | Where-Object { $_ -match 'listed as Standing or Time-bound' })[0]
         $n = ($step -split '\.')[0]
-        $step | Should -Match 'so a role listed as Standing may be time-bound or activated from an eligible assignment\. Before removing it, open the role in Privileged Identity Management > Microsoft Entra roles > Roles and record in the change record the start time, end time and directory scope the Active assignments tab shows for the account'
+        $step | Should -Match '^\d+\. The collection could not read the Privileged Identity Management schedules, so a role listed as Standing may be time-bound or activated from an eligible assignment\. Before removing one, open the role in Privileged Identity Management > Microsoft Entra roles > Roles and record in the change record the start time, end time and directory scope the Active assignments tab shows for the account, so the rollback restores what was there\. For each Microsoft Entra role listed as Standing or Time-bound' -Because 'the end is recorded before the step says to remove the role'
         $rollback = (@(Get-Section $text 'C) ROLLBACK PLAN') -join "`n")
-        $rollback | Should -Match ('For a role listed as Standing, use what step {0} recorded in the change record: where it recorded an end time, assign the role as active with that end date and time, never as permanent\.' -f $n)
+        $rollback | Should -Match ('select the account and assign it, as active with the recorded end date where one is recorded, or, for a role listed as Standing, with the end time step {0} recorded in the change record, never as permanent where it recorded one\. A role recorded with an administrative unit' -f $n) -Because 'the end is set in the same assignment, not after it'
     }
 
     It 'writes singular wording for one account and names an account with a top role as a possible emergency access account' {
@@ -2243,7 +2245,7 @@ Describe 'Change request variants' {
         $text | Should -Match ', with a condition \(version 2\.0\) kept exactly in change-requests\.csv: \(\(!\(ActionMatches'
         $rollback = @(Get-Section $text 'C) ROLLBACK PLAN') -join "`n"
         $rollback | Should -Match 'For an Azure role assignment recorded with a condition, recreate it with that condition, copied exactly from change-requests\.csv, since without it the role grants more than it did\.'
-        $rollback | Should -Match 'then on the Conditions tab select Add condition, set Editor type to Code, paste the condition, select Save and then Review \+ assign\.'
+        $rollback | Should -Match 'then on the Conditions tab select Add condition, set Editor type to Code, paste the condition and select Save\. Where step 4 recorded it as Active time-bound, set it to Active and Time bound with the recorded end date and time on the Assignment type tab, then select Review \+ assign\.'
         $rollback | Should -Match 'The portal cannot add a condition at a management group or root scope, so recreate one there from Azure Cloud Shell in Bash'
         $rollback | Should -Match 'run code condition\.txt, paste the condition, save the file'
         ($rollback -split "`n") | Should -Contain '    az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope SCOPE --condition "$(cat condition.txt)" --condition-version VERSION' -Because 'the condition is read from a file, so a token such as $key_case_sensitive$ is never expanded by the shell'
@@ -2276,6 +2278,20 @@ Describe 'Change request variants' {
         $email = Get-Content (Join-Path $pack '05-change-requests/CR-19-disabled-account-roles.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-19 with a conditioned root role'
         $email | Should -Match 'User Access Administrator on the root scope with a condition'
+    }
+
+    It 'names no removal step for a time-bound Azure assignment when every Azure role is at the root scope' {
+        $pack = Join-Path $TestDrive 'roles-root-only-condition'
+        New-ChangeFixture $pack
+        $root = & $azureRole '/' 'User Access Administrator' $roleIds.Uaa $lee
+        $root.Condition = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {acdd72a7-3385-48ef-bd42-f606fba81ae7}))"
+        $root.ConditionVersion = '2.0'
+        Set-PackResult $pack 'IA.15-RBAC' @($root)
+        Set-PackResult $pack 'IA.15-ENTRA' @()
+        $null = & $generator -EvidencePath $pack
+        $text = Get-Content (Join-Path $pack '05-change-requests/CR-19-disabled-account-roles.txt') -Raw
+        $text | Should -Not -Match 'step 0\b|Active time-bound' -Because 'the portal removal step is written only below the root scope'
+        (@(Get-Section $text 'C) ROLLBACK PLAN') -join "`n") | Should -Match 'paste the condition and select Save\. Then select Review \+ assign\. The portal cannot add a condition'
     }
 
     It 'removes a role at the Azure root scope from the command line, since the portal cannot, and lists it under the root scope' {

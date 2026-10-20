@@ -343,7 +343,10 @@ eligible one in Privileged Identity Management, which does not remove the last G
 eligible assignment is recreated there with its start and end date and time, or as permanent (Assign Microsoft Entra
 roles in Privileged Identity Management), an Azure role assignment's State column reads Active time-bound and Edit
 columns shows its start and end time (List Azure role assignments using the Azure portal), and it is recreated as
-Active and Time bound with that end on the Assignment type tab (Assign Azure roles using the Azure portal), and Resource Graph returns assignments at parent scopes only
+Active and Time bound with that end on the Assignment type tab before Review + assign, or edited afterwards from its
+State link (Assign Azure roles using the Azure portal), while a resource scope has neither, so a time-bound assignment
+on a resource is read and recreated in Privileged Identity Management (Assign Azure resource roles in Privileged
+Identity Management), and Resource Graph returns assignments at parent scopes only
 with the `AtScopeAboveAndBelow` scope filter and holds role assignments, role definitions and classic administrators
 only (Understanding the Azure Resource Graph query language, Azure Resource Graph table and resource type reference). A role assignment condition filters down what the role grants and is added under Conditions in the code editor, except at a management group scope, where the portal cannot add one (Azure role assignment conditions, Add or edit Azure role assignment conditions using the Azure portal, using Azure CLI), and an Entra role can be scoped to a single app registration, which is assigned from App registrations, the application, Roles and administrators (Assign Microsoft Entra roles).
 
