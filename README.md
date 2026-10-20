@@ -94,7 +94,9 @@ missing evidence never becomes a favorable zero.
    the client wants, just-in-time VM access (which needs Defender for Servers Plan 2) or Azure Bastion for RDP and SSH
    (WinRM continues through just-in-time access or named addresses, since Bastion does not provide it), asks for the
    private ranges that connect where a rule is open to every address, and the index
-   names the rules left out: appliance untrust interfaces, groups attached to nothing (a cleanup item) and `*` or port
+   says that a machine an Azure Virtual Network Manager security admin rule with Always Allow keeps open is outside
+   what CR-16 can close (its steps record and escalate that rule, and `-AdminRuleOpen` names the machine in the email,
+   which then asks who manages that central policy), and names the rules left out: appliance untrust interfaces, groups attached to nothing (a cleanup item) and `*` or port
    range rules (for review). The FTP email asks whether any deployment tool, process or person still connects over FTP or
    FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled suits each app, and the index names the apps whose FTP state Resource Graph
    returned empty, for a portal check, and says that deployment slots are not covered. AKS node pools without encryption at host get no change

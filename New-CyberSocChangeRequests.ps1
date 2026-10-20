@@ -49,6 +49,12 @@
 .PARAMETER ChangeDate
     The proposed date the client emails ask the client to approve. Every email asks for a reply by a week
     before it. Defaults to two weeks after the build date, and must be at least eight days after it.
+.PARAMETER AdminRuleOpen
+    The virtual machines whose effective security rules show an Azure Virtual Network Manager security
+    admin rule with Always Allow on a management port from an internet source, each as name:port, such as
+    vm-jump01:3389. Security admin rules apply before network security groups, so CR-16 cannot close those
+    ports. The CR-16 email then says a central network policy keeps them open and asks who manages it, and
+    the change request and the index name them.
 .EXAMPLE
     ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000
 .EXAMPLE
@@ -71,7 +77,8 @@ param(
     [string]$ClientContact,
     [string]$SenderName,
     [switch]$PurgeProtectionApproved,
-    [datetime]$ChangeDate
+    [datetime]$ChangeDate,
+    [string[]]$AdminRuleOpen
 )
 
 $ErrorActionPreference = 'Stop'
@@ -602,6 +609,21 @@ function Join-Words([string[]]$Words) {
 }
 # The management ports CR-16 closes, and how a rule source reads in a sentence.
 $managementPorts = '22', '3389', '5985', '5986'
+# The machines -AdminRuleOpen names, each with the management ports a security admin rule with Always Allow keeps
+# open to the internet. That rule applies before every network security group, so CR-16 cannot close them.
+$heldOpen = [ordered]@{}
+foreach ($entry in @($AdminRuleOpen | Where-Object { $_ })) {
+    if ($entry -notmatch '^\s*([^:\s][^:]*?)\s*:\s*(22|3389|5985|5986)\s*$') { throw ('-AdminRuleOpen takes each machine as name:port with port 22, 3389, 5985 or 5986, such as vm-jump01:3389, not "{0}".' -f (ConvertTo-CopyText $entry)) }
+    $port = $Matches[2]
+    $machine = ConvertTo-CopyText $Matches[1]
+    $key = $machine.ToLowerInvariant()
+    if (-not $heldOpen.Contains($key)) { $heldOpen[$key] = [pscustomobject]@{ Name = $machine; Ports = [System.Collections.Generic.List[string]]::new() } }
+    if ($port -notin $heldOpen[$key].Ports) { $heldOpen[$key].Ports.Add($port) }
+}
+# Each machine with its ports, such as vm-jump01 (ports 22 and 3389).
+function Format-HeldOpen {
+    Join-Words @(foreach ($m in $heldOpen.Values) { '{0} ({1} {2})' -f $m.Name, (Get-Pick $m.Ports.Count 'port' 'ports'), (Join-Words @($m.Ports | Sort-Object { [int]$_ })) })
+}
 function Format-RuleSource([string]$Prefix) { if ($Prefix -eq '*') { 'any address' } else { ConvertTo-CopyText $Prefix } }
 function Format-RuleProtocol([string]$Protocol) { switch -Regex ($Protocol) { '^(\*|)$' { 'any protocol' } '^(?i)(tcp|udp|icmp|esp|ah)$' { $Protocol.ToUpperInvariant() } default { ConvertTo-CopyText $Protocol } } }
 # Where a rule applies: each subnet by its name and virtual network, each network interface by its name and
@@ -1522,7 +1544,15 @@ $catalog = @(
                 $notes.Add(('{0} left out of CR-16 for review because {1} a protocol other than TCP, so {2} may carry an application rather than RDP, SSH or WinRM: {3}. Review each with the client, since RDP can also use UDP 3389.' -f (Get-Count $protocols.Count 'rule' 'rules'), (Get-Pick $protocols.Count 'it allows only' 'they allow only'), (Get-Pick $protocols.Count 'it' 'they'), ($protocols -join ' / ')))
             }
             $n = $resources.Count
-            if (-not $n) { return @{ State = $(if ($rows.Count) { 'Only rules for cleanup or review remain, see the notes' } else { 'No gaps found' }); Notes = $notes.ToArray() } }
+            # A security admin rule from Azure Virtual Network Manager applies before every network security group,
+            # and Always Allow ends the evaluation, so no change to a group closes a port such a rule keeps open.
+            $held = $heldOpen.Count
+            if (-not $n) {
+                if ($held) { $notes.Add(('-AdminRuleOpen names {0} that a security admin rule with Always Allow keeps open to the internet: {1}. CR-16 has no rule to close in this pack, so no email names {2}. Escalate each admin rule to whoever owns the Virtual Network Manager configuration.' -f (Get-Count $held 'machine' 'machines'), (Format-HeldOpen), (Get-Pick $held 'it' 'them'))) }
+                return @{ State = $(if ($rows.Count) { 'Only rules for cleanup or review remain, see the notes' } else { 'No gaps found' }); Notes = $notes.ToArray() }
+            }
+            $notes.Add('CR-16 changes network security group rules only. Azure Virtual Network Manager security admin rules apply before them, and one with Always Allow ends the evaluation, so a machine whose effective security rules show such a rule for 22, 3389, 5985 or 5986 from an internet source stays open whatever CR-16 changes and is outside what CR-16 can close. The steps have the operator record that admin rule and escalate it to whoever owns the Virtual Network Manager configuration, and never count the port as closed. Run again with -AdminRuleOpen to name the machine in the client email.')
+            if ($held) { $notes.Add(('CR-16 names {0} that a security admin rule with Always Allow keeps open to the internet (-AdminRuleOpen): {1}. Its email says a central network policy keeps {2} open and asks who manages it. Escalate each admin rule to whoever owns the Virtual Network Manager configuration.' -f (Get-Count $held 'machine' 'machines'), (Format-HeldOpen), (Get-Pick @($heldOpen.Values | ForEach-Object { $_.Ports }).Count 'the port' 'the ports'))) }
 
             # Just-in-time VM access needs Defender for Servers Plan 2 on the subscription (P0.3). The path that fits
             # each subscription is named in the change request and suggested in the email.
@@ -1577,20 +1607,26 @@ $catalog = @(
             # The rules can differ for each network interface of a machine, so each one the rules applied to is read.
             # A rule on a subnet names no network interfaces, so they are listed from the virtual network. A stopped
             # machine shows no effective rules, so it gets the deny without the check rather than waiting to start.
-            $effective = 'For each network interface the rules applied to, directly or through its subnet, go to Virtual machines, open the machine it belongs to, select Networking, select the network interface and select Effective security rules under Help. The page shows only the first 50 rules, so select Download and check the complete list in the file it saves. For a rule on a subnet, find every network interface in it on the Connected devices page of its virtual network, which lists each device with its subnet. Leave out a machine that just-in-time VM access covers, since its deny rules already stop internet sources on the ports it protects.'
+            # The just-in-time deny is a network security group rule too, so a machine it covers is still read for
+            # the security admin rules that come before every group.
+            $effective = 'For each network interface the rules applied to, directly or through its subnet, go to Virtual machines, open the machine it belongs to, select Networking, select the network interface and select Effective security rules under Help. The page shows only the first 50 rules, so select Download and check the complete list in the file it saves. For a rule on a subnet, find every network interface in it on the Connected devices page of its virtual network, which lists each device with its subnet. For a machine that just-in-time VM access covers, check only the security admin rules, since its deny rules already stop internet sources on the ports it protects once the groups decide.'
             # The first rule that matches a connection's source, protocol and port decides it in each group, and the
             # groups of the subnet and the network interface must both allow it. A deny for named addresses leaves
             # every other address to the rules after it, so only a deny that covers the internet stops it. The deny
             # carries TCP only, like the rules CR-16 changes, so a rule for another protocol left for review keeps
-            # working, and it skips only the ports of a rule left unchanged, which stay open until agreed.
-            $reach = 'The page shows the group of the subnet and the group of the network interface. In each group, rules apply in priority order and the first rule that matches the source, protocol and port of a connection decides it, and a connection gets through only if every group on its path allows it. A deny rule stops internet sources only where its source is Any, 0.0.0.0/0, ::/0 or Internet and it covers the port, since a deny for named addresses leaves every other address to the rules after it.'
+            # working, and it skips only the ports of a rule left unchanged, which stay open until agreed. Azure
+            # Virtual Network Manager security admin rules are listed too and apply before both groups: the first
+            # that matches decides, Always Allow and Deny end the evaluation, and Allow passes it on to the groups.
+            $reach = 'The page shows the group of the subnet and the group of the network interface. In each group, rules apply in priority order and the first rule that matches the source, protocol and port of a connection decides it, and a connection gets through only if every group on its path allows it. A deny rule stops internet sources only where its source is Any, 0.0.0.0/0, ::/0 or Internet and it covers the port, since a deny for named addresses leaves every other address to the rules after it. Where Azure Virtual Network Manager applies security admin rules to the virtual network, the page and the file list them too, under the name of the virtual network manager, and they apply before both groups. The first admin rule that matches a connection decides it: Always Allow lets it in whatever the groups say, Deny stops it whatever they say, and Allow passes it on to the groups.'
+            $always = 'the first security admin rule that matches an internet source on the port is an Always Allow'
             $wide = 'lists 0.0.0.0/0, ::/0 or other public prefixes the client did not name or already allow on purpose, such as 0.0.0.0/1 and 128.0.0.0/1'
-            $impl.Add(('{0} {1} For each of 22, 3389, 5985 and 5986, select each inbound allow rule that covers the port to see its source prefixes. The port is still open to the internet where an allow {2}, no deny that stops internet sources on that port comes before it in the same group, and the other group on the path, if there is one, lets the same connection through. Effective security rules lists rules only while the machine is running, so treat every management port of a stopped machine as open and note it in the change record. Leave the ports of a rule this change left unchanged and noted in the change record out of the deny on the network interfaces behind it, since that rule stays open until the client agrees a path, and note them with it. For every other management port found open, add a deny rule with protocol TCP, Source set to Service Tag and Internet, Destination port ranges set to those ports in the group that holds the allow rules for the named addresses, or in the group of the network interface, or of the subnet where the interface has none, when no addresses were named. Give it a free priority number from 100 to 4096 that is higher than every allow rule in that group for those ports from the named addresses or another source the client already allows on purpose, and lower than the allow that lets the internet in where that allow is a custom rule in the same group. Default rules, numbered 65000 and above, always come after it. Select Add and check again. If no such number is free, leave the rule as it is and review it with the client.' -f $effective, $reach, $wide))
+            $impl.Add(('{0} {1} For each of 22, 3389, 5985 and 5986, select each inbound allow rule that covers the port to see its source prefixes. The port is still open to the internet where an allow {2}, no deny that stops internet sources on that port comes before it in the same group, and the other group on the path, if there is one, lets the same connection through. Where {3}, the port stays open whatever the groups say, so no network security group change can close it: record that admin rule, with its virtual network manager, priority, source and ports, in the change record, escalate it to whoever owns the Virtual Network Manager configuration and never count the port as closed on that interface. Still add the deny below for it, so the deny applies once the admin rule is gone. Effective security rules lists rules only while the machine is running, so treat every management port of a stopped machine as open and note it in the change record, and read its security admin rules on the Security admin configurations tab of its virtual network under Settings > Network Manager. Leave the ports of a rule this change left unchanged and noted in the change record out of the deny on the network interfaces behind it, since that rule stays open until the client agrees a path, and note them with it. For every other management port found open, add a deny rule with protocol TCP, Source set to Service Tag and Internet, Destination port ranges set to those ports in the group that holds the allow rules for the named addresses, or in the group of the network interface, or of the subnet where the interface has none, when no addresses were named. Give it a free priority number from 100 to 4096 that is higher than every allow rule in that group for those ports from the named addresses or another source the client already allows on purpose, and lower than the allow that lets the internet in where that allow is a custom rule in the same group. Default rules, numbered 65000 and above, always come after it. Select Add and check again. If no such number is free, leave the rule as it is and review it with the client.' -f $effective, $reach, $wide, $always))
             $privateTest = if ($broad) { ' Any rule added for the private ranges allows only the management ports, from the ranges the client confirmed.' } else { '' }
             $testing = @(
                 ('In the Azure portal, open the network security group of {0} and go to Settings > Inbound security rules.' -f (Get-EachStep $n 'rule'))
                 ('Confirm each rule listed is gone, allows only the source addresses the client named, or no longer allows 22, 3389, 5985 or 5986 while its other ports keep their source, and that no other rule allows those ports over TCP from Any, Internet, 0.0.0.0/0 or ::/0.{0}' -f $privateTest)
-                ('{0} {1} For each of 22, 3389, 5985 and 5986, confirm that no allow rule that covers the port and {2}, lets an internet source through under those rules, apart from the Azure platform address 168.63.129.16 and the ports of a rule this change left unchanged and noted in the change record, so no other internet source reaches those ports. For a stopped machine, confirm instead that the deny from the Internet service tag is in place.' -f $effective, $reach, $wide)
+                ('{0} {1} For each of 22, 3389, 5985 and 5986, confirm that no allow rule that covers the port and {2}, lets an internet source through under those rules, apart from the Azure platform address 168.63.129.16 and the ports of a rule this change left unchanged and noted in the change record, so no other internet source reaches those ports. Where {3}, never report that port as closed, even with the deny in place: confirm the admin rule is recorded in the change record and escalated to whoever owns the Virtual Network Manager configuration, and report the port as still open until that owner closes it. For a stopped machine, confirm instead that the deny from the Internet service tag is in place and read the Security admin configurations tab of its virtual network under Settings > Network Manager the same way.' -f $effective, $reach, $wide, $always)
+                if ($held) { 'Report {0}, which -AdminRuleOpen names as held open by a security admin rule with Always Allow, as still open and escalated, never closed.' -f (Format-HeldOpen) }
                 'Where just-in-time VM access was enabled, go to Microsoft Defender for Cloud > Workload protections > Just-in-time VM access and confirm the virtual machines behind the rules show on the Configured tab.'
                 'Where Azure Bastion is the path, open one virtual machine behind each rule, select Connect > Bastion and confirm a session opens.'
                 if ($winRm) { 'Where a rule opened 5985 or 5986 and WinRM is still needed, have the client confirm a WinRM connection to one machine behind it, through an approved just-in-time request or from a named address.' })
@@ -1626,6 +1662,13 @@ $catalog = @(
                     ('Just-in-time VM access keeps the ports closed and opens them only when an administrator asks, for that person''s own address and for a limited time, with every request recorded. It is part of Microsoft Defender for Servers Plan 2. {0}' -f $planWords)
                     ('Azure Bastion lets administrators connect from the Azure portal over an encrypted connection on port 443, so the machines need no management port open to the internet. It is billed by the hour from the moment it is deployed in a virtual network, and its free Developer tier is meant for development and test only.{0}' -f $(if ($winRm) { ' It provides RDP and SSH sessions only, so it cannot replace WinRM, which remote PowerShell uses.' } else { '' }))))
             $effect.Add($suggest)
+            # A central policy the client may not know about keeps a port open that this change cannot close.
+            if ($held) {
+                $heldPorts = @($heldOpen.Values | ForEach-Object { $_.Ports }).Count
+                $where = if ($held -eq 1) { 'On virtual machine {0}, a central network policy, a security admin rule in Azure Virtual Network Manager, keeps {1} {2} open to the internet.' -f @($heldOpen.Values)[0].Name, (Get-Pick $heldPorts 'port' 'ports'), (Join-Words @(@($heldOpen.Values)[0].Ports | Sort-Object { [int]$_ })) }
+                else { 'On virtual machines {0}, a central network policy, a security admin rule in Azure Virtual Network Manager, keeps those ports open to the internet.' -f (Format-HeldOpen) }
+                $effect.Add(('{0} That policy applies before any network security group rule, so this change cannot close {1} there, and {2} open until the policy changes. Could you tell me who manages your Virtual Network Manager configuration, so I can raise this with them?' -f $where, (Get-Pick $heldPorts 'that port' 'those ports'), (Get-Pick $heldPorts 'it stays' 'they stay')))
+            }
             $email = New-ApprovalEmail -Subject 'closing remote management ports to the internet' `
                 -Change @(('I would like to close {0} that let anyone on the internet reach RDP, SSH or WinRM, the remote management ports, on your Azure virtual machines.' -f (Get-Pick $n 'the network security group rule' "the $n network security group rules")), ('In their place, administrators would connect through just-in-time VM access or Azure Bastion{0}.' -f $(if ($winRm) { ', and remote PowerShell over WinRM through just-in-time VM access or from addresses you name' } else { '' }))) `
                 -Why ('I recommend closing {0} because ports open to the whole internet are scanned all the time, and attackers try guessed or stolen passwords against them. Closing {1} removes that exposure while keeping a controlled way in for your administrators.' -f (Get-Pick $n 'this rule' 'these rules'), (Get-Pick $n 'it' 'them')) `
@@ -1639,8 +1682,11 @@ $catalog = @(
                     Number = 16; Key = 'management-ports'; Title = 'Close internet-facing RDP, SSH and WinRM rules on network security groups'
                     Description = 'Remove {0} that allow RDP, SSH or WinRM from any internet address, or narrow each to named source addresses, and give administrators just-in-time VM access or Azure Bastion in their place{1}.' -f (Get-Listed $n 'inbound security rule' 'inbound security rules'), $(if ($winRm) { ', with WinRM through just-in-time VM access or named source addresses only' } else { '' })
                     Purpose = 'Management ports open to the internet are scanned constantly and attacked with guessed or stolen credentials. Closing them removes that exposure while keeping a controlled way in for administrators.'
-                    ResourceIntro = '{0} RDP, SSH or WinRM from any internet address on a workload subnet or network interface, with every property recorded for the rollback. The last lines give the path that fits each subscription.' -f $(if ($n -eq 1) { 'The inbound rule below allows' } else { "The $n inbound rules below allow" })
-                    ResourceLines = @(Format-ResourceList $resources) + $planLines
+                    ResourceIntro = '{0} RDP, SSH or WinRM from any internet address on a workload subnet or network interface, with every property recorded for the rollback. The last lines give the path that fits each subscription{1}.' -f $(if ($n -eq 1) { 'The inbound rule below allows' } else { "The $n inbound rules below allow" }), $(if ($held) { ', and the machines a security admin rule keeps open' } else { '' })
+                    ResourceLines = @(Format-ResourceList $resources) + $planLines + @(if ($held) {
+                            '', 'Kept open by an Azure Virtual Network Manager security admin rule with Always Allow (-AdminRuleOpen), which CR-16 cannot close:'
+                            foreach ($m in $heldOpen.Values) { '- {0}: {1} {2}' -f $m.Name, (Get-Pick $m.Ports.Count 'port' 'ports'), (Join-Words @($m.Ports | Sort-Object { [int]$_ })) }
+                        })
                     Availability = 'No impact on the virtual machines, since only new remote management connections from the internet are refused and connections already open stay up.'
                     UserExperience = 'Administrators who connect straight from the internet over RDP, SSH or WinRM move to just-in-time VM access or Azure Bastion, as agreed with the client{0}.' -f $(if ($winRm) { ', and remote PowerShell over WinRM to just-in-time VM access or named source addresses, since Azure Bastion does not provide WinRM' } else { '' })
                     Dependencies = 'Needs the replacement path the client agreed in place first, just-in-time VM access with Defender for Servers Plan 2 on the subscription, or an Azure Bastion host that every network security group of the machines lets in on 22 and 3389 for RDP and SSH{0}{1}.' -f $(if ($winRm) { ', with WinRM through just-in-time VM access or named source addresses' } else { '' }), $(if ($broad) { ', and for a rule open to every address, the private ranges the client confirmed or its word that nothing connects from its own networks' } else { '' })
@@ -1653,6 +1699,9 @@ $catalog = @(
                         , @('Configure NSG rules for Azure Bastion, target VM subnet', 'https://learn.microsoft.com/azure/bastion/bastion-nsg#target-vm-subnet')
                         , @('What is Azure Bastion', 'https://learn.microsoft.com/azure/bastion/bastion-overview')
                         , @('View effective security rules of a network interface', 'https://learn.microsoft.com/azure/virtual-network/virtual-network-network-interface#view-effective-security-rules')
+                        , @('Effective security rules overview', 'https://learn.microsoft.com/azure/network-watcher/effective-security-rules-overview')
+                        , @('Security admin rules in Azure Virtual Network Manager', 'https://learn.microsoft.com/azure/virtual-network-manager/concept-security-admins#how-security-admin-rules-and-network-security-groups-nsgs-are-evaluated')
+                        , @('View configurations applied by Azure Virtual Network Manager', 'https://learn.microsoft.com/azure/virtual-network-manager/how-to-view-applied-configurations')
                         , @('Choose the right Azure Bastion SKU', 'https://learn.microsoft.com/azure/bastion/bastion-sku-comparison'))
                     Csv = $resources
                     Email = $email
