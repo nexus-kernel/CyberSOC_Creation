@@ -52,6 +52,14 @@ BeforeAll {
         Set-PackResult $Path 'DP.2-DETAIL' @(@{ Name = 'kv-app'; ResourceId = 'kv1'; resourceGroup = 'rg-app'; subscriptionId = $s1; RetentionDays = 90 }, @{ Name = 'kv-dev'; ResourceId = 'kv2'; resourceGroup = 'rg-dev'; subscriptionId = $s2; RetentionDays = 7 })
         Set-PackResult $Path 'NB.4-DETAIL' @(@{ Name = 'app-portal'; ResourceId = 'app1'; Kind = 'app'; resourceGroup = 'rg-web'; subscriptionId = $s1; DefaultHostName = 'app-portal.azurewebsites.net' }, @{ Name = 'func-jobs'; ResourceId = 'app2'; Kind = 'functionapp'; resourceGroup = 'rg-web'; subscriptionId = $s1; DefaultHostName = 'func-jobs.azurewebsites.net' })
         Set-PackResult $Path 'NB.5-DETAIL' @(@{ Name = 'app-portal'; ResourceId = 'app1'; resourceGroup = 'rg-web'; subscriptionId = $s1; MinTlsVersion = '1.0' }, @{ Name = 'app-blank'; ResourceId = 'app3'; resourceGroup = 'rg-web'; subscriptionId = $s1; MinTlsVersion = '' })
+        # NB.5-FTPS-DETAIL: the sites whose FTP state is not FtpsOnly or Disabled, so AllAllowed or empty. app-portal
+        # is also below TLS 1.2 in NB.5-DETAIL, and app-blank reads empty in both, as Resource Graph can return it.
+        $site = { param($name, $rg, $sub) "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Web/sites/$name" }
+        Set-PackResult $Path 'NB.5-FTPS-DETAIL' @(
+            @{ Name = 'app-portal'; ResourceId = (& $site 'app-portal' 'rg-web' $s1); resourceGroup = 'rg-web'; subscriptionId = $s1; FtpsState = 'AllAllowed'; MinTlsVersion = '1.0' }
+            @{ Name = 'func-jobs'; ResourceId = (& $site 'func-jobs' 'rg-web' $s1); resourceGroup = 'rg-web'; subscriptionId = $s1; FtpsState = 'AllAllowed'; MinTlsVersion = '1.2' }
+            @{ Name = 'app-blank'; ResourceId = (& $site 'app-blank' 'rg-web' $s1); resourceGroup = 'rg-web'; subscriptionId = $s1; FtpsState = ''; MinTlsVersion = '' }
+            @{ Name = 'app-partners'; ResourceId = (& $site 'app-partners' 'rg-api' $s2); resourceGroup = 'rg-api'; subscriptionId = $s2; FtpsState = 'AllAllowed'; MinTlsVersion = '1.2' })
         Set-PackResult $Path 'NB.6-DETAIL' @()
         $paas = { param($provider, $name, $rg, $sub) "/subscriptions/$sub/resourceGroups/$rg/providers/$provider/$name" }
         Set-PackResult $Path 'NB.6-PAAS-DETAIL' @(
@@ -201,7 +209,7 @@ Describe 'Change request generation' {
             'CR-01-diagnostic-logging.txt', 'CR-02-storage-secure-transfer.txt', 'CR-03-storage-minimum-tls.txt', 'CR-04-app-service-minimum-tls.txt',
             'CR-06-key-vault-purge-protection.txt', 'CR-07-storage-anonymous-access.txt', 'CR-08-app-service-https-only.txt', 'CR-09-encryption-at-host.txt',
             'CR-11-redis-minimum-tls.txt', 'CR-12-service-bus-minimum-tls.txt', 'CR-13-event-hubs-minimum-tls.txt', 'CR-14-cosmos-db-minimum-tls.txt', 'CR-15-scale-set-encryption-at-host.txt',
-            'CR-16-management-ports.txt')
+            'CR-16-management-ports.txt', 'CR-17-app-service-ftps.txt')
         @($emailFiles.Name | Sort-Object) | Should -Be @($crFiles.Name | Sort-Object | ForEach-Object { $_ -replace '\.txt$', '.email.txt' }) -Because 'every change request writes a client email'
         $files.Count | Should -Be ($crFiles.Count + $emailFiles.Count + 2)
         $index | Should -Match '\| 05 \| Minimum TLS 1\.2 on Azure SQL servers \|  \| No gaps found \|'
@@ -628,7 +636,7 @@ Describe 'Change request generation' {
             $email | Should -Match "Please reply by $reply\. " -Because "$($f.Name) asks for a reply a week before the proposed date"
             $email | Should -Match "\r?\n\r?\n[^\r\n]+:\r?\n\r?\nSubscription Example[^\r\n]*\((5f1c2a9e|a0b1c2d3)[^\r\n]*\):\r?\n\r?\n- " -Because "$($f.Name) lists the resources by subscription"
         }
-        $dated = 'CR-01-diagnostic-logging', 'CR-02-storage-secure-transfer', 'CR-03-storage-minimum-tls', 'CR-04-app-service-minimum-tls', 'CR-06-key-vault-purge-protection', 'CR-07-storage-anonymous-access', 'CR-08-app-service-https-only', 'CR-11-redis-minimum-tls', 'CR-12-service-bus-minimum-tls', 'CR-13-event-hubs-minimum-tls', 'CR-14-cosmos-db-minimum-tls', 'CR-16-management-ports'
+        $dated = 'CR-01-diagnostic-logging', 'CR-02-storage-secure-transfer', 'CR-03-storage-minimum-tls', 'CR-04-app-service-minimum-tls', 'CR-06-key-vault-purge-protection', 'CR-07-storage-anonymous-access', 'CR-08-app-service-https-only', 'CR-11-redis-minimum-tls', 'CR-12-service-bus-minimum-tls', 'CR-13-event-hubs-minimum-tls', 'CR-14-cosmos-db-minimum-tls', 'CR-16-management-ports', 'CR-17-app-service-ftps'
         foreach ($k in $dated) {
             $email = & $read "$k.email.txt"
             $email | Should -Match "\r?\n\r?\n[^\r\n]*approve [^?]*$proposed\? Please reply by $reply\. [^\r\n]*I will not schedule this change until I have your approval\.\r?\n\r?\nThank you,\r?\nScott Example\r?\n$" -Because "$k asks for approval of the proposed date"
@@ -639,7 +647,7 @@ Describe 'Change request generation' {
             $email | Should -Match "\r?\n\r?\nCould you approve this change and suggest a maintenance window that works for these (servers|scale sets)\? Please reply by $reply\. " -Because "$k restarts machines, so it asks for a maintenance window"
             $email | Should -Not -Match $proposed -Because "$k leaves the date to the maintenance window"
         }
-        $index | Should -Match ('- CR-01, CR-02, CR-03, CR-04, CR-06, CR-07, CR-08, CR-11, CR-12, CR-13, CR-14, CR-16 ask the client to approve the proposed date, {0}, and CR-09, CR-15 ask the client to approve the change and suggest a maintenance window\. Every email asks for a reply by {1}\. Run again with -ChangeDate to propose another day' -f $proposed, $reply)
+        $index | Should -Match ('- CR-01, CR-02, CR-03, CR-04, CR-06, CR-07, CR-08, CR-11, CR-12, CR-13, CR-14, CR-16, CR-17 ask the client to approve the proposed date, {0}, and CR-09, CR-15 ask the client to approve the change and suggest a maintenance window\. Every email asks for a reply by {1}\. Run again with -ChangeDate to propose another day' -f $proposed, $reply)
         $index | Should -Match "Every client email asks for the client's approval, and no change is scheduled until the client approves it\."
         $index | Should -Not -Match '(?i)notice|concern'
     }
@@ -758,6 +766,55 @@ Describe 'Change request generation' {
         foreach ($left in 'nsg-fw-untrust', 'nsg-hub-untrust', 'nsg-old', 'Allow-HighPorts', 'Allow-Any') { $email | Should -Not -Match $left -Because "$left is not in the change" }
     }
 
+    It 'turns plain FTP off on the App Service apps whose FTP state reads All allowed, reading the recorded state again before each change' {
+        $text = & $read 'CR-17-app-service-ftps.txt'
+        $text | Should -Match '^Title: Set the FTP state to FTPS only or Disabled on App Service apps\r?\n'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION') | Should -Be 'Set the FTP state to FTPS only, or to Disabled where the client confirms nothing deploys over FTP, on the 3 App Service and Function apps listed below.'
+        @(Get-Section $text 'C) RESOURCES') | Should -Be @(
+            'The 3 apps below are listed with the FTP state each one has today.'
+            "Subscription: Example Production ($s1)"
+            '- app-portal, resource group rg-web, FTP state All allowed, minimum TLS 1.0'
+            '- func-jobs, resource group rg-web, FTP state All allowed'
+            "Subscription: Example, Dev Test ($s2)"
+            '- app-partners, resource group rg-api, FTP state All allowed') -Because 'the app below TLS 1.2 shows its minimum, since FTPS only needs 1.2'
+        $text | Should -Not -Match 'app-blank' -Because 'an app whose FTP state reads empty is not changed on a guess'
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $impl[0] | Should -Be '1. In the Azure portal, go to App Services and open the first app listed in the RESOURCES section.'
+        $impl[1] | Should -Be '2. Go to Settings > Configuration and select the General settings tab.'
+        $impl[2] | Should -Match '^3\. Under Platform settings, read FTP state\. If it no longer shows All allowed, the state recorded for the app in the RESOURCES section, the app has changed since collection, so leave it unchanged, note it in the change record for the next pack and skip the remaining steps for it\.$' -Because 'an app changed since collection is skipped'
+        $impl[3] | Should -Match '^4\. If the client chose FTPS only for the app, read Minimum Inbound TLS Version\. FTPS only does not support TLS 1\.0 or 1\.1, so if it shows 1\.0 or 1\.1, leave the app unchanged until CR-04 has set 1\.2 on it'
+        $impl[4] | Should -Be '5. Set FTP state to FTPS only, or to Disabled where the client confirmed that nothing uploads to the app over FTP or FTPS, select Apply and confirm.'
+        $impl[5] | Should -Be '6. Repeat steps 1 to 5 for each remaining app listed.'
+        @(Get-Section $text 'B) TESTING PLAN')[-1] | Should -Be '2. Confirm FTP state shows FTPS only or Disabled under Platform settings, as agreed with the client for the app.'
+        @(Get-Section $text 'C) ROLLBACK PLAN')[-1] | Should -Match '^2\. Set FTP state back to All allowed, the state recorded for the app in the RESOURCES section, select Apply and confirm\.'
+        (Get-Section $text 'E) MITIGATION') -join '|' | Should -Be 'If changes need to be reverted, follow the rollback plan.'
+        @(Get-Section $text 'A) REFERENCES')[0] | Should -Be '- Deploy your app to Azure App Service using FTP/S, enforce FTPS: https://learn.microsoft.com/azure/app-service/deploy-ftp#enforce-ftps'
+        @(Get-Section $text 'C) DEPENDENCIES') | Should -Be 'Deployment tools and people that upload over plain FTP, or over FTP or FTPS to an app set to Disabled, can no longer connect once the change is applied.'
+    }
+
+    It 'names in the index the apps without a recorded FTP state, the uncovered slots, the apps below TLS 1.2 and the basic authentication follow-up' {
+        $index | Should -Match '\| 17 \| Plain FTP turned off on App Service apps \| 3 \| Change request and client email \| CR-17-app-service-ftps\.txt, CR-17-app-service-ftps\.email\.txt \|'
+        $index | Should -Match '- 1 App Service app left out of CR-17 because Resource Graph returned an empty FTP state, or one Microsoft Learn does not list, and Learn documents no state App Service applies when none is set, so it may still accept plain FTP: app-blank \(resource group rg-web\)\. Check its FTP state under Settings > Configuration > General settings in the portal, and raise the change for any that shows All allowed\.'
+        $index | Should -Match '- NB\.5-FTPS-DETAIL reads the production site of each app\. Deployment slots have a configuration of their own, which the pack does not read, so CR-17 does not cover them\. Check the FTP state of each slot in the portal\.'
+        $index | Should -Match '- 1 App Service app in CR-17 has a minimum inbound TLS version below 1\.2: app-portal \(resource group rg-web\)\. FTPS only does not support TLS 1\.0 or 1\.1, so CR-04 sets 1\.2 on it first, or the client chooses Disabled\.'
+        $index | Should -Match '- FTP Basic Auth Publishing Credentials, under the same General settings tab, is a separate setting and not part of CR-17\. .* is a possible follow-up'
+    }
+
+    It 'asks for approval to turn off plain FTP, whether anything still uploads over it and whether FTPS only or Disabled suits each app' {
+        $email = & $read 'CR-17-app-service-ftps.email.txt'
+        Assert-ApprovalEmail $email 'CR-17'
+        $email | Should -Match '^Subject: Approval requested: turning off plain FTP on Azure App Service applications\r?\n'
+        $email | Should -Match 'I would like your approval to stop plain FTP connections to 3 of your App Service and Function applications by setting the FTP state of each to FTPS only, or to Disabled where nothing uploads files to it over FTP or FTPS\. FTP is an older way to upload files to an application, and FTPS is the same with the connection encrypted\.'
+        $email | Should -Match 'I recommend this change because plain FTP sends the deployment user name, password and files unencrypted'
+        $email | Should -Match 'will be refused once the change is applied, and will need to connect over FTPS'
+        $email | Should -Match 'Disabled also turns off FTPS, so it suits only an application that nothing uploads to over FTP or FTPS\.'
+        $email | Should -Match 'FTPS only needs a minimum inbound TLS version of 1\.2, and app-portal still allows an older version, so for it I would set the minimum to 1\.2 first'
+        $email | Should -Match "The applications are listed below by subscription, each with its FTP state today:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- app-portal \(resource group rg-web, FTP state All allowed\)\r?\n- func-jobs \(resource group rg-web, FTP state All allowed\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- app-partners \(resource group rg-api, FTP state All allowed\)\r?\n"
+        $email | Should -Match '\r?\n\r?\nThe FTP state can be set back to All allowed, the state each application has today, at any time\.\r?\n'
+        $email | Should -Match '\r?\n\r?\nCould you let me know whether any deployment tool or person still uploads files to these applications over plain FTP, and whether FTPS only or Disabled suits each one\? With that agreed, could you approve this change for \w+day, [^?]+\? Please reply by [^.]+\d{4}\. If something still uploads over plain FTP, I will hold the change for that application until it uses FTPS\.'
+        $email | Should -Not -Match 'app-blank|minimum TLS 1\.0' -Because 'the email lists only the apps in the change, each with its FTP state'
+    }
+
     It 'lists one row per resource in the CSV' {
         @($csv | Where-Object CR -eq 'CR-06').Resource | Should -Be @('kv-app', 'kv-dev')
         ($csv | Where-Object { $_.CR -eq 'CR-04' }).CurrentSetting | Should -Be 'minimum TLS 1.0'
@@ -770,6 +827,10 @@ Describe 'Change request generation' {
         @($mgmt.Resource) | Should -Be @('nsg-web/Allow-RDP', 'nsg-jump/Allow-SSH-HTTPS')
         ($mgmt | Where-Object Resource -eq 'nsg-web/Allow-RDP').ResourceId | Should -Be "/subscriptions/$s1/resourceGroups/rg-web/providers/Microsoft.Network/networkSecurityGroups/nsg-web/securityRules/Allow-RDP" -Because 'the CSV names the rule by its resource ID'
         ($mgmt | Where-Object Resource -eq 'nsg-jump/Allow-SSH-HTTPS').CurrentSetting | Should -Be 'priority 310, allow inbound, protocol TCP, source *, source ports *, destination *, destination ports (22, 443), description "Jump box access, vendor", applies to network interface nic-jump01 of virtual machine vm-jump01' -Because 'the CSV carries every property the rollback needs, cleaned to the copy rules like every file'
+        $ftps = @($csv | Where-Object CR -eq 'CR-17')
+        @($ftps.Resource) | Should -Be @('app-portal', 'func-jobs', 'app-partners')
+        ($ftps | Where-Object Resource -eq 'app-portal').CurrentSetting | Should -Be 'FTP state All allowed, minimum TLS 1.0'
+        ($ftps | Where-Object Resource -eq 'app-partners').ResourceId | Should -Be "/subscriptions/$s2/resourceGroups/rg-api/providers/Microsoft.Web/sites/app-partners"
         @($csv | Where-Object { -not $_.ResourceId }).Count | Should -Be 0 -Because 'every tracking row carries the resource ID'
     }
 }
@@ -797,7 +858,7 @@ Describe 'Change request variants' {
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request and client email \| CR-06-key-vault-purge-protection\.txt, CR-06-key-vault-purge-protection\.email\.txt \|'
         $index | Should -Match '- CR-06 refers to the purge protection approval the client gave at build kickoff \(-PurgeProtectionApproved\), and asks the client to confirm that it still stands and to approve the proposed date\. Attach that approval and the reply to the change request\.'
-        $index | Should -Match 'CR-01, CR-02, CR-03, CR-04, CR-06, CR-07, CR-08, CR-11, CR-12, CR-13, CR-14, CR-16 ask the client to approve the proposed date'
+        $index | Should -Match 'CR-01, CR-02, CR-03, CR-04, CR-06, CR-07, CR-08, CR-11, CR-12, CR-13, CR-14, CR-16, CR-17 ask the client to approve the proposed date'
         $kv = Get-Content (Join-Path $out 'CR-06-key-vault-purge-protection.txt') -Raw
         @(Get-Section $kv 'E) MITIGATION')[0] | Should -Match '^Purge protection cannot be disabled once it is enabled, so this change cannot be reverted\.'
         Get-Content (Join-Path $out 'CR-07-storage-anonymous-access.email.txt') -Raw | Should -Not -Match 'build kickoff' -Because 'the switch covers purge protection only'
@@ -812,7 +873,7 @@ Describe 'Change request variants' {
         $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
     }
 
-    It 'writes a client email for every change request, CR-01 to CR-16' {
+    It 'writes a client email for every change request, CR-01 to CR-17' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
         # written at least once. A change request written without its email, or with an email that does not
@@ -842,7 +903,7 @@ Describe 'Change request variants' {
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
-        @($written | Sort-Object -Unique) | Should -Be @(1..16) -Because 'the two packs between them write every change request'
+        @($written | Sort-Object -Unique) | Should -Be @(1..17) -Because 'the two packs between them write every change request'
         $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
@@ -1381,11 +1442,58 @@ Describe 'Change request variants' {
         Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \|  \| No gaps found \|'
     }
 
+    It 'never changes an app that already reads FtpsOnly or Disabled, writes singular wording for one app, and reads no gaps when only apps without a state remain' {
+        # NB.5-FTPS-DETAIL leaves out FtpsOnly and Disabled in any case. The generator does not rely on it, so a row
+        # carrying either state is never changed.
+        $pack = Join-Path $TestDrive 'ftps-single'
+        New-ChangeFixture $pack
+        $site = { param($name, $rg, $sub) "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Web/sites/$name" }
+        Set-PackResult $pack 'NB.5-FTPS-DETAIL' @(
+            @{ Name = 'app-intranet'; ResourceId = (& $site 'app-intranet' 'rg-web' $s1); resourceGroup = 'rg-web'; subscriptionId = $s1; FtpsState = 'AllAllowed'; MinTlsVersion = '1.2' }
+            @{ Name = 'app-secure'; ResourceId = (& $site 'app-secure' 'rg-web' $s1); resourceGroup = 'rg-web'; subscriptionId = $s1; FtpsState = 'FtpsOnly'; MinTlsVersion = '1.2' }
+            @{ Name = 'func-closed'; ResourceId = (& $site 'func-closed' 'rg-web' $s2); resourceGroup = 'rg-web'; subscriptionId = $s2; FtpsState = 'Disabled'; MinTlsVersion = '1.2' })
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $text = Get-Content (Join-Path $out 'CR-17-app-service-ftps.txt') -Raw
+        $text | Should -Match 'Set the FTP state to FTPS only, or to Disabled where the client confirms nothing deploys over FTP, on the App Service app listed below\.'
+        $text | Should -Match 'Plain FTP sends the deployment credentials and files unencrypted, and this app still allows it\.'
+        $text | Should -Match "Subscription: Example Production \($s1\)\r?\n- app-intranet, resource group rg-web, FTP state All allowed\r?\n"
+        $text | Should -Not -Match 'app-secure|func-closed|Repeat steps'
+        $email = Get-Content (Join-Path $out 'CR-17-app-service-ftps.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-17 for one application'
+        $email | Should -Match 'I would like your approval to stop plain FTP connections to one of your App Service and Function applications by setting its FTP state to FTPS only'
+        $email | Should -Match 'The application is listed below with its FTP state today:'
+        $email | Should -Match 'and whether FTPS only or Disabled suits it\? With that agreed, could you approve this change for '
+        $email | Should -Not -Match 'minimum inbound TLS' -Because 'the app already requires TLS 1.2'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Not -Match 'left out of CR-17|below 1\.2: ' -Because 'no app lacks a state and none is below TLS 1.2'
+        @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-17').Resource | Should -Be @('app-intranet')
+
+        Set-PackResult $pack 'NB.5-FTPS-DETAIL' @(@{ Name = 'func-flex'; ResourceId = (& $site 'func-flex' 'rg-jobs' $s2); resourceGroup = 'rg-jobs'; subscriptionId = $s2; FtpsState = ''; MinTlsVersion = '1.2' })
+        $null = & $generator -EvidencePath $pack
+        Test-Path (Join-Path $out 'CR-17-app-service-ftps.txt') | Should -BeFalse -Because 'an app without a recorded state is not changed'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 17 \| Plain FTP turned off on App Service apps \|  \| Only apps without a recorded FTP state remain, see the notes \|  \|'
+        $index | Should -Match '1 App Service app left out of CR-17 because Resource Graph returned an empty FTP state.*: func-flex \(resource group rg-jobs\)\.'
+
+        Set-PackResult $pack 'NB.5-FTPS-DETAIL' @()
+        $null = & $generator -EvidencePath $pack
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 17 \| Plain FTP turned off on App Service apps \|  \| No gaps found \|  \|'
+        $index | Should -Match 'Deployment slots have a configuration of their own, which the pack does not read, so CR-17 does not cover them\.' -Because 'a slot can still allow plain FTP when every production site is enforced'
+        Set-PackResult $pack 'NB.5' @(@{ Configs = 0; FtpsEnforced = 0; MinTls12 = 0 })
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Not -Match 'Deployment slots' -Because 'a pack with no App Service site has no slot'
+        Set-PackResult $pack 'NB.5' @(@{ Configs = 4; FtpsEnforced = 4; MinTls12 = 4 })
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match 'Deployment slots have a configuration of their own' -Because 'the sites may have slots that still allow plain FTP'
+    }
+
     It 'reads needs recollection on a pack collected before the per-resource results, and clears stale change requests' {
         $pack = Join-Path $TestDrive 'old'
         New-ChangeFixture $pack
         $null = & $generator -EvidencePath $pack
-        foreach ($id in 'P0.7', 'NB.2-DETAIL', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'NB.6-PAAS-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DP.4-VMSS-ELIGIBILITY') { Remove-PackResult $pack $id }
+        foreach ($id in 'P0.7', 'NB.2-DETAIL', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.5-FTPS-DETAIL', 'NB.6-DETAIL', 'NB.6-PAAS-DETAIL', 'DP.1-DETAIL', 'DP.2-DETAIL', 'DP.4-VMSS-ELIGIBILITY') { Remove-PackResult $pack $id }
         Set-PackResult $pack 'DP.4-ELIGIBILITY' @() 'FAILED'
         $null = & $generator -EvidencePath $pack
         $out = Join-Path $pack '05-change-requests'
@@ -1396,6 +1504,7 @@ Describe 'Change request variants' {
         foreach ($n in 11..14) { $index | Should -Match ('\| {0} \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.2\.0 or later \|' -f $n) -Because 'NB.6-PAAS-DETAIL was added in 1.2.0' }
         $index | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \|  \| Needs recollection with CyberSOC collector 1\.3\.0 or later \|' -Because 'DP.4-VMSS-ELIGIBILITY was added in 1.3.0'
         $index | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \|  \| Needs recollection with CyberSOC collector 1\.6\.0 or later \|' -Because 'NB.2-DETAIL was added in 1.6.0'
+        $index | Should -Match '\| 17 \| Plain FTP turned off on App Service apps \|  \| Needs recollection with CyberSOC collector 1\.7\.0 or later \|' -Because 'NB.5-FTPS-DETAIL was added in 1.7.0'
         $index | Should -Match 'Subscription names were not read \(P0\.7\)'
         Get-Content (Join-Path $out 'CR-01-diagnostic-logging.txt') -Raw | Should -Match "- $s1\r?\n"
     }

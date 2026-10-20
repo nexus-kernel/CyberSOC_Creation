@@ -57,11 +57,19 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 14 | Minimum TLS 1.2 on Azure Cosmos DB accounts. Azure Cosmos DB retired TLS 1.0 and 1.1 on August 31, 2025 and accepts only TLS 1.2 as an account minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | Yes, approval request |
 | 15 | Encryption at host on the virtual machine scale sets whose model can take it. The model is set from Cloud Shell, then each existing instance is stopped (deallocated), brought to the model (Upgrade on a Uniform instance, Settings > Disks > Additional settings on a Flexible one) and started again only if it was running. A scale set with an Automatic or Rolling upgrade policy may apply the model on its own, all at once or in batches, so the change runs inside the maintenance window and the availability impact says so. RESOURCES lists the unique ID of each scale set and the VM ID of each Flexible instance to change. Before the model is set, the steps check under Overview > JSON View that `properties.uniqueId` still reads the listed ID, and a scale set whose ID differs is left out of every step. The Flexible steps work through the instances the scale set holds when the change is made and change only an instance whose `properties.vmId` is listed for that scale set, so an instance that joined after collection, or one created again under a listed name, is skipped and left for the next pack. The rollback covers any instance created after the model was changed. AKS node pools are routed to a planned project in the index | DP.4-VMSS-ELIGIBILITY, DP.4-ELIGIBILITY | Yes, approval request |
 | 16 | Internet-facing RDP, SSH and WinRM rules closed: each allow inbound rule open to any address, Internet, 0.0.0.0/0 or ::/0 on 22, 3389, 5985 or 5986 over TCP or any protocol, on a workload subnet or network interface. The replacement path the client agrees goes in first: just-in-time VM access (Defender for Cloud > Workload protections > Just-in-time VM access), which needs Defender for Servers Plan 2 on the subscription, or Azure Bastion (Connect > Bastion on the virtual network) for RDP and SSH. Bastion provides RDP and SSH sessions only (What is Azure Bastion), so a rule that opens WinRM (5985 or 5986) keeps WinRM only through just-in-time VM access or named source addresses, never Bastion, and is left unchanged where the client still needs WinRM and neither is agreed. The existing rules keep priority over the just-in-time deny rules until they are removed. Where Bastion is the path, every network security group of the machines gets an allow on 22 and 3389 from the AzureBastionSubnet address range ahead of any deny rule, and a Bastion session is opened before any rule changes. A rule whose source is Any, 0.0.0.0/0 or ::/0 also matches private addresses, so its management ports first get an allow from the private ranges the client confirms in reply to the email (the virtual network address spaces, peered networks and on-premises ranges), entered as CIDR blocks and never as a service tag, unless the client confirmed nothing connects from them. The service tag for the virtual network also holds the prefixes of user-defined routes, so with a forced-tunneling `0.0.0.0/0` route it would keep the ports open to the internet. A broad rule is left unchanged until the client confirms one or the other. Then each rule is deleted, or narrowed to the source addresses the client named, and a rule that also allows other ports loses only the management ports: when addresses were named, its management ports move to a new rule from those addresses, so its other ports keep the source they have. Last, the effective security rules of each network interface the rules applied to (Virtual machines > the machine > Networking > the network interface > Effective security rules, downloaded as a file, since the page shows only the first 50 rules) show the source prefixes behind every allow on those ports. A port is still open where an allow lists `0.0.0.0/0`, `::/0` or other public prefixes nobody named (such as `0.0.0.0/1` and `128.0.0.0/1`), no deny from Any, `0.0.0.0/0`, `::/0` or Internet on that port comes first in its group, and the other group on the path (subnet or network interface) also lets the connection through. The default virtual network rule behind a forced-tunneling route is the usual case. A TCP deny on the open management ports from the Internet service tag then goes in at a custom priority (100 to 4096) after the allows of its group for named addresses or sources the client already allows on purpose and, where the open allow is a custom rule in the same group, ahead of it. Default rules (65000 and above) always come after it. The ports of a rule the change left unchanged get no deny on the interfaces behind it and are noted with that rule, while the other open management ports there are still denied, and a rule for another protocol left for review keeps working. The network interfaces in a subnet come from the Connected devices page of its virtual network, a machine just-in-time VM access covers is left out since its deny already stops the internet, and a stopped machine, whose effective rules cannot be read, gets the deny without the check. The testing plan repeats that check. RESOURCES lists every property of each rule, and the path that fits each subscription from P0.3. The rollback recreates the rule from those properties, also in the CSV, ahead of any just-in-time deny rule, and deletes the rules the change added, the deny from the Internet service tag included | NB.2-DETAIL, P0.3 | Yes, approval request |
+| 17 | Plain FTP turned off on App Service and Function apps: the FTP state set to FTPS only, or to Disabled where the client confirms nothing uploads to the app over FTP or FTPS. Only an app whose state reads `AllAllowed` is changed. Before changing an app, the steps read its FTP state under Settings > Configuration > General settings, and an app that no longer shows the recorded All allowed has changed since collection, so it is skipped and left for the next pack. FTPS only does not support TLS 1.0 or 1.1, so an app whose minimum inbound TLS version reads 1.0 or 1.1 is left unchanged until CR-04 sets 1.2, unless the client chooses Disabled. RESOURCES and the CSV show that minimum beside the FTP state. The rollback sets each app back to All allowed, the recorded state | NB.5-FTPS-DETAIL | Yes, approval request |
 
 Resources a change leaves out are named in the index notes:
 
 - CR-04 leaves out App Service apps whose minimum TLS version Resource Graph returned empty, because App Service
   applies 1.2 when none is set. Check them in the portal if the value may be missing from Resource Graph.
+- CR-17 leaves out App Service apps whose FTP state Resource Graph returned empty, or as a value Microsoft Learn does
+  not list (only `AllAllowed`, `FtpsOnly` and `Disabled`). Learn documents no state App Service applies when none is
+  set, so such an app may still accept plain FTP: the note names each one for a check in the portal. When only those
+  remain, CR-17 reads "Only apps without a recorded FTP state remain, see the notes". Its notes also say, unless NB.5 shows
+  no App Service site, that deployment slots, which have a configuration of their own, are not read and so not covered, name the apps in
+  CR-17 whose minimum TLS version is below 1.2, and point to FTP Basic Auth Publishing Credentials as a possible
+  follow-up that is not part of the change.
 - CR-07 leaves out FileStorage accounts, which hold no blob service, and every account it cannot show is safe to change:
   - an account with a container set to Blob or Container access, named with its public containers. Turning the
     setting off would stop those anonymous reads, so each container's owner confirms first that it serves no public
@@ -159,7 +167,7 @@ The sections follow the template headings, in order, so each one pastes into the
 - The notification list is left empty to fill in.
 - Every change request writes a client email (`CR-NN-<change>.email.txt`) that asks for the client's approval,
   built by the one shared builder, `New-ApprovalEmail`. The generator stops before writing anything when a change
-  request has no approval request, and the Pester suite fails when any change request from CR-01 to CR-16 is written
+  request has no approval request, and the Pester suite fails when any change request from CR-01 to CR-17 is written
   without one, or with an email that leaves the shared structure, carries a title, or opens two paragraphs the same
   way. A new change request builds its email the same way.
 
@@ -216,6 +224,10 @@ Each change keeps its own content inside that structure:
   replacement the client wants, and, where a rule is open to every address, the address ranges of the virtual
   networks, peered networks and on-premises networks that connect, or that nothing connects from them. It offers to
   narrow a rule to named addresses instead of removing it.
+- CR-17 says that plain FTP stops working, that Disabled turns FTPS off too, that deployment methods other than
+  FTP are not affected, and, where an app is below TLS 1.2, that FTPS only needs the minimum TLS request first. It
+  lists each app with its FTP state, and before asking for approval it asks whether any deployment tool or person
+  still uploads over plain FTP and whether FTPS only or Disabled suits each app.
 - CR-05, CR-11, CR-12 and CR-14 say that the change cannot be reversed, because the service takes no lower minimum,
   and why no reversal should be needed.
 
@@ -233,7 +245,12 @@ from deployment and offers a Developer tier for development and test only (What 
 comparison, Deploy Azure Bastion from the Azure portal), the VirtualNetwork service tag includes the address prefixes
 used on user-defined routes and might contain default routes (Azure service tags overview), and the effective security
 rules of a network interface are under Networking, the network interface, then Help, Effective security rules, for a
-running virtual machine (Create, change, or delete a network interface).
+running virtual machine (Create, change, or delete a network interface). For CR-17: the FTP state is set under
+Configuration, General settings, Platform settings, to FTPS only or to Disabled, which turns off FTP and FTPS, FTPS only
+does not support TLS 1.0 or 1.1, and the FTP and FTPS endpoint is active on an app without any configuration (Deploy
+your app to Azure App Service using FTP/S), the API takes `AllAllowed`, `FtpsOnly` and `Disabled` and documents no
+default (Microsoft.Web sites/config), and FTP basic authentication is a separate setting (Disable basic authentication
+in Azure App Service deployments).
 
 Every change request, email and the index keep to the copy rules: no semicolons, arrows (Unicode arrows and `->`,
 `<-`, `=>`), emoji or angle brackets, and the greater-than sign only in navigation steps such as Settings >
@@ -253,7 +270,7 @@ rejects, and a file that still breaks a rule stops the run before any file is wr
 Each change reports one of these statuses in the index: change request and client email, no gaps found, not
 collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
 later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15, 1.4.0 or later for CR-09 and CR-15 when they
-have a machine or scale set to change, and 1.6.0 or later for CR-16). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
+have a machine or scale set to change, 1.6.0 or later for CR-16, and 1.7.0 or later for CR-17). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
 read as no gaps. A change request that also reads a result beyond its sources (DR.6-COVERAGE and P0.5 for CR-01,
 DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack, P0.3 for
 CR-16) reads "partial
@@ -268,7 +285,8 @@ Service Bus and Event Hubs namespaces and Cosmos DB accounts below TLS 1.2 for C
 DP.4-VMSS-ELIGIBILITY, which lists the scale sets without encryption at host for CR-15, and the ScaleSet column of
 DP.4-ELIGIBILITY were added in 1.3.0, and the VmId column of DP.4-ELIGIBILITY and the UniqueId column of
 DP.4-VMSS-ELIGIBILITY in 1.4.0. NB.2-DETAIL, which lists the internet-exposed management port rules for CR-16
-with every property and attachment, was added in 1.6.0. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
+with every property and attachment, was added in 1.6.0, and NB.5-FTPS-DETAIL, which lists the App Service apps
+that still allow plain FTP for CR-17, in 1.7.0. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
 
 ## Validation
 

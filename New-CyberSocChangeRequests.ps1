@@ -8,9 +8,9 @@
     (assigned where it is missing, and remediated where resources are not compliant),
     secure transfer and minimum TLS 1.2 on storage accounts, minimum TLS 1.2 on App Service, Azure SQL,
     Azure Cache for Redis, Service Bus, Event Hubs and Azure Cosmos DB, Key Vault purge protection,
-    encryption at host on virtual machines and scale sets, and closing internet-facing RDP, SSH and WinRM
-    rules on network security groups. Every change request also gets a client email,
-    drafted and ready to send, that asks for the client's approval. Every email has the same parts in the
+    encryption at host on virtual machines and scale sets, closing internet-facing RDP, SSH and WinRM
+    rules on network security groups, and turning off plain FTP on App Service apps. Every change request
+    also gets a client email, drafted and ready to send, that asks for the client's approval. Every email has the same parts in the
     same order: what is to change, why it is recommended, what it means for the client, the resources by
     subscription, how it can be reversed, and the request, which asks for approval of the proposed date, or
     for a maintenance window where the change needs a restart, by a reply-by date a week before it. Nothing
@@ -54,8 +54,8 @@
 .NOTES
     The per-resource results (P0.7, NB.4-DETAIL, NB.5-DETAIL, NB.6-DETAIL, DP.1-DETAIL, DP.2-DETAIL,
     DP.4-ELIGIBILITY, DR.6-COVERAGE and DR.6-NONCOMPLIANT) were added in CyberSOC collector 1.1.0,
-    NB.6-PAAS-DETAIL in 1.2.0, DP.4-VMSS-ELIGIBILITY in 1.3.0 and NB.2-DETAIL in 1.6.0. Changes that read them say "needs
-    recollection" on packs collected with an earlier version. CR-09 and CR-15 also need the machine and scale
+    NB.6-PAAS-DETAIL in 1.2.0, DP.4-VMSS-ELIGIBILITY in 1.3.0, NB.2-DETAIL in 1.6.0 and NB.5-FTPS-DETAIL
+    in 1.7.0. Changes that read them say "needs recollection" on packs collected with an earlier version. CR-09 and CR-15 also need the machine and scale
     set IDs added in 1.4.0, and say "needs recollection" on an earlier pack that lists anything to change.
 #>
 #Requires -Version 5.1
@@ -88,6 +88,7 @@ foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAI
 $detailVersions['NB.6-PAAS-DETAIL'] = '1.2.0'
 $detailVersions['DP.4-VMSS-ELIGIBILITY'] = '1.3.0'
 $detailVersions['NB.2-DETAIL'] = '1.6.0'
+$detailVersions['NB.5-FTPS-DETAIL'] = '1.7.0'
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -1632,6 +1633,89 @@ $catalog = @(
                         , @('What is Azure Bastion', 'https://learn.microsoft.com/azure/bastion/bastion-overview')
                         , @('View effective security rules of a network interface', 'https://learn.microsoft.com/azure/virtual-network/virtual-network-network-interface#view-effective-security-rules')
                         , @('Choose the right Azure Bastion SKU', 'https://learn.microsoft.com/azure/bastion/bastion-sku-comparison'))
+                    Csv = $resources
+                    Email = $email
+                } } } }
+    @{ Number = 17; Key = 'app-service-ftps'; Change = 'Plain FTP turned off on App Service apps'; Sources = @('NB.5-FTPS-DETAIL')
+       Build = {
+            # NB.5-FTPS-DETAIL lists every site whose FTP state is not FtpsOnly or Disabled. Only AllAllowed is known
+            # to accept plain FTP. Microsoft Learn documents no state App Service applies when none is set, so a site
+            # whose state reads empty, or reads a value Learn does not list, is named in the index for a portal check
+            # instead of being changed or read as safe.
+            $rows = @(Get-Rows 'NB.5-FTPS-DETAIL')
+            $label = { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) }
+            $unread = @($rows | Where-Object { (Get-Text $_.FtpsState) -notin 'AllAllowed', 'FtpsOnly', 'Disabled' } | ForEach-Object {
+                    $state = ConvertTo-CopyText $_.FtpsState
+                    if ($state) { '{0} (resource group {1}, FTP state {2})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup), $state } else { $_ | ForEach-Object $label }
+                } | Sort-Object)
+            $notes = [System.Collections.Generic.List[string]]::new()
+            if ($unread.Count) {
+                $notes.Add(('{0} left out of CR-17 because Resource Graph returned an empty FTP state, or one Microsoft Learn does not list, and Learn documents no state App Service applies when none is set, so {1} may still accept plain FTP: {2}. Check {3} under Settings > Configuration > General settings in the portal, and raise the change for any that shows All allowed.' -f (Get-Count $unread.Count 'App Service app' 'App Service apps'), (Get-Pick $unread.Count 'it' 'they'), ($unread -join ', '), (Get-Pick $unread.Count 'its FTP state' 'the FTP state of each one')))
+            }
+            # A slot belongs to a site, so the slot note is left out only when NB.5 shows the pack has no site at all.
+            $noSites = (Get-Status 'NB.5') -eq 'EMPTY' -or ((Get-Status 'NB.5') -eq 'OK' -and -not (Test-Unreadable 'NB.5') -and @(Get-Rows 'NB.5').Count -eq 1 -and (Get-Text @(Get-Rows 'NB.5')[0].Configs) -eq '0')
+            if (-not $noSites) { $notes.Add('NB.5-FTPS-DETAIL reads the production site of each app. Deployment slots have a configuration of their own, which the pack does not read, so CR-17 does not cover them. Check the FTP state of each slot in the portal.') }
+            $lowTls = [System.Collections.Generic.List[string]]::new()
+            $lowTlsNames = [System.Collections.Generic.List[string]]::new()
+            $resources = @(foreach ($row in @($rows | Where-Object { (Get-Text $_.FtpsState) -eq 'AllAllowed' })) {
+                    $tls = Format-TlsVersion $row.MinTlsVersion
+                    $setting = 'FTP state All allowed'
+                    # FTPS only does not support TLS 1.0 or 1.1, so an app below 1.2 needs CR-04 first.
+                    if ($tls -in '1.0', '1.1') { $setting += ', minimum TLS ' + $tls; $lowTls.Add(($row | ForEach-Object $label)); $lowTlsNames.Add((ConvertTo-CopyText $row.Name)) }
+                    New-Resource $row.Name $row.resourceGroup $row.subscriptionId $setting $row.ResourceId
+                })
+            $n = $resources.Count
+            if (-not $n) { return @{ State = $(if ($unread.Count) { 'Only apps without a recorded FTP state remain, see the notes' } else { 'No gaps found' }); Notes = $notes.ToArray() } }
+            if ($lowTls.Count) {
+                $notes.Add(('{0} in CR-17 {1} a minimum inbound TLS version below 1.2: {2}. FTPS only does not support TLS 1.0 or 1.1, so CR-04 sets 1.2 on {3} first, or the client chooses Disabled.' -f (Get-Count $lowTls.Count 'App Service app' 'App Service apps'), (Get-Pick $lowTls.Count 'has' 'have'), ($lowTls -join ', '), (Get-Pick $lowTls.Count 'it' 'them')))
+            }
+            $notes.Add('FTP Basic Auth Publishing Credentials, under the same General settings tab, is a separate setting and not part of CR-17. Turning it off stops sign-in to the FTP and FTPS endpoint with deployment credentials, and is a possible follow-up once the client confirms how each app is deployed.')
+            # The state can change between collection and the change, so each app is read again first and left
+            # unchanged when it no longer shows the recorded state.
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add((Get-OpenStep $n 'App Services' 'app'))
+            $impl.Add('Go to Settings > Configuration and select the General settings tab.')
+            $impl.Add('Under Platform settings, read FTP state. If it no longer shows All allowed, the state recorded for the app in the RESOURCES section, the app has changed since collection, so leave it unchanged, note it in the change record for the next pack and skip the remaining steps for it.')
+            $impl.Add('If the client chose FTPS only for the app, read Minimum Inbound TLS Version. FTPS only does not support TLS 1.0 or 1.1, so if it shows 1.0 or 1.1, leave the app unchanged until CR-04 has set 1.2 on it, note it in the change record and skip the remaining steps for it.')
+            $impl.Add('Set FTP state to FTPS only, or to Disabled where the client confirmed that nothing uploads to the app over FTP or FTPS, select Apply and confirm.')
+            Add-RepeatStep $impl $n 1 'app'
+            $these = Get-Pick $n 'the application' 'these applications'
+            $effect = @(
+                ('A deployment tool or a person that connects to {0} over plain FTP, to upload files or to download them, will be refused once the change is applied, and will need to connect over FTPS, which FTP clients such as WinSCP, Cyberduck and Visual Studio support, or move to another deployment method. Disabled also turns off FTPS, so it suits only an application that nothing uploads to over FTP or FTPS.' -f $these)
+                ('Deployment methods other than FTP, such as ZIP deploy, Web Deploy, local Git, GitHub Actions or an Azure DevOps pipeline without an FTP upload step, are not affected, and {0} keep serving {1} users as {2} do now.' -f $(if ($n -eq 1) { 'the application will' } else { 'these applications will' }), (Get-Pick $n 'its' 'their'), (Get-Pick $n 'it' 'they')))
+            if ($lowTls.Count) {
+                $effect += ('FTPS only needs a minimum inbound TLS version of 1.2, and {0} still {1} an older version, so for {2} I would set the minimum to 1.2 first, under my separate request for it, or set Disabled.' -f (@($lowTlsNames | Sort-Object) -join ', ' -replace ', ([^,]+)$', ' and $1'), (Get-Pick $lowTls.Count 'allows' 'allow'), (Get-Pick $lowTls.Count 'it' 'them'))
+            }
+            $email = New-ApprovalEmail -Subject 'turning off plain FTP on Azure App Service applications' `
+                -Change @(('I would like to stop plain FTP connections to {0} by setting {1} to FTPS only, or to Disabled where nothing uploads files to it over FTP or FTPS.' -f (Get-Yours $n 'App Service and Function applications'), (Get-Pick $n 'its FTP state' 'the FTP state of each')), 'FTP is an older way to upload files to an application, and FTPS is the same with the connection encrypted.') `
+                -Why ('I recommend this change because plain FTP sends the deployment user name, password and files unencrypted, so anyone who can see the traffic can read them and use the credentials to change {0}. FTPS only keeps file uploads working over an encrypted connection, and Disabled turns the FTP endpoint off where nothing uses it.' -f $these) `
+                -Effect $effect `
+                -Listed (Get-Pick $n 'The application is listed below with its FTP state today:' 'The applications are listed below by subscription, each with its FTP state today:') `
+                -Resources (Get-EmailResourceList $resources { '{0} (resource group {1}, FTP state All allowed)' -f $_.Name, $_.ResourceGroup }) `
+                -Reversal ('The FTP state can be set back to All allowed, the state {0} today, at any time.' -f (Get-Pick $n 'the application has' 'each application has')) `
+                -Ask ('Could you let me know whether any deployment tool or person still uploads files to {0} over plain FTP, and whether FTPS only or Disabled suits {1}? With that agreed, could you approve this change for {2}?' -f $these, (Get-Pick $n 'it' 'each one'), $proposedDay) `
+                -Options ('If something still uploads over plain FTP, I will hold the change for {0} until it uses FTPS. If another date suits you better, or anything listed above should stay out of the change, please let me know.' -f (Get-Pick $n 'the application' 'that application'))
+            @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
+                    Number = 17; Key = 'app-service-ftps'; Title = 'Set the FTP state to FTPS only or Disabled on App Service apps'
+                    Description = 'Set the FTP state to FTPS only, or to Disabled where the client confirms nothing deploys over FTP, on {0}.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps')
+                    Purpose = 'Plain FTP sends the deployment credentials and files unencrypted, and {0} still {1} it. FTPS only keeps file uploads working over an encrypted connection, and Disabled turns the FTP endpoint off where it is not used.' -f (Get-Pick $n 'this app' 'these apps'), (Get-Pick $n 'allows' 'allow')
+                    ResourceIntro = '{0} with the FTP state {1} today.' -f $(if ($n -eq 1) { 'The app below is listed' } else { "The $n apps below are listed" }), (Get-Pick $n 'it has' 'each one has')
+                    ResourceLines = Format-ResourceList $resources
+                    Availability = 'No impact on the requests the {0} since the FTP state applies only to the FTP and FTPS endpoint used to upload files.' -f (Get-Pick $n 'app serves,' 'apps serve,')
+                    UserExperience = 'No change for the users of the {0}.' -f (Get-Pick $n 'app' 'apps')
+                    Dependencies = 'Deployment tools and people that upload over plain FTP, or over FTP or FTPS to an app set to Disabled, can no longer connect once the change is applied.'
+                    Implementation = $impl.ToArray()
+                    Testing = @(
+                        ('In the Azure portal, open {0}, go to Settings > Configuration and select the General settings tab.' -f (Get-EachStep $n 'app'))
+                        'Confirm FTP state shows FTPS only or Disabled under Platform settings, as agreed with the client for the app.')
+                    Rollback = @(
+                        'In the Azure portal, open the app to revert, go to Settings > Configuration and select the General settings tab.'
+                        'Set FTP state back to All allowed, the state recorded for the app in the RESOURCES section, select Apply and confirm. An app left unchanged during the change needs no rollback.')
+                    References = @(
+                        , @('Deploy your app to Azure App Service using FTP/S, enforce FTPS', 'https://learn.microsoft.com/azure/app-service/deploy-ftp#enforce-ftps')
+                        , @('Configure an App Service app, general settings', 'https://learn.microsoft.com/azure/app-service/configure-common#configure-general-settings')
+                        , @('Secure your Azure App Service deployment, service-specific security', 'https://learn.microsoft.com/azure/app-service/overview-security#service-specific-security')
+                        , @('Disable basic authentication in Azure App Service deployments', 'https://learn.microsoft.com/azure/app-service/configure-basic-auth-disable'))
                     Csv = $resources
                     Email = $email
                 } } } }

@@ -158,6 +158,22 @@ Describe 'Query catalog' {
         ([regex]::Matches($ss.Query, 'join kind=')).Count | Should -BeLessOrEqual 3 -Because 'Resource Graph allows three joins per query'
     }
 
+    It 'lists each App Service site that still allows plain FTP, read as NB.5-DETAIL reads its sites (1.7.0)' {
+        $d = $catalog | Where-Object Id -eq 'NB.5-FTPS-DETAIL'
+        $d.Engine | Should -Be 'ARG'
+        $d.Phase | Should -Be 'P2 Network'
+        $d.Notes | Should -Match '^Added in CyberSOC 1\.7\.0\.'
+        $d.Notes | Should -Match 'Deployment slots \(sites/slots/config\) are not read\.'
+        $d.Notes | Should -Match 'Internal: names sites, the report embeds counts only\.'
+        $d.Query | Should -Match 'appserviceresources\r?\n\| where type =~ "microsoft\.web/sites/config"\r?\n\| where id !contains "\{\{MRG\}\}"'
+        $d.Query | Should -MatchExactly 'coalesce\(properties\.FtpsState, properties\.ftpsState\)' -Because 'appserviceresources returns the config keys in PascalCase'
+        $d.Query | Should -MatchExactly 'coalesce\(properties\.MinTlsVersion, properties\.minTlsVersion\)' -Because 'FTPS only needs TLS 1.2, so CR-17 reads the minimum too'
+        $d.Query | Should -Match 'where not\(FtpsState in~ \("FtpsOnly", "Disabled"\)\)' -Because 'an empty state is kept for the index note, never read as enforced'
+        $d.Query | Should -Match 'project Name = tostring\(Parts\[8\]\), ResourceId = tostring\(split\(id, "/config/"\)\[0\]\),\s+resourceGroup = tostring\(Parts\[4\]\), subscriptionId = tostring\(Parts\[2\]\), FtpsState, MinTlsVersion'
+        $nb5 = ($catalog | Where-Object Id -eq 'NB.5-DETAIL').Query
+        ($d.Query -split "`r?`n" | Select-Object -First 3) -join "`n" | Should -Be (($nb5 -split "`r?`n" | Select-Object -First 3) -join "`n") -Because 'both read the same site configurations with the managed resource group excluded'
+    }
+
     It 'lists each internet-exposed management port rule with its properties and attachments, read as NB.2 reads them (1.6.0)' {
         $nb2 = ($catalog | Where-Object Id -eq 'NB.2').Query
         $d = $catalog | Where-Object Id -eq 'NB.2-DETAIL'
@@ -2164,7 +2180,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.6.0'
+        $params2.ScriptVersion | Should -Be '1.7.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {
