@@ -769,7 +769,7 @@ Describe 'Change request generation' {
     It 'turns plain FTP off on the App Service apps whose FTP state reads All allowed, reading the recorded state again before each change' {
         $text = & $read 'CR-17-app-service-ftps.txt'
         $text | Should -Match '^Title: Set the FTP state to FTPS only or Disabled on App Service apps\r?\n'
-        @(Get-Section $text 'A) CHANGE DESCRIPTION') | Should -Be 'Set the FTP state to FTPS only, or to Disabled where the client confirms nothing deploys over FTP, on the 3 App Service and Function apps listed below.'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION') | Should -Be 'Set the FTP state to FTPS only, or to Disabled where the client confirms nothing uses FTP or FTPS, on the 3 App Service and Function apps listed below.'
         @(Get-Section $text 'C) RESOURCES') | Should -Be @(
             'The 3 apps below are listed with the FTP state each one has today.'
             "Subscription: Example Production ($s1)"
@@ -783,13 +783,13 @@ Describe 'Change request generation' {
         $impl[1] | Should -Be '2. Go to Settings > Configuration and select the General settings tab.'
         $impl[2] | Should -Match '^3\. Under Platform settings, read FTP state\. If it no longer shows All allowed, the state recorded for the app in the RESOURCES section, the app has changed since collection, so leave it unchanged, note it in the change record for the next pack and skip the remaining steps for it\.$' -Because 'an app changed since collection is skipped'
         $impl[3] | Should -Match '^4\. If the client chose FTPS only for the app, read Minimum Inbound TLS Version\. FTPS only does not support TLS 1\.0 or 1\.1, so if it shows 1\.0 or 1\.1, leave the app unchanged until CR-04 has set 1\.2 on it'
-        $impl[4] | Should -Be '5. Set FTP state to FTPS only, or to Disabled where the client confirmed that nothing uploads to the app over FTP or FTPS, select Apply and confirm.'
+        $impl[4] | Should -Be '5. Set FTP state to FTPS only, or to Disabled only where the client confirmed that no tool, process or person uses FTP or FTPS on the app, to upload files or to download files or logs, select Apply and confirm.' -Because 'Disabled also ends FTPS downloads, such as log retrieval'
         $impl[5] | Should -Be '6. Repeat steps 1 to 5 for each remaining app listed.'
         @(Get-Section $text 'B) TESTING PLAN')[-1] | Should -Be '2. Confirm FTP state shows FTPS only or Disabled under Platform settings, as agreed with the client for the app.'
         @(Get-Section $text 'C) ROLLBACK PLAN')[-1] | Should -Match '^2\. Set FTP state back to All allowed, the state recorded for the app in the RESOURCES section, select Apply and confirm\.'
         (Get-Section $text 'E) MITIGATION') -join '|' | Should -Be 'If changes need to be reverted, follow the rollback plan.'
         @(Get-Section $text 'A) REFERENCES')[0] | Should -Be '- Deploy your app to Azure App Service using FTP/S, enforce FTPS: https://learn.microsoft.com/azure/app-service/deploy-ftp#enforce-ftps'
-        @(Get-Section $text 'C) DEPENDENCIES') | Should -Be 'Deployment tools and people that upload over plain FTP, or over FTP or FTPS to an app set to Disabled, can no longer connect once the change is applied.'
+        @(Get-Section $text 'C) DEPENDENCIES') | Should -Be 'Tools, processes and people that use plain FTP, or FTP or FTPS on an app set to Disabled, to upload or download files can no longer connect once the change is applied.'
     }
 
     It 'names in the index the apps without a recorded FTP state, the uncovered slots, the apps below TLS 1.2 and the basic authentication follow-up' {
@@ -800,18 +800,18 @@ Describe 'Change request generation' {
         $index | Should -Match '- FTP Basic Auth Publishing Credentials, under the same General settings tab, is a separate setting and not part of CR-17\. .* is a possible follow-up'
     }
 
-    It 'asks for approval to turn off plain FTP, whether anything still uploads over it and whether FTPS only or Disabled suits each app' {
+    It 'asks for approval to turn off plain FTP, whether anything still uses FTP or FTPS to upload or download and whether FTPS only or Disabled suits each app' {
         $email = & $read 'CR-17-app-service-ftps.email.txt'
         Assert-ApprovalEmail $email 'CR-17'
         $email | Should -Match '^Subject: Approval requested: turning off plain FTP on Azure App Service applications\r?\n'
-        $email | Should -Match 'I would like your approval to stop plain FTP connections to 3 of your App Service and Function applications by setting the FTP state of each to FTPS only, or to Disabled where nothing uploads files to it over FTP or FTPS\. FTP is an older way to upload files to an application, and FTPS is the same with the connection encrypted\.'
+        $email | Should -Match 'I would like your approval to stop plain FTP connections to 3 of your App Service and Function applications by setting the FTP state of each to FTPS only, or to Disabled where nothing connects to it over FTP or FTPS\. FTP is an older way to upload files to an application, and FTPS is the same with the connection encrypted\.'
         $email | Should -Match 'I recommend this change because plain FTP sends the deployment user name, password and files unencrypted'
         $email | Should -Match 'will be refused once the change is applied, and will need to connect over FTPS'
-        $email | Should -Match 'Disabled also turns off FTPS, so it suits only an application that nothing uploads to over FTP or FTPS\.'
+        $email | Should -Match 'Disabled also turns off FTPS, so it suits only an application that nothing connects to over FTP or FTPS, to upload files or to download files or logs\.'
         $email | Should -Match 'FTPS only needs a minimum inbound TLS version of 1\.2, and app-portal still allows an older version, so for it I would set the minimum to 1\.2 first'
         $email | Should -Match "The applications are listed below by subscription, each with its FTP state today:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- app-portal \(resource group rg-web, FTP state All allowed\)\r?\n- func-jobs \(resource group rg-web, FTP state All allowed\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- app-partners \(resource group rg-api, FTP state All allowed\)\r?\n"
         $email | Should -Match '\r?\n\r?\nThe FTP state can be set back to All allowed, the state each application has today, at any time\.\r?\n'
-        $email | Should -Match '\r?\n\r?\nCould you let me know whether any deployment tool or person still uploads files to these applications over plain FTP, and whether FTPS only or Disabled suits each one\? With that agreed, could you approve this change for \w+day, [^?]+\? Please reply by [^.]+\d{4}\. If something still uploads over plain FTP, I will hold the change for that application until it uses FTPS\.'
+        $email | Should -Match '\r?\n\r?\nCould you let me know whether any deployment tool, scheduled process or person still connects to these applications over FTP or FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled suits each one\? With that agreed, could you approve this change for \w+day, [^?]+\? Please reply by [^.]+\d{4}\. If something still uses plain FTP, I will hold the change for that application until it uses FTPS, and I will set Disabled only where nothing uses FTP or FTPS at all\.' -Because 'Disabled also ends FTPS downloads, so the client confirms every use of FTP and FTPS'
         $email | Should -Not -Match 'app-blank|minimum TLS 1\.0' -Because 'the email lists only the apps in the change, each with its FTP state'
     }
 
@@ -1455,7 +1455,7 @@ Describe 'Change request variants' {
         $null = & $generator -EvidencePath $pack
         $out = Join-Path $pack '05-change-requests'
         $text = Get-Content (Join-Path $out 'CR-17-app-service-ftps.txt') -Raw
-        $text | Should -Match 'Set the FTP state to FTPS only, or to Disabled where the client confirms nothing deploys over FTP, on the App Service app listed below\.'
+        $text | Should -Match 'Set the FTP state to FTPS only, or to Disabled where the client confirms nothing uses FTP or FTPS, on the App Service app listed below\.'
         $text | Should -Match 'Plain FTP sends the deployment credentials and files unencrypted, and this app still allows it\.'
         $text | Should -Match "Subscription: Example Production \($s1\)\r?\n- app-intranet, resource group rg-web, FTP state All allowed\r?\n"
         $text | Should -Not -Match 'app-secure|func-closed|Repeat steps'

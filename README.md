@@ -87,8 +87,8 @@ missing evidence never becomes a favorable zero.
    (WinRM continues through just-in-time access or named addresses, since Bastion does not provide it), asks for the
    private ranges that connect where a rule is open to every address, and the index
    names the rules left out: appliance untrust interfaces, groups attached to nothing (a cleanup item) and `*` or port
-   range rules (for review). The FTP email asks whether any deployment tool or person still uploads over plain FTP,
-   and whether FTPS only or Disabled suits each app, and the index names the apps whose FTP state Resource Graph
+   range rules (for review). The FTP email asks whether any deployment tool, process or person still connects over FTP or
+   FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled suits each app, and the index names the apps whose FTP state Resource Graph
    returned empty, for a portal check, and says that deployment slots are not covered. AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
    pool replacement with the client.
