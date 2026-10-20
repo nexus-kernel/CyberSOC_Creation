@@ -59,6 +59,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 16 | Internet-facing RDP, SSH and WinRM rules closed: each allow inbound rule open to any address, Internet, 0.0.0.0/0 or ::/0 on 22, 3389, 5985 or 5986 over TCP or any protocol, on a workload subnet or network interface. The replacement path the client agrees goes in first: just-in-time VM access (Defender for Cloud > Workload protections > Just-in-time VM access), which needs Defender for Servers Plan 2 on the subscription, or Azure Bastion (Connect > Bastion on the virtual network) for RDP and SSH. Bastion provides RDP and SSH sessions only (What is Azure Bastion), so a rule that opens WinRM (5985 or 5986) keeps WinRM only through just-in-time VM access or named source addresses, never Bastion, and is left unchanged where the client still needs WinRM and neither is agreed. The existing rules keep priority over the just-in-time deny rules until they are removed. Where Bastion is the path, every network security group of the machines gets an allow on 22 and 3389 from the AzureBastionSubnet address range ahead of any deny rule, and a Bastion session is opened before any rule changes. A rule whose source is Any, 0.0.0.0/0 or ::/0 also matches private addresses, so its management ports first get an allow from the private ranges the client confirms in reply to the email (the virtual network address spaces, peered networks and on-premises ranges), entered as CIDR blocks and never as a service tag, unless the client confirmed nothing connects from them. The service tag for the virtual network also holds the prefixes of user-defined routes, so with a forced-tunneling `0.0.0.0/0` route it would keep the ports open to the internet. A broad rule is left unchanged until the client confirms one or the other. Then each rule is deleted, or narrowed to the source addresses the client named, and a rule that also allows other ports loses only the management ports: when addresses were named, its management ports move to a new rule from those addresses, so its other ports keep the source they have. Last, the effective security rules of each network interface the rules applied to (Virtual machines > the machine > Networking > the network interface > Effective security rules, downloaded as a file, since the page shows only the first 50 rules) show the source prefixes behind every allow on those ports. A port is still open where an allow lists `0.0.0.0/0`, `::/0` or other public prefixes nobody named (such as `0.0.0.0/1` and `128.0.0.0/1`), no deny from Any, `0.0.0.0/0`, `::/0` or Internet on that port comes first in its group, and the other group on the path (subnet or network interface) also lets the connection through. The default virtual network rule behind a forced-tunneling route is the usual case. A TCP deny on the open management ports from the Internet service tag then goes in at a custom priority (100 to 4096) after the allows of its group for named addresses or sources the client already allows on purpose and, where the open allow is a custom rule in the same group, ahead of it. Default rules (65000 and above) always come after it. The ports of a rule the change left unchanged get no deny on the interfaces behind it and are noted with that rule, while the other open management ports there are still denied, and a rule for another protocol left for review keeps working. The network interfaces in a subnet come from the Connected devices page of its virtual network, a machine just-in-time VM access covers is left out since its deny already stops the internet, and a stopped machine, whose effective rules cannot be read, gets the deny without the check. The testing plan repeats that check. RESOURCES lists every property of each rule, and the path that fits each subscription from P0.3. The rollback recreates the rule from those properties, also in the CSV, ahead of any just-in-time deny rule, and deletes the rules the change added, the deny from the Internet service tag included | NB.2-DETAIL, P0.3 | Yes, approval request |
 | 17 | Plain FTP turned off on App Service and Function apps: the FTP state set to FTPS only, or to Disabled only where the client confirms no tool, process or person uses FTP or FTPS on the app, to upload files or to download files or logs. Only an app whose state reads `AllAllowed` is changed. Before changing an app, the steps read its FTP state under Settings > Configuration > General settings, and an app that no longer shows the recorded All allowed has changed since collection, so it is skipped and left for the next pack. FTPS only does not support TLS 1.0 or 1.1, so an app whose minimum inbound TLS version reads 1.0 or 1.1 is left unchanged until CR-04 sets 1.2, unless the client chooses Disabled. RESOURCES and the CSV show that minimum beside the FTP state. The rollback sets each app back to All allowed, the recorded state | NB.5-FTPS-DETAIL | Yes, approval request |
 | 18 | Blob containers set to private access: each container set to Blob or Container in a storage account that allows anonymous access, so anyone can read it today, set to Private under Data storage > Containers > Change access level, grouped by subscription and account. RESOURCES has one line per account with its containers counted and named, each with its recorded level, and the CSV one row per container. Before the change, the steps read Allow Blob anonymous access under Settings > Configuration and skip an account that now shows Disabled, since its containers can no longer be read anonymously and the portal cannot change their level, then read each listed container and skip one that no longer shows its recorded level or that the client asked to keep out. A container opened after collection is noted for the next pack, never changed. Setting a container to Private stops anonymous reads straight away, which the purpose and the email say. The static website container `$web` is left out, since its site is served from the web endpoint whatever its level. RESOURCES explains the order with CR-07: CR-07 takes only an account with no container set to Blob or Container, so a later pack picks each account up for CR-07 once its containers read Private. The rollback sets each container back to its recorded level, which Microsoft Learn allows only while the account allows anonymous access, so after CR-07 it needs that setting enabled again, which reopens every public container in the account | DP.1-CONTAINERS-DETAIL, DP.1-CONTAINERS, DP.1-DETAIL | Yes, approval request |
+| 19 | Roles removed from disabled accounts: every Azure role assignment, at management group, subscription, resource group, resource or root scope, and every Microsoft Entra role assignment, standing, time-bound, activated or eligible, assigned directly to a user account the pack records as disabled. RESOURCES lists the Azure assignments by subscription, then the management groups and the root scope above them, and the Entra assignments on their own, each with the account and its object ID, the role and its definition ID, the scope and the assignment ID. Before removing anything, the steps open the account under Microsoft Entra ID > Users and read Account status, and an account turned back on since collection, or one the client asked to keep, is left unchanged and noted. An Azure assignment is removed under Access control (IAM) > Role assignments at the scope where it was made, and one at the root scope, which the portal cannot remove, with `az role assignment delete` from Cloud Shell. An Entra assignment is removed under Roles and administrators, or from its administrative unit, and an eligible one in Privileged Identity Management. The rollback recreates each assignment from its recorded role, scope and account, which the CSV carries in full, one row per assignment. Only one side is written when the other could not be read, and the index says which side is missing and why | IA.15-DISABLED, IA.15-RBAC, IA.15-ENTRA | Yes, approval request |
 
 Resources a change leaves out are named in the index notes:
 
@@ -101,6 +102,31 @@ Resources a change leaves out are named in the index notes:
   with `AuthenticationType` Anonymous where the account sends its logs to the workspace. When only `$web` or blocked
   containers remain, CR-18 reads "Only containers the account setting already blocks, or static website containers,
   remain, see the notes".
+- CR-19 lists only a role assigned directly to an account IA.15-DISABLED records as disabled, whatever the role
+  results hold, so an enabled account is never listed. Its notes name:
+  - the roles held through group membership, each group with its ID, the roles it holds and its disabled members.
+    CR-19 leaves them unchanged, since removing a group's role, or an account from the group, changes access for the
+    group, so each one is reviewed with its owner.
+  - the accounts synced from on-premises Active Directory, whose disabled state comes from Active Directory, so
+    re-enabling one there turns it back on at the next sync, without the roles.
+  - an account holding Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator or
+    a role at the Azure root scope, to ask the client whether it is an emergency access account before sending.
+  - when IA.15-ENTRA could not see eligible assignments ("Eligible assignments not visible, needs
+    RoleManagement.Read.Directory"), that only active Entra assignments are listed, an activated one reads as
+    Standing, and an account whose only roles are eligible is missing.
+  - when the Azure side was read through Lighthouse, that Resource Graph showed the managing tenant's delegations, so
+    Azure roles may be missing. Whenever the Azure side was read, that only the subscriptions in the pack and the
+    management groups and root scope above them were read, and that Resource Graph never holds the eligible
+    assignments of Privileged Identity Management for Azure resources.
+  - when one side could not be read, which side is missing and the collector's reason, such as the permission it
+    needs. That side is unknown, not a zero.
+  - that disabled service principals are not read.
+
+  The status reads "Not collected (IA.15-DISABLED UNAVAILABLE)" when the accounts could not be read, "No gaps found in
+  the Azure roles, Microsoft Entra roles not collected (...), see the notes" when one side is clean and the other was
+  not read, "Only roles held through groups remain, see the notes" when nothing is assigned directly, and "No roles
+  found in what was read, ... read in part, see the notes" when a side read in part returned nothing, so a partial
+  read never reads as "No gaps found".
 - CR-01 assigns the initiative where no ATMO-MXDR policy state was found. An assignment made shortly before
   collection shows no state until its first compliance scan, so the index asks to confirm under Policy > Assignments
   first. When other subscriptions already have the initiative, CR-01 assigns per subscription even with
@@ -187,7 +213,7 @@ The sections follow the template headings, in order, so each one pastes into the
 - The notification list is left empty to fill in.
 - Every change request writes a client email (`CR-NN-<change>.email.txt`) that asks for the client's approval,
   built by the one shared builder, `New-ApprovalEmail`. The generator stops before writing anything when a change
-  request has no approval request, and the Pester suite fails when any change request from CR-01 to CR-18 is written
+  request has no approval request, and the Pester suite fails when any change request from CR-01 to CR-19 is written
   without one, or with an email that leaves the shared structure, carries a title, or opens two paragraphs the same
   way. A new change request builds its email the same way.
 
@@ -204,7 +230,9 @@ order:
    weaknesses ...": the risk the change reduces.
 5. What it means for the client: the expected effect and the reason for it, usually no visible effect because the
    platform already refuses what the setting turns off, or a restart that needs a maintenance window.
-6. The resources, introduced in a sentence and listed by subscription.
+6. The resources, introduced in a sentence and listed by subscription. CR-19 also lists the management groups and
+   the root scope above the subscriptions, each under a line of its own, and the Microsoft Entra roles under
+   `Microsoft Entra ID directory roles:`, since they belong to no subscription.
 7. How the change can be reversed, or that it cannot.
 8. The request: approval of the proposed date (`-ChangeDate`, two weeks after the build by default), or, for CR-09
    and CR-15, which restart each machine, approval of the change and a maintenance window. It asks for a reply by a
@@ -258,6 +286,12 @@ Each change keeps its own content inside that structure:
   through a content delivery network such as Azure Front Door that adds the signature, and says a container that still
   serves public content stays out until then. It offers to set each container back while its account still allows
   anonymous access.
+- CR-19 lists each account with its roles in plain words, the Azure roles by subscription and the Microsoft Entra
+  roles on their own, and says that nobody loses access today, since the accounts cannot sign in, that an account
+  back in use later would need its roles assigned again, that roles held through a group stay as they are, and that
+  each account is checked again just before the change. It offers to restore any role from the record, and before
+  asking for approval it asks whether any account is expected back in use, such as someone on leave or a seasonal
+  worker, or is kept for emergency access, and says such an account stays out of the change.
 - CR-05, CR-11, CR-12 and CR-14 say that the change cannot be reversed, because the service takes no lower minimum,
   and why no reversal should be needed.
 
@@ -286,7 +320,15 @@ portal setting is disabled while it does not, and the account setting overrides 
 anonymous read access for containers and blobs, Remediate anonymous read access to blob data), the `$web` container
 level does not affect the static website endpoint (Static website hosting in Azure Storage), and Azure Front Door in
 front of a private container authenticates with a shared access signature (Use Azure Front Door with Azure Storage
-Blobs).
+Blobs). For CR-19: an Azure role assignment is removed under Access control (IAM), Role assignments at the scope where
+it was made, and an inherited one cannot be removed at a child scope (Remove Azure role assignments), an assignment at
+the root scope is removed with Azure PowerShell, the Azure CLI or the REST API rather than the portal (Elevate access
+to manage all Azure subscriptions and management groups), a Microsoft Entra role is removed under Roles and admins and
+a role held through a group by removing the account from the group (Remove Microsoft Entra role assignments), an
+eligible one in Privileged Identity Management, which does not remove the last Global Administrator assignment (Assign
+Microsoft Entra roles in Privileged Identity Management), and Resource Graph returns assignments at parent scopes only
+with the `AtScopeAboveAndBelow` scope filter and holds role assignments, role definitions and classic administrators
+only (Understanding the Azure Resource Graph query language, Azure Resource Graph table and resource type reference).
 
 Every change request, email and the index keep to the copy rules: no semicolons, arrows (Unicode arrows and `->`,
 `<-`, `=>`), emoji or angle brackets, and the greater-than sign only in navigation steps such as Settings >

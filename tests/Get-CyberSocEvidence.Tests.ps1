@@ -267,7 +267,7 @@ Describe 'Query catalog' {
     }
 
     It 'uses only known engines' {
-        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
+        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'DISABLED-ROLES', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
         $catalog | Where-Object { $_.Engine -notin $known } | Should -BeNullOrEmpty
     }
 
@@ -1666,6 +1666,274 @@ Describe 'Graph collectors' {
     }
 }
 
+Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
+    BeforeAll {
+        # Synthetic tenant: two subscriptions under the management group mg-contoso-platform. Role definition IDs are
+        # the real built-in IDs: Azure Owner, Contributor, Reader, User Access Administrator, Key Vault Administrator and
+        # Storage Blob Data Contributor, and the Entra Global Administrator, User Administrator, Helpdesk Administrator,
+        # Security Reader and Billing Administrator.
+        $script:fx = @{
+            S1 = '3f6a1c2e-8b4d-4e7a-9c1f-2d5b8e0a4c61'; S2 = '7b2d9e4f-1a3c-4b5d-8e6f-0a1b2c3d4e5f'; Mg = '/providers/Microsoft.Management/managementGroups/mg-contoso-platform'
+            Dana = 'a6f1c2d3-4b5e-4f60-8a7b-9c0d1e2f3a41'      # disabled, holds roles at every scope
+            Lee = 'b7e2d3c4-5a6f-4071-9b8c-0d1e2f3a4b52'       # disabled, synced from on-premises, eligible Entra role
+            Kim = 'c8f3e4d5-6b70-4182-8c9d-1e2f3a4b5c63'       # disabled, reaches roles only through a group
+            Ann = 'd9a4f5e6-7c81-4293-9dae-2f3a4b5c6d74'       # enabled, holds Owner and Global Administrator
+            Ops = 'e0b5a6f7-8d92-43a4-aebf-3a4b5c6d7e85'       # group: platform-operators, holds Contributor and Helpdesk Administrator
+            Owner = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'; Contributor = 'b24988ac-6180-42a0-ab88-20f7382dd24c'; Reader = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
+            Uaa = '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9'; KvAdmin = '00482a5a-887f-4fb3-b363-3b7fe8e74483'; BlobContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+            Ga = '62e90394-69f5-4237-9190-012177145e10'; UserAdmin = 'fe930be7-5e62-47db-91af-98c3a49a38b1'; Helpdesk = '729827e3-9c14-49f7-bb1b-9608f156bbb8'
+            SecReader = '5d6b6bb7-de71-4623-b4af-96380a352509'; Billing = 'b0f54661-2d74-4c50-afa3-1ec803f12efe'
+        }
+        $f = $script:fx
+        $script:fxUsers = @(
+            [pscustomobject]@{ id = $f.Dana; displayName = 'Dana Whitfield'; userPrincipalName = 'dana.whitfield@contoso.com'; accountEnabled = $false; onPremisesSyncEnabled = $null }
+            [pscustomobject]@{ id = $f.Lee.ToUpperInvariant(); displayName = 'Lee Ashford'; userPrincipalName = 'lee.ashford@contoso.com'; accountEnabled = $false; onPremisesSyncEnabled = $true }
+            [pscustomobject]@{ id = $f.Kim; displayName = 'Kim Osei'; userPrincipalName = 'kim.osei@contoso.com'; accountEnabled = $false; onPremisesSyncEnabled = $false }
+            # The filter is server side. Were it ever ignored, an enabled account would come back, and must not be kept.
+            [pscustomobject]@{ id = $f.Ann; displayName = 'Ann Larsen'; userPrincipalName = 'ann.larsen@contoso.com'; accountEnabled = $true; onPremisesSyncEnabled = $null })
+        $ra = { param([string]$Scope, [string]$Role, [string]$RoleName, [string]$Principal, [string]$Type = 'User')
+            $name = (Get-TestGuid ($Scope + $Role + $Principal))
+            $sub = if ($Scope -match '^/subscriptions/([^/]+)') { $Matches[1] } else { '' }
+            [pscustomobject]@{ AssignmentId = "$Scope/providers/Microsoft.Authorization/roleAssignments/$name"; subscriptionId = $sub; Scope = $Scope; RoleDefinitionId = "/subscriptions/$($f.S1)/providers/Microsoft.Authorization/roleDefinitions/$Role"; Role = $RoleName; PrincipalId = $Principal; PrincipalType = $Type } }
+        function script:Get-TestGuid([string]$Seed) { ([guid]::new([Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($Seed)))).ToString() }
+        $rg = "/subscriptions/$($f.S1)/resourceGroups/rg-app"
+        $script:fxArg = @(
+            (& $ra $f.Mg $f.Reader 'Reader' $f.Dana)
+            (& $ra "/subscriptions/$($f.S1)" $f.Owner 'Owner' $f.Dana)
+            (& $ra $rg $f.Contributor 'Contributor' $f.Dana)
+            (& $ra "$rg/providers/Microsoft.KeyVault/vaults/kv-app-prod" $f.KvAdmin 'Key Vault Administrator' $f.Dana)
+            (& $ra "/subscriptions/$($f.S2)/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stdataprod" $f.BlobContributor 'Storage Blob Data Contributor' $f.Lee)
+            (& $ra '/' $f.Uaa 'User Access Administrator' $f.Lee)
+            (& $ra "/subscriptions/$($f.S2)" $f.Owner 'Owner' $f.Ann)
+            (& $ra "/subscriptions/$($f.S2)/resourceGroups/rg-ops" $f.Contributor 'Contributor' $f.Ops 'Group')
+            (& $ra "/subscriptions/$($f.S2)" $f.Reader 'Reader' 'f1c6b7a8-9ea3-44b5-bfc0-4b5c6d7e8f96' 'ServicePrincipal'))
+        # A management group assignment comes back once per subscription under it. It must be kept once.
+        $script:fxArg += $script:fxArg[0]
+        $principal = { param([string]$Id, [string]$Type, [string]$Name, [string]$Upn) [pscustomobject]@{ '@odata.type' = "#microsoft.graph.$Type"; id = $Id; displayName = $Name; userPrincipalName = $Upn } }
+        $script:fxRoleAssignments = @(
+            [pscustomobject]@{ id = 'lAPpYvVpN0KRkAEhdxReEJC2sEqbR_9Hr48lds9SGHI-1'; roleDefinitionId = $f.UserAdmin; principalId = $f.Dana; directoryScopeId = '/'; principal = (& $principal $f.Dana 'user' 'Dana Whitfield' 'dana.whitfield@contoso.com') }
+            [pscustomobject]@{ id = 'x3ifr6ub3U2nW8aaQyKm8BOXpYc9w0lJk5QCWa4yC4c-1'; roleDefinitionId = $f.SecReader; principalId = $f.Lee; directoryScopeId = '/'; principal = (& $principal $f.Lee 'user' 'Lee Ashford' 'lee.ashford@contoso.com') }
+            [pscustomobject]@{ id = 'lAPpYvVpN0KRkAEhdxReEOkEVmWa3ZtIrqW1xbBWoWw-1'; roleDefinitionId = $f.Ga; principalId = $f.Ann; directoryScopeId = '/'; principal = (& $principal $f.Ann 'user' 'Ann Larsen' 'ann.larsen@contoso.com') }
+            [pscustomobject]@{ id = 'kpD7cnQrWEiDkfnCZvOJXZOUaNFBQ-BLsvrSdmoMvDs-1'; roleDefinitionId = $f.Helpdesk; principalId = $f.Ops; directoryScopeId = '/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9'; principal = (& $principal $f.Ops 'group' 'platform-operators' $null) })
+        $script:fxSchedules = @(
+            [pscustomobject]@{ id = 's1'; roleDefinitionId = $f.UserAdmin; principalId = $f.Dana; directoryScopeId = '/'; assignmentType = 'Assigned'; endDateTime = $null }
+            [pscustomobject]@{ id = 's2'; roleDefinitionId = $f.SecReader; principalId = $f.Lee; directoryScopeId = '/'; assignmentType = 'Activated'; endDateTime = '2026-10-11T20:00:00Z' })
+        $script:fxEligible = @(
+            [pscustomobject]@{ id = 'e1'; roleDefinitionId = $f.SecReader; principalId = $f.Lee; directoryScopeId = '/'; endDateTime = '2027-03-31T00:00:00Z'; principal = (& $principal $f.Lee 'user' 'Lee Ashford' 'lee.ashford@contoso.com') }
+            [pscustomobject]@{ id = 'e2'; roleDefinitionId = $f.Billing; principalId = $f.Ann; directoryScopeId = '/'; endDateTime = $null; principal = (& $principal $f.Ann 'user' 'Ann Larsen' 'ann.larsen@contoso.com') })
+        $script:fxDefinitions = @(
+            foreach ($d in @(@($f.Ga, 'Global Administrator'), @($f.UserAdmin, 'User Administrator'), @($f.Helpdesk, 'Helpdesk Administrator'), @($f.SecReader, 'Security Reader'), @($f.Billing, 'Billing Administrator'))) {
+                [pscustomobject]@{ id = $d[0]; templateId = $d[0]; displayName = $d[1] } })
+        # One Graph answer per path. A path set to a string throws it, so a test can make any one read fail.
+        function script:New-DisabledGraph([hashtable]$Fail = @{}) {
+            $answers = [ordered]@{
+                'users\?\$filter=accountEnabled eq false' = $script:fxUsers
+                'roleManagement/directory/roleAssignments\?' = $script:fxRoleAssignments
+                'roleManagement/directory/roleDefinitions' = $script:fxDefinitions
+                'roleAssignmentScheduleInstances' = $script:fxSchedules
+                'roleEligibilityScheduleInstances' = $script:fxEligible
+                "groups/$($script:fx.Ops)/transitiveMembers" = @([pscustomobject]@{ id = $script:fx.Kim }, [pscustomobject]@{ id = $script:fx.Ann })
+                "groups/$($script:fx.Ops)\?\`$select=id,displayName" = [pscustomobject]@{ id = $script:fx.Ops; displayName = 'platform-operators' }
+            }
+            foreach ($k in $Fail.Keys) { $answers[$k] = $Fail[$k] }
+            $answers
+        }
+        function script:New-DisabledCtx([string]$AccessPath = 'Direct') {
+            [pscustomobject]@{
+                TenantGuid = 'client'; GraphAvailable = $true; GraphReason = ''; GraphCache = @{}; ArmTenant = 'client'; AccessPath = $AccessPath; Subscriptions = @($script:fx.S1, $script:fx.S2)
+                GraphMissingScopes = [System.Collections.Generic.List[string]]::new(); GraphPartial = [System.Collections.Generic.List[string]]::new(); Pending = [System.Collections.Generic.List[object]]::new()
+                OutDir = $TestDrive; WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; ManagedRgPattern = 'aznativesol0'
+            }
+        }
+        $script:item = Get-EbrQueryCatalog | Where-Object Id -eq 'IA.15-DISABLED'
+        $null = New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force
+    }
+    BeforeEach {
+        $script:graph = New-DisabledGraph
+        Mock Invoke-EbrGraphGet {
+            foreach ($k in $script:graph.Keys) {
+                if ($Uri -match $k) {
+                    $v = $script:graph[$k]
+                    if ($v -is [string]) { throw $v }
+                    if ($v -is [array]) { return , @($v) }
+                    return $v
+                }
+            }
+            throw "unexpected $Uri"
+        }
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Columns = @(); Rows = $script:fxArg; Detail = '' } }
+    }
+
+    It 'reads every Azure role assignment from the root down, joined to role definitions, with the managed resource group exclusion' {
+        $script:item.Engine | Should -Be 'DISABLED-ROLES'
+        $script:item.Phase | Should -Be 'P2 Identity'
+        $script:item.LighthouseIncomplete | Should -BeTrue
+        $q = $script:item.Query
+        $q | Should -Match '^authorizationresources\r?\n\| where type =~ "microsoft\.authorization/roleassignments"'
+        $q | Should -Match '\| where id !contains "\{\{MRG\}\}"'
+        $q | Should -Match 'join kind=leftouter \(\s+authorizationresources\s+\| where type =~ "microsoft\.authorization/roledefinitions"'
+        $q | Should -Match 'project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, PrincipalId, PrincipalType'
+        $q | Should -Not -Match 'principalType in' -Because 'an assignment without a principal type must not be dropped'
+        $script:item.Notes | Should -Match 'User\.Read\.All'
+        $script:item.Notes | Should -Match 'RoleManagement\.Read\.Directory'
+        $script:item.Notes | Should -Match 'Lighthouse'
+        $null = Invoke-EbrCatalogItem -Ctx (New-DisabledCtx) -Item $script:item
+        Should -Invoke Invoke-EbrArgQuery -Times 1 -Exactly -ParameterFilter { $Options.authorizationScopeFilter -eq 'AtScopeAboveAndBelow' -and $Query -match 'id !contains "aznativesol0"' -and @($Subscriptions).Count -eq 2 }
+        Get-Content (Join-Path $TestDrive 'queries/IA.15-DISABLED.kql') -Raw | Should -Match 'AtScopeAboveAndBelow'
+    }
+
+    It 'lists the disabled accounts only, never an enabled one, even when Graph returns one' {
+        $ctx = New-DisabledCtx
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        $r.ResultId | Should -Be 'IA.15-DISABLED'
+        $r.Status | Should -Be 'OK'
+        @($r.Rows | ForEach-Object UserPrincipalName) | Should -Be @('dana.whitfield@contoso.com', 'kim.osei@contoso.com', 'lee.ashford@contoso.com')
+        @($r.Rows | ForEach-Object AccountEnabled | Sort-Object -Unique) | Should -Be @($false)
+        ($r.Rows | Where-Object UserPrincipalName -like 'lee*').PrincipalId | Should -Be $script:fx.Lee -Because 'object IDs are kept in lower case, so they match the role assignments'
+        @($r.Rows | Where-Object OnPremisesSyncEnabled | ForEach-Object UserPrincipalName) | Should -Be @('lee.ashford@contoso.com')
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like 'https://graph.microsoft.com/v1.0/users?$filter=accountEnabled eq false&$select=id,displayName,userPrincipalName,accountEnabled,onPremisesSyncEnabled&$top=999' }
+        $all = @($r.Rows) + @($ctx.Pending | ForEach-Object { @($_.Rows) })
+        ($all | ConvertTo-Json -Depth 5) | Should -Not -Match 'ann\.larsen|Ann Larsen' -Because 'no result names an enabled account, whatever it holds or whichever group it is in'
+        @($ctx.Pending | ForEach-Object ResultId) | Should -Be @('IA.15-RBAC', 'IA.15-ENTRA')
+    }
+
+    It 'keeps every Azure role a disabled account holds, at management group, subscription, resource group, resource and root scope, once each' {
+        $ctx = New-DisabledCtx
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        $rbac = $ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC'
+        $rbac.Status | Should -Be 'OK'
+        $rows = @($rbac.Rows)
+        @($rows | Where-Object HeldThrough -eq 'Direct' | ForEach-Object { '{0}|{1}|{2}' -f $_.UserPrincipalName, $_.ScopeLevel, $_.Role } | Sort-Object) | Should -Be @(
+            'dana.whitfield@contoso.com|Management group|Reader', 'dana.whitfield@contoso.com|Resource group|Contributor', 'dana.whitfield@contoso.com|Resource|Key Vault Administrator', 'dana.whitfield@contoso.com|Subscription|Owner'
+            'lee.ashford@contoso.com|Resource|Storage Blob Data Contributor', 'lee.ashford@contoso.com|Root|User Access Administrator')
+        $mg = $rows | Where-Object ScopeLevel -eq 'Management group'
+        @($mg).Count | Should -Be 1 -Because 'a management group assignment returned under each subscription is one assignment'
+        $mg.subscriptionId | Should -Be ''
+        $mg.Scope | Should -Be $script:fx.Mg
+        $kv = $rows | Where-Object Role -eq 'Key Vault Administrator'
+        @($kv.subscriptionId, $kv.resourceGroup, $kv.RoleDefinitionId) | Should -Be @($script:fx.S1, 'rg-app', "/subscriptions/$($script:fx.S1)/providers/microsoft.authorization/roledefinitions/$($script:fx.KvAdmin)")
+        $kv.AssignmentId | Should -Match '^/subscriptions/.+/providers/Microsoft\.KeyVault/vaults/kv-app-prod/providers/Microsoft\.Authorization/roleAssignments/[0-9a-f-]{36}$'
+        $group = @($rows | Where-Object HeldThrough -eq 'Group')
+        @($group | ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.UserPrincipalName, $_.GroupName, $_.GroupId, $_.Role }) | Should -Be @("kim.osei@contoso.com|platform-operators|$($script:fx.Ops)|Contributor") -Because 'the disabled member of a group is listed with the group, and the enabled member is not'
+        $rbac.Detail | Should -Match '^7 Azure role assignments held by 3 of the 3 disabled accounts, 1 through a group, read in the subscriptions of the pack and at the management groups and root scope above them\.'
+    }
+
+    It 'keeps every Entra role, standing, activated and eligible, not only the 12 privileged ones' {
+        $ctx = New-DisabledCtx
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        $entra = $ctx.Pending | Where-Object ResultId -eq 'IA.15-ENTRA'
+        $entra.Status | Should -Be 'OK'
+        @($entra.Rows | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.UserPrincipalName, $_.Role, $_.AssignmentType, $_.HeldThrough, $_.DirectoryScope }) | Should -Be @(
+            'dana.whitfield@contoso.com|User Administrator|Standing|Direct|/'
+            'kim.osei@contoso.com|Helpdesk Administrator|Standing|Group|/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9'
+            'lee.ashford@contoso.com|Security Reader|Activated|Direct|/'
+            'lee.ashford@contoso.com|Security Reader|Eligible|Direct|/')
+        ($entra.Rows | Where-Object AssignmentType -eq 'Eligible').EndDateUtc | Should -Be '2027-03-31T00:00:00Z'
+        ($entra.Rows | Where-Object AssignmentType -eq 'Activated').AssignmentId | Should -Be 'x3ifr6ub3U2nW8aaQyKm8BOXpYc9w0lJk5QCWa4yC4c-1'
+        @($entra.Rows | ForEach-Object PimRead | Sort-Object -Unique) | Should -Be @('Yes')
+        ($entra.Rows | Where-Object HeldThrough -eq 'Group').GroupName | Should -Be 'platform-operators'
+    }
+
+    It 'reuses the role assignments IA.6 read, and reads each group once' {
+        $ctx = New-DisabledCtx
+        $script:graph['roleAssignmentScheduleInstances'] = 'HTTP 400: Bad Request | AadPremiumLicenseRequired'
+        $null = Invoke-EbrGraphCollector -Ctx $ctx -Item ([pscustomobject]@{ Id = 'IA.6'; Title = 'IA.6'; Engine = 'GRAPH'; Query = 'GET /v1.0/x'; Notes = ''; Phase = 'P2 Identity' })
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -match 'roleManagement/directory/roleAssignments\?' }
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "*groups/$($script:fx.Ops)/transitiveMembers*" } -Because 'the group holds an Azure and an Entra role, and is read once'
+        $entra = $ctx.Pending | Where-Object ResultId -eq 'IA.15-ENTRA'
+        $entra.Status | Should -Be 'OK'
+        $entra.Detail | Should -Match 'PIM is not licensed'
+        @($entra.Rows | ForEach-Object AssignmentType | Sort-Object -Unique) | Should -Be @('Standing')
+    }
+
+    It 'reports both sides UNAVAILABLE, not a zero, when the users cannot be read, and names the permission' {
+        $ctx = New-DisabledCtx
+        $script:graph['users\?\$filter=accountEnabled eq false'] = 'GRAPH-403 https://graph.microsoft.com/v1.0/users: HTTP 403: Forbidden | Authorization_RequestDenied'
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        foreach ($x in @($r) + @($ctx.Pending)) {
+            $x.Status | Should -Be 'UNAVAILABLE' -Because $x.ResultId
+            $x.Detail | Should -Match '^Not a zero: the Graph token cannot read user accounts' -Because $x.ResultId
+            $x.Detail | Should -Match 'Needs User\.Read\.All\. Fix: az login --tenant client --scope https://graph\.microsoft\.com/User\.Read\.All' -Because $x.ResultId
+            @($x.Rows).Count | Should -Be 0
+        }
+        @($ctx.GraphMissingScopes) | Should -Be @('User.Read.All')
+        Should -Invoke Invoke-EbrArgQuery -Times 0 -Exactly
+    }
+
+    It 'reports all three UNAVAILABLE when Microsoft Graph is not reachable' {
+        $ctx = New-DisabledCtx
+        $ctx.GraphAvailable = $false
+        $ctx.GraphReason = 'No Graph token: AADSTS530004.'
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        @(@($r) + @($ctx.Pending) | ForEach-Object Status | Sort-Object -Unique) | Should -Be @('UNAVAILABLE')
+        $r.Detail | Should -Match '^Not a zero: Microsoft Graph was not reachable.*AADSTS530004'
+    }
+
+    It 'keeps the Azure side when only the Entra roles cannot be read' {
+        $ctx = New-DisabledCtx
+        $script:graph['roleManagement/directory/roleAssignments\?'] = 'GRAPH-403 https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments: HTTP 403: Forbidden'
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        $r.Status | Should -Be 'OK'
+        $entra = $ctx.Pending | Where-Object ResultId -eq 'IA.15-ENTRA'
+        $entra.Status | Should -Be 'UNAVAILABLE'
+        $entra.Detail | Should -Match '^Not a zero: .*Needs RoleManagement\.Read\.Directory'
+        ($ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC').Status | Should -Be 'OK'
+        @(($ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC').Rows).Count | Should -Be 7
+        $r.Detail | Should -Match 'IA\.15-ENTRA UNAVAILABLE'
+    }
+
+    It 'keeps the Entra side when Resource Graph fails' {
+        $ctx = New-DisabledCtx
+        Mock Invoke-EbrArgQuery { throw 'HTTP 429: Too Many Requests' }
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        ($ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC').Status | Should -Be 'FAILED'
+        ($ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC').Detail | Should -Match '429'
+        ($ctx.Pending | Where-Object ResultId -eq 'IA.15-ENTRA').Status | Should -Be 'OK'
+    }
+
+    It 'flags the eligible assignments as not visible when PIM needs RoleManagement.Read.Directory' {
+        $ctx = New-DisabledCtx
+        $script:graph['roleAssignmentScheduleInstances'] = 'GRAPH-403 https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleInstances: HTTP 403: Forbidden'
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        $entra = $ctx.Pending | Where-Object ResultId -eq 'IA.15-ENTRA'
+        $entra.Status | Should -Be 'PARTIAL' -Because 'an eligible assignment may be missing'
+        $entra.Detail | Should -Match '^Eligible assignments not visible, needs RoleManagement\.Read\.Directory'
+        @($entra.Rows | ForEach-Object AssignmentType | Sort-Object -Unique) | Should -Be @('Standing')
+        @($entra.Rows | ForEach-Object PimRead | Sort-Object -Unique) | Should -Be @('NoPermission')
+        @($ctx.GraphPartial) | Should -Contain 'IA.15-ENTRA (eligible role assignments)'
+    }
+
+    It 'marks the Azure side partial through Lighthouse, and when a group cannot be read' {
+        $ctx = New-DisabledCtx 'Lighthouse'
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        $rbac = $ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC'
+        $rbac.Status | Should -Be 'PARTIAL'
+        $rbac.Detail | Should -Match "Read through Lighthouse, which shows the managing tenant's delegations"
+        $rbac.Source | Should -Be 'Resource Graph (lighthouse) and Microsoft Graph'
+        $ctx = New-DisabledCtx
+        $script:graph["groups/$($script:fx.Ops)/transitiveMembers"] = 'GRAPH-403 https://graph.microsoft.com/v1.0/groups: HTTP 403: Forbidden'
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        foreach ($id in 'IA.15-RBAC', 'IA.15-ENTRA') {
+            $x = $ctx.Pending | Where-Object ResultId -eq $id
+            $x.Status | Should -Be 'PARTIAL' -Because $id
+            $x.Detail | Should -Match "The members of 1 group could not be read, so the (Azure|Entra) roles held through it are not listed: $($script:fx.Ops)\." -Because $id
+            @($x.Rows | Where-Object HeldThrough -eq 'Group').Count | Should -Be 0
+        }
+        @($ctx.GraphMissingScopes) | Should -Contain 'GroupMember.Read.All'
+    }
+
+    It 'reads nothing more when no account is disabled' {
+        $ctx = New-DisabledCtx
+        $script:fxUsersSaved = $script:graph['users\?\$filter=accountEnabled eq false']
+        $script:graph['users\?\$filter=accountEnabled eq false'] = @($script:fxUsers | Where-Object accountEnabled)
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        @(@($r) + @($ctx.Pending) | ForEach-Object Status) | Should -Be @('EMPTY', 'EMPTY', 'EMPTY')
+        Should -Invoke Invoke-EbrArgQuery -Times 0 -Exactly
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly
+    }
+}
+
 Describe 'Multiple workspaces' {
     BeforeAll {
         $wsA = [pscustomobject]@{ WorkspaceName = 'ws-a'; CustomerId = 'aaaa'; subscriptionId = 'sub-a'; AccessTenant = 't1' }
@@ -2248,7 +2516,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.8.0'
+        $params2.ScriptVersion | Should -Be '1.9.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

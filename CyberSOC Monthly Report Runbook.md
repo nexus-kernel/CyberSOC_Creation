@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, and 1.8.0 for DP.1-CONTAINERS-DETAIL. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, and 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -492,6 +492,54 @@ resourcecontainers
 | where type =~ "microsoft.resources/subscriptions"
 | project subscriptionId, SubscriptionName = name
 | order by SubscriptionName asc
+```
+
+### IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA Roles held by disabled accounts
+
+Engine DISABLED-ROLES. CyberSOC collector 1.9.0. Microsoft Graph for the accounts and the Entra roles, Resource Graph for the Azure roles. All three results name accounts and stay internal. Feeds CR-19, which removes each role assigned directly to a disabled account, and names in the index the roles held through groups, the accounts synced from on-premises and anything that could not be read.
+
+IA.15-DISABLED, the disabled user accounts, paged through `@odata.nextLink`. An account is kept only when Graph returns `accountEnabled` false. Needs User.Read.All. Without it all three results are UNAVAILABLE ("Not a zero"), since no role can be tied to an account. Disabled service principals are not read.
+
+```http
+GET https://graph.microsoft.com/v1.0/users?$filter=accountEnabled eq false&$select=id,displayName,userPrincipalName,accountEnabled,onPremisesSyncEnabled&$top=999
+```
+
+IA.15-ENTRA, every Microsoft Entra role the accounts hold. `roleAssignments` is the read IA.6 makes, shared, and every directory role counts, not only the 12 privileged ones. The schedule instances mark an active assignment Activated or Time-bound and add the Eligible ones. When they answer 403 the result is PARTIAL and reads "Eligible assignments not visible, needs RoleManagement.Read.Directory". When `roleAssignments` cannot be read, IA.15-ENTRA alone is UNAVAILABLE and the Azure side still runs.
+
+```http
+GET https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments?$expand=principal
+GET https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions?$select=id,displayName,templateId
+GET https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentScheduleInstances?$expand=principal
+GET https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilityScheduleInstances?$expand=principal
+```
+
+A role held by a group, on either side, is followed to the group's disabled members, nested groups included (GroupMember.Read.All). Each row names the group (`HeldThrough` Group), and CR-19 leaves it unchanged for review.
+
+```http
+GET https://graph.microsoft.com/v1.0/groups/{id}?$select=id,displayName
+GET https://graph.microsoft.com/v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$select=id&$top=999
+```
+
+IA.15-RBAC, every Azure role assignment the accounts hold, with the query below. It is sent with the request option `"authorizationScopeFilter": "AtScopeAboveAndBelow"`. Microsoft Learn (Understanding the Azure Resource Graph query language, query scope) documents that the filter defaults to `AtScopeAndBelow`, which returns the assignments at and below the subscriptions in the request, so the management group and root scope assignments above them come back only with `AtScopeAboveAndBelow`. Each assignment is kept once. `ScopeLevel` is read from the scope: Root (`/`), Management group, Subscription, Resource group or Resource. Learn lists only `roleassignments`, `roledefinitions` and `classicadministrators` in `authorizationresources`, so the eligible assignments of Privileged Identity Management for Azure resources are not read, and the CR-19 index says so. As with IA.7, through Lighthouse Resource Graph shows the managing tenant's delegations instead of the client's own role assignments, so IA.15-RBAC reads PARTIAL there.
+
+```kql
+authorizationresources
+| where type =~ "microsoft.authorization/roleassignments"
+| where id !contains "{{MRG}}"
+| extend PrincipalId      = tolower(tostring(properties.principalId)),
+         PrincipalType    = tostring(properties.principalType),
+         Scope            = tostring(properties.scope),
+         RoleDefinitionId = tolower(tostring(properties.roleDefinitionId))
+| extend RoleGuid = tostring(split(RoleDefinitionId, "/")[-1])
+| join kind=leftouter (
+    authorizationresources
+    | where type =~ "microsoft.authorization/roledefinitions"
+    | extend RoleGuid = tolower(name), Role = tostring(properties.roleName)
+    | summarize Role = take_any(Role) by RoleGuid
+  ) on RoleGuid
+| where PrincipalType !~ "ServicePrincipal"   // users and groups, and any assignment without a type
+| project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, PrincipalId, PrincipalType
+| order by PrincipalId asc, Scope asc
 ```
 
 ### NB.2-DETAIL Internet-exposed management port rules with their properties and attachments
