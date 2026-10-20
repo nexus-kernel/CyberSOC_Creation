@@ -1262,14 +1262,15 @@ Describe 'Change request variants' {
         New-ChangeFixture $pack
         $id = "/subscriptions/$s1/resourceGroups/rg-web/providers/Microsoft.Network/networkSecurityGroups/nsg-v6"
         $subnet = @{ id = "/subscriptions/$s1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-app/subnets/snet-v6" }
-        $row = { param($name, $protocol, $source, $port) @{ subscriptionId = $s1; resourceGroup = 'rg-web'; NSG = 'nsg-v6'; NsgId = $id; RuleName = $name; RuleId = "$id/securityRules/$name"; Priority = 150; Protocol = $protocol
+        # Azure takes one rule per priority in each direction of a group.
+        $row = { param($name, $protocol, $source, $port, $priority = 150) @{ subscriptionId = $s1; resourceGroup = 'rg-web'; NSG = 'nsg-v6'; NsgId = $id; RuleName = $name; RuleId = "$id/securityRules/$name"; Priority = $priority; Protocol = $protocol
                 SourcePrefixes = @($source); SourcePorts = @('*'); DestinationPrefixes = @('*'); DestinationAsgs = @(); DestinationPorts = @($port); Association = 'Subnet'; Subnets = @($subnet); Nics = @(); NicVms = @(); ApplianceNicIds = @(); ApplianceSubnetIds = @() } }
-        Set-PackResult $pack 'NB.2-DETAIL' @((& $row 'Allow-SSH-v6' 'Tcp' '::/0' '22'), (& $row 'Allow-App-UDP' 'Udp' '*' '22'), (& $row 'Allow-RDP-Any' '*' 'Internet' '3389'))
+        Set-PackResult $pack 'NB.2-DETAIL' @((& $row 'Allow-SSH-v6' 'Tcp' '::/0' '22'), (& $row 'Allow-App-UDP' 'Udp' '*' '22' 160), (& $row 'Allow-RDP-Any' '*' 'Internet' '3389' 170))
         $null = & $generator -EvidencePath $pack
         $out = Join-Path $pack '05-change-requests'
         $text = Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw
         $text | Should -Match '- nsg-v6/Allow-SSH-v6, resource group rg-web, priority 150, allow inbound, protocol TCP, source ::/0,' -Because 'the IPv6 any-address prefix is the internet too'
-        $text | Should -Match '- nsg-v6/Allow-RDP-Any, resource group rg-web, priority 150, allow inbound, protocol Any, source Internet,' -Because 'a rule for any protocol carries TCP'
+        $text | Should -Match '- nsg-v6/Allow-RDP-Any, resource group rg-web, priority 170, allow inbound, protocol Any, source Internet,' -Because 'a rule for any protocol carries TCP'
         $text | Should -Not -Match 'Allow-App-UDP'
         Assert-ApprovalEmail (Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw) 'CR-16 with ::/0'
         Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw | Should -Match 'One of the rules is open to every address' -Because '::/0 matches private addresses too, the Internet tag does not'
@@ -1283,9 +1284,9 @@ Describe 'Change request variants' {
     It 'keeps WinRM off Azure Bastion, builds the private access rule from confirmed ranges and checks the effective security rules' {
         $pack = Join-Path $TestDrive 'mgmt-winrm'
         New-ChangeFixture $pack
-        $row = { param($name, $group, $sub, $source, [string[]]$ports, $association, $attached)
+        $row = { param($name, $group, $sub, $priority, $source, [string[]]$ports, $association, $attached)
             $id = "/subscriptions/$sub/resourceGroups/rg-win/providers/Microsoft.Network/networkSecurityGroups/$group"
-            @{ subscriptionId = $sub; resourceGroup = 'rg-win'; NSG = $group; NsgId = $id; RuleName = $name; RuleId = "$id/securityRules/$name"; Priority = 200; Direction = 'Inbound'; Access = 'Allow'; Protocol = 'Tcp'
+            @{ subscriptionId = $sub; resourceGroup = 'rg-win'; NSG = $group; NsgId = $id; RuleName = $name; RuleId = "$id/securityRules/$name"; Priority = $priority; Direction = 'Inbound'; Access = 'Allow'; Protocol = 'Tcp'
                 SourcePrefixes = @($source); SourcePorts = @('*'); DestinationPrefixes = @('*'); DestinationAsgs = @(); DestinationPorts = $ports; Description = ''; Association = $association; RangeNeedsReview = $false
                 Subnets = @(if ($association -eq 'Subnet') { $attached }); Nics = @(if ($association -eq 'NIC') { $attached }); NicVms = @(); ApplianceNicIds = @(); ApplianceSubnetIds = @() } }
         $subnet = @{ id = "/subscriptions/$s1/resourceGroups/rg-net/providers/Microsoft.Network/virtualNetworks/vnet-ops/subnets/snet-mgmt" }
@@ -1293,9 +1294,9 @@ Describe 'Change request variants' {
         # A WinRM-only rule where Plan 2 is on, a mixed RDP and WinRM rule open to 0.0.0.0/0 and an SSH rule open to
         # ::/0 where Plan 2 is off, so Azure Bastion is suggested there and both broad rules need private access.
         Set-PackResult $pack 'NB.2-DETAIL' @(
-            (& $row 'Allow-WinRM' 'nsg-mgmt' $s1 'Internet' @('5985', '5986') 'Subnet' $subnet)
-            (& $row 'Allow-RDP-WinRM' 'nsg-win' $s2 '0.0.0.0/0' @('3389', '5986') 'NIC' $nic)
-            (& $row 'Allow-SSH-v6' 'nsg-win' $s2 '::/0' @('22') 'NIC' $nic))
+            (& $row 'Allow-WinRM' 'nsg-mgmt' $s1 200 'Internet' @('5985', '5986') 'Subnet' $subnet)
+            (& $row 'Allow-RDP-WinRM' 'nsg-win' $s2 200 '0.0.0.0/0' @('3389', '5986') 'NIC' $nic)
+            (& $row 'Allow-SSH-v6' 'nsg-win' $s2 210 '::/0' @('22') 'NIC' $nic))
         $null = & $generator -EvidencePath $pack
         $out = Join-Path $pack '05-change-requests'
         $text = Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw
