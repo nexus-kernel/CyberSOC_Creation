@@ -1703,6 +1703,9 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
             Kim = 'c8f3e4d5-6b70-4182-8c9d-1e2f3a4b5c63'       # disabled, reaches roles only through a group
             Ann = 'd9a4f5e6-7c81-4293-9dae-2f3a4b5c6d74'       # enabled, holds Owner and Global Administrator
             Ops = 'e0b5a6f7-8d92-43a4-aebf-3a4b5c6d7e85'       # group: platform-operators, holds Contributor and Helpdesk Administrator
+            Tier2 = 'f1c6d7e8-9ea3-44b5-bfc0-4b5c6d7e8f96'     # group: ops-tier2, nested in platform-operators, holds Lee, and platform-operators again (a loop)
+            Dyn = 'a2d7e8f9-0fb4-45c6-8d1e-5c6d7e8f9a07'       # group: all-staff-dynamic, dynamic membership, holds Reader on S2, with Morgan
+            Legacy = 'b3e8f9a0-1ac5-46d7-9e2f-6d7e8f9a0b18'    # group: legacy-admins, synced from on-premises, holds Reader on S1, with Kim
             Owner = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'; Contributor = 'b24988ac-6180-42a0-ab88-20f7382dd24c'; Reader = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
             Uaa = '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9'; KvAdmin = '00482a5a-887f-4fb3-b363-3b7fe8e74483'; BlobContributor = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
             Ga = '62e90394-69f5-4237-9190-012177145e10'; UserAdmin = 'fe930be7-5e62-47db-91af-98c3a49a38b1'; Helpdesk = '729827e3-9c14-49f7-bb1b-9608f156bbb8'
@@ -1733,7 +1736,9 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
             (& $ra '/' $f.Uaa 'User Access Administrator' $f.Lee)
             (& $ra "/subscriptions/$($f.S2)" $f.Owner 'Owner' $f.Ann)
             (& $ra "/subscriptions/$($f.S2)/resourceGroups/rg-ops" $f.Contributor 'Contributor' $f.Ops 'Group')
-            (& $ra "/subscriptions/$($f.S2)" $f.Reader 'Reader' 'f1c6b7a8-9ea3-44b5-bfc0-4b5c6d7e8f96' 'ServicePrincipal'))
+            (& $ra "/subscriptions/$($f.S2)" $f.Reader 'Reader' $f.Dyn 'Group')
+            (& $ra "/subscriptions/$($f.S1)" $f.Reader 'Reader' $f.Legacy 'Group')
+            (& $ra "/subscriptions/$($f.S2)" $f.Reader 'Reader' 'c4f9a0b1-2bd6-47e8-8f30-7e8f9a0b1c29' 'ServicePrincipal'))
         # A management group assignment comes back once per subscription under it. It must be kept once.
         $script:fxArg += $script:fxArg[0]
         $principal = { param([string]$Id, [string]$Type, [string]$Name, [string]$Upn) [pscustomobject]@{ '@odata.type' = "#microsoft.graph.$Type"; id = $Id; displayName = $Name; userPrincipalName = $Upn } }
@@ -1753,16 +1758,33 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $script:fxDefinitions = @(
             foreach ($d in @(@($f.Ga, 'Global Administrator'), @($f.UserAdmin, 'User Administrator'), @($f.Helpdesk, 'Helpdesk Administrator'), @($f.SecReader, 'Security Reader'), @($f.Billing, 'Billing Administrator'))) {
                 [pscustomobject]@{ id = $d[0]; templateId = $d[0]; displayName = $d[1] } })
-        # One Graph answer per path. A path set to a string throws it, so a test can make any one read fail.
+        # One Graph answer per path. A path set to a string throws it, so a test can make any one read fail. Each group
+        # answers its properties and its direct members, as Graph returns them: users and groups together, typed.
+        $member = { param([string]$Id, [string]$Type, [string]$Name) [pscustomobject]@{ '@odata.type' = "#microsoft.graph.$Type"; id = $Id; displayName = $Name } }
+        $script:fxGroupMembers = @{
+            $f.Ops = @((& $member $f.Kim 'user' 'Kim Osei'), (& $member $f.Ann 'user' 'Ann Larsen'), (& $member $f.Tier2 'group' 'ops-tier2'))
+            # Lee comes back in upper case, as Graph can write an ID, and platform-operators is a member of its own
+            # nested group, so the walk must stop at a group it has seen.
+            $f.Tier2 = @((& $member $f.Lee.ToUpperInvariant() 'user' 'Lee Ashford'), (& $member $f.Ops 'group' 'platform-operators'))
+            $f.Dyn = @((& $member $f.Morgan 'user' 'Morgan Reyes'))
+            $f.Legacy = @((& $member $f.Kim 'user' 'Kim Osei'))
+        }
         function script:New-DisabledGraph([hashtable]$Fail = @{}) {
+            $f = $script:fx
             $answers = [ordered]@{
                 'users\?\$filter=accountEnabled eq false' = $script:fxUsers
                 'roleManagement/directory/roleAssignments\?' = $script:fxRoleAssignments
                 'roleManagement/directory/roleDefinitions' = $script:fxDefinitions
                 'roleAssignmentScheduleInstances' = $script:fxSchedules
                 'roleEligibilityScheduleInstances' = $script:fxEligible
-                "groups/$($script:fx.Ops)/transitiveMembers" = @([pscustomobject]@{ id = $script:fx.Kim }, [pscustomobject]@{ id = $script:fx.Ann })
-                "groups/$($script:fx.Ops)\?\`$select=id,displayName" = [pscustomobject]@{ id = $script:fx.Ops; displayName = 'platform-operators' }
+                "groups/$($f.Ops)/members" = $script:fxGroupMembers[$f.Ops]
+                "groups/$($f.Ops)\?\`$select=id,displayName" = [pscustomobject]@{ id = $f.Ops; displayName = 'platform-operators'; groupTypes = @(); onPremisesSyncEnabled = $null }
+                "groups/$($f.Tier2)/members" = $script:fxGroupMembers[$f.Tier2]
+                "groups/$($f.Tier2)\?\`$select=id,displayName" = [pscustomobject]@{ id = $f.Tier2; displayName = 'ops-tier2'; groupTypes = @('Unified'); onPremisesSyncEnabled = $false }
+                "groups/$($f.Dyn)/members" = $script:fxGroupMembers[$f.Dyn]
+                "groups/$($f.Dyn)\?\`$select=id,displayName" = [pscustomobject]@{ id = $f.Dyn; displayName = 'all-staff-dynamic'; groupTypes = @('DynamicMembership'); onPremisesSyncEnabled = $null }
+                "groups/$($f.Legacy)/members" = $script:fxGroupMembers[$f.Legacy]
+                "groups/$($f.Legacy)\?\`$select=id,displayName" = [pscustomobject]@{ id = $f.Legacy; displayName = 'legacy-admins'; groupTypes = @(); onPremisesSyncEnabled = $true }
             }
             foreach ($k in $Fail.Keys) { $answers[$k] = $Fail[$k] }
             $answers
@@ -1848,8 +1870,14 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         ($rows | Where-Object Role -eq 'Owner').Condition | Should -Be ''
         $rbac.Columns | Should -Contain 'Condition'
         $group = @($rows | Where-Object HeldThrough -eq 'Group')
-        @($group | ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.UserPrincipalName, $_.GroupName, $_.GroupId, $_.Role }) | Should -Be @("kim.osei@contoso.com|platform-operators|$($script:fx.Ops)|Contributor") -Because 'the disabled member of a group is listed with the group, and the enabled member is not'
-        $rbac.Detail | Should -Match '^7 Azure role assignments held by 3 of the 3 disabled accounts, 1 through a group, read in the subscriptions of the pack and at the management groups and root scope above them\.'
+        @($group | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.UserPrincipalName, $_.GroupName, $_.GroupId, $_.Role, $_.MemberOfName, $_.MemberOfType }) | Should -Be @(
+            "kim.osei@contoso.com|legacy-admins|$($script:fx.Legacy)|Reader|legacy-admins|On-premises"
+            "kim.osei@contoso.com|platform-operators|$($script:fx.Ops)|Contributor|platform-operators|Assigned"
+            "lee.ashford@contoso.com|platform-operators|$($script:fx.Ops)|Contributor|ops-tier2|Assigned"
+            "morgan.reyes@contoso.com|all-staff-dynamic|$($script:fx.Dyn)|Reader|all-staff-dynamic|Dynamic") -Because 'each disabled member of a group is listed with the group that holds the role and the group it sits in, and the enabled member is not'
+        $rbac.Detail | Should -Match '^10 Azure role assignments held by 3 of the 3 disabled accounts, 4 through a group, read in the subscriptions of the pack and at the management groups and root scope above them\.'
+        foreach ($c in 'MemberOfId', 'MemberOfName', 'MemberOfType', 'GroupPath', 'GroupPathIds') { $rbac.Columns | Should -Contain $c }
+        @($rows | Where-Object HeldThrough -eq 'Direct' | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.MemberOfId, $_.MemberOfName, $_.MemberOfType, @($_.GroupPath).Count, @($_.GroupPathIds).Count } | Sort-Object -Unique) | Should -Be @('|||0|0') -Because 'a role assigned to the account itself names no group'
     }
 
     It 'keeps every Entra role, standing, activated and eligible, not only the 12 privileged ones' {
@@ -1859,13 +1887,44 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $entra.Status | Should -Be 'OK'
         @($entra.Rows | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.UserPrincipalName, $_.Role, $_.AssignmentType, $_.HeldThrough, $_.DirectoryScope }) | Should -Be @(
             'kim.osei@contoso.com|Helpdesk Administrator|Standing|Group|/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9'
+            'lee.ashford@contoso.com|Helpdesk Administrator|Standing|Group|/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9'
             'lee.ashford@contoso.com|Security Reader|Activated|Direct|/'
             'lee.ashford@contoso.com|Security Reader|Eligible|Direct|/'
             'morgan.reyes@contoso.com|User Administrator|Standing|Direct|/')
         ($entra.Rows | Where-Object AssignmentType -eq 'Eligible').EndDateUtc | Should -Be '2027-03-31T00:00:00Z'
         ($entra.Rows | Where-Object AssignmentType -eq 'Activated').AssignmentId | Should -Be 'x3ifr6ub3U2nW8aaQyKm8BOXpYc9w0lJk5QCWa4yC4c-1'
         @($entra.Rows | ForEach-Object PimRead | Sort-Object -Unique) | Should -Be @('Yes')
-        ($entra.Rows | Where-Object HeldThrough -eq 'Group').GroupName | Should -Be 'platform-operators'
+        @(($entra.Rows | Where-Object HeldThrough -eq 'Group').GroupName | Sort-Object -Unique) | Should -Be @('platform-operators')
+        $nested = $entra.Rows | Where-Object { $_.HeldThrough -eq 'Group' -and $_.UserPrincipalName -eq 'lee.ashford@contoso.com' }
+        @($nested.MemberOfId, $nested.MemberOfName, $nested.MemberOfType) | Should -Be @($script:fx.Tier2, 'ops-tier2', 'Assigned') -Because 'Lee reaches the role as a member of the nested group, which is where the account is removed from'
+        @($nested.GroupPath) | Should -Be @('platform-operators', 'ops-tier2')
+        @($nested.GroupPathIds) | Should -Be @($script:fx.Ops, $script:fx.Tier2)
+    }
+
+    It 'follows nested groups once each, records the group the account sits in with its membership type, and drops a deleted group' {
+        $ctx = New-DisabledCtx
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        $rows = @(($ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC').Rows | Where-Object HeldThrough -eq 'Group')
+        $direct = $rows | Where-Object { $_.UserPrincipalName -eq 'kim.osei@contoso.com' -and $_.GroupId -eq $script:fx.Ops }
+        @($direct.MemberOfId, $direct.MemberOfName, $direct.MemberOfType) | Should -Be @($script:fx.Ops, 'platform-operators', 'Assigned') -Because 'a member of the role group itself is removed from that group'
+        @($direct.GroupPath) | Should -Be @('platform-operators')
+        $dynamic = $rows | Where-Object GroupId -eq $script:fx.Dyn
+        @($dynamic.UserPrincipalName, $dynamic.MemberOfType) | Should -Be @('morgan.reyes@contoso.com', 'Dynamic') -Because 'a rule decides the members of a dynamic membership group'
+        $synced = $rows | Where-Object GroupId -eq $script:fx.Legacy
+        @($synced.UserPrincipalName, $synced.MemberOfType) | Should -Be @('kim.osei@contoso.com', 'On-premises') -Because 'the members of a synced group come from Active Directory'
+        foreach ($g in $script:fx.Ops, $script:fx.Tier2, $script:fx.Dyn, $script:fx.Legacy) {
+            Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "*groups/$g/members?*" } -Because "group $g is read once, although platform-operators is a member of its own nested group"
+            Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "*groups/$g[?]`$select=*" }
+        }
+        Should -Invoke Invoke-EbrGraphGet -Times 0 -Exactly -ParameterFilter { $Uri -like '*transitiveMembers*' } -Because 'the direct members are walked, so the group each account sits in is known'
+        # A group deleted since the role was given to it holds the role for no one, and makes nothing partial.
+        $ctx = New-DisabledCtx
+        $script:graph["groups/$($script:fx.Legacy)\?\`$select=id,displayName"] = 'HTTP 404: Not Found | Request_ResourceNotFound'
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        $rbac = $ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC'
+        $rbac.Status | Should -Be 'OK'
+        @($rbac.Rows | Where-Object GroupId -eq $script:fx.Legacy).Count | Should -Be 0
+        @($rbac.Rows | Where-Object HeldThrough -eq 'Group').Count | Should -Be 3
     }
 
     It 'reuses the role assignments IA.6 read, and reads each group once' {
@@ -1874,8 +1933,9 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $null = Invoke-EbrGraphCollector -Ctx $ctx -Item ([pscustomobject]@{ Id = 'IA.6'; Title = 'IA.6'; Engine = 'GRAPH'; Query = 'GET /v1.0/x'; Notes = ''; Phase = 'P2 Identity' })
         $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
         Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -match 'roleManagement/directory/roleAssignments\?' }
-        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "*groups/$($script:fx.Ops)/transitiveMembers*" } -Because 'the group holds an Azure and an Entra role, and is read once'
-        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "*groups/$($script:fx.Ops)/transitiveMembers/microsoft.graph.user?*" -and $Uri -match '[?&]\$count=true(&|$)' } -Because 'Graph takes the user cast only as an advanced query, with $count=true and ConsistencyLevel eventual'
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "*groups/$($script:fx.Ops)/members?*" } -Because 'the group holds an Azure and an Entra role, and is read once'
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "*groups/$($script:fx.Ops)/members?*" -and $Uri -match '[?&]\$count=true(&|$)' -and $Uri -match '[?&]\$top=999(&|$)' } -Because 'Graph takes $select and $top on members only as an advanced query, with $count=true and ConsistencyLevel eventual'
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "*groups/$($script:fx.Ops)[?]`$select=*" } -Because 'its properties say whether a member can be removed'
         $entra = $ctx.Pending | Where-Object ResultId -eq 'IA.15-ENTRA'
         $entra.Status | Should -Be 'OK'
         $entra.Detail | Should -Match 'PIM is not licensed'
@@ -1914,7 +1974,7 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $entra.Status | Should -Be 'UNAVAILABLE'
         $entra.Detail | Should -Match '^Not a zero: .*Needs RoleManagement\.Read\.Directory'
         ($ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC').Status | Should -Be 'OK'
-        @(($ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC').Rows).Count | Should -Be 7
+        @(($ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC').Rows).Count | Should -Be 10
         $r.Detail | Should -Match 'IA\.15-ENTRA UNAVAILABLE'
     }
 
@@ -1946,7 +2006,7 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $entra = $ctx.Pending | Where-Object ResultId -eq 'IA.15-ENTRA'
         $entra.Status | Should -Be 'PARTIAL' -Because 'an eligible assignment may be missing'
         $entra.Detail | Should -Match '^Eligible assignments not visible, the PIM schedule instances could not be read'
-        $lee = @($entra.Rows | Where-Object UserPrincipalName -eq 'lee.ashford@contoso.com')
+        $lee = @($entra.Rows | Where-Object { $_.UserPrincipalName -eq 'lee.ashford@contoso.com' -and $_.HeldThrough -eq 'Direct' })
         @($lee | ForEach-Object AssignmentType) | Should -Be @('Activated') -Because 'the active instances were read, so an activation never reads as Standing'
         $lee[0].EndDateUtc | Should -Be '2026-10-11T20:00:00Z'
         @($entra.Rows | Where-Object AssignmentType -eq 'Eligible').Count | Should -Be 0
@@ -1960,15 +2020,24 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $rbac.Detail | Should -Match "Read through Lighthouse, which shows the managing tenant's delegations"
         $rbac.Source | Should -Be 'Resource Graph (lighthouse) and Microsoft Graph'
         $ctx = New-DisabledCtx
-        $script:graph["groups/$($script:fx.Ops)/transitiveMembers"] = 'GRAPH-403 https://graph.microsoft.com/v1.0/groups: HTTP 403: Forbidden'
+        $script:graph["groups/$($script:fx.Ops)/members"] = 'GRAPH-403 https://graph.microsoft.com/v1.0/groups: HTTP 403: Forbidden'
         $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
         foreach ($id in 'IA.15-RBAC', 'IA.15-ENTRA') {
             $x = $ctx.Pending | Where-Object ResultId -eq $id
             $x.Status | Should -Be 'PARTIAL' -Because $id
             $x.Detail | Should -Match "The members of 1 group could not be read, so the (Azure|Entra) roles held through it are not listed: $($script:fx.Ops)\." -Because $id
-            @($x.Rows | Where-Object HeldThrough -eq 'Group').Count | Should -Be 0
+            @($x.Rows | Where-Object GroupId -eq $script:fx.Ops).Count | Should -Be 0
         }
+        @(($ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC').Rows | Where-Object HeldThrough -eq 'Group' | ForEach-Object GroupName | Sort-Object -Unique) | Should -Be @('all-staff-dynamic', 'legacy-admins') -Because 'the other groups are still read'
         @($ctx.GraphMissingScopes) | Should -Contain 'GroupMember.Read.All'
+        # A nested group that cannot be read keeps the members read above it and is named itself.
+        $ctx = New-DisabledCtx
+        $script:graph = New-DisabledGraph @{ "groups/$($script:fx.Tier2)/members" = 'HTTP 429: Too Many Requests' }
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        $rbac = $ctx.Pending | Where-Object ResultId -eq 'IA.15-RBAC'
+        $rbac.Status | Should -Be 'PARTIAL'
+        $rbac.Detail | Should -Match "The members of 1 group could not be read, so the Azure roles held through it are not listed: $($script:fx.Tier2)\."
+        @($rbac.Rows | Where-Object { $_.GroupId -eq $script:fx.Ops } | ForEach-Object UserPrincipalName) | Should -Be @('kim.osei@contoso.com') -Because 'the direct member of platform-operators is still listed'
     }
 
     It 'reads nothing more when no account is disabled' {
@@ -2564,7 +2633,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.9.0'
+        $params2.ScriptVersion | Should -Be '1.10.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

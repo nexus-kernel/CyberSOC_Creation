@@ -18,7 +18,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
 - **Pack name.** `CyberSOC-Evidence_<client>_<report month>_<yyyyMMdd-HHmmss>/`.
 - **Change requests.** Each collection ends by writing the hardening change requests and a client email for each
   one into `05-change-requests` (`New-CyberSocChangeRequests.ps1`). See [Change requests](#change-requests).
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.9.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.10.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -238,7 +238,7 @@ Details:
 | IA.5 Registered methods | `reports/authenticationMethods/userRegistrationDetails` | AuditLog.Read.All | Portal path in the manifest |
 | IA.6 Privileged roles | `roleManagement/directory/roleAssignmentScheduleInstances` and `roleEligibilityScheduleInstances`, falling back to `roleAssignments` without PIM | RoleManagement.Read.Directory | **IA.6-SUB**: current privileged role holders from `IdentityInfo` |
 | IA.8 Conditional Access inventory | `identity/conditionalAccess/policies` | Policy.Read.All | **IA.8-SUB**: every CA policy seen in 30 days of sign-ins |
-| IA.15-DISABLED Roles held by disabled accounts (engine DISABLED-ROLES) | `users?$filter=accountEnabled eq false`, then the IA.6 `roleAssignments` read (cached, every directory role), `roleDefinitions`, the PIM schedule instances, and `groups/{id}/transitiveMembers` for each group that holds a role. Also reads the Azure role assignments from Resource Graph and writes IA.15-RBAC and IA.15-ENTRA | User.Read.All (users), RoleManagement.Read.Directory (Entra roles, eligible ones), GroupMember.Read.All (group members) | None. Users unreadable makes all three UNAVAILABLE, Entra roles unreadable makes IA.15-ENTRA UNAVAILABLE only |
+| IA.15-DISABLED Roles held by disabled accounts (engine DISABLED-ROLES) | `users?$filter=accountEnabled eq false`, then the IA.6 `roleAssignments` read (cached, every directory role), `roleDefinitions`, the PIM schedule instances, and `groups/{id}` and `groups/{id}/members` for each group that holds a role and each group nested in it. Also reads the Azure role assignments from Resource Graph and writes IA.15-RBAC and IA.15-ENTRA | User.Read.All (users), RoleManagement.Read.Directory (Entra roles, eligible ones), GroupMember.Read.All (group members) | None. Users unreadable makes all three UNAVAILABLE, Entra roles unreadable makes IA.15-ENTRA UNAVAILABLE only |
 | IA.11 Risk policies in force | the cached IA.8 list, plus `directory/onPremisesSynchronization` | Policy.Read.All (and OnPremDirectorySynchronization.Read.All for password hash sync) | none |
 | IA.13 Consent governance | `policies/authorizationPolicy`, `policies/adminConsentRequestPolicy` | Policy.Read.All | none |
 | POS.6 Tenant Secure Score | `security/secureScores?$top=90`, `security/secureScoreControlProfiles`. Also writes POS.6-TREND and POS.6-CATEGORIES | SecurityEvents.Read.All | **POS.6-SUB**: device secure score and exposure score from the Defender API |
@@ -291,6 +291,20 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.10.0 (October 20, 2026): `IA.15-RBAC` and `IA.15-ENTRA` record the group each disabled
+  account sits in, so CR-19 can remove the account from it. A role held through a group is followed through the
+  group's direct members (`groups/{id}/members`, paged, read as an advanced query with `$count=true` and
+  `ConsistencyLevel: eventual`, which Graph requires for `$select` and `$top` on members) and through the members of
+  each group nested in it, each group read once and a loop stopped at a group already seen. Every row held through
+  a group adds `MemberOfId`, `MemberOfName` and `MemberOfType` (the group the account is a direct member of, the role
+  group itself or a group nested in it, and whether a member can be removed from it: Assigned, Dynamic for a dynamic
+  membership group, On-premises for a group synced from Active Directory, read from `groups/{id}` with `groupTypes`
+  and `onPremisesSyncEnabled`), `GroupPath` and `GroupPathIds` (the names and IDs from the role group down to that
+  group, JSON arrays in the result, empty on a role assigned to the account). An account that sits in two groups under
+  the same role group has one row per group, with the shortest path. A nested group that cannot be read is named in
+  the detail and makes the side PARTIAL, and a group deleted since the role was given to it holds the role for no
+  one. `transitiveMembers` is no longer read. CR-19 on a pack collected earlier leaves the roles held through groups
+  unchanged and asks for a recollection.
 - CyberSOC collector 1.9.0 (October 20, 2026): `IA.15-DISABLED` (engine `DISABLED-ROLES`, phase P2 Identity) reads
   the roles still held by disabled accounts, for change request CR-19. It writes three results, all internal since
   they name accounts:
@@ -316,9 +330,9 @@ in the pack (`results/<ID>.csv`).
     Activated (from `roleAssignmentScheduleInstances`) or Eligible (from `roleEligibilityScheduleInstances`). When the
     PIM schedule instances answer 403 the result reads PARTIAL with "Eligible assignments not visible, needs
     RoleManagement.Read.Directory", and `PimRead` reads NoPermission on its rows.
-  - A role held through a group lists the group's disabled members (`transitiveMembers`, nested groups included, read
-    as an advanced query with `$count=true` and `ConsistencyLevel: eventual`, which Graph requires for the user cast) with
-    the group. An eligibility a user inherits from a group (`memberType` Group) is the group's, never listed as the user's. A group whose members cannot be read is named and makes that side PARTIAL.
+  - A role held through a group lists the group's disabled members with the group, nested groups included (from
+    1.10.0 through the direct members of the group and of each group nested in it, with the group each member sits
+    in, see 1.10.0 above). An eligibility a user inherits from a group (`memberType` Group) is the group's, never listed as the user's. A group whose members cannot be read is named and makes that side PARTIAL.
   - Users unreadable (403) makes all three UNAVAILABLE ("Not a zero") with User.Read.All named. Entra roles unreadable
     makes only IA.15-ENTRA UNAVAILABLE, and a Resource Graph failure only IA.15-RBAC FAILED. No disabled account
     makes all three EMPTY, and nothing more is read. The queries are in section 6 of the CyberSOC Monthly Report

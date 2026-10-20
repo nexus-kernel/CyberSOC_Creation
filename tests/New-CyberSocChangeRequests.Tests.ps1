@@ -37,6 +37,23 @@ BeforeAll {
     $kim = 'c8f3e4d5-6b70-4182-8c9d-1e2f3a4b5c63'
     $ann = 'd9a4f5e6-7c81-4293-9dae-2f3a4b5c6d74'
     $opsGroup = @{ Id = 'e0b5a6f7-8d92-43a4-aebf-3a4b5c6d7e85'; Name = 'platform-operators' }
+    # ops-tier2 is nested in platform-operators, so a member of it holds the group's roles and is removed from ops-tier2.
+    $tier2Group = @{ Id = 'f1c6d7e8-9ea3-44b5-bfc0-4b5c6d7e8f96'; Name = 'ops-tier2' }
+    $opsNested = @{ Id = $opsGroup.Id; Name = $opsGroup.Name; MemberOf = $tier2Group }
+    # A dynamic membership group and a group synced from on-premises cannot lose a member here.
+    $dynGroup = @{ Id = 'a2d7e8f9-0fb4-45c6-8d1e-5c6d7e8f9a07'; Name = 'all-staff-dynamic'; Type = 'Dynamic' }
+    $legacyGroup = @{ Id = 'b3e8f9a0-1ac5-46d7-9e2f-6d7e8f9a0b18'; Name = 'legacy-admins'; Type = 'On-premises' }
+    # A group given with Old stands for a pack collected before 1.10.0, without the group membership columns.
+    $opsOld = @{ Id = $opsGroup.Id; Name = $opsGroup.Name; Old = $true }
+    # The group columns of a row: none for a role assigned to the account, else the role group, the group the account
+    # sits in (the role group itself, or the MemberOf group nested in it), its membership type and the path between them.
+    $held = { param($Group)
+        if (-not $Group) { return @{ HeldThrough = 'Direct'; GroupId = ''; GroupName = ''; MemberOfId = ''; MemberOfName = ''; MemberOfType = ''; GroupPath = @(); GroupPathIds = @() } }
+        if ($Group.Old) { return @{ HeldThrough = 'Group'; GroupId = $Group.Id; GroupName = $Group.Name } }
+        $of = if ($Group.MemberOf) { $Group.MemberOf } else { $Group }
+        $path = @(@{ Id = $Group.Id; Name = $Group.Name }) + @(if ($Group.MemberOf) { $Group.MemberOf })
+        @{ HeldThrough = 'Group'; GroupId = $Group.Id; GroupName = $Group.Name; MemberOfId = $of.Id; MemberOfName = $of.Name; MemberOfType = $(if ($of.Type) { $of.Type } else { 'Assigned' })
+            GroupPath = @($path | ForEach-Object { $_.Name }); GroupPathIds = @($path | ForEach-Object { $_.Id }) } }
     $mgScope = '/providers/Microsoft.Management/managementGroups/mg-contoso-platform'
     $roleIds = @{
         Owner = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'; Contributor = 'b24988ac-6180-42a0-ab88-20f7382dd24c'; Reader = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
@@ -47,21 +64,26 @@ BeforeAll {
         $morgan = @('Morgan Reyes', 'morgan.reyes@contoso.com', $false); $lee = @('Lee Ashford', 'lee.ashford@contoso.com', $true)
         $kim = @('Kim Osei', 'kim.osei@contoso.com', $false); $ann = @('Ann Larsen', 'ann.larsen@contoso.com', $false)
     }
-    # One IA.15-RBAC row as the collector writes it. A group given holds the role, and the account is its disabled member.
+    # One IA.15-RBAC row as the collector writes it. A group given holds the role, and the account is its disabled member,
+    # of the group itself or of the MemberOf group nested in it.
     $azureRole = { param([string]$Scope, [string]$Role, [string]$RoleId, [string]$Principal, $Group)
         $level = switch -Regex ($Scope) { '^/$' { 'Root' } 'managementGroups' { 'Management group' } '^/subscriptions/[^/]+$' { 'Subscription' } '^/subscriptions/[^/]+/resourceGroups/[^/]+$' { 'Resource group' } default { 'Resource' } }
         $p = $people[$Principal]
-        @{ subscriptionId = $(if ($Scope -match '^/subscriptions/([^/]+)') { $Matches[1] } else { '' }); resourceGroup = $(if ($Scope -match '/resourceGroups/([^/]+)') { $Matches[1] } else { '' })
+        $row = @{ subscriptionId = $(if ($Scope -match '^/subscriptions/([^/]+)') { $Matches[1] } else { '' }); resourceGroup = $(if ($Scope -match '/resourceGroups/([^/]+)') { $Matches[1] } else { '' })
             ScopeLevel = $level; Scope = $Scope; Role = $Role; RoleDefinitionId = "/subscriptions/$s1/providers/microsoft.authorization/roledefinitions/$RoleId"
             PrincipalId = $Principal; UserPrincipalName = $p[1]; DisplayName = $p[0]; OnPremisesSyncEnabled = $p[2]
-            HeldThrough = $(if ($Group) { 'Group' } else { 'Direct' }); GroupId = $(if ($Group) { $Group.Id } else { '' }); GroupName = $(if ($Group) { $Group.Name } else { '' })
-            AssignmentId = ('{0}/providers/Microsoft.Authorization/roleAssignments/{1}' -f $Scope.TrimEnd('/'), (Get-TestId "$Scope|$RoleId|$Principal")) } }
+            AssignmentId = ('{0}/providers/Microsoft.Authorization/roleAssignments/{1}' -f $Scope.TrimEnd('/'), (Get-TestId "$Scope|$RoleId|$Principal")) }
+        $h = & $held $Group
+        foreach ($k in $h.Keys) { $row[$k] = $h[$k] }
+        $row }
     # One IA.15-ENTRA row as the collector writes it.
     $entraRole = { param([string]$Role, [string]$RoleId, [string]$Type, [string]$Principal, $Group, [string]$Scope = '/', [string]$End = '', [string]$PimRead = 'Yes')
         $p = $people[$Principal]
-        @{ Role = $Role; RoleDefinitionId = $RoleId; DirectoryScope = $Scope; AssignmentType = $Type; PrincipalId = $Principal; UserPrincipalName = $p[1]; DisplayName = $p[0]; OnPremisesSyncEnabled = $p[2]
-            HeldThrough = $(if ($Group) { 'Group' } else { 'Direct' }); GroupId = $(if ($Group) { $Group.Id } else { '' }); GroupName = $(if ($Group) { $Group.Name } else { '' })
-            EndDateUtc = $End; AssignmentId = (Get-TestId "$Role|$Type|$Principal"); PimRead = $PimRead } }
+        $row = @{ Role = $Role; RoleDefinitionId = $RoleId; DirectoryScope = $Scope; AssignmentType = $Type; PrincipalId = $Principal; UserPrincipalName = $p[1]; DisplayName = $p[0]; OnPremisesSyncEnabled = $p[2]
+            EndDateUtc = $End; AssignmentId = (Get-TestId "$Role|$Type|$Principal"); PimRead = $PimRead }
+        $h = & $held $Group
+        foreach ($k in $h.Keys) { $row[$k] = $h[$k] }
+        $row }
     function New-ChangeFixture {
         param([string]$Path)
         New-Item -ItemType Directory -Path (Join-Path $Path 'results') -Force | Out-Null
@@ -168,7 +190,8 @@ BeforeAll {
             @{ Name = 'aks-nodepool1-vmss'; ResourceType = 'microsoft.compute/virtualmachinescalesets'; resourceGroup = 'rg-aks'; subscriptionId = $s1; PowerState = 'Scale set'; Size = 'Standard_D2s_v5' })
         # IA.15: Morgan holds Azure roles at management group, subscription, resource group and resource scope and a
         # standing Entra role. Lee, synced from on-premises, holds a storage role and an eligible Entra role that is
-        # activated now. Kim holds roles only through the group platform-operators. Pat is disabled and holds nothing.
+        # activated now, and the roles of platform-operators as a member of ops-tier2, nested in it. Kim holds roles
+        # only through the group platform-operators, as a member of it. Pat is disabled and holds nothing.
         # Ann is enabled: her rows stand for a collector that let an enabled account through, and must never be listed.
         # Role definition IDs are the real built-in ones.
         Set-PackResult $Path 'IA.15-DISABLED' @(
@@ -183,12 +206,14 @@ BeforeAll {
             (& $azureRole "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.KeyVault/vaults/kv-app" 'Key Vault Administrator' $roleIds.KvAdmin $morgan)
             (& $azureRole "/subscriptions/$s2/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stdataprod" 'Storage Blob Data Contributor' $roleIds.BlobContributor $lee)
             (& $azureRole "/subscriptions/$s2/resourceGroups/rg-ops" 'Contributor' $roleIds.Contributor $kim $opsGroup)
+            (& $azureRole "/subscriptions/$s2/resourceGroups/rg-ops" 'Contributor' $roleIds.Contributor $lee $opsNested)
             (& $azureRole "/subscriptions/$s2" 'Owner' $roleIds.Owner $ann))
         Set-PackResult $Path 'IA.15-ENTRA' @(
             (& $entraRole 'User Administrator' $roleIds.UserAdmin 'Standing' $morgan)
             (& $entraRole 'Security Reader' $roleIds.SecReader 'Activated' $lee)
             (& $entraRole 'Security Reader' $roleIds.SecReader 'Eligible' $lee -End '2027-03-31T00:00:00Z')
             (& $entraRole 'Helpdesk Administrator' $roleIds.Helpdesk 'Standing' $kim $opsGroup -Scope '/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9')
+            (& $entraRole 'Helpdesk Administrator' $roleIds.Helpdesk 'Standing' $lee $opsNested -Scope '/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9')
             (& $entraRole 'Global Administrator' $roleIds.Ga 'Standing' $ann))
     }
     function Get-Section([string]$Text, [string]$Heading) {
@@ -280,7 +305,8 @@ Describe 'Change request generation' {
             'CR-11-redis-minimum-tls.txt', 'CR-12-service-bus-minimum-tls.txt', 'CR-13-event-hubs-minimum-tls.txt', 'CR-14-cosmos-db-minimum-tls.txt', 'CR-15-scale-set-encryption-at-host.txt',
             'CR-16-management-ports.txt', 'CR-17-app-service-ftps.txt', 'CR-18-storage-private-containers.txt', 'CR-19-disabled-account-roles.txt')
         @($emailFiles.Name | Sort-Object) | Should -Be @($crFiles.Name | Sort-Object | ForEach-Object { $_ -replace '\.txt$', '.email.txt' }) -Because 'every change request writes a client email'
-        $files.Count | Should -Be ($crFiles.Count + $emailFiles.Count + 2)
+        $files.Count | Should -Be ($crFiles.Count + $emailFiles.Count + 3) -Because 'the index, the CSV and the CSV the CR-19 email attaches'
+        Test-Path (Join-Path $out 'CR-19-disabled-account-roles.email.csv') | Should -BeTrue -Because 'CR-19 names the accounts in a CSV attached to its email'
         $index | Should -Match '\| 05 \| Minimum TLS 1\.2 on Azure SQL servers \|  \| No gaps found \|'
         $index | Should -Match '\| 06 \| Purge protection on key vaults \| 2 \| Change request and client email \| CR-06-key-vault-purge-protection\.txt, CR-06-key-vault-purge-protection\.email\.txt \|'
         $index | Should -Match '\| 07 \| Anonymous blob access disabled on storage accounts \| 1 \| Change request and client email \|' -Because 'an account with a public container is left out'
@@ -938,9 +964,11 @@ Describe 'Change request generation' {
 
     It 'removes the roles held by disabled accounts, Azure by subscription and scope and Entra separately, after reading each account again' {
         $text = & $read 'CR-19-disabled-account-roles.txt'
-        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the 5 Azure role assignments and 3 Microsoft Entra role assignments held by the 2 disabled user accounts listed below, at the scope where each was made.'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the 5 Azure role assignments and 3 Microsoft Entra role assignments assigned directly to the 3 disabled user accounts listed below, at the scope where each was made, and remove 2 of them from 2 groups through which they hold 4 more role assignments.'
+        @(Get-Section $text 'B) PURPOSE')[0] | Should -Match 'Removing the roles, and the group memberships that carry them, closes that path'
+        @(Get-Section $text 'A) AVAILABILITY/PERFORMANCE')[0] | Should -Be 'No impact on any service, since the accounts are disabled and cannot sign in, and a group keeps its roles and its other members.'
         $res = @(Get-Section $text 'C) RESOURCES')
-        $res[0] | Should -Match '^The 2 accounts below are recorded as disabled at collection'
+        $res[0] | Should -Be 'The 3 accounts below are recorded as disabled at collection. Each role listed is assigned directly to one of them, or reaches the account through the group it is removed from. The CSV carries every assignment and membership in full for the rollback.'
         $res[1] | Should -Be 'Azure role assignments, removed at the scope where each was made:'
         $res[2] | Should -Be "Subscription: Example Production ($s1)"
         $res[3] | Should -Match "^- Morgan Reyes \(morgan\.reyes@contoso\.com\), object ID $morgan`: Owner on the subscription, role definition $($roleIds.Owner), scope /subscriptions/$s1, assignment [0-9a-f-]{36}$"
@@ -951,8 +979,11 @@ Describe 'Change request generation' {
         $res[8] | Should -Be 'Management group: mg-contoso-platform' -Because 'a management group sits after the subscriptions, under its own name'
         $res[9] | Should -Match "^- Morgan Reyes .+: Reader on the management group, role definition $($roleIds.Reader), scope $([regex]::Escape($mgScope)), "
         $res[10] | Should -Be 'Microsoft Entra role assignments:'
-        @($res | Select-Object -Skip 11) | Should -Match '^- (Morgan Reyes .+: User Administrator, Standing|Lee Ashford .+: Security Reader, (Activated|Eligible)), role definition [0-9a-f-]{36}, directory scope /, assignment '
-        @($res | Select-Object -Skip 11).Count | Should -Be 3
+        @($res | Select-Object -Skip 11 -First 3) | Should -Match '^- (Morgan Reyes .+: User Administrator, Standing|Lee Ashford .+: Security Reader, (Activated|Eligible)), role definition [0-9a-f-]{36}, directory scope /, assignment '
+        $res[14] | Should -Be 'Group memberships removed, which take the roles the group holds away from the account:'
+        $res[15] | Should -Be "- Kim Osei (kim.osei@contoso.com), object ID $kim`: removed from group platform-operators ($($opsGroup.Id)), which holds Azure Contributor on /subscriptions/$s2/resourceGroups/rg-ops and Microsoft Entra Helpdesk Administrator (in administrative unit 4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9)" -Because 'a member of the role group itself leaves that group'
+        $res[16] | Should -Be "- Lee Ashford (lee.ashford@contoso.com), object ID $lee`: removed from group ops-tier2 ($($tier2Group.Id)), nested in platform-operators ($($opsGroup.Id)), which holds Azure Contributor on /subscriptions/$s2/resourceGroups/rg-ops and Microsoft Entra Helpdesk Administrator (in administrative unit 4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9)" -Because 'a member of a nested group leaves the nested group, named with the role group it is nested in'
+        $res.Count | Should -Be 17
         $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
         $impl[0] | Should -Be '1. In the Azure portal, go to Microsoft Entra ID > Users and open the first account listed in the RESOURCES section.'
         $impl[1] | Should -Match '^2\. On the Overview page, read Account status, .+If it shows the account as enabled, the account has been turned back on since collection, so leave every role it holds unchanged, note it in the change record for the next pack and skip the remaining steps for it\. Leave out too any account the client asked to keep out of the change\.$'
@@ -960,12 +991,14 @@ Describe 'Change request generation' {
         $impl[3] | Should -Match 'whose Scope column reads This resource\. Where the tab shows a State column and it reads Active time-bound, record in the change record the end time of the assignment, shown by selecting Edit columns and then End time, since the collection does not hold it and the rollback restores the assignment as time-bound with that end\. A resource scope shows no State column, so for an assignment on a resource, where the client uses Privileged Identity Management, read its end on the Active roles tab of Privileged Identity Management > Azure resources > the resource > Roles > the role instead\. Select Remove and then Yes\. An assignment shown as Inherited was made at a parent scope and is removed there'
         $impl[4] | Should -Match 'Microsoft Entra ID > Roles and administrators, open the role, select the account, select Remove assignment'
         $impl[5] | Should -Be '6. For each Microsoft Entra role listed as Eligible for the account, go to Privileged Identity Management > Microsoft Entra roles > Roles, open the role, find the account on the Eligible assignments tab, with the scope listed for the role, and select Remove. A role listed as Activated comes from an eligible assignment and ends when its activation expires, so remove that eligible assignment the same way, and where the Active assignments tab still lists the activation with a Remove link, select it as well.' -Because 'an Activated role with its Eligible row keeps the wording it had'
-        $impl[6] | Should -Be '7. Repeat steps 1 to 6 for each remaining account listed.'
+        $impl[6] | Should -Be '7. For each group membership listed for the account, go to Microsoft Entra ID > Groups > All groups and open the group the account is removed from, the first group named on its line, which is the group that holds the role or a group nested in it. Select Members, find the account, select it, select Remove and then Yes. If Membership type on the group reads Dynamic User or Dynamic Device, or Source reads Windows server AD, a member cannot be removed here, so leave the membership unchanged and note it in the change record for a review with the group owner.'
+        $impl[7] | Should -Be '8. Repeat steps 1 to 7 for each remaining account listed.'
         ($impl -join ' ') | Should -Not -Match 'az role' -Because 'only an assignment at the root scope needs the command line'
         $testing = @(Get-Section $text 'B) TESTING PLAN')
         $testing[0] | Should -Be '1. In the Azure portal, go to Microsoft Entra ID > Users and open each account listed in the RESOURCES section.'
         $testing[1] | Should -Match 'Select Azure role assignments, choose each subscription listed for the account in turn'
         $testing[2] | Should -Match 'Select Assigned roles and confirm that none of the Microsoft Entra roles recorded for the account appears under Active assignments or Eligible assignments'
+        $testing[3] | Should -Be '4. Select Groups and confirm that no group recorded for the account under group memberships is listed, apart from any left unchanged and noted in the change record, then confirm under Azure role assignments and Assigned roles that the roles those groups hold no longer reach the account.'
         $rollback = (@(Get-Section $text 'C) ROLLBACK PLAN') -join "`n")
         $rollback | Should -Match 'Access control \(IAM\) > Add > Add role assignment, select the recorded role'
         $azureRollback = @(Get-Section $text 'C) ROLLBACK PLAN')[0]
@@ -975,48 +1008,90 @@ Describe 'Change request generation' {
         $rollback | Should -Match 'A role recorded as Activated needs no rollback of its own, since it came from the eligible assignment recorded with it\.'
         $rollback | Should -Not -Match 'no Eligible line|recorded in the change record at step|Permanently eligible'
         $text | Should -Not -Match 'no Eligible line|pim-how-to-add-role-to-user#assign-a-role'
-        $rollback | Should -Match 'change-requests\.csv carries each assignment in full, with the role, role definition ID, scope, any condition and the account object ID, and the change record carries each end time or schedule recorded before removal\.'
+        $rollback | Should -Match 'For a group membership, go to Microsoft Entra ID > Groups > All groups, open the recorded group, select Members, select Add members, find the account by its object ID, select it and select Select\. Every role the group holds, itself or through the groups it is nested in, reaches the account again at once\.'
+        $rollback | Should -Match 'change-requests\.csv carries each assignment in full, with the role, role definition ID, scope, any condition and the account object ID, and each group membership with the group the account is removed from and the roles it holds, and the change record carries each end time or schedule recorded before removal\.'
         foreach ($r in @(Get-Section $text 'A) REFERENCES')) { $r | Should -Match '^- [^:]+: https://learn\.microsoft\.com/(azure|entra)/' }
         $text | Should -Match 'learn\.microsoft\.com/entra/identity/role-based-access-control/groups-remove-assignment'
+        $text | Should -Match 'learn\.microsoft\.com/entra/fundamentals/how-to-manage-groups#remove-members-or-owners-of-a-group'
+        $text | Should -Match 'learn\.microsoft\.com/entra/fundamentals/how-to-manage-groups#add-members-or-owners-of-a-group'
     }
 
-    It 'never lists an enabled account, a role held through a group or a disabled account without roles' {
-        foreach ($f in 'CR-19-disabled-account-roles.txt', 'CR-19-disabled-account-roles.email.txt') {
+    It 'never lists an enabled account or a disabled account without roles, and removes an account from the group that gives it a role' {
+        foreach ($f in 'CR-19-disabled-account-roles.txt', 'CR-19-disabled-account-roles.email.txt', 'CR-19-disabled-account-roles.email.csv') {
             $t = & $read $f
             $t | Should -Not -Match 'Ann Larsen|ann\.larsen|Global Administrator' -Because "$f names no enabled account, whatever its role results hold"
-            $t | Should -Not -Match 'Kim Osei|platform-operators|Helpdesk Administrator|rg-ops' -Because "$f changes no role held through a group"
             $t | Should -Not -Match 'Pat Moreno' -Because "$f lists only accounts that hold a role"
         }
-        @($csv | Where-Object CR -eq 'CR-19' | Where-Object { $_.Resource -match 'ann\.|kim\.' -or $_.CurrentSetting -match $ann -or $_.CurrentSetting -match $kim }).Count | Should -Be 0
+        (& $read 'CR-19-disabled-account-roles.txt') | Should -Match 'Kim Osei' -Because 'an account that holds a role only through a group is removed from the group'
+        (& $read 'CR-19-disabled-account-roles.email.txt') | Should -Not -Match 'Morgan Reyes|morgan\.reyes|Kim Osei|kim\.osei|Lee Ashford|lee\.ashford|platform-operators|ops-tier2' -Because 'the email counts the accounts and names them in the attached CSV only'
+        @($csv | Where-Object CR -eq 'CR-19' | Where-Object { $_.Resource -match 'ann\.' -or $_.CurrentSetting -match $ann }).Count | Should -Be 0
+        $kimRows = @($csv | Where-Object CR -eq 'CR-19' | Where-Object { $_.Resource -match 'kim\.' })
+        @($kimRows.Resource) | Should -Be @('kim.osei@contoso.com, member of group platform-operators') -Because 'a role held through a group is tracked as the membership that carries it, not as an assignment'
+        $kimRows[0].CurrentSetting | Should -Be "Membership of group platform-operators ($($opsGroup.Id)), which holds Azure Contributor on /subscriptions/$s2/resourceGroups/rg-ops and Microsoft Entra Helpdesk Administrator (in administrative unit 4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9), held by kim.osei@contoso.com (object ID $kim)"
+        $kimRows[0].ResourceId | Should -Be "/groups/$($opsGroup.Id)/members/$kim/`$ref" -Because 'the resource ID is the Graph path that removes the member'
+        $leeRows = @($csv | Where-Object CR -eq 'CR-19' | Where-Object { $_.Resource -match 'member of group' -and $_.Resource -match 'lee\.' })
+        @($leeRows.Resource) | Should -Be @('lee.ashford@contoso.com, member of group ops-tier2')
+        $leeRows[0].CurrentSetting | Should -Match "^Membership of group ops-tier2 \($($tier2Group.Id)\), nested in platform-operators \($($opsGroup.Id)\), which holds Azure Contributor on "
+        $leeRows[0].ResourceId | Should -Be "/groups/$($tier2Group.Id)/members/$lee/`$ref"
     }
 
     It 'names in the index the roles held through groups, the synced accounts, the Azure eligible assignments it cannot read and the service principals' {
-        $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| 8 \| Change request and client email \| CR-19-disabled-account-roles\.txt, CR-19-disabled-account-roles\.email\.txt \|'
-        $index | Should -Match "- 1 disabled account holds roles through group membership, which CR-19 leaves unchanged: group platform-operators \($($opsGroup.Id)\), which holds Azure Contributor on /subscriptions/$s2/resourceGroups/rg-ops and Microsoft Entra Helpdesk Administrator \(in administrative unit 4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9\), with the disabled member Kim Osei \(kim\.osei@contoso\.com\)\. Removing the role from a group, or an account from it, changes access for the group, so review each group with its owner as a separate change\."
+        $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| 10 \| Change request and client email \| CR-19-disabled-account-roles\.txt, CR-19-disabled-account-roles\.email\.txt, CR-19-disabled-account-roles\.email\.csv \|' -Because 'CR-19 counts one row per assignment and per group membership, and lists the CSV its email attaches'
+        $index | Should -Match "- 2 disabled accounts hold roles through group membership, and CR-19 removes each one from the group it sits in: Kim Osei \(kim\.osei@contoso\.com\) from group platform-operators \($($opsGroup.Id)\), which holds Azure Contributor on /subscriptions/$s2/resourceGroups/rg-ops and Microsoft Entra Helpdesk Administrator \(in administrative unit 4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9\) / Lee Ashford \(lee\.ashford@contoso\.com\) from group ops-tier2 \($($tier2Group.Id)\), nested in platform-operators \($($opsGroup.Id)\), which holds Azure Contributor on /subscriptions/$s2/resourceGroups/rg-ops and Microsoft Entra Helpdesk Administrator \(in administrative unit 4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9\)\."
+        $index | Should -Match '- CR-19 names the accounts and their roles in CR-19-disabled-account-roles\.email\.csv rather than in its email, since the list can be long\. Attach the file to the email\.'
+        $index | Should -Not -Match 'which CR-19 leaves unchanged|whose members CR-19 cannot change' -Because 'every group in the fixture can lose a member'
         $index | Should -Match '- 1 account in CR-19 is synced from on-premises Active Directory: Lee Ashford \(lee\.ashford@contoso\.com\)\. Its disabled state comes from Active Directory'
         $index | Should -Match '- IA\.15-RBAC reads the subscriptions in the pack and the management groups and root scope above them, so a role in another subscription of the tenant is not listed\. Resource Graph also holds the active Azure role assignments only, not the eligible assignments of Privileged Identity Management for Azure resources'
         $index | Should -Match '- IA\.15-DISABLED reads user accounts only\. Disabled service principals are not read'
         $index | Should -Not -Match 'Lighthouse|Eligible Microsoft Entra role assignments were not visible|emergency access account' -Because 'the full fixture was read directly, with PIM, and holds none of the top roles'
     }
 
-    It 'asks for approval to remove the roles, listing each account with its roles, and asks whether any account is coming back' {
+    It 'asks for approval to remove the roles and the group memberships, counts the accounts in the email and names them in the attached CSV, and asks whether any account is coming back' {
         $email = & $read 'CR-19-disabled-account-roles.email.txt'
         Assert-ApprovalEmail $email 'CR-19'
         $email | Should -Match '^Subject: Approval requested: removing the roles held by disabled accounts\r?\n'
-        $email | Should -Match 'I would like your approval to remove the Azure and Microsoft Entra roles still assigned to 2 disabled accounts in your tenant\. These accounts are disabled, so they cannot sign in, but each one still holds every role listed below\.'
+        $email | Should -Match 'I would like your approval to remove the Azure and Microsoft Entra roles still held by 3 disabled accounts in your tenant, by removing the roles assigned to the accounts themselves and, where a group holds a role for one of them, by removing that account from the group\. These accounts are disabled, so they cannot sign in, but each one still holds every role listed in the attached file\.'
         $email | Should -Match 'I recommend removing these roles because a disabled account keeps every role it holds'
         $email | Should -Match '\r?\n\r?\nNobody loses access today, since these accounts cannot sign in\.\r?\n'
-        $email | Should -Match '\r?\n\r?\nIf one of these accounts comes back into use later, it would need its roles assigned again\.\r?\n'
-        $email | Should -Match '\r?\n\r?\nRoles that reach a disabled account through a group stay as they are'
-        $email | Should -Match ("The accounts are listed below with their roles, the Azure roles by subscription and the Microsoft Entra roles on their own:\r?\n\r?\n" +
-            "Subscription Example Production \($s1\):\r?\n\r?\n- Morgan Reyes \(morgan\.reyes@contoso\.com\): Owner on the subscription, Contributor on resource group rg-app, Key Vault Administrator on resource kv-app in resource group rg-app\r?\n\r?\n" +
-            "Subscription Example, Dev Test \($s2\):\r?\n\r?\n- Lee Ashford \(lee\.ashford@contoso\.com\): Storage Blob Data Contributor on resource stdataprod in resource group rg-data\r?\n\r?\n" +
-            "Management group mg-contoso-platform:\r?\n\r?\n- Morgan Reyes \(morgan\.reyes@contoso\.com\): Reader on the management group\r?\n\r?\n" +
-            "Microsoft Entra ID directory roles:\r?\n\r?\n- Lee Ashford \(lee\.ashford@contoso\.com\): Security Reader \(activated from an eligible assignment\), Security Reader \(eligible in Privileged Identity Management, until 2027-03-31\)\r?\n" +
-            "- Morgan Reyes \(morgan\.reyes@contoso\.com\): User Administrator\r?\n")
-        $email | Should -Match '\r?\n\r?\nI can restore any of these roles at any time from the record I keep of each one'
+        $email | Should -Match '\r?\n\r?\nIf one of these accounts comes back into use later, it would need its roles assigned again and its group memberships restored\.\r?\n'
+        $email | Should -Match '\r?\n\r?\nWhere a group holds the role, I would remove the account concerned from the group rather than take the role away from the group, so its other members keep their access, and where an account sits in a group nested inside the one that holds the role, it is the nested group the account is removed from\. Removing an account from a group also ends anything else the group gives it, such as access to an application, which does not matter while the account is disabled\.\r?\n'
+        $email | Should -Not -Match 'come from a rule|stay as they are for now' -Because 'every group in the fixture can lose a member, and the pack records the group each account sits in'
+        $email | Should -Match ("The accounts and their roles are in the attached file CR-19-disabled-account-roles\.email\.csv, one line for each role with the account, the role, where it applies, how the account holds it and what I would do about it, and they add up as follows:\r?\n\r?\n" +
+            "Subscription Example Production \($s1\):\r?\n\r?\n- 1 account holding 3 roles\r?\n\r?\n" +
+            "Subscription Example, Dev Test \($s2\):\r?\n\r?\n- 2 accounts holding 3 roles, 2 of them through a group\r?\n\r?\n" +
+            "Management group mg-contoso-platform:\r?\n\r?\n- 1 account holding 1 role\r?\n\r?\n" +
+            "Microsoft Entra ID directory roles:\r?\n\r?\n- 3 accounts holding 5 roles, 2 of them through a group\r?\n") -Because 'the email counts the roles under each heading and leaves the names to the attached file'
+        $email | Should -Match '\r?\n\r?\nI can restore any of these roles at any time from the record I keep of each one, with its role, where it applies and the account it belongs to, and add an account back to the group it was removed from\.'
         $email | Should -Match '\r?\n\r?\nBefore I schedule the change, could you tell me whether any of these accounts is expected to come back into use, for example for someone on leave or a seasonal worker, or is kept for emergency access\? I will leave any such account out of the change\. With that confirmed, could you approve this change for \w+day, '
         $email | Should -Not -Match '(?i)object ID|role definition|assignment ID' -Because 'the email names roles in plain words, the change request keeps the IDs'
+        $file = Join-Path $out 'CR-19-disabled-account-roles.email.csv'
+        (Get-Content $file -First 1) | Should -Be '"Account","SignInName","RoleType","Role","Scope","Detail","HeldThrough","Action"'
+        $rows = @(Import-Csv $file)
+        $rows.Count | Should -Be 12 -Because 'one line per role, assigned to the account or held through a group'
+        @($rows | ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.Account, $_.RoleType, $_.Role, $_.HeldThrough }) | Should -Be @(
+            'Kim Osei|Azure|Contributor|Group platform-operators'
+            'Kim Osei|Microsoft Entra|Helpdesk Administrator|Group platform-operators'
+            'Lee Ashford|Azure|Contributor|Group platform-operators, through the group ops-tier2 nested in it'
+            'Lee Ashford|Azure|Storage Blob Data Contributor|Assigned to the account'
+            'Lee Ashford|Microsoft Entra|Helpdesk Administrator|Group platform-operators, through the group ops-tier2 nested in it'
+            'Lee Ashford|Microsoft Entra|Security Reader|Assigned to the account'
+            'Lee Ashford|Microsoft Entra|Security Reader|Assigned to the account'
+            'Morgan Reyes|Azure|Contributor|Assigned to the account'
+            'Morgan Reyes|Azure|Key Vault Administrator|Assigned to the account'
+            'Morgan Reyes|Azure|Reader|Assigned to the account'
+            'Morgan Reyes|Azure|Owner|Assigned to the account'
+            'Morgan Reyes|Microsoft Entra|User Administrator|Assigned to the account') -Because 'the file is sorted by account, Azure roles first, then by where the role applies'
+        $kimAzure = $rows | Where-Object { $_.Account -eq 'Kim Osei' -and $_.RoleType -eq 'Azure' }
+        @($kimAzure.SignInName, $kimAzure.Scope, $kimAzure.Detail, $kimAzure.Action) | Should -Be @('kim.osei@contoso.com', "resource group rg-ops in the subscription Example, Dev Test ($s2)", '', 'Remove the account from group platform-operators')
+        $nested = $rows | Where-Object { $_.Account -eq 'Lee Ashford' -and $_.Role -eq 'Helpdesk Administrator' }
+        @($nested.Scope, $nested.Detail, $nested.Action) | Should -Be @('administrative unit 4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9', '', 'Remove the account from group ops-tier2') -Because 'a member of a nested group is removed from the nested group'
+        @($rows | Where-Object { $_.Account -eq 'Lee Ashford' -and $_.Role -eq 'Security Reader' } | ForEach-Object Detail) | Should -Be @('activated from an eligible assignment', 'eligible in Privileged Identity Management, until 2027-03-31')
+        ($rows | Where-Object { $_.Role -eq 'Reader' }).Scope | Should -Be 'the management group mg-contoso-platform'
+        ($rows | Where-Object { $_.Role -eq 'Owner' }).Scope | Should -Be "the subscription Example Production ($s1)"
+        ($rows | Where-Object { $_.Role -eq 'Key Vault Administrator' }).Scope | Should -Be "resource kv-app in resource group rg-app in the subscription Example Production ($s1)"
+        ($rows | Where-Object { $_.Role -eq 'User Administrator' }).Scope | Should -Be 'the whole directory'
+        @($rows | Where-Object { $_.Action -eq 'Remove the role assignment' }).Count | Should -Be 8
+        (Get-Content $file -Raw) | Should -Not -Match ';|>|<|Ann Larsen|Pat Moreno' -Because 'the file goes to the client and keeps the copy rules of an email'
     }
 
     It 'lists one row per resource in the CSV' {
@@ -1041,7 +1116,7 @@ Describe 'Change request generation' {
             "Example Production ($s1)|rg-web|stweb/images|anonymous access level Blob, readable anonymously today") -Because 'CR-18 tracks one row per container, with the level the rollback restores'
         ($private | Where-Object Resource -eq 'stweb/images').ResourceId | Should -Be "/subscriptions/$s1/resourceGroups/rg-web/providers/Microsoft.Storage/storageAccounts/stweb/blobServices/default/containers/images"
         $roles = @($csv | Where-Object CR -eq 'CR-19')
-        $roles.Count | Should -Be 8 -Because 'CR-19 tracks one row per assignment it removes'
+        $roles.Count | Should -Be 10 -Because 'CR-19 tracks one row per assignment it removes and one per group membership'
         $mg = $roles | Where-Object { $_.CurrentSetting -match 'management group scope' }
         @($mg.Subscription, $mg.ResourceGroup, $mg.Resource) | Should -Be @('', '', 'morgan.reyes@contoso.com, Reader')
         $mg.CurrentSetting | Should -Be "Azure role Reader (/subscriptions/$s1/providers/microsoft.authorization/roledefinitions/$($roleIds.Reader)) at management group scope $mgScope, assigned to morgan.reyes@contoso.com (object ID $morgan)" -Because 'the rollback recreates each assignment from its role, scope and account'
@@ -1116,7 +1191,9 @@ Describe 'Change request variants' {
                 Test-Path $email | Should -BeTrue -Because "$($cr.Name) is written with a client email"
                 $text = Get-Content $email -Raw
                 Assert-ApprovalEmail $text $cr.Name
-                $index | Should -Match ('\| {0} \| [^|]+ \| \d+ \| Change request and client email(, partial collection scope)? \| {1}, {2} \|' -f $number, [regex]::Escape($cr.Name), [regex]::Escape($cr.BaseName + '.email.txt')) -Because $cr.Name
+                # An email that attaches a CSV lists it after the email, under the same base name.
+                $index | Should -Match ('\| {0} \| [^|]+ \| \d+ \| Change request and client email(, partial collection scope)? \| {1}, {2}(, {3})? \|' -f $number, [regex]::Escape($cr.Name), [regex]::Escape($cr.BaseName + '.email.txt'), [regex]::Escape($cr.BaseName + '.email.csv')) -Because $cr.Name
+                foreach ($attached in @(Get-ChildItem $out -Filter ($cr.BaseName + '.email.csv'))) { Get-Content $attached.FullName -Raw | Should -Not -Match ';|>|<' -Because "$($attached.Name) goes to the client with the email" }
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
@@ -2047,15 +2124,15 @@ Describe 'Change request variants' {
         $null = & $generator -EvidencePath $pack
         $out = Join-Path $pack '05-change-requests'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
-        $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| 5 \| Change request and client email \|'
+        $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| 7 \| Change request and client email \|' -Because 'the Azure roles held through a group add a membership row each'
         $index | Should -Match '- The Microsoft Entra roles of the disabled accounts are unknown, not a zero, because IA\.15-ENTRA could not be used: it reads UNAVAILABLE: Not a zero: the Graph token cannot read Microsoft Entra role assignments.+Needs RoleManagement\.Read\.Directory\.'
         $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
-        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the 5 Azure role assignments held by the 2 disabled user accounts listed below, at the scope where each was made.'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the 5 Azure role assignments assigned directly to the 3 disabled user accounts listed below, at the scope where each was made, and remove 2 of them from 2 groups through which they hold 2 more role assignments.'
         $text | Should -Not -Match 'Microsoft Entra role assignments:|Roles and administrators|Privileged Identity Management > Microsoft Entra'
         $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-19 with the Azure side only'
-        $email | Should -Match 'I would like your approval to remove the Azure roles still assigned to 2 disabled accounts'
-        $email | Should -Match 'The accounts are listed below with their Azure roles, by subscription:\r?\n\r?\nSubscription Example Production'
+        $email | Should -Match 'I would like your approval to remove the Azure roles still held by 3 disabled accounts in your tenant, by removing the roles assigned to the accounts themselves and, where a group holds a role for one of them, by removing that account from the group\.'
+        $email | Should -Match 'The accounts and their roles are in the attached file CR-19-disabled-account-roles\.email\.csv, [^\r\n]+ as follows:\r?\n\r?\nSubscription Example Production'
         $email | Should -Not -Match 'Microsoft Entra ID directory roles'
         # An unreadable result file is never read as no roles.
         Set-PackResult $pack 'IA.15-ENTRA' @() 'OK'
@@ -2082,10 +2159,14 @@ Describe 'Change request variants' {
         Set-PackResult $pack 'IA.15-RBAC' @() 'EMPTY'
         $null = & $generator -EvidencePath $pack
         & $state | Should -Be '| 19 | Roles removed from disabled accounts |  | No gaps found in the Azure roles, Microsoft Entra roles not collected (IA.15-ENTRA UNAVAILABLE), see the notes |  |'
-        Set-PackResult $pack 'IA.15-RBAC' @((& $azureRole "/subscriptions/$s2/resourceGroups/rg-ops" 'Contributor' $roleIds.Contributor $kim $opsGroup))
+        Set-PackResult $pack 'IA.15-RBAC' @((& $azureRole "/subscriptions/$s2/resourceGroups/rg-ops" 'Contributor' $roleIds.Contributor $kim $dynGroup))
         Set-PackResult $pack 'IA.15-ENTRA' @((& $entraRole 'Global Administrator' $roleIds.Ga 'Standing' $ann))
         $null = & $generator -EvidencePath $pack
-        & $state | Should -Be '| 19 | Roles removed from disabled accounts |  | Only roles held through groups remain, see the notes |  |' -Because 'an enabled account is never listed, and a group role is never removed'
+        & $state | Should -Be '| 19 | Roles removed from disabled accounts |  | Only roles held through groups whose members cannot be changed here remain, see the notes |  |' -Because 'an enabled account is never listed, and a member cannot be removed from a dynamic membership group'
+        Set-PackResult $pack 'IA.15-RBAC' @((& $azureRole "/subscriptions/$s2/resourceGroups/rg-ops" 'Contributor' $roleIds.Contributor $kim $opsOld))
+        $null = & $generator -EvidencePath $pack
+        & $state | Should -Be '| 19 | Roles removed from disabled accounts |  | Only roles held through groups remain, see the notes |  |' -Because 'a pack collected before 1.10.0 does not record the group each account sits in'
+        (Get-Content (Join-Path $out '00-index.md') -Raw) | Should -Match 'Collect again with CyberSOC collector 1\.10\.0 or later, and CR-19 removes each account from its group\.'
         foreach ($id in 'IA.15-DISABLED', 'IA.15-RBAC', 'IA.15-ENTRA') { Set-PackResult $pack $id @() }
         $null = & $generator -EvidencePath $pack
         & $state | Should -Be '| 19 | Roles removed from disabled accounts |  | No gaps found |  |'
@@ -2112,7 +2193,7 @@ Describe 'Change request variants' {
         Set-PackResult $pack 'IA.15-RBAC' $rbac 'PARTIAL' "7 Azure role assignments held by 3 of the 4 disabled accounts, 1 through a group. Read through Lighthouse, which shows the managing tenant's delegations rather than the client's own role assignments, so this is incomplete."
         $null = & $generator -EvidencePath $pack
         $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
-        $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| 7 \| Change request and client email, partial collection scope \|'
+        $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| 9 \| Change request and client email, partial collection scope \|'
         $index | Should -Match '- Eligible Microsoft Entra role assignments were not visible to the collection \(it needs RoleManagement\.Read\.Directory\), so CR-19 lists only the active ones, an activated assignment reads as Standing, and a disabled account whose only roles are eligible is not listed at all\.'
         $index | Should -Match "- The Azure role assignments were read through Azure Lighthouse, where Resource Graph shows the managing tenant's delegations instead of the client's own role assignments, so CR-19 may miss Azure roles the disabled accounts hold\."
         $index | Should -Match '- IA\.15-ENTRA was read in part, so CR-19 may miss some Microsoft Entra roles: Eligible assignments not visible'
@@ -2155,7 +2236,8 @@ Describe 'Change request variants' {
         $row[0].CurrentSetting | Should -Match 'Activated until 2026-10-12T14:30:00Z, .+, eligible assignment not collected, its schedule is recorded in the change record before removal$'
         $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-19 with an Activated role and no eligibility recorded'
-        $email | Should -Match '- Lee Ashford \(lee\.ashford@contoso\.com\): Security Reader \(activated from an eligible assignment\)'
+        $attached = @(Import-Csv (Join-Path $out 'CR-19-disabled-account-roles.email.csv') | Where-Object { $_.Account -eq 'Lee Ashford' -and $_.Role -eq 'Security Reader' })
+        @($attached.Detail) | Should -Be @('activated from an eligible assignment') -Because 'the attached file names the assignment in plain words'
     }
 
     It 'keeps the record-first wording to the Activated role whose eligibility was not collected, matching account, role and directory scope' {
@@ -2213,13 +2295,15 @@ Describe 'Change request variants' {
         $out = Join-Path $pack '05-change-requests'
         $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
         @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the 1 Microsoft Entra role assignment held by the disabled user account listed below, at the scope where each was made.'
-        @(Get-Section $text 'C) RESOURCES')[0] | Should -Match '^The account below is recorded as disabled at collection, and each role listed is assigned directly to it\.'
+        @(Get-Section $text 'C) RESOURCES')[0] | Should -Be 'The account below is recorded as disabled at collection. Each role listed is assigned directly to it. The CSV carries every assignment in full for the rollback.'
         $text | Should -Not -Match 'Repeat steps|Access control \(IAM\)|Eligible assignments tab'
         $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-19 for one account'
-        $email | Should -Match 'I would like your approval to remove the Microsoft Entra roles still assigned to 1 disabled account in your tenant\. The account is disabled, so it cannot sign in, but it still holds every role listed below\.'
+        $email | Should -Match 'I would like your approval to remove the Microsoft Entra roles still assigned to 1 disabled account in your tenant\. The account is disabled, so it cannot sign in, but it still holds every role listed in the attached file\.'
         $email | Should -Match 'Nobody loses access today, since the account cannot sign in\.'
-        $email | Should -Match "The account is listed below with its Microsoft Entra roles:\r?\n\r?\nMicrosoft Entra ID directory roles:\r?\n\r?\n- Morgan Reyes \(morgan\.reyes@contoso\.com\): Global Administrator\r?\n"
+        $email | Should -Match "The account and its roles are in the attached file CR-19-disabled-account-roles\.email\.csv, one line for each role with the account, the role, where it applies, how the account holds it and what I would do about it, and they add up as follows:\r?\n\r?\nMicrosoft Entra ID directory roles:\r?\n\r?\n- 1 account holding 1 role\r?\n"
+        $email | Should -Not -Match '(?i)group' -Because 'no role reaches the account through a group'
+        @(Import-Csv (Join-Path $out 'CR-19-disabled-account-roles.email.csv') | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.Account, $_.Role, $_.Scope, $_.HeldThrough, $_.Action }) | Should -Be @('Morgan Reyes|Global Administrator|the whole directory|Assigned to the account|Remove the role assignment')
         $email | Should -Match 'could you tell me whether the account is expected to come back into use'
         $email | Should -Match 'Just before the change, I will check the account again and leave it unchanged if it has been turned back on since my review\.'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
@@ -2256,9 +2340,11 @@ Describe 'Change request variants' {
         $text | Should -Match "Application Administrator, Standing, role definition 9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3, directory scope /$app, "
         $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-19 with a condition and an application scope'
-        $email | Should -Match 'Storage Blob Data Contributor on resource stdataprod in resource group rg-data with a condition\r?\n'
-        $email | Should -Match "Application Administrator \(for the single application or other Microsoft Entra object with ID $app\)"
-        $email | Should -Not -Match 'ActionMatches' -Because 'the email names the condition, the change request and CSV carry it'
+        $attached = @(Import-Csv (Join-Path $out 'CR-19-disabled-account-roles.email.csv'))
+        $blobRow = $attached | Where-Object Role -eq 'Storage Blob Data Contributor'
+        @($blobRow.Scope, $blobRow.Detail) | Should -Be @("resource stdataprod in resource group rg-data in the subscription Example, Dev Test ($s2)", 'with a condition that narrows what the role allows')
+        @($attached | Where-Object Role -eq 'Application Administrator' | ForEach-Object { '{0}|{1}|{2}' -f $_.Account, $_.Scope, $_.Detail }) | Should -Be @("Lee Ashford|the single application or other Microsoft Entra object with ID $app|", "Morgan Reyes|the single application or other Microsoft Entra object with ID $app|eligible in Privileged Identity Management")
+        ($email + (Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.csv') -Raw)) | Should -Not -Match 'ActionMatches' -Because 'the email and its file name the condition, the change request and CSV carry it'
     }
 
     It 'restores each Azure assignment through one rollback step only, so a conditioned root role is never restored without its condition' {
@@ -2277,7 +2363,8 @@ Describe 'Change request variants' {
         ($rollback -join "`n") | Should -Match '\. For an assignment at the root scope recorded without a condition, run in Azure Cloud Shell' -Because 'the unconditioned root Reader still has its own step'
         $email = Get-Content (Join-Path $pack '05-change-requests/CR-19-disabled-account-roles.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-19 with a conditioned root role'
-        $email | Should -Match 'User Access Administrator on the root scope with a condition'
+        $uaa = Import-Csv (Join-Path $pack '05-change-requests/CR-19-disabled-account-roles.email.csv') | Where-Object Role -eq 'User Access Administrator'
+        @($uaa.Scope, $uaa.Detail) | Should -Be @('the root scope, above every subscription', 'with a condition that narrows what the role allows')
     }
 
     It 'names no removal step for a time-bound Azure assignment when every Azure role is at the root scope' {
@@ -2312,8 +2399,84 @@ Describe 'Change request variants' {
         @(Get-Section $text 'C) ROLLBACK PLAN')[0] | Should -Match 'az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope "/"$'
         $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
         Assert-ApprovalEmail $email 'CR-19 at the root scope'
-        $email | Should -Match "Root scope:\r?\n\r?\n- Lee Ashford \(lee\.ashford@contoso\.com\): User Access Administrator on the root scope\r?\n"
+        $email | Should -Match "Root scope:\r?\n\r?\n- 1 account holding 1 role\r?\n"
+        (Import-Csv (Join-Path $out 'CR-19-disabled-account-roles.email.csv')).Scope | Should -Be 'the root scope, above every subscription'
         (Get-Content (Join-Path $out '00-index.md') -Raw) | Should -Match 'or a role at the Azure root scope: Lee Ashford'
+    }
+
+    It 'leaves a role held through a dynamic or synced group unchanged, names it in the index and marks it in the attached file' {
+        $pack = Join-Path $TestDrive 'roles-fixed-groups'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'IA.15-RBAC' @(
+            (& $azureRole "/subscriptions/$s1" 'Owner' $roleIds.Owner $morgan)
+            (& $azureRole "/subscriptions/$s2" 'Reader' $roleIds.Reader $kim $dynGroup)
+            (& $azureRole "/subscriptions/$s1" 'Reader' $roleIds.Reader $lee $legacyGroup))
+        Set-PackResult $pack 'IA.15-ENTRA' @()
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the 1 Azure role assignment held by the disabled user account listed below, at the scope where each was made.'
+        @(Get-Section $text 'C) RESOURCES')[0] | Should -Be 'The account below is recorded as disabled at collection. Each role listed is assigned directly to it. Roles held through a group the change cannot alter are left out and named in the index. The CSV carries every assignment in full for the rollback.'
+        $text | Should -Not -Match 'Kim Osei|Lee Ashford|Group memberships removed|all-staff-dynamic|legacy-admins' -Because 'a membership a rule or Active Directory decides is not part of the change'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| 1 \| Change request and client email \|'
+        $index | Should -Match "- 2 disabled accounts hold roles through a group whose members CR-19 cannot change, so they stay as they are: Kim Osei \(kim\.osei@contoso\.com\) through group all-staff-dynamic \($($dynGroup.Id)\), a dynamic membership group whose members a rule decides, which holds Azure Reader on /subscriptions/$s2 / Lee Ashford \(lee\.ashford@contoso\.com\) through group legacy-admins \($($legacyGroup.Id)\), synced from on-premises Active Directory, where its members are managed, which holds Azure Reader on /subscriptions/$s1\. Review each with the group owner, who can change the membership rule, or remove the account from the group in Active Directory so that the next sync takes the role away\."
+        $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-19 with dynamic and synced groups'
+        $email | Should -Match 'I would like your approval to remove the Azure roles still assigned to 1 disabled account in your tenant\.'
+        $email | Should -Match '\r?\n\r?\n2 accounts hold a role through a group whose members come from a rule or from your on-premises directory, so those memberships cannot be changed in the group itself, and I would leave them as they are, marked in the attached file, for a separate review with you\.\r?\n'
+        $email | Should -Match "Subscription Example Production \($s1\):\r?\n\r?\n- 1 account holding 1 role\r?\n" -Because 'the email counts only the roles the change removes'
+        $email | Should -Not -Match 'Dev Test' -Because 'the only role in that subscription is left unchanged'
+        $rows = @(Import-Csv (Join-Path $out 'CR-19-disabled-account-roles.email.csv'))
+        @($rows | ForEach-Object { '{0}|{1}|{2}|{3}' -f $_.Account, $_.Role, $_.HeldThrough, $_.Action }) | Should -Be @(
+            'Kim Osei|Reader|Group all-staff-dynamic|None in this change, the members of group all-staff-dynamic come from a rule'
+            'Lee Ashford|Reader|Group legacy-admins|None in this change, group legacy-admins is synced from on-premises Active Directory'
+            'Morgan Reyes|Owner|Assigned to the account|Remove the role assignment') -Because 'the client sees every role, with what the change does about it'
+    }
+
+    It 'removes the account from its group alone when every role reaches it through a group' {
+        $pack = Join-Path $TestDrive 'roles-group-only'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'IA.15-RBAC' @((& $azureRole "/subscriptions/$s2/resourceGroups/rg-ops" 'Contributor' $roleIds.Contributor $kim $opsGroup))
+        Set-PackResult $pack 'IA.15-ENTRA' @()
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the disabled user account listed below from the 1 group through which it holds 1 role assignment.'
+        @(Get-Section $text 'C) RESOURCES')[0] | Should -Be 'The account below is recorded as disabled at collection. Each role listed reaches the account through the group it is removed from. The CSV carries every assignment and membership in full for the rollback.'
+        $text | Should -Not -Match 'Access control \(IAM\)|Roles and administrators' -Because 'no role is assigned to the account itself'
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $impl[2] | Should -Match '^3\. For each group membership listed for the account, go to Microsoft Entra ID > Groups > All groups'
+        $impl.Count | Should -Be 3
+        @(Get-Section $text 'B) TESTING PLAN')[1] | Should -Match '^2\. Select Groups and confirm that no group recorded for the account under group memberships is listed'
+        $rollback = @(Get-Section $text 'C) ROLLBACK PLAN')
+        $rollback[0] | Should -Match '^1\. For a group membership, go to Microsoft Entra ID > Groups > All groups, open the recorded group, select Members, select Add members'
+        $rollback[1] | Should -Be '2. change-requests.csv carries each assignment in full, with the role, role definition ID, scope, any condition and the account object ID, and each group membership with the group the account is removed from and the roles it holds. An account left unchanged during the change needs no rollback.'
+        $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-19 with a group membership only'
+        $email | Should -Match 'I would like your approval to remove the Azure roles that 1 disabled account still holds in your tenant through group membership, by removing it from the group that holds the role\. The account is disabled, so it cannot sign in, but it still holds every role listed in the attached file\.'
+        $email | Should -Match 'Where a group holds the role, I would remove the account from the group rather than take the role away from the group, so its other members keep their access, and where the account sits in a group nested inside the one that holds the role, it is the nested group it is removed from\.'
+        $email | Should -Match "Subscription Example, Dev Test \($s2\):\r?\n\r?\n- 1 account holding 1 role, 1 of them through a group\r?\n"
+        @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-19' | ForEach-Object Resource) | Should -Be @('kim.osei@contoso.com, member of group platform-operators')
+    }
+
+    It 'leaves the roles held through groups unchanged on a pack collected before the group membership columns, and asks for a recollection' {
+        $pack = Join-Path $TestDrive 'roles-old-pack'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'IA.15-RBAC' @((& $azureRole "/subscriptions/$s1" 'Owner' $roleIds.Owner $morgan), (& $azureRole "/subscriptions/$s2/resourceGroups/rg-ops" 'Contributor' $roleIds.Contributor $kim $opsOld))
+        Set-PackResult $pack 'IA.15-ENTRA' @((& $entraRole 'Helpdesk Administrator' $roleIds.Helpdesk 'Standing' $kim $opsOld -Scope '/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9'))
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| 1 \| Change request and client email \|'
+        $index | Should -Match "- 1 disabled account holds roles through group membership, which CR-19 leaves unchanged because the pack does not record the group each account sits in: group platform-operators \($($opsGroup.Id)\), which holds Azure Contributor on /subscriptions/$s2/resourceGroups/rg-ops and Microsoft Entra Helpdesk Administrator \(in administrative unit 4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9\), with the disabled member Kim Osei \(kim\.osei@contoso\.com\)\. Collect again with CyberSOC collector 1\.10\.0 or later, and CR-19 removes each account from its group\."
+        $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
+        $text | Should -Not -Match 'Kim Osei|Group memberships removed'
+        @(Get-Section $text 'C) RESOURCES')[0] | Should -Match 'Roles held through a group the change cannot alter are left out and named in the index\.'
+        $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-19 on a pack without the group membership columns'
+        $email | Should -Match '\r?\n\r?\nRoles that reach a disabled account through a group stay as they are for now, since my review did not record which group each account sits in, and I will come back to you about those separately\.\r?\n'
+        (Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.csv') -Raw) | Should -Not -Match 'Kim Osei'
     }
 
     It 'cleans every character the copy check rejects from pack values instead of stopping' {
