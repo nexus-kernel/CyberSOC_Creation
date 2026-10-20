@@ -47,7 +47,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 04 | Minimum inbound TLS 1.2 on App Service and Function apps. App Service refuses TLS 1.0 and 1.1 from May 31, 2027 | NB.5-DETAIL | Yes, approval request |
 | 05 | Minimum TLS 1.2 on Azure SQL logical servers. Azure SQL retired TLS 1.0 and 1.1 on August 31, 2025 | NB.6-DETAIL | Yes, approval request |
 | 06 | Purge protection on key vaults, with the soft delete retention period of each vault. Purge protection cannot be disabled once enabled, so the client approves it in writing first | DP.2-DETAIL | Yes, approval request |
-| 07 | Anonymous blob access disabled on the storage accounts where it carries no risk: DP.1-CONTAINERS listed every container (`ReadStatus` OK) and none is set to Blob or Container access. RESOURCES lists the container count of each account. Before Save, the steps check under Data storage > Containers that every container's anonymous access level still reads Private, and an account where one reads Blob or Container is left unchanged for the next pack. The rollback sets Allow Blob anonymous access back to Enabled, which applies within 30 seconds and leaves the containers as they are | DP.1-DETAIL, DP.1-CONTAINERS | Yes, approval request |
+| 07 | Anonymous blob access disabled on the storage accounts where it carries no risk: DP.1-CONTAINERS listed every container (`ReadStatus` OK) and none is set to Blob or Container access. RESOURCES lists the container count of each account. Before Save, the steps check under Data storage > Containers that every container's anonymous access level still reads Private, and an account where one reads Blob or Container is left unchanged for the next pack. The rollback sets Allow Blob anonymous access back to Enabled, which applies within 30 seconds and leaves the containers as they are. An account with a container set to Blob or Container waits for CR-18 | DP.1-DETAIL, DP.1-CONTAINERS | Yes, approval request |
 | 08 | HTTPS Only on App Service and Function apps | NB.4-DETAIL | Yes, approval request |
 | 09 | Encryption at host on the virtual machines that can take it. RESOURCES lists the VM ID of each machine, and before stopping a machine the steps check under Overview > JSON View that `properties.vmId` still reads that ID. A machine whose ID differs was deleted and created again under the same name after collection, so it is skipped and left for the next pack. Each machine changed is stopped for the change, and started again only if it was running when the change began, during the change and on rollback. The machines of a Flexible scale set that CR-15 changes are left to it | DP.4-ELIGIBILITY, DP.4-VMSS-ELIGIBILITY | Yes, approval request |
 | 10 | Diagnostic logging remediated on the resources not compliant with the initiative: one remediation task for each assignment and policy, each resource listed once | DR.6-INITIATIVE, DR.6-NONCOMPLIANT | Yes, approval request |
@@ -58,6 +58,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 15 | Encryption at host on the virtual machine scale sets whose model can take it. The model is set from Cloud Shell, then each existing instance is stopped (deallocated), brought to the model (Upgrade on a Uniform instance, Settings > Disks > Additional settings on a Flexible one) and started again only if it was running. A scale set with an Automatic or Rolling upgrade policy may apply the model on its own, all at once or in batches, so the change runs inside the maintenance window and the availability impact says so. RESOURCES lists the unique ID of each scale set and the VM ID of each Flexible instance to change. Before the model is set, the steps check under Overview > JSON View that `properties.uniqueId` still reads the listed ID, and a scale set whose ID differs is left out of every step. The Flexible steps work through the instances the scale set holds when the change is made and change only an instance whose `properties.vmId` is listed for that scale set, so an instance that joined after collection, or one created again under a listed name, is skipped and left for the next pack. The rollback covers any instance created after the model was changed. AKS node pools are routed to a planned project in the index | DP.4-VMSS-ELIGIBILITY, DP.4-ELIGIBILITY | Yes, approval request |
 | 16 | Internet-facing RDP, SSH and WinRM rules closed: each allow inbound rule open to any address, Internet, 0.0.0.0/0 or ::/0 on 22, 3389, 5985 or 5986 over TCP or any protocol, on a workload subnet or network interface. The replacement path the client agrees goes in first: just-in-time VM access (Defender for Cloud > Workload protections > Just-in-time VM access), which needs Defender for Servers Plan 2 on the subscription, or Azure Bastion (Connect > Bastion on the virtual network) for RDP and SSH. Bastion provides RDP and SSH sessions only (What is Azure Bastion), so a rule that opens WinRM (5985 or 5986) keeps WinRM only through just-in-time VM access or named source addresses, never Bastion, and is left unchanged where the client still needs WinRM and neither is agreed. The existing rules keep priority over the just-in-time deny rules until they are removed. Where Bastion is the path, every network security group of the machines gets an allow on 22 and 3389 from the AzureBastionSubnet address range ahead of any deny rule, and a Bastion session is opened before any rule changes. A rule whose source is Any, 0.0.0.0/0 or ::/0 also matches private addresses, so its management ports first get an allow from the private ranges the client confirms in reply to the email (the virtual network address spaces, peered networks and on-premises ranges), entered as CIDR blocks and never as a service tag, unless the client confirmed nothing connects from them. The service tag for the virtual network also holds the prefixes of user-defined routes, so with a forced-tunneling `0.0.0.0/0` route it would keep the ports open to the internet. A broad rule is left unchanged until the client confirms one or the other. Then each rule is deleted, or narrowed to the source addresses the client named, and a rule that also allows other ports loses only the management ports: when addresses were named, its management ports move to a new rule from those addresses, so its other ports keep the source they have. Last, the effective security rules of each network interface the rules applied to (Virtual machines > the machine > Networking > the network interface > Effective security rules, downloaded as a file, since the page shows only the first 50 rules) show the source prefixes behind every allow on those ports. A port is still open where an allow lists `0.0.0.0/0`, `::/0` or other public prefixes nobody named (such as `0.0.0.0/1` and `128.0.0.0/1`), no deny from Any, `0.0.0.0/0`, `::/0` or Internet on that port comes first in its group, and the other group on the path (subnet or network interface) also lets the connection through. The default virtual network rule behind a forced-tunneling route is the usual case. A TCP deny on the open management ports from the Internet service tag then goes in at a custom priority (100 to 4096) after the allows of its group for named addresses or sources the client already allows on purpose and, where the open allow is a custom rule in the same group, ahead of it. Default rules (65000 and above) always come after it. The ports of a rule the change left unchanged get no deny on the interfaces behind it and are noted with that rule, while the other open management ports there are still denied, and a rule for another protocol left for review keeps working. The network interfaces in a subnet come from the Connected devices page of its virtual network, a machine just-in-time VM access covers is left out since its deny already stops the internet, and a stopped machine, whose effective rules cannot be read, gets the deny without the check. The testing plan repeats that check. RESOURCES lists every property of each rule, and the path that fits each subscription from P0.3. The rollback recreates the rule from those properties, also in the CSV, ahead of any just-in-time deny rule, and deletes the rules the change added, the deny from the Internet service tag included | NB.2-DETAIL, P0.3 | Yes, approval request |
 | 17 | Plain FTP turned off on App Service and Function apps: the FTP state set to FTPS only, or to Disabled only where the client confirms no tool, process or person uses FTP or FTPS on the app, to upload files or to download files or logs. Only an app whose state reads `AllAllowed` is changed. Before changing an app, the steps read its FTP state under Settings > Configuration > General settings, and an app that no longer shows the recorded All allowed has changed since collection, so it is skipped and left for the next pack. FTPS only does not support TLS 1.0 or 1.1, so an app whose minimum inbound TLS version reads 1.0 or 1.1 is left unchanged until CR-04 sets 1.2, unless the client chooses Disabled. RESOURCES and the CSV show that minimum beside the FTP state. The rollback sets each app back to All allowed, the recorded state | NB.5-FTPS-DETAIL | Yes, approval request |
+| 18 | Blob containers set to private access: each container set to Blob or Container in a storage account that allows anonymous access, so anyone can read it today, set to Private under Data storage > Containers > Change access level, grouped by subscription and account. RESOURCES has one line per account with its containers counted and named, each with its recorded level, and the CSV one row per container. Before the change, the steps read Allow Blob anonymous access under Settings > Configuration and skip an account that now shows Disabled, since its containers can no longer be read anonymously and the portal cannot change their level, then read each listed container and skip one that no longer shows its recorded level or that the client asked to keep out. A container opened after collection is noted for the next pack, never changed. Setting a container to Private stops anonymous reads straight away, which the purpose and the email say. The static website container `$web` is left out, since its site is served from the web endpoint whatever its level. RESOURCES explains the order with CR-07: CR-07 takes only an account with no container set to Blob or Container, so a later pack picks each account up for CR-07 once its containers read Private. The rollback sets each container back to its recorded level, which Microsoft Learn allows only while the account allows anonymous access, so after CR-07 it needs that setting enabled again, which reopens every public container in the account | DP.1-CONTAINERS-DETAIL, DP.1-CONTAINERS, DP.1-DETAIL | Yes, approval request |
 
 Resources a change leaves out are named in the index notes:
 
@@ -72,15 +73,34 @@ Resources a change leaves out are named in the index notes:
   follow-up that is not part of the change.
 - CR-07 leaves out FileStorage accounts, which hold no blob service, and every account it cannot show is safe to change:
   - an account with a container set to Blob or Container access, named with its public containers. Turning the
-    setting off would stop those anonymous reads, so each container's owner confirms first that it serves no public
-    content and the container is set to private. A later pack picks the account up for CR-07 once every container in
-    it is private.
+    setting off would stop those anonymous reads, so CR-18 asks each container's owner to confirm first that it serves
+    no public content, and sets the container to private. A later pack picks the account up for CR-07 once every
+    container in it is private. CR-18 never changes the static website container (`$web`), so the note says so when one
+    of these accounts also has a public `$web`, and an account whose only public container is `$web` gets a note of its
+    own: `$web` is set to Private on its own, as the CR-18 notes say, before the account can reach CR-07.
   - an account whose containers were not listed, because DP.1-CONTAINERS has no row for it or was not collected,
     failed or is unreadable. Recollect the pack.
   - an account whose containers DP.1-CONTAINERS could not list when it reads PARTIAL (a `ReadStatus` other than OK).
     Only an account read in full qualifies.
 
   When no account qualifies, CR-07 reads "No gaps found" and the notes still name the accounts left out.
+- CR-18 changes only the containers anyone can read today. Its notes name, each account with its containers counted:
+  - the static website containers (`$web`) set to Blob or Container. A static website is served from the web endpoint
+    of its account whatever the level of `$web` (Static website hosting in Azure Storage), so setting it to Private
+    would not close the site, only the copy of its files on the blob endpoint. An account that allows anonymous
+    access stays out of CR-07 until `$web` is private too.
+  - the containers set to Blob or Container in an account that blocks anonymous access. The account setting keeps them
+    closed, and the portal cannot change a container's level while the account blocks anonymous access, so they are
+    left as they are, to be set to Private by any change that relaxes the account setting.
+  - the accounts DP.1-CONTAINERS could not list (a `ReadStatus` other than OK), whose containers are not in the
+    detail. Recollect the pack.
+  - the FileStorage accounts in DP.1-DETAIL, which hold no blob service.
+
+  When CR-18 is written, a note also says how to see what still reads each account without signing in before it is
+  sent: the Transactions metric of the Blob namespace filtered on Authentication Anonymous, and `StorageBlobLogs`
+  with `AuthenticationType` Anonymous where the account sends its logs to the workspace. When only `$web` or blocked
+  containers remain, CR-18 reads "Only containers the account setting already blocks, or static website containers,
+  remain, see the notes".
 - CR-01 assigns the initiative where no ATMO-MXDR policy state was found. An assignment made shortly before
   collection shows no state until its first compliance scan, so the index asks to confirm under Policy > Assignments
   first. When other subscriptions already have the initiative, CR-01 assigns per subscription even with
@@ -167,7 +187,7 @@ The sections follow the template headings, in order, so each one pastes into the
 - The notification list is left empty to fill in.
 - Every change request writes a client email (`CR-NN-<change>.email.txt`) that asks for the client's approval,
   built by the one shared builder, `New-ApprovalEmail`. The generator stops before writing anything when a change
-  request has no approval request, and the Pester suite fails when any change request from CR-01 to CR-17 is written
+  request has no approval request, and the Pester suite fails when any change request from CR-01 to CR-18 is written
   without one, or with an email that leaves the shared structure, carries a title, or opens two paragraphs the same
   way. A new change request builds its email the same way.
 
@@ -229,6 +249,15 @@ Each change keeps its own content inside that structure:
   lists each app with its FTP state, and before asking for approval it asks whether any deployment tool or person
   still connects over FTP or FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled
   suits each app. Disabled is set only where nothing uses FTP or FTPS at all.
+- CR-18 lists the containers by subscription and account, one line per account with its containers counted and
+  each container's level, and says that anyone can read every one of them today without signing in. It says that
+  setting them to private stops anonymous reads straight away, so a website, application, content delivery network or
+  link that reads them without signing in gets an error, while sign-in, shared access signature and account key access
+  keep working and a static website is not affected. Before asking for approval it asks the owner of each container
+  to confirm that it serves no public content, or to move its files to shared access signatures, on their own or
+  through a content delivery network such as Azure Front Door that adds the signature, and says a container that still
+  serves public content stays out until then. It offers to set each container back while its account still allows
+  anonymous access.
 - CR-05, CR-11, CR-12 and CR-14 say that the change cannot be reversed, because the service takes no lower minimum,
   and why no reversal should be needed.
 
@@ -251,7 +280,13 @@ Configuration, General settings, Platform settings, to FTPS only or to Disabled,
 does not support TLS 1.0 or 1.1, and the FTP and FTPS endpoint is active on an app without any configuration (Deploy
 your app to Azure App Service using FTP/S), the API takes `AllAllowed`, `FtpsOnly` and `Disabled` and documents no
 default (Microsoft.Web sites/config), and FTP basic authentication is a separate setting (Disable basic authentication
-in Azure App Service deployments).
+in Azure App Service deployments). For CR-18: a container's level is set under Data storage, Containers, Change
+access level, a container can be opened to Blob or Container only while the account allows anonymous access, and the
+portal setting is disabled while it does not, and the account setting overrides the container level (Configure
+anonymous read access for containers and blobs, Remediate anonymous read access to blob data), the `$web` container
+level does not affect the static website endpoint (Static website hosting in Azure Storage), and Azure Front Door in
+front of a private container authenticates with a shared access signature (Use Azure Front Door with Azure Storage
+Blobs).
 
 Every change request, email and the index keep to the copy rules: no semicolons, arrows (Unicode arrows and `->`,
 `<-`, `=>`), emoji or angle brackets, and the greater-than sign only in navigation steps such as Settings >
@@ -266,14 +301,14 @@ rejects, and a file that still breaks a rule stops the run before any file is wr
 | `CR-NN-<change>.txt` | One change request |
 | `CR-NN-<change>.email.txt` | The client email for that change, subject line first |
 | `00-index.md` | Every change with its status and files, and notes on the resources left out |
-| `change-requests.csv` | One row per resource: CR, Change, Subscription, ResourceGroup, Resource, CurrentSetting, ResourceId |
+| `change-requests.csv` | One row per resource, and one per container for CR-18 (`account/container`): CR, Change, Subscription, ResourceGroup, Resource, CurrentSetting, ResourceId |
 
 Each change reports one of these statuses in the index: change request and client email, no gaps found, not
 collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
 later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15, 1.4.0 or later for CR-09 and CR-15 when they
-have a machine or scale set to change, 1.6.0 or later for CR-16, and 1.7.0 or later for CR-17). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
+have a machine or scale set to change, 1.6.0 or later for CR-16, 1.7.0 or later for CR-17, and 1.8.0 or later for CR-18). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
 read as no gaps. A change request that also reads a result beyond its sources (DR.6-COVERAGE and P0.5 for CR-01,
-DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack, P0.3 for
+DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07 and CR-18, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack, P0.3 for
 CR-16) reads "partial
 collection scope" when that result
 is PARTIAL, and gets a note in the index when it was not collected or is unreadable.
@@ -287,7 +322,8 @@ DP.4-VMSS-ELIGIBILITY, which lists the scale sets without encryption at host for
 DP.4-ELIGIBILITY were added in 1.3.0, and the VmId column of DP.4-ELIGIBILITY and the UniqueId column of
 DP.4-VMSS-ELIGIBILITY in 1.4.0. NB.2-DETAIL, which lists the internet-exposed management port rules for CR-16
 with every property and attachment, was added in 1.6.0, and NB.5-FTPS-DETAIL, which lists the App Service apps
-that still allow plain FTP for CR-17, in 1.7.0. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
+that still allow plain FTP for CR-17, in 1.7.0. DP.1-CONTAINERS-DETAIL, which lists each container set to Blob or
+Container for CR-18, was added in 1.8.0 and is written by the DP.1-CONTAINERS engine. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
 
 ## Validation
 

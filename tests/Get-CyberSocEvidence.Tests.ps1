@@ -561,6 +561,74 @@ Describe 'Network devices and blob containers (1.11.0)' {
         $r.ReadStatus | Should -Match '403'
         $r.Containers | Should -Be 0
     }
+    It 'lists each container set to Blob or Container with what CR-18 needs, and none for an account it cannot list in full (1.8.0)' {
+        $item = Get-EbrQueryCatalog | Where-Object Id -eq 'DP.1-CONTAINERS'
+        $item.Notes | Should -Match 'Since CyberSOC 1\.8\.0 it also writes DP\.1-CONTAINERS-DETAIL, one row per container set to Blob or Container'
+        $accountId = '/subscriptions/s1/resourceGroups/rg-web/providers/Microsoft.Storage/storageAccounts/stweb'
+        Mock Invoke-EbrRest {
+            if ($Uri -match 'page2') { return [pscustomobject]@{ value = @([pscustomobject]@{ id = "$accountId/blobServices/default/containers/downloads"; name = 'downloads'; properties = [pscustomobject]@{ publicAccess = 'Container' } }) } }
+            [pscustomobject]@{ value = @(
+                    [pscustomobject]@{ id = "$accountId/blobServices/default/containers/private"; name = 'private'; properties = [pscustomobject]@{ publicAccess = 'None' } }
+                    [pscustomobject]@{ name = 'images'; properties = [pscustomobject]@{ publicAccess = 'Blob' } }
+                    [pscustomobject]@{ id = "$accountId/blobServices/default/containers/`$web"; name = '$web'; properties = [pscustomobject]@{ publicAccess = 'Blob' } })
+                nextLink = 'https://management.azure.com/x?page2' }
+        }
+        $a = [pscustomobject]@{ ResourceId = $accountId; Account = 'stweb'; resourceGroup = 'rg-web'; subscriptionId = 's1'; AllowBlobPublicAccess = 'true' }
+        $details = [System.Collections.Generic.List[object]]::new()
+        $r = Get-EbrBlobContainerRow -Account $a -Tenant 't' -Details $details
+        $r.PublicContainers | Should -Be 3
+        @($details | ForEach-Object { '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f $_.subscriptionId, $_.resourceGroup, $_.Account, $_.Container, $_.AccessLevel, $_.AccountAnonymousAccess, $_.ReadableToday }) | Should -Be @(
+            's1|rg-web|stweb|images|Blob|Allowed|True', 's1|rg-web|stweb|$web|Blob|Allowed|True', 's1|rg-web|stweb|downloads|Container|Allowed|True')
+        $details[0].ResourceId | Should -Be "$accountId/blobServices/default/containers/images" -Because 'a container without an ID is named by its path under the account'
+        $details[2].ResourceId | Should -Be "$accountId/blobServices/default/containers/downloads"
+        @($details | ForEach-Object AccountId | Sort-Object -Unique) | Should -Be @($accountId)
+        $a.AllowBlobPublicAccess = 'false'
+        $details.Clear()
+        $null = Get-EbrBlobContainerRow -Account $a -Tenant 't' -Details $details
+        @($details | ForEach-Object { '{0}|{1}' -f $_.AccountAnonymousAccess, $_.ReadableToday } | Sort-Object -Unique) | Should -Be @('Disabled|False') -Because 'the account setting blocks every anonymous read'
+        Mock Invoke-EbrRest { if ($Uri -match 'page2') { throw 'HTTP 429: Too Many Requests' }; [pscustomobject]@{ value = @([pscustomobject]@{ name = 'images'; properties = [pscustomobject]@{ publicAccess = 'Blob' } }); nextLink = 'https://management.azure.com/x?page2' } }
+        $details.Clear()
+        $r = Get-EbrBlobContainerRow -Account $a -Tenant 't' -Details $details
+        $r.ReadStatus | Should -Match '429'
+        $details.Count | Should -Be 0 -Because 'an account whose second page failed was not listed in full, so CR-18 names it in the index instead'
+    }
+    It 'writes DP.1-CONTAINERS-DETAIL with every outcome of DP.1-CONTAINERS, so a failed read never asks for a newer collector' {
+        New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force | Out-Null
+        $ctx = [pscustomobject]@{ WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; ManagedRgPattern = 'aznativesol0'; OutDir = $TestDrive; Subscriptions = @('s1'); ArmTenant = 't'; AccessPath = ''; Pending = [System.Collections.Generic.List[object]]::new() }
+        $item = Get-EbrQueryCatalog | Where-Object Id -eq 'DP.1-CONTAINERS'
+        $open = [pscustomobject]@{ ResourceId = '/subscriptions/s1/resourceGroups/rg-web/providers/Microsoft.Storage/storageAccounts/stweb'; Account = 'stweb'; resourceGroup = 'rg-web'; subscriptionId = 's1'; AllowBlobPublicAccess = '' }
+        $denied = [pscustomobject]@{ ResourceId = '/subscriptions/s1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stdenied'; Account = 'stdenied'; resourceGroup = 'rg-data'; subscriptionId = 's1'; AllowBlobPublicAccess = 'true' }
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @($open); Detail = '' } }
+        Mock Invoke-EbrRest { if ($Uri -match 'stdenied') { throw 'HTTP 403: Forbidden' }; [pscustomobject]@{ value = @([pscustomobject]@{ name = 'images'; properties = [pscustomobject]@{ publicAccess = 'Blob' } }, [pscustomobject]@{ name = 'logs'; properties = [pscustomobject]@{ publicAccess = 'None' } }) } }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $res.Status | Should -Be 'OK'
+        $ctx.Pending.Count | Should -Be 1
+        $d = $ctx.Pending[0]
+        @($d.ResultId, $d.Status) | Should -Be @('DP.1-CONTAINERS-DETAIL', 'OK')
+        @($d.Rows).Count | Should -Be 1
+        @($d.Rows)[0].Container | Should -Be 'images'
+        @($d.Rows)[0].AccountAnonymousAccess | Should -Be 'Not set, allowed'
+        $d.Detail | Should -Be '1 containers set to Blob or Container access in 1 of 1 storage accounts listed, 1 readable anonymously today.'
+        $ctx.Pending.Clear()
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @($open, $denied); Detail = '' } }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        @($res.Status, $ctx.Pending[0].Status) | Should -Be @('PARTIAL', 'PARTIAL') -Because 'a container in an account not listed may be missing'
+        $ctx.Pending[0].Detail | Should -Match 'Accounts not listed add no rows, see DP\.1-CONTAINERS\.$'
+        $ctx.Pending.Clear()
+        Mock Invoke-EbrRest { [pscustomobject]@{ value = @([pscustomobject]@{ name = 'logs'; properties = [pscustomobject]@{ publicAccess = 'None' } }) } }
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @($open); Detail = '' } }
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $ctx.Pending[0].Status | Should -Be 'EMPTY' -Because 'every container is private'
+        $ctx.Pending.Clear()
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @(); Detail = '' } }
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $ctx.Pending[0].Status | Should -Be 'EMPTY'
+        $ctx.Pending.Clear()
+        Mock Invoke-EbrArgQuery { throw 'Resource Graph throttled' }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'FAILED'
+        $ctx.Pending[0].Status | Should -Be 'FAILED'
+        $ctx.Pending[0].Detail | Should -Match 'throttled'
+    }
     It 'reads encryption at host support per size from the Compute resource SKUs API, one region at a time' {
         Mock Invoke-EbrRest {
             if ($Uri -match 'page2') { return [pscustomobject]@{ value = @([pscustomobject]@{ resourceType = 'virtualMachines'; name = 'Standard_A1'; capabilities = @([pscustomobject]@{ name = 'EncryptionAtHostSupported'; value = 'False' }) }) } }
@@ -2180,7 +2248,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.7.0'
+        $params2.ScriptVersion | Should -Be '1.8.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

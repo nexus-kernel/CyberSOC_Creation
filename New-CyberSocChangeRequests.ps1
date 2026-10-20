@@ -9,7 +9,8 @@
     secure transfer and minimum TLS 1.2 on storage accounts, minimum TLS 1.2 on App Service, Azure SQL,
     Azure Cache for Redis, Service Bus, Event Hubs and Azure Cosmos DB, Key Vault purge protection,
     encryption at host on virtual machines and scale sets, closing internet-facing RDP, SSH and WinRM
-    rules on network security groups, and turning off plain FTP on App Service apps. Every change request
+    rules on network security groups, turning off plain FTP on App Service apps, and setting the blob containers
+    that anyone can read today to private access. Every change request
     also gets a client email, drafted and ready to send, that asks for the client's approval. Every email has the same parts in the
     same order: what is to change, why it is recommended, what it means for the client, the resources by
     subscription, how it can be reversed, and the request, which asks for approval of the proposed date, or
@@ -54,8 +55,8 @@
 .NOTES
     The per-resource results (P0.7, NB.4-DETAIL, NB.5-DETAIL, NB.6-DETAIL, DP.1-DETAIL, DP.2-DETAIL,
     DP.4-ELIGIBILITY, DR.6-COVERAGE and DR.6-NONCOMPLIANT) were added in CyberSOC collector 1.1.0,
-    NB.6-PAAS-DETAIL in 1.2.0, DP.4-VMSS-ELIGIBILITY in 1.3.0, NB.2-DETAIL in 1.6.0 and NB.5-FTPS-DETAIL
-    in 1.7.0. Changes that read them say "needs recollection" on packs collected with an earlier version. CR-09 and CR-15 also need the machine and scale
+    NB.6-PAAS-DETAIL in 1.2.0, DP.4-VMSS-ELIGIBILITY in 1.3.0, NB.2-DETAIL in 1.6.0, NB.5-FTPS-DETAIL
+    in 1.7.0 and DP.1-CONTAINERS-DETAIL in 1.8.0. Changes that read them say "needs recollection" on packs collected with an earlier version. CR-09 and CR-15 also need the machine and scale
     set IDs added in 1.4.0, and say "needs recollection" on an earlier pack that lists anything to change.
 #>
 #Requires -Version 5.1
@@ -89,6 +90,7 @@ $detailVersions['NB.6-PAAS-DETAIL'] = '1.2.0'
 $detailVersions['DP.4-VMSS-ELIGIBILITY'] = '1.3.0'
 $detailVersions['NB.2-DETAIL'] = '1.6.0'
 $detailVersions['NB.5-FTPS-DETAIL'] = '1.7.0'
+$detailVersions['DP.1-CONTAINERS-DETAIL'] = '1.8.0'
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -876,6 +878,9 @@ $catalog = @(
             $containers = @{}
             if ($containersRead) { foreach ($c in @(Get-Rows 'DP.1-CONTAINERS')) { $containers[(Get-Text $c.ResourceId).ToLowerInvariant()] = $c } }
             $public = [System.Collections.Generic.List[string]]::new()
+            # CR-18 leaves the static website container ($web) out, so an account whose only public container is
+            # $web gets a note of its own pointing to the separate change the CR-18 notes describe.
+            $webOnly = [System.Collections.Generic.List[string]]::new()
             $unlisted = [System.Collections.Generic.List[string]]::new()
             $failed = [System.Collections.Generic.List[string]]::new()
             # A FileStorage account holds no blob service, so the setting does not apply to it.
@@ -885,13 +890,21 @@ $catalog = @(
                     # A row without a whole number of public containers cannot show the account is safe to change.
                     if ($null -eq $c -or (Get-Text $c.PublicContainers) -notmatch '^\d+$') { $unlisted.Add($label); continue }
                     if ((Get-Text $c.ReadStatus) -ne 'OK') { $failed.Add($label); continue }
-                    if ((Get-Number $c.PublicContainers) -gt 0 -or (Get-Text $c.PublicContainerNames)) { $public.Add(('{0}: {1}' -f $label, (ConvertTo-CopyText $c.PublicContainerNames))); continue }
+                    if ((Get-Number $c.PublicContainers) -gt 0 -or (Get-Text $c.PublicContainerNames)) {
+                        $names = ConvertTo-CopyText $c.PublicContainerNames
+                        if ((Get-Number $c.PublicContainers) -le 1 -and $names -match '^\$web \((Blob|Container)\)$') { $webOnly.Add(('{0}: {1}' -f $label, $names)) }
+                        else { $public.Add(('{0}: {1}' -f $label, $names)) }
+                        continue
+                    }
                     $count = Get-Number $c.Containers
                     New-Resource $a.Name $a.resourceGroup $a.subscriptionId $(if ($count -eq 1) { '1 container, private' } elseif ($count) { "$count containers, all private" } else { 'no containers' }) $a.ResourceId
                 })
             $notes = [System.Collections.Generic.List[string]]::new()
             if ($public.Count) {
-                $notes.Add(('{0} left out of CR-07 because {1} a container set to Blob or Container access, which anyone can read today without signing in: {2}. Turning the account setting off would stop those anonymous reads, so the owner of each container confirms first that it serves no public content and the container is set to private. A later pack picks each account up for CR-07 once every container in it is private.' -f (Get-Count $public.Count 'storage account' 'storage accounts'), (Get-Pick $public.Count 'it has' 'each has'), ($public -join ' / ')))
+                $notes.Add(('{0} left out of CR-07 because {1} a container set to Blob or Container access, which anyone can read today without signing in: {2}. Turning the account setting off would stop those anonymous reads, so CR-18 asks the owner of each container to confirm first that it serves no public content, and sets the container to private.{3} A later pack picks each account up for CR-07 once every container in it is private.' -f (Get-Count $public.Count 'storage account' 'storage accounts'), (Get-Pick $public.Count 'it has' 'each has'), ($public -join ' / '), $(if (@($public | Where-Object { $_ -match '\$web \(' }).Count) { ' CR-18 leaves out the static website container ($web), which is set to Private on its own, as the CR-18 notes say.' } else { '' })))
+            }
+            if ($webOnly.Count) {
+                $notes.Add(('{0} left out of CR-07 because {1} only public container is the static website container ($web), set to Blob or Container access: {2}. CR-18 does not change $web, since the site is served from the web endpoint whatever its level. Set $web to Private on its own, as the CR-18 notes say, once the owner confirms nothing links to the blob endpoint addresses of the site, and a later pack picks {3} up for CR-07.' -f (Get-Count $webOnly.Count 'storage account' 'storage accounts'), (Get-Pick $webOnly.Count 'its' 'their'), ($webOnly -join ' / '), (Get-Pick $webOnly.Count 'the account' 'each account')))
             }
             if ($unlisted.Count) {
                 $why = if ($containersRead) { 'DP.1-CONTAINERS did not list {0} containers' -f (Get-Pick $unlisted.Count 'its' 'their') }
@@ -1717,6 +1730,110 @@ $catalog = @(
                         , @('Secure your Azure App Service deployment, service-specific security', 'https://learn.microsoft.com/azure/app-service/overview-security#service-specific-security')
                         , @('Disable basic authentication in Azure App Service deployments', 'https://learn.microsoft.com/azure/app-service/configure-basic-auth-disable'))
                     Csv = $resources
+                    Email = $email
+                } } } }
+    @{ Number = 18; Key = 'storage-private-containers'; Change = 'Blob containers set to private access'; Sources = @('DP.1-CONTAINERS-DETAIL')
+       Build = {
+            # DP.1-CONTAINERS-DETAIL lists every container set to Blob or Container in the accounts DP.1-CONTAINERS
+            # listed in full. CR-18 changes the ones anyone can read today, in accounts that allow anonymous access.
+            # The index names the rest: Microsoft Learn says the portal cannot change a container's level while its
+            # account blocks anonymous access, and a static website ($web) is served from its own endpoint whatever
+            # the level of $web. It also names the accounts whose containers were not listed and the FileStorage
+            # accounts, which hold no blob service.
+            $label = { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Account), (ConvertTo-CopyText $_.resourceGroup) }
+            $rows = @(Get-Rows 'DP.1-CONTAINERS-DETAIL' | Where-Object { (Get-Text $_.AccessLevel) -in 'Blob', 'Container' })
+            $web = @($rows | Where-Object { (Get-Text $_.Container) -eq '$web' })
+            $blocked = @($rows | Where-Object { (Get-Text $_.Container) -ne '$web' -and -not (Test-True $_.ReadableToday) })
+            $open = @($rows | Where-Object { (Get-Text $_.Container) -ne '$web' -and (Test-True $_.ReadableToday) })
+            # One entry per account, its containers by name with the level recorded for each, so a large estate
+            # reads as a line per account rather than a line per container.
+            $byAccount = { param($list)
+                foreach ($g in @($list | Group-Object { (Get-Text $_.AccountId).ToLowerInvariant() })) {
+                    $first = $g.Group[0]
+                    $containers = @($g.Group | Sort-Object { Get-Text $_.Container })
+                    $names = @($containers | ForEach-Object { '{0} ({1})' -f (ConvertTo-CopyText $_.Container), (Get-Text $_.AccessLevel) })
+                    [pscustomobject]@{
+                        Resource = New-Resource $first.Account $first.resourceGroup $first.subscriptionId ('{0}: {1}' -f (Get-Count $names.Count 'container' 'containers'), ($names -join ', ')) $first.AccountId
+                        Label = $first | ForEach-Object $label; Containers = $containers
+                    }
+                } }
+            $notes = [System.Collections.Generic.List[string]]::new()
+            if ($web.Count) {
+                $webLines = @($web | ForEach-Object { '{0}, {1} access' -f ($_ | ForEach-Object $label), (Get-Text $_.AccessLevel) } | Sort-Object)
+                $notes.Add(('{0} set to Blob or Container access left out of CR-18: {1}. A static website is served from the web endpoint of its account whatever the access level of $web, so setting it to Private would not close the site and would only stop anonymous reads of the same files through the blob endpoint. Set it to Private on its own once the owner confirms nothing links to the blob endpoint addresses of the site. An account that allows anonymous access stays out of CR-07 until then.' -f (Get-Count $web.Count 'static website container ($web)' 'static website containers ($web)'), ($webLines -join ', ')))
+            }
+            if ($blocked.Count) {
+                $closed = @(& $byAccount $blocked | Sort-Object Label)
+                $notes.Add(('{0} in {1} anonymous access left out of CR-18: {2}. The account setting keeps {3} closed, so no one can read {3} anonymously today, and Microsoft Learn notes that the portal cannot change the access level of a container while its account blocks anonymous access. {4} open again as soon as the account allowed anonymous access, so any change that relaxes the account setting also sets {3} to Private.' -f (Get-Count $blocked.Count 'container set to Blob or Container access' 'containers set to Blob or Container access'), $(if ($closed.Count -eq 1) { 'a storage account that blocks' } else { '{0} storage accounts that block' -f $closed.Count }), (@($closed | ForEach-Object { '{0}, {1}' -f $_.Label, $_.Resource.Setting }) -join ' / '), (Get-Pick $blocked.Count 'it' 'them'), (Get-Pick $blocked.Count 'It would' 'They would')))
+            }
+            if (Test-ResultRead 'DP.1-CONTAINERS') {
+                $unread = @(Get-Rows 'DP.1-CONTAINERS' | Where-Object { (Get-Text $_.ReadStatus) -ne 'OK' } | ForEach-Object $label | Sort-Object)
+                if ($unread.Count) {
+                    $notes.Add(('{0} left out of CR-18 because DP.1-CONTAINERS could not list {1} containers: {2}. A container set to Blob or Container there is not in CR-18, so recollect the pack.' -f (Get-Count $unread.Count 'storage account' 'storage accounts'), (Get-Pick $unread.Count 'its' 'their'), ($unread -join ', ')))
+                }
+            }
+            if (Test-ResultRead 'DP.1-DETAIL') {
+                $files = @(Get-Rows 'DP.1-DETAIL' | Where-Object { (Get-Text $_.Kind) -ieq 'FileStorage' } | ForEach-Object { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) } | Sort-Object)
+                if ($files.Count) {
+                    $notes.Add(('{0} left out of CR-18 because {1} no blob service, so {2} no blob containers to change: {3}.' -f (Get-Count $files.Count 'FileStorage account' 'FileStorage accounts'), (Get-Pick $files.Count 'it holds' 'they hold'), (Get-Pick $files.Count 'it has' 'they have'), ($files -join ', ')))
+                }
+            }
+            $groups = @(& $byAccount $open | Sort-Object { Format-Subscription $_.Resource.SubscriptionId }, { $_.Resource.ResourceGroup }, { $_.Resource.Name })
+            $resources = @($groups | ForEach-Object Resource)
+            $n = $open.Count
+            $m = $resources.Count
+            if (-not $n) { return @{ State = $(if ($rows.Count) { 'Only containers the account setting already blocks, or static website containers, remain, see the notes' } else { 'No gaps found' }); Notes = $notes.ToArray() } }
+            $notes.Add('Before CR-18 is sent, the metrics of each account show whether anything still reads it without signing in. In the Azure portal, open Monitoring > Metrics on the account, choose the Blob metric namespace and the Transactions metric, and add a filter of Authentication equal to Anonymous. Where the account sends its resource logs to the workspace, StorageBlobLogs with AuthenticationType Anonymous names each container read. A content delivery network in front of a private container needs a shared access signature, which Azure Front Door can add.')
+            # The CSV keeps one row per container, with the level recorded for the rollback.
+            $csv = @(foreach ($g in $groups) {
+                    foreach ($c in $g.Containers) {
+                        New-Resource ('{0}/{1}' -f $c.Account, $c.Container) $c.resourceGroup $c.subscriptionId ('anonymous access level {0}, readable anonymously today' -f (Get-Text $c.AccessLevel)) $c.ResourceId
+                    } })
+            # A level or the account setting can change between collection and the change, so each account and
+            # container is read again first, and anything that no longer matches the record is left unchanged.
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add((Get-OpenStep $m 'Storage accounts' 'storage account'))
+            $impl.Add('Go to Settings > Configuration and read Allow Blob anonymous access. If it shows Disabled, the account has blocked anonymous access since collection, so its containers can no longer be read anonymously and the portal cannot change their access level. Leave the account unchanged, note it in the change record for the next pack and skip the remaining steps for it.')
+            $impl.Add('Go to Data storage > Containers and read the Anonymous access level of each container listed for the account in the RESOURCES section. A container that no longer shows its recorded level has changed since collection, so leave it unchanged and note it in the change record. Leave out too any container the client asked to keep out of the change.')
+            $impl.Add('Select the remaining listed containers, select Change access level, set Anonymous access level to Private (no anonymous access) and select OK.')
+            $impl.Add('If another container in the account, other than $web, shows Blob or Container, it was opened after collection and is not part of this change, so note it in the change record for the next pack.')
+            Add-RepeatStep $impl $m 1 'storage account'
+            $these = Get-Pick $n 'the container' 'these containers'
+            $email = New-ApprovalEmail -Subject 'private access for Azure Blob Storage containers' `
+                -Change @(('I would like to set {0} to private access, so {1} can no longer be read without signing in.' -f (Get-Yours $n 'Azure Blob Storage containers'), (Get-Pick $n 'it' 'they')), ('{0} set to public access today, and {1} it, so anyone who has the address of a file there can read it.' -f (Get-Pick $n 'It is' 'Each of them is'), (Get-Pick $m 'its storage account allows' 'their storage accounts allow'))) `
+                -Why ('I recommend this change because anyone can read {0} today without signing in, so a file placed there by mistake, or one meant only for a partner, is open to everyone. A private container also stays closed if the account setting is changed later.' -f $these) `
+                -Effect @(
+                    ('Setting {0} to private stops anonymous reads straight away. A website, an application, a content delivery network or a link that reads files from {1} without signing in, such as images, downloads or documents shared by link, will get an error once the change is applied.' -f $these, (Get-Pick $n 'it' 'them'))
+                    'Applications and people that sign in, or that use a shared access signature or an account key, keep working as they do now.'
+                    'A static website hosted in a storage account is served from its own web address, which the container access level does not control, so the change leaves it as it is.'
+                    (Get-Pick $n 'Just before the change, I will check the container again and leave it unchanged if its access level has changed since my review.' 'Just before the change, I will check each container again and skip any whose access level has changed since my review.')) `
+                -Listed $(if ($n -eq 1) { 'The container is listed below under its storage account, with its access level today. Anyone can read it without signing in:' } else { 'The {0} containers are listed below by subscription and storage account, with the number in each account and the access level of each container today. Anyone can read every one of them without signing in:' -f $n }) `
+                -Resources (Get-EmailResourceList $resources { '{0} (resource group {1}), {2}' -f $_.Name, $_.ResourceGroup, $_.Setting }) `
+                -Reversal ('{0} can be set back to the access level it has today at any time, as long as its storage account still allows anonymous access.' -f (Get-Pick $n 'The container' 'Each container')) `
+                -Ask ('Before I schedule the change, could you ask the owner of {0} to confirm that it serves no public content? Where {1} does, its files can move to shared access signatures, which give time-limited links, either on their own or through a content delivery network such as Azure Front Door that adds the signature, and I will leave {2} out until they have moved. With that confirmed, could you approve this change for {3}?' -f (Get-Pick $n 'the container' 'each container'), (Get-Pick $n 'it' 'a container'), (Get-Pick $n 'it' 'that container'), $proposedDay)
+            @{ Used = @('DP.1-CONTAINERS'); Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
+                    Number = 18; Key = 'storage-private-containers'; Title = 'Set public blob containers to private access'
+                    Description = 'Set the anonymous access level of {0} to Private, in {1} anonymous access.' -f (Get-Listed $n 'blob container' 'blob containers'), $(if ($m -eq 1) { 'a storage account that allows' } else { "$m storage accounts that allow" })
+                    Purpose = 'Anyone can read {0} today without signing in, so setting {1} to Private stops those anonymous reads straight away. A private container also stays closed if the account setting is relaxed later.' -f (Get-Pick $n 'this container' 'these containers'), (Get-Pick $n 'it' 'them')
+                    ResourceIntro = '{0} set to Blob or Container access in {1} anonymous access, so anyone can read {2} today. {3} its containers with the level recorded at collection. CR-07 turns anonymous access off at the account level only where no container is set to Blob or Container, so a later pack picks {4} up for CR-07 once every container in it reads Private.' -f $(if ($n -eq 1) { 'The container below is' } else { "The $n containers below are" }), $(if ($m -eq 1) { 'a storage account that allows' } else { "$m storage accounts that allow" }), (Get-Pick $n 'it' 'them'), (Get-Pick $m 'The account lists' 'Each account lists'), (Get-Pick $m 'the account' 'each account')
+                    ResourceLines = Format-ResourceList $resources
+                    Availability = 'No impact on the storage service, since requests made with Microsoft Entra ID, a shared access signature or an account key keep working.'
+                    UserExperience = 'Anyone who reads {0} without signing in, such as a website, an application, a CDN or a shared link, is refused once the change is applied.' -f (Get-Pick $n 'this container' 'these containers')
+                    Dependencies = 'Needs the owner of each container to confirm it serves no public content, or to move that content to shared access signatures, on their own or through a CDN that adds one, before the change.'
+                    Implementation = $impl.ToArray()
+                    Testing = @(
+                        ('In the Azure portal, open {0} and go to Data storage > Containers.' -f (Get-EachStep $m 'storage account'))
+                        'Confirm the Anonymous access level column shows Private for each container listed for the account, apart from any left unchanged and noted in the change record.')
+                    Rollback = @(
+                        'In the Azure portal, open the storage account to revert and go to Settings > Configuration. A container can be set to Blob or Container only while Allow Blob anonymous access shows Enabled. If it shows Disabled, for example after CR-07, enabling it again opens every container in the account that is set to Blob or Container, so agree that with the client first.'
+                        'Go to Data storage > Containers, select the container to revert, select Change access level, set Anonymous access level back to the level recorded for it in the RESOURCES section and select OK. A container left unchanged during the change needs no rollback.')
+                    References = @(
+                        , @('Configure anonymous read access for containers and blobs, set the anonymous access level for a container', 'https://learn.microsoft.com/azure/storage/blobs/anonymous-read-access-configure#set-the-anonymous-access-level-for-a-container')
+                        , @('Remediate anonymous read access to blob data, detect anonymous requests from client applications', 'https://learn.microsoft.com/azure/storage/blobs/anonymous-read-access-prevent#detect-anonymous-requests-from-client-applications')
+                        , @('Static website hosting in Azure Storage, impact of setting the access level on the web container', 'https://learn.microsoft.com/azure/storage/blobs/storage-blob-static-website#impact-of-setting-the-access-level-on-the-web-container')
+                        , @('Grant limited access to Azure Storage resources using shared access signatures', 'https://learn.microsoft.com/azure/storage/common/storage-sas-overview')
+                        , @('Use Azure Front Door with Azure Storage Blobs', 'https://learn.microsoft.com/azure/frontdoor/scenario-storage-blobs'))
+                    Csv = $csv
                     Email = $email
                 } } } }
 )

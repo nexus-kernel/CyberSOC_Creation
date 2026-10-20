@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, and 1.7.0 for NB.5-FTPS-DETAIL. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, and 1.8.0 for DP.1-CONTAINERS-DETAIL. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -648,7 +648,7 @@ resources
 
 ### DP.1-DETAIL Storage accounts without secure transfer, minimum TLS 1.2 or anonymous access off
 
-Engine ARG. One row per storage account DP.1 counts against secure transfer, minimum TLS 1.2 or anonymous blob access, read the same way: a missing allowBlobPublicAccess means anonymous access is allowed. NfsV3 and the FileStorage kind mark accounts that may serve NFS, which CR-02 leaves out because NFS mounts are refused once secure transfer is required. CR-07 also leaves out FileStorage accounts, which hold no blob service. Feeds CR-02, CR-03 and CR-07. CR-07 takes only the accounts whose containers DP.1-CONTAINERS listed in full with none set to Blob or Container access, and names the others in the index.
+Engine ARG. One row per storage account DP.1 counts against secure transfer, minimum TLS 1.2 or anonymous blob access, read the same way: a missing allowBlobPublicAccess means anonymous access is allowed. NfsV3 and the FileStorage kind mark accounts that may serve NFS, which CR-02 leaves out because NFS mounts are refused once secure transfer is required. CR-07 also leaves out FileStorage accounts, which hold no blob service, and CR-18 names them in its notes. Feeds CR-02, CR-03 and CR-07. CR-07 takes only the accounts whose containers DP.1-CONTAINERS listed in full with none set to Blob or Container access, and names the others in the index.
 
 ```kql
 resources
@@ -662,6 +662,20 @@ resources
 | project Name = name, ResourceId = id, Kind = kind, resourceGroup, subscriptionId,
           SecureTransfer, MinimumTlsVersion, AllowBlobPublicAccess, NfsV3
 | order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### DP.1-CONTAINERS-DETAIL Blob containers set to Blob or Container access
+
+Engine STORAGE-CONTAINERS, written with DP.1-CONTAINERS. CyberSOC collector 1.8.0. Resource Graph does not index blob containers, so DP.1-CONTAINERS lists the storage accounts with the query below (FileStorage accounts hold no blob service and are left out) and then reads each account with `GET <account>/blobServices/default/containers?api-version=2023-05-01` on the Storage resource provider, following `nextLink` (Reader is enough). DP.1-CONTAINERS-DETAIL has one row per container whose `properties.publicAccess` reads `Blob` or `Container`: `subscriptionId`, `resourceGroup`, `Account`, `Container`, `AccessLevel`, `AccountAnonymousAccess` (Allowed, Disabled, or Not set, allowed), `ReadableToday` (true when the account setting allows anonymous access), `AccountId` and the container `ResourceId`. An account that cannot be listed in full adds no rows, and its DP.1-CONTAINERS row records the error, so the detail reads PARTIAL with DP.1-CONTAINERS, and FAILED or EMPTY with it when no account is read or none is in scope. Feeds CR-18, which sets the containers readable today to private, and names in the index the static website containers (`$web`), the containers an account blocking anonymous access already keeps closed, and the accounts not listed.
+
+```kql
+resources
+| where type =~ "microsoft.storage/storageaccounts"
+| where id !contains "{{MRG}}"
+| where kind !~ "FileStorage"   // no blob service
+| project ResourceId = id, Account = name, resourceGroup, subscriptionId,
+          AllowBlobPublicAccess = tostring(properties.allowBlobPublicAccess)
+| order by subscriptionId asc, Account asc
 ```
 
 ### DP.2-DETAIL Key vaults without purge protection

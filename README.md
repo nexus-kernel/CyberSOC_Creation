@@ -62,8 +62,9 @@ missing evidence never becomes a favorable zero.
    `05-change-requests/` holds one change request for each low-impact hardening item that still has resources to
    fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service, Azure SQL, Redis, Service Bus,
    Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
-   machines and on scale sets, closing internet-facing RDP, SSH and WinRM rules, and turning off plain FTP on App
-   Service apps), and a ready-to-send client email for every change request. Every email asks for the
+   machines and on scale sets, closing internet-facing RDP, SSH and WinRM rules, turning off plain FTP on App
+   Service apps, and setting the blob containers anyone can read today to private), and a ready-to-send client email
+   for every change request. Every email asks for the
    client's approval and reads as a letter, with no titles and each paragraph opening in its own words, in one order:
    what is to change, why, what it means for the client, the resources
    by subscription, how it can be reversed, and the request. It asks the client to approve the proposed date, two
@@ -79,7 +80,14 @@ missing evidence never becomes a favorable zero.
    The
    diagnostic logging emails say that the resource logs add Log Analytics ingestion to the Sentinel workspace.
    Anonymous blob access is turned off only on the storage accounts whose containers were all listed and are private,
-   so its email walks the client through why nothing breaks, and the index names the accounts left out. Add
+   so its email walks the client through why nothing breaks, and the index names the accounts left out. The accounts
+   with a public container go to CR-18 first, which sets each container anyone can read today to private: its email
+   lists the containers by subscription and account, says anonymous reads stop straight away, and asks the owner of
+   each container to confirm it serves no public content, or to move its files to shared access signatures, on their
+   own or through a content delivery network that adds one. The index names the containers left out (the static
+   website container `$web`, and the containers that an account blocking anonymous access already keeps closed) and
+   the accounts whose containers were not listed. Once every container in an account is private, a later pack picks
+   the account up for CR-07. Add
    `-PurgeProtectionApproved` when the client approved purge protection at build kickoff: its email then refers to
    that approval and asks the client to confirm it still stands and to approve the proposed date, and the index
    records it. The management port email asks who still needs RDP, SSH or WinRM from the internet and which replacement

@@ -54,7 +54,7 @@
       - POST https://api.security.microsoft.com/api/advancedqueries/run (query)
       - GET  https://api.security.microsoft.com/api/configurationScore and /api/exposureScore
       - GET  <workspace>/providers/Microsoft.SecurityInsights/alertRules
-      - GET  <storage account>/blobServices/default/containers (container access levels, DP.1-CONTAINERS)
+      - GET  <storage account>/blobServices/default/containers (container access levels, DP.1-CONTAINERS and DP.1-CONTAINERS-DETAIL)
       - GET  https://graph.microsoft.com/v1.0/organization, domains,
         domains/<id>/federationConfiguration, reports/authenticationMethods/
         userRegistrationDetails, roleManagement/directory/roleAssignments and
@@ -230,7 +230,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.7.0, based on the EBR collector 1.14.0
+    Version: 1.8.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -278,7 +278,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.7.0'
+$script:EbrVersion = '1.8.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2236,7 +2236,7 @@ resources
 | order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'DP.1-CONTAINERS' -Phase 'P2 Data protection' -Engine 'STORAGE-CONTAINERS' -Title 'Blob container anonymous access levels' -Notes 'Added in 1.11.0. Resource Graph does not index blob containers, so the collector lists them per storage account with a GET on the blobServices/default/containers path of each account (Reader is enough). One row per account: the account-level anonymous access setting, the containers, the containers whose own access level is Blob or Container, and how many of those are readable anonymously today because the account setting allows it. Containers are read in every account, so a public container under an account that blocks anonymous access still counts against the defense in depth control. Internal: names accounts and containers, the report embeds counts only.' -Query @'
+    $q.Add((New-EbrQuery -Id 'DP.1-CONTAINERS' -Phase 'P2 Data protection' -Engine 'STORAGE-CONTAINERS' -Title 'Blob container anonymous access levels' -Notes 'Added in 1.11.0. Resource Graph does not index blob containers, so the collector lists them per storage account with a GET on the blobServices/default/containers path of each account (Reader is enough). One row per account: the account-level anonymous access setting, the containers, the containers whose own access level is Blob or Container, and how many of those are readable anonymously today because the account setting allows it. Containers are read in every account, so a public container under an account that blocks anonymous access still counts against the defense in depth control. Since CyberSOC 1.8.0 it also writes DP.1-CONTAINERS-DETAIL, one row per container set to Blob or Container with its subscription, resource group, account, name, access level, the account setting and whether it is readable anonymously today, for change request CR-18. Internal: names accounts and containers, the report embeds counts only.' -Query @'
 resources
 | where type =~ "microsoft.storage/storageaccounts"
 | where id !contains "{{MRG}}"
@@ -4004,8 +4004,10 @@ function Invoke-EbrAhQuery {
 function Get-EbrBlobContainerRow {
     # Lists one storage account's blob containers through the Storage resource provider (a GET that
     # Reader can make) and reduces them to counts plus the names of the containers set to public.
-    # allowBlobPublicAccess only appears once someone sets it, and not set means allowed.
-    param($Account, [string]$Tenant, [int]$NameLimit = 25)
+    # allowBlobPublicAccess only appears once someone sets it, and not set means allowed. Each container
+    # set to Blob or Container is also added to Details, when given, as one DP.1-CONTAINERS-DETAIL row.
+    # An account that cannot be listed adds none, since its row records the error.
+    param($Account, [string]$Tenant, [int]$NameLimit = 25, [System.Collections.Generic.List[object]]$Details)
     $setting = ([string]$Account.AllowBlobPublicAccess).ToLowerInvariant()
     $allows = $setting -ne 'false'
     $row = [ordered]@{
@@ -4015,6 +4017,7 @@ function Get-EbrBlobContainerRow {
     }
     try {
         $public = [System.Collections.Generic.List[string]]::new()
+        $found = [System.Collections.Generic.List[object]]::new()
         $uri = 'https://management.azure.com{0}/blobServices/default/containers?api-version=2023-05-01' -f $Account.ResourceId
         while ($uri) {
             $resp = Invoke-EbrRest -Method GET -Uri $uri -Resource 'https://management.azure.com/' -Tenant $Tenant
@@ -4022,10 +4025,20 @@ function Get-EbrBlobContainerRow {
                 if ($null -eq $c) { continue }
                 $row.Containers++
                 $level = [string](Get-EbrProp (Get-EbrProp $c 'properties') 'publicAccess')
-                if ($level -in 'Blob', 'Container') { $public.Add(('{0} ({1})' -f $c.name, $level)) }
+                if ($level -in 'Blob', 'Container') {
+                    $public.Add(('{0} ({1})' -f $c.name, $level))
+                    $id = [string](Get-EbrProp $c 'id')
+                    if (-not $id) { $id = '{0}/blobServices/default/containers/{1}' -f $Account.ResourceId, $c.name }
+                    $found.Add([pscustomobject][ordered]@{
+                            subscriptionId = $row.subscriptionId; resourceGroup = $row.resourceGroup; Account = $row.Account; Container = [string]$c.name
+                            AccessLevel = $level; AccountAnonymousAccess = $row.AccountAnonymousAccess; ReadableToday = $allows; AccountId = $row.ResourceId; ResourceId = $id
+                        })
+                }
             }
             $uri = Get-EbrProp $resp 'nextLink'
         }
+        # Rows are added only once every page is read, so a partly listed account adds none.
+        if ($null -ne $Details) { foreach ($f in $found) { $Details.Add($f) } }
         $row.PublicContainers = $public.Count
         $row.ExposedContainers = $(if ($allows) { $public.Count } else { 0 })
         $row.PublicContainerNames = (@($public | Select-Object -First $NameLimit) -join ', ') + $(if ($public.Count -gt $NameLimit) { ', and {0} more' -f ($public.Count - $NameLimit) } else { '' })
@@ -5411,15 +5424,25 @@ function Invoke-EbrCatalogItem {
         'STORAGE-CONTAINERS' {
             Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the blobServices/default/containers path of each account, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
             $columns = @('subscriptionId', 'resourceGroup', 'Account', 'AccountAnonymousAccess', 'Containers', 'PublicContainers', 'ExposedContainers', 'PublicContainerNames', 'ReadStatus', 'ResourceId')
+            # DP.1-CONTAINERS-DETAIL (CyberSOC 1.8.0): one row per container set to Blob or Container, for CR-18. It
+            # is written with every outcome of DP.1-CONTAINERS, so a failed read never reads as needing a newer collector.
+            $detailColumns = @('subscriptionId', 'resourceGroup', 'Account', 'Container', 'AccessLevel', 'AccountAnonymousAccess', 'ReadableToday', 'AccountId', 'ResourceId')
             try { $accounts = @((Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant).Rows) }
-            catch { return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed) }
-            if ($accounts.Count -eq 0) { return New-EbrResult -ResultId $Item.Id -Status 'EMPTY' -Columns $columns -Source 'Resource Graph' -Detail 'No storage account with a blob service in scope.' -DurationSec (& $elapsed) }
+            catch {
+                $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-CONTAINERS-DETAIL' -Status 'FAILED' -Columns $detailColumns -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed)))
+                return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed)
+            }
+            if ($accounts.Count -eq 0) {
+                $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-CONTAINERS-DETAIL' -Status 'EMPTY' -Columns $detailColumns -Source 'Resource Graph' -Detail 'No storage account with a blob service in scope.' -DurationSec (& $elapsed)))
+                return New-EbrResult -ResultId $Item.Id -Status 'EMPTY' -Columns $columns -Source 'Resource Graph' -Detail 'No storage account with a blob service in scope.' -DurationSec (& $elapsed)
+            }
             $rows = [System.Collections.Generic.List[object]]::new()
+            $details = [System.Collections.Generic.List[object]]::new()
             $i = 0
             foreach ($a in $accounts) {
                 $i++
                 Write-Progress -Id 2 -ParentId 1 -Activity 'Listing blob containers' -Status ('{0} ({1} of {2})' -f $a.Account, $i, $accounts.Count) -PercentComplete ([int](100 * $i / $accounts.Count))
-                $rows.Add((Get-EbrBlobContainerRow -Account $a -Tenant $Ctx.ArmTenant))
+                $rows.Add((Get-EbrBlobContainerRow -Account $a -Tenant $Ctx.ArmTenant -Details $details))
             }
             Write-Progress -Id 2 -ParentId 1 -Activity 'Listing blob containers' -Completed
             $failed = @($rows | Where-Object ReadStatus -ne 'OK')
@@ -5428,7 +5451,12 @@ function Invoke-EbrCatalogItem {
             $detail = '{0} of {1} storage accounts listed: {2} containers, {3} set to Blob or Container access, {4} readable anonymously today.' -f $read.Count, $rows.Count, (& $total 'Containers'), (& $total 'PublicContainers'), (& $total 'ExposedContainers')
             if ($failed.Count) { $detail += ' Not listed: ' + ((@($failed | Select-Object -First 5) | ForEach-Object { '{0}: {1}' -f $_.Account, $_.ReadStatus }) -join ' / ') + $(if ($failed.Count -gt 5) { ' / and {0} more' -f ($failed.Count - 5) } else { '' }) }
             $status = if ($read.Count -eq 0) { 'FAILED' } elseif ($failed.Count) { 'PARTIAL' } else { 'OK' }
-            return New-EbrResult -ResultId $Item.Id -Status $status -Rows $rows.ToArray() -Columns $columns -Source ('Resource Graph and the Storage resource provider ({0})' -f $(if ($Ctx.AccessPath) { $Ctx.AccessPath.ToLowerInvariant() } else { 'direct' })) -Detail $detail -DurationSec (& $elapsed)
+            $source = 'Resource Graph and the Storage resource provider ({0})' -f $(if ($Ctx.AccessPath) { $Ctx.AccessPath.ToLowerInvariant() } else { 'direct' })
+            $detailStatus = if ($status -ne 'OK') { $status } elseif ($details.Count) { 'OK' } else { 'EMPTY' }
+            $detailText = '{0} containers set to Blob or Container access in {1} of {2} storage accounts listed, {3} readable anonymously today.' -f $details.Count, $read.Count, $rows.Count, @($details | Where-Object ReadableToday).Count
+            if ($failed.Count) { $detailText += ' Accounts not listed add no rows, see DP.1-CONTAINERS.' }
+            $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-CONTAINERS-DETAIL' -Status $detailStatus -Rows $details.ToArray() -Columns $detailColumns -Source $source -Detail $detailText -DurationSec (& $elapsed)))
+            return New-EbrResult -ResultId $Item.Id -Status $status -Rows $rows.ToArray() -Columns $columns -Source $source -Detail $detail -DurationSec (& $elapsed)
         }
         'COMPUTE-SKUS' {
             Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the Microsoft.Compute/skus path of each subscription and region, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
