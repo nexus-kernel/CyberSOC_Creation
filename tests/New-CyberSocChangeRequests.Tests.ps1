@@ -1615,13 +1615,13 @@ Describe 'Change request variants' {
         $testing | Should -Match 'confirm that no allow rule that covers the port and lists 0\.0\.0\.0/0, ::/0 or other public prefixes'
         $impl[-1] | Should -Match 'a free priority number from 100 to 4096 .* Default rules, numbered 65000 and above, always come after it\.' -Because 'a custom rule can never sit after a default rule'
         $impl[-1] | Should -Not -Match 'than every rule just-in-time' -Because 'a just-in-time deny from Any already stops the internet, so no ordering against it is needed'
-        $impl[-1] | Should -Match 'Leave out a machine that just-in-time VM access covers, since its deny rules already stop internet sources on the ports it protects\.'
+        $impl[-1] | Should -Match 'For a machine that just-in-time VM access covers, check only the security admin rules, since its deny rules already stop internet sources on the ports it protects once the groups decide\.' -Because 'an Always Allow admin rule comes before the just-in-time deny too'
         $impl[-1] | Should -Match 'For a rule on a subnet, find every network interface in it on the Connected devices page of its virtual network, which lists each device with its subnet\.' -Because 'a rule on a subnet names no network interfaces'
-        $impl[-1] | Should -Match 'Effective security rules lists rules only while the machine is running, so treat every management port of a stopped machine as open and note it in the change record\.' -Because 'a stopped machine could start with the ports open'
+        $impl[-1] | Should -Match 'Effective security rules lists rules only while the machine is running, so treat every management port of a stopped machine as open and note it in the change record, and read its security admin rules' -Because 'a stopped machine could start with the ports open'
         $impl[-1] | Should -Not -Match 'when it next runs'
         $impl[-1] | Should -Not -Match 'Leave out a network interface behind a rule' -Because 'a rule left unchanged exempts only its own ports, and the other open ports are still denied'
         foreach ($step in $impl[-1], ((Get-Section $text 'B) TESTING PLAN') -join "`n")) { $step | Should -Match 'The page shows only the first 50 rules, so select Download and check the complete list in the file it saves\.' -Because 'a later public allow would otherwise be missed' }
-        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'For a stopped machine, confirm instead that the deny from the Internet service tag is in place\.'
+        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'For a stopped machine, confirm instead that the deny from the Internet service tag is in place and read the Security admin configurations tab of its virtual network'
         $impl[-1] | Should -Not -Match 'protocol Any' -Because 'a deny for any protocol would also stop a UDP rule left out of CR-16 for review'
         $text | Should -Match ([regex]::Escape('View effective security rules of a network interface: https://learn.microsoft.com/azure/virtual-network/virtual-network-network-interface#view-effective-security-rules'))
 
@@ -1632,6 +1632,72 @@ Describe 'Change request variants' {
         $email | Should -Match 'I suggest just-in-time VM access where Plan 2 is on and Azure Bastion elsewhere, unless you would rather turn Plan 2 on there\. Azure Bastion does not provide WinRM, so remote PowerShell would continue through just-in-time VM access or only from addresses you name\.'
         $email | Should -Match 'and which replacement you would like, just-in-time VM access or Azure Bastion for RDP and SSH\?'
         $email | Should -Not -Match '[;>]|->|=>|<-'
+    }
+
+    It 'escalates a Virtual Network Manager Always Allow admin rule instead of counting a network security group deny as closing the port' {
+        $pack = Join-Path $TestDrive 'mgmt-admin-rules'
+        New-ChangeFixture $pack
+        $out = Join-Path $pack '05-change-requests'
+        # Without -AdminRuleOpen: the steps still read the security admin rules, and the email names no machine.
+        $null = & $generator -EvidencePath $pack
+        $text = Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw
+        $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $testing = (Get-Section $text 'B) TESTING PLAN') -join "`n"
+        foreach ($step in $impl[-1], $testing) {
+            # Security admin rules show in the effective rules and apply before both groups. Always Allow and Deny end
+            # the evaluation, and Allow passes the connection on to the groups.
+            $step | Should -Match 'Where Azure Virtual Network Manager applies security admin rules to the virtual network, the page and the file list them too, under the name of the virtual network manager, and they apply before both groups\. The first admin rule that matches a connection decides it: Always Allow lets it in whatever the groups say, Deny stops it whatever they say, and Allow passes it on to the groups\.'
+            $step | Should -Match 'For a machine that just-in-time VM access covers, check only the security admin rules' -Because 'the just-in-time deny is a network security group rule, which an Always Allow admin rule comes before'
+            $step | Should -Match 'read the Security admin configurations tab of its virtual network under Settings > Network Manager|read its security admin rules on the Security admin configurations tab of its virtual network under Settings > Network Manager' -Because 'a stopped machine shows no effective rules, but an admin rule still keeps its port open once it starts'
+        }
+        # Always Allow on 3389 from the internet: escalated, never closed by the deny the step adds.
+        $impl[-1] | Should -Match 'Where the first security admin rule that matches an internet source on the port is an Always Allow, the port stays open whatever the groups say, so no network security group change can close it: record that admin rule, with its virtual network manager, priority, source and ports, in the change record, escalate it to whoever owns the Virtual Network Manager configuration and never count the port as closed on that interface\.'
+        $impl[-1] | Should -Match 'Still add the deny below for it, so the deny applies once the admin rule is gone\.' -Because 'the deny takes effect only once the Always Allow rule is removed'
+        $testing | Should -Match 'Where the first security admin rule that matches an internet source on the port is an Always Allow, never report that port as closed, even with the deny in place: confirm the admin rule is recorded in the change record and escalated to whoever owns the Virtual Network Manager configuration, and report the port as still open until that owner closes it\.'
+        $text | Should -Match ([regex]::Escape('Security admin rules in Azure Virtual Network Manager: https://learn.microsoft.com/azure/virtual-network-manager/concept-security-admins#how-security-admin-rules-and-network-security-groups-nsgs-are-evaluated'))
+        $text | Should -Match ([regex]::Escape('Effective security rules overview: https://learn.microsoft.com/azure/network-watcher/effective-security-rules-overview'))
+        $text | Should -Match ([regex]::Escape('View configurations applied by Azure Virtual Network Manager: https://learn.microsoft.com/azure/virtual-network-manager/how-to-view-applied-configurations'))
+        $text | Should -Not -Match 'Kept open by an Azure Virtual Network Manager'
+        $index | Should -Match '- CR-16 changes network security group rules only\. Azure Virtual Network Manager security admin rules apply before them, and one with Always Allow ends the evaluation, so a machine whose effective security rules show such a rule for 22, 3389, 5985 or 5986 from an internet source stays open whatever CR-16 changes and is outside what CR-16 can close\.'
+        $email | Should -Not -Match 'central network policy|Virtual Network Manager' -Because 'an Allow or Deny admin rule leaves nothing for the client to escalate, and no machine was named'
+        Assert-ApprovalEmail $email 'CR-16 without an admin rule'
+
+        # vm-web01 behind Allow-RDP on snet-web: an Always Allow admin rule keeps 3389 open to the internet. Each
+        # machine is named by its resource ID, since a machine name is unique only within its resource group.
+        $vm = { param($sub, $group, $name) "/subscriptions/$sub/resourceGroups/$group/providers/Microsoft.Compute/virtualMachines/$name" }
+        $web01 = & $vm $s1 'rg-web' 'vm-web01'
+        $web01Label = 'vm-web01 in resource group rg-web of subscription Example Production \({0}\)' -f $s1
+        $null = & $generator -EvidencePath $pack -AdminRuleOpen "$($web01):3389"
+        $text = Get-Content (Join-Path $out 'CR-16-management-ports.txt') -Raw
+        $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        Assert-ApprovalEmail $email 'CR-16 with one machine an admin rule keeps open'
+        $email | Should -Match ('\r?\n\r?\nOn virtual machine {0}, a central network policy, a security admin rule in Azure Virtual Network Manager, keeps port 3389 open to the internet\. That policy applies before any network security group rule, so this change cannot close that port there, and it stays open until the policy changes\. Could you tell me who manages your Virtual Network Manager configuration, so I can raise this with them\?\r?\n' -f $web01Label)
+        $text | Should -Match ("Kept open by an Azure Virtual Network Manager security admin rule with Always Allow \(-AdminRuleOpen\), which CR-16 cannot close:\r?\n- {0}: port 3389" -f $web01Label)
+        $text | Should -Match 'The last lines give the path that fits each subscription, and the machines a security admin rule keeps open\.'
+        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match ('Report {0} \(port 3389\), which -AdminRuleOpen names as held open by a security admin rule with Always Allow, as still open and escalated, never closed\.' -f $web01Label)
+        $index | Should -Match ('- CR-16 names 1 machine that a security admin rule with Always Allow keeps open to the internet \(-AdminRuleOpen\): {0} \(port 3389\)\. Its email says a central network policy keeps the port open and asks who manages it\.' -f $web01Label)
+
+        # The same machine named twice, in another case, is one machine with both ports, and a machine of the same
+        # name in another resource group stays apart.
+        $dev01 = & $vm $s2 'rg-dev' 'vm-web01'
+        $null = & $generator -EvidencePath $pack -AdminRuleOpen "$($web01):3389", "$($dev01):3389", "$($web01.ToUpperInvariant()):22", "$($web01):3389"
+        $email = Get-Content (Join-Path $out 'CR-16-management-ports.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-16 with two machines of the same name'
+        $email | Should -Match ('On virtual machines {0} \(ports 22 and 3389\) and vm-web01 in resource group rg-dev of subscription Example, Dev Test \({1}\) \(port 3389\), a central network policy, a security admin rule in Azure Virtual Network Manager, keeps those ports open to the internet\. That policy applies before any network security group rule, so this change cannot close those ports there, and they stay open until the policy changes\.' -f $web01Label, $s2)
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '- CR-16 names 2 machines that a security admin rule with Always Allow keeps open'
+        # Only the resource ID names a machine once, so a bare name, a resource group path, another resource type,
+        # another port and a missing port are refused.
+        foreach ($wrong in 'vm-web01:3389', 'rg-web/vm-web01:3389', "$(& $vm $s1 'rg-web' 'vm-web01')/extensions/x:3389", ($web01 -replace 'virtualMachines', 'virtualMachineScaleSets') + ':3389', "$($web01):443", $web01) {
+            { & $generator -EvidencePath $pack -AdminRuleOpen $wrong } | Should -Throw '*-AdminRuleOpen takes each machine as the resource ID of the virtual machine followed by :port, with port 22, 3389, 5985 or 5986*' -Because "$wrong does not name one virtual machine and one management port"
+        }
+
+        # With nothing for CR-16 to close, the index still names the machine for escalation.
+        Set-PackResult $pack 'NB.2-DETAIL' @()
+        $null = & $generator -EvidencePath $pack -AdminRuleOpen "$($web01):3389"
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match ('- -AdminRuleOpen names 1 machine that a security admin rule with Always Allow keeps open to the internet: {0} \(port 3389\)\. CR-16 has no rule to close in this pack, so no email names it\.' -f $web01Label)
     }
 
     It 'writes no management port change when only rules for cleanup or review remain, and no gaps when NB.2-DETAIL is empty' {
