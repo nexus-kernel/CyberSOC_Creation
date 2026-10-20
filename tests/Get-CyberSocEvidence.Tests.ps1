@@ -1939,6 +1939,19 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         @($ctx.GraphPartial) | Should -Contain 'IA.15-ENTRA (eligible role assignments)'
     }
 
+    It 'keeps the activated and time-bound assignments when only the eligible schedule read fails' {
+        $ctx = New-DisabledCtx
+        $script:graph['roleEligibilityScheduleInstances'] = 'HTTP 429: Too Many Requests'
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
+        $entra = $ctx.Pending | Where-Object ResultId -eq 'IA.15-ENTRA'
+        $entra.Status | Should -Be 'PARTIAL' -Because 'an eligible assignment may be missing'
+        $entra.Detail | Should -Match '^Eligible assignments not visible, the PIM schedule instances could not be read'
+        $lee = @($entra.Rows | Where-Object UserPrincipalName -eq 'lee.ashford@contoso.com')
+        @($lee | ForEach-Object AssignmentType) | Should -Be @('Activated') -Because 'the active instances were read, so an activation never reads as Standing'
+        $lee[0].EndDateUtc | Should -Be '2026-10-11T20:00:00Z'
+        @($entra.Rows | Where-Object AssignmentType -eq 'Eligible').Count | Should -Be 0
+    }
+
     It 'marks the Azure side partial through Lighthouse, and when a group cannot be read' {
         $ctx = New-DisabledCtx 'Lighthouse'
         $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item

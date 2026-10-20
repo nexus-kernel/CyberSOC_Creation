@@ -5011,18 +5011,30 @@ function Invoke-EbrDisabledRoles {
         $eligible = @()
         $pimRead = 'Yes'
         $pimWhy = ''
+        $classify = { param([string]$Why) if ($Why -match '^GRAPH-403') { 'NoPermission' } elseif ($Why -match '^HTTP 400\b|AadPremiumLicenseRequired') { 'NoLicense' } else { 'Error' } }
+        # The two schedule reads fail on their own. When only the eligible one fails, the active instances read before
+        # it still mark each assignment Activated or Time-bound with its end date, so the rollback never restores a
+        # temporary assignment as a permanent one.
+        $activeRead = $true
         try {
             foreach ($a in (Get-EbrGraphCachedList -Ctx $Ctx -Key 'roleAssignmentScheduleInstances' -Path 'roleManagement/directory/roleAssignmentScheduleInstances?$expand=principal')) {
                 $active[(& $keyOf $a)] = $a
             }
-            $eligible = Get-EbrGraphCachedList -Ctx $Ctx -Key 'roleEligibilityScheduleInstances' -Path 'roleManagement/directory/roleEligibilityScheduleInstances?$expand=principal'
         }
         catch {
             $pimWhy = $_.Exception.Message -replace '\s+', ' '
-            $active.Clear(); $eligible = @()
-            $pimRead = if ($pimWhy -match '^GRAPH-403') { 'NoPermission' } elseif ($pimWhy -match '^HTTP 400\b|AadPremiumLicenseRequired') { 'NoLicense' } else { 'Error' }
-            if ($pimRead -eq 'NoPermission') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'RoleManagement.Read.Directory' -Partial 'IA.15-ENTRA (eligible role assignments)' }
+            $active.Clear(); $activeRead = $false
+            $pimRead = & $classify $pimWhy
         }
+        if ($activeRead) {
+            try { $eligible = Get-EbrGraphCachedList -Ctx $Ctx -Key 'roleEligibilityScheduleInstances' -Path 'roleManagement/directory/roleEligibilityScheduleInstances?$expand=principal' }
+            catch {
+                $pimWhy = $_.Exception.Message -replace '\s+', ' '
+                $eligible = @()
+                $pimRead = & $classify $pimWhy
+            }
+        }
+        if ($pimRead -eq 'NoPermission') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'RoleManagement.Read.Directory' -Partial 'IA.15-ENTRA (eligible role assignments)' }
         $entraRow = {
             param($a, [string]$Kind, [string]$End)
             $p = Get-EbrProp $a 'principal'
@@ -5050,7 +5062,7 @@ function Invoke-EbrDisabledRoles {
         $detail = '{0} held by {1} of the {2}, {3} through a group.' -f (Format-EbrCount $rows.Count 'Microsoft Entra role assignment' 'Microsoft Entra role assignments'), @($rows | ForEach-Object PrincipalId | Sort-Object -Unique).Count, (Format-EbrCount $userRows.Count 'disabled account' 'disabled accounts'), @($rows | Where-Object HeldThrough -eq 'Group').Count
         $partial = $false
         switch ($pimRead) {
-            'NoPermission' { $partial = $true; $detail = 'Eligible assignments not visible, needs RoleManagement.Read.Directory, so only active assignments are listed and an activated one reads as Standing. ' + $detail }
+            'NoPermission' { $partial = $true; $detail = 'Eligible assignments not visible, needs RoleManagement.Read.Directory, so only active assignments are listed{0}. ' -f $(if ($activeRead) { '' } else { ' and an activated one reads as Standing' }) + $detail }
             'Error' { $partial = $true; $detail = ('Eligible assignments not visible, the PIM schedule instances could not be read ({0}), so only active assignments are listed. ' -f (Get-EbrAzErrorSummary $pimWhy)) + $detail }
             'NoLicense' { $detail += ' PIM is not licensed (no Microsoft Entra ID P2), so there are no eligible assignments and every active one is standing.' }
         }
