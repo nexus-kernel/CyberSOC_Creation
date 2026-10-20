@@ -2024,6 +2024,9 @@ Describe 'Change request variants' {
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
         $index | Should -Match 'Eligible Microsoft Entra role assignments were not visible to the collection'
         $index | Should -Match 'IA\.15-RBAC was read in part, so CR-19 may miss some Azure roles: .*Lighthouse'
+        Set-PackResult $pack 'IA.15-RBAC' @() 'FAILED' 'The Azure role assignments could not be read. HTTP 429'
+        $null = & $generator -EvidencePath $pack
+        & $state | Should -Be '| 19 | Roles removed from disabled accounts |  | No roles found in what was read, IA.15-ENTRA read in part, Azure roles not collected (IA.15-RBAC FAILED), see the notes |  |' -Because 'a side read in part never reads as no gaps when the other side is missing either'
     }
 
     It 'flags the eligible Entra assignments it could not see, and the Lighthouse limit on the Azure side' {

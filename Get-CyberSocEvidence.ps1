@@ -3895,9 +3895,10 @@ function New-EbrResult {
 }
 
 function Invoke-EbrArgQuery {
-    # Options adds request options, such as the authorizationScopeFilter IA.15-DISABLED uses to read the role
-    # assignments at the management groups above the subscriptions too.
-    param([string]$Query, [string[]]$Subscriptions, [string]$Tenant, [hashtable]$Options = @{})
+    # RequestOptions adds request options, such as the authorizationScopeFilter IA.15-DISABLED uses to read the role
+    # assignments at the management groups above the subscriptions too. It keeps its own name because PowerShell
+    # variable names ignore case, so $Options would be the $options built for each page below.
+    param([string]$Query, [string[]]$Subscriptions, [string]$Tenant, [hashtable]$RequestOptions = @{})
     $uri = 'https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01'
     $rows = [System.Collections.Generic.List[object]]::new()
     $skip = $null
@@ -3906,7 +3907,7 @@ function Invoke-EbrArgQuery {
     do {
         $page++
         $options = @{ '$top' = 1000; resultFormat = 'objectArray' }
-        foreach ($k in $Options.Keys) { $options[$k] = $Options[$k] }
+        foreach ($k in $RequestOptions.Keys) { $options[$k] = $RequestOptions[$k] }
         if ($skip) { $options['$skipToken'] = $skip }
         # Scoped to the client's subscriptions every single time. Tenant scope from the
         # Atmosera tenant returns every delegated customer, and nobody wants that slide.
@@ -5055,7 +5056,7 @@ function Invoke-EbrDisabledRoles {
     $source = 'Resource Graph ({0}) and Microsoft Graph' -f $(if ($Ctx.AccessPath) { $Ctx.AccessPath.ToLowerInvariant() } else { 'direct' })
     $rbacUnread = [System.Collections.Generic.List[string]]::new()
     try {
-        $arg = Invoke-EbrArgQuery -Query $Query -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant -Options @{ authorizationScopeFilter = 'AtScopeAboveAndBelow' }
+        $arg = Invoke-EbrArgQuery -Query $Query -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant -RequestOptions @{ authorizationScopeFilter = 'AtScopeAboveAndBelow' }
         $seen = @{}
         $rbacRows = [System.Collections.Generic.List[object]]::new()
         foreach ($a in @($arg.Rows)) {

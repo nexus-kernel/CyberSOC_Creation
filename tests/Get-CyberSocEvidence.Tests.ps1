@@ -1666,6 +1666,30 @@ Describe 'Graph collectors' {
     }
 }
 
+Describe 'Resource Graph request options (CyberSOC 1.9.0)' {
+    It 'sends the request options to Resource Graph on every page, with and without the scope filter' {
+        # The real helper, with only its REST boundary mocked: a parameter named like the per-page options would be
+        # the same variable, since PowerShell variable names ignore case, and every query would fail.
+        Mock Write-Progress { }
+        Mock Start-Sleep { }
+        Mock Invoke-EbrRest {
+            $script:bodies += , $Body
+            if ($Body.options['$skipToken']) { return [pscustomobject]@{ data = @([pscustomobject]@{ n = 2 }) } }
+            [pscustomobject]@{ data = @([pscustomobject]@{ n = 1 }); '$skipToken' = 'next' }
+        }
+        $script:bodies = @()
+        $r = Invoke-EbrArgQuery -Query 'authorizationresources' -Subscriptions @('s1') -Tenant 't'
+        @($r.Rows | ForEach-Object n) | Should -Be @(1, 2)
+        $script:bodies.Count | Should -Be 2
+        @($script:bodies | ForEach-Object { '{0}|{1}|{2}' -f $_.options['$top'], $_.options.resultFormat, $_.options.ContainsKey('authorizationScopeFilter') }) | Should -Be @('1000|objectArray|False', '1000|objectArray|False')
+        $script:bodies = @()
+        $r = Invoke-EbrArgQuery -Query 'authorizationresources' -Subscriptions @('s1') -Tenant 't' -RequestOptions @{ authorizationScopeFilter = 'AtScopeAboveAndBelow' }
+        @($r.Rows).Count | Should -Be 2
+        @($script:bodies | ForEach-Object { '{0}|{1}|{2}' -f $_.options['$top'], $_.options.resultFormat, $_.options.authorizationScopeFilter }) | Should -Be @('1000|objectArray|AtScopeAboveAndBelow', '1000|objectArray|AtScopeAboveAndBelow')
+        $script:bodies[1].options['$skipToken'] | Should -Be 'next'
+    }
+}
+
 Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
     BeforeAll {
         # Synthetic tenant: two subscriptions under the management group mg-contoso-platform. Role definition IDs are
@@ -1778,7 +1802,7 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $script:item.Notes | Should -Match 'RoleManagement\.Read\.Directory'
         $script:item.Notes | Should -Match 'Lighthouse'
         $null = Invoke-EbrCatalogItem -Ctx (New-DisabledCtx) -Item $script:item
-        Should -Invoke Invoke-EbrArgQuery -Times 1 -Exactly -ParameterFilter { $Options.authorizationScopeFilter -eq 'AtScopeAboveAndBelow' -and $Query -match 'id !contains "aznativesol0"' -and @($Subscriptions).Count -eq 2 }
+        Should -Invoke Invoke-EbrArgQuery -Times 1 -Exactly -ParameterFilter { $RequestOptions.authorizationScopeFilter -eq 'AtScopeAboveAndBelow' -and $Query -match 'id !contains "aznativesol0"' -and @($Subscriptions).Count -eq 2 }
         Get-Content (Join-Path $TestDrive 'queries/IA.15-DISABLED.kql') -Raw | Should -Match 'AtScopeAboveAndBelow'
     }
 

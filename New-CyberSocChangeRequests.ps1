@@ -1946,12 +1946,16 @@ $catalog = @(
             $n = $azure.Count + $entra.Count
             if (-not $n) {
                 $missing = @($sides | Where-Object { -not $read[$_.Id] })
-                $state = if ($missing.Count -eq $sides.Count) { 'Not collected ({0})' -f (@($sides | ForEach-Object { '{0} {1}' -f $_.Id, (Get-Status $_.Id) }) -join ', ') }
-                elseif ($missing.Count) { 'No gaps found in the {0} roles, {1} roles not collected ({2} {3}), see the notes' -f (@($sides | Where-Object { $read[$_.Id] })[0].Name), $missing[0].Name, $missing[0].Id, (Get-Status $missing[0].Id) }
-                elseif ($viaGroup.Count) { 'Only roles held through groups remain, see the notes' }
-                # A side read in part may hold a role it did not return, so it never reads as no gaps.
-                elseif (@($sides | Where-Object { (Get-Status $_.Id) -eq 'PARTIAL' }).Count) { 'No roles found in what was read, {0} read in part, see the notes' -f (@($sides | Where-Object { (Get-Status $_.Id) -eq 'PARTIAL' } | ForEach-Object Id) -join ' and ') }
+                if ($missing.Count -eq $sides.Count) { return @{ State = ('Not collected ({0})' -f (@($sides | ForEach-Object { '{0} {1}' -f $_.Id, (Get-Status $_.Id) }) -join ', ')); Notes = $notes.ToArray() } }
+                # A side read in part may hold a role it did not return, so it never reads as no gaps, whatever the
+                # other side reads.
+                $partial = @($sides | Where-Object { $read[$_.Id] -and (Get-Status $_.Id) -eq 'PARTIAL' } | ForEach-Object Id)
+                $state = if ($partial.Count) { 'No roles found in what was read, {0} read in part' -f ($partial -join ' and ') }
+                elseif ($viaGroup.Count) { 'Only roles held through groups remain' }
+                elseif ($missing.Count) { 'No gaps found in the {0} roles' -f (@($sides | Where-Object { $read[$_.Id] })[0].Name) }
                 else { 'No gaps found' }
+                if ($missing.Count) { $state += ', {0} roles not collected ({1} {2})' -f $missing[0].Name, $missing[0].Id, (Get-Status $missing[0].Id) }
+                if ($state -ne 'No gaps found') { $state += ', see the notes' }
                 return @{ State = $state; Notes = $notes.ToArray() }
             }
             $people = @(@($azure) + @($entra) | Group-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | ForEach-Object { $_.Group[0] } | Sort-Object { & $who $_ })
