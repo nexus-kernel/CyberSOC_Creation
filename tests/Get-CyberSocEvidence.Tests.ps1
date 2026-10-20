@@ -1674,7 +1674,7 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         # Security Reader and Billing Administrator.
         $script:fx = @{
             S1 = '3f6a1c2e-8b4d-4e7a-9c1f-2d5b8e0a4c61'; S2 = '7b2d9e4f-1a3c-4b5d-8e6f-0a1b2c3d4e5f'; Mg = '/providers/Microsoft.Management/managementGroups/mg-contoso-platform'
-            Dana = 'a6f1c2d3-4b5e-4f60-8a7b-9c0d1e2f3a41'      # disabled, holds roles at every scope
+            Morgan = 'a6f1c2d3-4b5e-4f60-8a7b-9c0d1e2f3a41'      # disabled, holds roles at every scope
             Lee = 'b7e2d3c4-5a6f-4071-9b8c-0d1e2f3a4b52'       # disabled, synced from on-premises, eligible Entra role
             Kim = 'c8f3e4d5-6b70-4182-8c9d-1e2f3a4b5c63'       # disabled, reaches roles only through a group
             Ann = 'd9a4f5e6-7c81-4293-9dae-2f3a4b5c6d74'       # enabled, holds Owner and Global Administrator
@@ -1686,7 +1686,7 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         }
         $f = $script:fx
         $script:fxUsers = @(
-            [pscustomobject]@{ id = $f.Dana; displayName = 'Dana Whitfield'; userPrincipalName = 'dana.whitfield@contoso.com'; accountEnabled = $false; onPremisesSyncEnabled = $null }
+            [pscustomobject]@{ id = $f.Morgan; displayName = 'Morgan Reyes'; userPrincipalName = 'morgan.reyes@contoso.com'; accountEnabled = $false; onPremisesSyncEnabled = $null }
             [pscustomobject]@{ id = $f.Lee.ToUpperInvariant(); displayName = 'Lee Ashford'; userPrincipalName = 'lee.ashford@contoso.com'; accountEnabled = $false; onPremisesSyncEnabled = $true }
             [pscustomobject]@{ id = $f.Kim; displayName = 'Kim Osei'; userPrincipalName = 'kim.osei@contoso.com'; accountEnabled = $false; onPremisesSyncEnabled = $false }
             # The filter is server side. Were it ever ignored, an enabled account would come back, and must not be kept.
@@ -1698,10 +1698,10 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         function script:Get-TestGuid([string]$Seed) { ([guid]::new([Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($Seed)))).ToString() }
         $rg = "/subscriptions/$($f.S1)/resourceGroups/rg-app"
         $script:fxArg = @(
-            (& $ra $f.Mg $f.Reader 'Reader' $f.Dana)
-            (& $ra "/subscriptions/$($f.S1)" $f.Owner 'Owner' $f.Dana)
-            (& $ra $rg $f.Contributor 'Contributor' $f.Dana)
-            (& $ra "$rg/providers/Microsoft.KeyVault/vaults/kv-app-prod" $f.KvAdmin 'Key Vault Administrator' $f.Dana)
+            (& $ra $f.Mg $f.Reader 'Reader' $f.Morgan)
+            (& $ra "/subscriptions/$($f.S1)" $f.Owner 'Owner' $f.Morgan)
+            (& $ra $rg $f.Contributor 'Contributor' $f.Morgan)
+            (& $ra "$rg/providers/Microsoft.KeyVault/vaults/kv-app-prod" $f.KvAdmin 'Key Vault Administrator' $f.Morgan)
             (& $ra "/subscriptions/$($f.S2)/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stdataprod" $f.BlobContributor 'Storage Blob Data Contributor' $f.Lee)
             (& $ra '/' $f.Uaa 'User Access Administrator' $f.Lee)
             (& $ra "/subscriptions/$($f.S2)" $f.Owner 'Owner' $f.Ann)
@@ -1711,12 +1711,12 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $script:fxArg += $script:fxArg[0]
         $principal = { param([string]$Id, [string]$Type, [string]$Name, [string]$Upn) [pscustomobject]@{ '@odata.type' = "#microsoft.graph.$Type"; id = $Id; displayName = $Name; userPrincipalName = $Upn } }
         $script:fxRoleAssignments = @(
-            [pscustomobject]@{ id = 'lAPpYvVpN0KRkAEhdxReEJC2sEqbR_9Hr48lds9SGHI-1'; roleDefinitionId = $f.UserAdmin; principalId = $f.Dana; directoryScopeId = '/'; principal = (& $principal $f.Dana 'user' 'Dana Whitfield' 'dana.whitfield@contoso.com') }
+            [pscustomobject]@{ id = 'lAPpYvVpN0KRkAEhdxReEJC2sEqbR_9Hr48lds9SGHI-1'; roleDefinitionId = $f.UserAdmin; principalId = $f.Morgan; directoryScopeId = '/'; principal = (& $principal $f.Morgan 'user' 'Morgan Reyes' 'morgan.reyes@contoso.com') }
             [pscustomobject]@{ id = 'x3ifr6ub3U2nW8aaQyKm8BOXpYc9w0lJk5QCWa4yC4c-1'; roleDefinitionId = $f.SecReader; principalId = $f.Lee; directoryScopeId = '/'; principal = (& $principal $f.Lee 'user' 'Lee Ashford' 'lee.ashford@contoso.com') }
             [pscustomobject]@{ id = 'lAPpYvVpN0KRkAEhdxReEOkEVmWa3ZtIrqW1xbBWoWw-1'; roleDefinitionId = $f.Ga; principalId = $f.Ann; directoryScopeId = '/'; principal = (& $principal $f.Ann 'user' 'Ann Larsen' 'ann.larsen@contoso.com') }
             [pscustomobject]@{ id = 'kpD7cnQrWEiDkfnCZvOJXZOUaNFBQ-BLsvrSdmoMvDs-1'; roleDefinitionId = $f.Helpdesk; principalId = $f.Ops; directoryScopeId = '/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9'; principal = (& $principal $f.Ops 'group' 'platform-operators' $null) })
         $script:fxSchedules = @(
-            [pscustomobject]@{ id = 's1'; roleDefinitionId = $f.UserAdmin; principalId = $f.Dana; directoryScopeId = '/'; assignmentType = 'Assigned'; endDateTime = $null }
+            [pscustomobject]@{ id = 's1'; roleDefinitionId = $f.UserAdmin; principalId = $f.Morgan; directoryScopeId = '/'; assignmentType = 'Assigned'; endDateTime = $null }
             [pscustomobject]@{ id = 's2'; roleDefinitionId = $f.SecReader; principalId = $f.Lee; directoryScopeId = '/'; assignmentType = 'Activated'; endDateTime = '2026-10-11T20:00:00Z' })
         $script:fxEligible = @(
             [pscustomobject]@{ id = 'e1'; roleDefinitionId = $f.SecReader; principalId = $f.Lee; directoryScopeId = '/'; endDateTime = '2027-03-31T00:00:00Z'; principal = (& $principal $f.Lee 'user' 'Lee Ashford' 'lee.ashford@contoso.com') }
@@ -1787,7 +1787,7 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:item
         $r.ResultId | Should -Be 'IA.15-DISABLED'
         $r.Status | Should -Be 'OK'
-        @($r.Rows | ForEach-Object UserPrincipalName) | Should -Be @('dana.whitfield@contoso.com', 'kim.osei@contoso.com', 'lee.ashford@contoso.com')
+        @($r.Rows | ForEach-Object UserPrincipalName) | Should -Be @('kim.osei@contoso.com', 'lee.ashford@contoso.com', 'morgan.reyes@contoso.com')
         @($r.Rows | ForEach-Object AccountEnabled | Sort-Object -Unique) | Should -Be @($false)
         ($r.Rows | Where-Object UserPrincipalName -like 'lee*').PrincipalId | Should -Be $script:fx.Lee -Because 'object IDs are kept in lower case, so they match the role assignments'
         @($r.Rows | Where-Object OnPremisesSyncEnabled | ForEach-Object UserPrincipalName) | Should -Be @('lee.ashford@contoso.com')
@@ -1804,8 +1804,8 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $rbac.Status | Should -Be 'OK'
         $rows = @($rbac.Rows)
         @($rows | Where-Object HeldThrough -eq 'Direct' | ForEach-Object { '{0}|{1}|{2}' -f $_.UserPrincipalName, $_.ScopeLevel, $_.Role } | Sort-Object) | Should -Be @(
-            'dana.whitfield@contoso.com|Management group|Reader', 'dana.whitfield@contoso.com|Resource group|Contributor', 'dana.whitfield@contoso.com|Resource|Key Vault Administrator', 'dana.whitfield@contoso.com|Subscription|Owner'
-            'lee.ashford@contoso.com|Resource|Storage Blob Data Contributor', 'lee.ashford@contoso.com|Root|User Access Administrator')
+            'lee.ashford@contoso.com|Resource|Storage Blob Data Contributor', 'lee.ashford@contoso.com|Root|User Access Administrator'
+            'morgan.reyes@contoso.com|Management group|Reader', 'morgan.reyes@contoso.com|Resource group|Contributor', 'morgan.reyes@contoso.com|Resource|Key Vault Administrator', 'morgan.reyes@contoso.com|Subscription|Owner')
         $mg = $rows | Where-Object ScopeLevel -eq 'Management group'
         @($mg).Count | Should -Be 1 -Because 'a management group assignment returned under each subscription is one assignment'
         $mg.subscriptionId | Should -Be ''
@@ -1824,10 +1824,10 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
         $entra = $ctx.Pending | Where-Object ResultId -eq 'IA.15-ENTRA'
         $entra.Status | Should -Be 'OK'
         @($entra.Rows | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.UserPrincipalName, $_.Role, $_.AssignmentType, $_.HeldThrough, $_.DirectoryScope }) | Should -Be @(
-            'dana.whitfield@contoso.com|User Administrator|Standing|Direct|/'
             'kim.osei@contoso.com|Helpdesk Administrator|Standing|Group|/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9'
             'lee.ashford@contoso.com|Security Reader|Activated|Direct|/'
-            'lee.ashford@contoso.com|Security Reader|Eligible|Direct|/')
+            'lee.ashford@contoso.com|Security Reader|Eligible|Direct|/'
+            'morgan.reyes@contoso.com|User Administrator|Standing|Direct|/')
         ($entra.Rows | Where-Object AssignmentType -eq 'Eligible').EndDateUtc | Should -Be '2027-03-31T00:00:00Z'
         ($entra.Rows | Where-Object AssignmentType -eq 'Activated').AssignmentId | Should -Be 'x3ifr6ub3U2nW8aaQyKm8BOXpYc9w0lJk5QCWa4yC4c-1'
         @($entra.Rows | ForEach-Object PimRead | Sort-Object -Unique) | Should -Be @('Yes')

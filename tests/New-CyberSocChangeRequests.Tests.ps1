@@ -32,7 +32,7 @@ BeforeAll {
         Remove-Item (Join-Path $Path "results/$Id.json") -ErrorAction SilentlyContinue
     }
     # IA.15 fixtures (CR-19): synthetic accounts, real built-in role definition IDs.
-    $dana = 'a6f1c2d3-4b5e-4f60-8a7b-9c0d1e2f3a41'
+    $morgan = 'a6f1c2d3-4b5e-4f60-8a7b-9c0d1e2f3a41'
     $lee = 'b7e2d3c4-5a6f-4071-9b8c-0d1e2f3a4b52'
     $kim = 'c8f3e4d5-6b70-4182-8c9d-1e2f3a4b5c63'
     $ann = 'd9a4f5e6-7c81-4293-9dae-2f3a4b5c6d74'
@@ -44,7 +44,7 @@ BeforeAll {
         Ga = '62e90394-69f5-4237-9190-012177145e10'; UserAdmin = 'fe930be7-5e62-47db-91af-98c3a49a38b1'; Helpdesk = '729827e3-9c14-49f7-bb1b-9608f156bbb8'; SecReader = '5d6b6bb7-de71-4623-b4af-96380a352509'
     }
     $people = @{
-        $dana = @('Dana Whitfield', 'dana.whitfield@contoso.com', $false); $lee = @('Lee Ashford', 'lee.ashford@contoso.com', $true)
+        $morgan = @('Morgan Reyes', 'morgan.reyes@contoso.com', $false); $lee = @('Lee Ashford', 'lee.ashford@contoso.com', $true)
         $kim = @('Kim Osei', 'kim.osei@contoso.com', $false); $ann = @('Ann Larsen', 'ann.larsen@contoso.com', $false)
     }
     # One IA.15-RBAC row as the collector writes it. A group given holds the role, and the account is its disabled member.
@@ -166,26 +166,26 @@ BeforeAll {
             @{ Name = 'vm-old'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s2; PowerState = 'PowerState/deallocated'; Size = 'Standard_B2s' }
             @{ Name = 'vm-paused'; ResourceType = 'microsoft.compute/virtualmachines'; resourceGroup = 'rg-app'; subscriptionId = $s1; PowerState = 'PowerState/stopped'; Size = 'Standard_B2s' }
             @{ Name = 'aks-nodepool1-vmss'; ResourceType = 'microsoft.compute/virtualmachinescalesets'; resourceGroup = 'rg-aks'; subscriptionId = $s1; PowerState = 'Scale set'; Size = 'Standard_D2s_v5' })
-        # IA.15: Dana holds Azure roles at management group, subscription, resource group and resource scope and a
+        # IA.15: Morgan holds Azure roles at management group, subscription, resource group and resource scope and a
         # standing Entra role. Lee, synced from on-premises, holds a storage role and an eligible Entra role that is
         # activated now. Kim holds roles only through the group platform-operators. Pat is disabled and holds nothing.
         # Ann is enabled: her rows stand for a collector that let an enabled account through, and must never be listed.
         # Role definition IDs are the real built-in ones.
         Set-PackResult $Path 'IA.15-DISABLED' @(
-            @{ PrincipalId = $dana; PrincipalType = 'User'; DisplayName = 'Dana Whitfield'; UserPrincipalName = 'dana.whitfield@contoso.com'; AccountEnabled = $false; OnPremisesSyncEnabled = $false }
+            @{ PrincipalId = $morgan; PrincipalType = 'User'; DisplayName = 'Morgan Reyes'; UserPrincipalName = 'morgan.reyes@contoso.com'; AccountEnabled = $false; OnPremisesSyncEnabled = $false }
             @{ PrincipalId = $lee; PrincipalType = 'User'; DisplayName = 'Lee Ashford'; UserPrincipalName = 'lee.ashford@contoso.com'; AccountEnabled = $false; OnPremisesSyncEnabled = $true }
             @{ PrincipalId = $kim; PrincipalType = 'User'; DisplayName = 'Kim Osei'; UserPrincipalName = 'kim.osei@contoso.com'; AccountEnabled = $false; OnPremisesSyncEnabled = $false }
             @{ PrincipalId = 'f2c7b8a9-0fb4-45c6-8d1e-5c6d7e8f9a07'; PrincipalType = 'User'; DisplayName = 'Pat Moreno'; UserPrincipalName = 'pat.moreno@contoso.com'; AccountEnabled = $false; OnPremisesSyncEnabled = $false })
         Set-PackResult $Path 'IA.15-RBAC' @(
-            (& $azureRole $mgScope 'Reader' $roleIds.Reader $dana)
-            (& $azureRole "/subscriptions/$s1" 'Owner' $roleIds.Owner $dana)
-            (& $azureRole "/subscriptions/$s1/resourceGroups/rg-app" 'Contributor' $roleIds.Contributor $dana)
-            (& $azureRole "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.KeyVault/vaults/kv-app" 'Key Vault Administrator' $roleIds.KvAdmin $dana)
+            (& $azureRole $mgScope 'Reader' $roleIds.Reader $morgan)
+            (& $azureRole "/subscriptions/$s1" 'Owner' $roleIds.Owner $morgan)
+            (& $azureRole "/subscriptions/$s1/resourceGroups/rg-app" 'Contributor' $roleIds.Contributor $morgan)
+            (& $azureRole "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.KeyVault/vaults/kv-app" 'Key Vault Administrator' $roleIds.KvAdmin $morgan)
             (& $azureRole "/subscriptions/$s2/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stdataprod" 'Storage Blob Data Contributor' $roleIds.BlobContributor $lee)
             (& $azureRole "/subscriptions/$s2/resourceGroups/rg-ops" 'Contributor' $roleIds.Contributor $kim $opsGroup)
             (& $azureRole "/subscriptions/$s2" 'Owner' $roleIds.Owner $ann))
         Set-PackResult $Path 'IA.15-ENTRA' @(
-            (& $entraRole 'User Administrator' $roleIds.UserAdmin 'Standing' $dana)
+            (& $entraRole 'User Administrator' $roleIds.UserAdmin 'Standing' $morgan)
             (& $entraRole 'Security Reader' $roleIds.SecReader 'Activated' $lee)
             (& $entraRole 'Security Reader' $roleIds.SecReader 'Eligible' $lee -End '2027-03-31T00:00:00Z')
             (& $entraRole 'Helpdesk Administrator' $roleIds.Helpdesk 'Standing' $kim $opsGroup -Scope '/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9')
@@ -943,15 +943,15 @@ Describe 'Change request generation' {
         $res[0] | Should -Match '^The 2 accounts below are recorded as disabled at collection'
         $res[1] | Should -Be 'Azure role assignments, removed at the scope where each was made:'
         $res[2] | Should -Be "Subscription: Example Production ($s1)"
-        $res[3] | Should -Match "^- Dana Whitfield \(dana\.whitfield@contoso\.com\), object ID $dana`: Owner on the subscription, role definition $($roleIds.Owner), scope /subscriptions/$s1, assignment [0-9a-f-]{36}$"
+        $res[3] | Should -Match "^- Morgan Reyes \(morgan\.reyes@contoso\.com\), object ID $morgan`: Owner on the subscription, role definition $($roleIds.Owner), scope /subscriptions/$s1, assignment [0-9a-f-]{36}$"
         $res[4] | Should -Match ': Contributor on resource group rg-app, '
         $res[5] | Should -Match ': Key Vault Administrator on resource kv-app in resource group rg-app, role definition 00482a5a-887f-4fb3-b363-3b7fe8e74483, scope /subscriptions/.+/providers/Microsoft\.KeyVault/vaults/kv-app, '
         $res[6] | Should -Be "Subscription: Example, Dev Test ($s2)"
         $res[7] | Should -Match '^- Lee Ashford .+: Storage Blob Data Contributor on resource stdataprod in resource group rg-data, '
         $res[8] | Should -Be 'Management group: mg-contoso-platform' -Because 'a management group sits after the subscriptions, under its own name'
-        $res[9] | Should -Match "^- Dana Whitfield .+: Reader on the management group, role definition $($roleIds.Reader), scope $([regex]::Escape($mgScope)), "
+        $res[9] | Should -Match "^- Morgan Reyes .+: Reader on the management group, role definition $($roleIds.Reader), scope $([regex]::Escape($mgScope)), "
         $res[10] | Should -Be 'Microsoft Entra role assignments:'
-        @($res | Select-Object -Skip 11) | Should -Match '^- (Dana Whitfield .+: User Administrator, Standing|Lee Ashford .+: Security Reader, (Activated|Eligible)), role definition [0-9a-f-]{36}, directory scope /, assignment '
+        @($res | Select-Object -Skip 11) | Should -Match '^- (Morgan Reyes .+: User Administrator, Standing|Lee Ashford .+: Security Reader, (Activated|Eligible)), role definition [0-9a-f-]{36}, directory scope /, assignment '
         @($res | Select-Object -Skip 11).Count | Should -Be 3
         $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
         $impl[0] | Should -Be '1. In the Azure portal, go to Microsoft Entra ID > Users and open the first account listed in the RESOURCES section.'
@@ -1003,11 +1003,11 @@ Describe 'Change request generation' {
         $email | Should -Match '\r?\n\r?\nIf one of these accounts comes back into use later, it would need its roles assigned again\.\r?\n'
         $email | Should -Match '\r?\n\r?\nRoles that reach a disabled account through a group stay as they are'
         $email | Should -Match ("The accounts are listed below with their roles, the Azure roles by subscription and the Microsoft Entra roles on their own:\r?\n\r?\n" +
-            "Subscription Example Production \($s1\):\r?\n\r?\n- Dana Whitfield \(dana\.whitfield@contoso\.com\): Owner on the subscription, Contributor on resource group rg-app, Key Vault Administrator on resource kv-app in resource group rg-app\r?\n\r?\n" +
+            "Subscription Example Production \($s1\):\r?\n\r?\n- Morgan Reyes \(morgan\.reyes@contoso\.com\): Owner on the subscription, Contributor on resource group rg-app, Key Vault Administrator on resource kv-app in resource group rg-app\r?\n\r?\n" +
             "Subscription Example, Dev Test \($s2\):\r?\n\r?\n- Lee Ashford \(lee\.ashford@contoso\.com\): Storage Blob Data Contributor on resource stdataprod in resource group rg-data\r?\n\r?\n" +
-            "Management group mg-contoso-platform:\r?\n\r?\n- Dana Whitfield \(dana\.whitfield@contoso\.com\): Reader on the management group\r?\n\r?\n" +
-            "Microsoft Entra ID directory roles:\r?\n\r?\n- Dana Whitfield \(dana\.whitfield@contoso\.com\): User Administrator\r?\n" +
-            "- Lee Ashford \(lee\.ashford@contoso\.com\): Security Reader \(activated from an eligible assignment\), Security Reader \(eligible in Privileged Identity Management, until 2027-03-31\)\r?\n")
+            "Management group mg-contoso-platform:\r?\n\r?\n- Morgan Reyes \(morgan\.reyes@contoso\.com\): Reader on the management group\r?\n\r?\n" +
+            "Microsoft Entra ID directory roles:\r?\n\r?\n- Lee Ashford \(lee\.ashford@contoso\.com\): Security Reader \(activated from an eligible assignment\), Security Reader \(eligible in Privileged Identity Management, until 2027-03-31\)\r?\n" +
+            "- Morgan Reyes \(morgan\.reyes@contoso\.com\): User Administrator\r?\n")
         $email | Should -Match '\r?\n\r?\nI can restore any of these roles at any time from the record I keep of each one'
         $email | Should -Match '\r?\n\r?\nBefore I schedule the change, could you tell me whether any of these accounts is expected to come back into use, for example for someone on leave or a seasonal worker, or is kept for emergency access\? I will leave any such account out of the change\. With that confirmed, could you approve this change for \w+day, '
         $email | Should -Not -Match '(?i)object ID|role definition|assignment ID' -Because 'the email names roles in plain words, the change request keeps the IDs'
@@ -1037,8 +1037,8 @@ Describe 'Change request generation' {
         $roles = @($csv | Where-Object CR -eq 'CR-19')
         $roles.Count | Should -Be 8 -Because 'CR-19 tracks one row per assignment it removes'
         $mg = $roles | Where-Object { $_.CurrentSetting -match 'management group scope' }
-        @($mg.Subscription, $mg.ResourceGroup, $mg.Resource) | Should -Be @('', '', 'dana.whitfield@contoso.com, Reader')
-        $mg.CurrentSetting | Should -Be "Azure role Reader (/subscriptions/$s1/providers/microsoft.authorization/roledefinitions/$($roleIds.Reader)) at management group scope $mgScope, assigned to dana.whitfield@contoso.com (object ID $dana)" -Because 'the rollback recreates each assignment from its role, scope and account'
+        @($mg.Subscription, $mg.ResourceGroup, $mg.Resource) | Should -Be @('', '', 'morgan.reyes@contoso.com, Reader')
+        $mg.CurrentSetting | Should -Be "Azure role Reader (/subscriptions/$s1/providers/microsoft.authorization/roledefinitions/$($roleIds.Reader)) at management group scope $mgScope, assigned to morgan.reyes@contoso.com (object ID $morgan)" -Because 'the rollback recreates each assignment from its role, scope and account'
         $mg.ResourceId | Should -Match ('^{0}/providers/Microsoft\.Authorization/roleAssignments/[0-9a-f-]{{36}}$' -f [regex]::Escape($mgScope))
         ($roles | Where-Object { $_.CurrentSetting -match 'Eligible' }).CurrentSetting | Should -Be "Microsoft Entra role Security Reader ($($roleIds.SecReader)), Eligible until 2027-03-31T00:00:00Z, directory scope /, assigned to lee.ashford@contoso.com (object ID $lee)"
         ($roles | Where-Object { $_.Resource -eq 'lee.ashford@contoso.com, Storage Blob Data Contributor' }).Subscription | Should -Be "Example, Dev Test ($s2)"
@@ -2032,7 +2032,7 @@ Describe 'Change request variants' {
         $p = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
         $p | Add-Member -NotePropertyName AccessPath -NotePropertyValue 'Lighthouse'
         $p | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
-        Set-PackResult $pack 'IA.15-ENTRA' @((& $entraRole 'User Administrator' $roleIds.UserAdmin 'Standing' $dana -PimRead 'NoPermission'), (& $entraRole 'Security Reader' $roleIds.SecReader 'Standing' $lee -PimRead 'NoPermission')) 'PARTIAL' 'Eligible assignments not visible, needs RoleManagement.Read.Directory, so only active assignments are listed and an activated one reads as Standing. 2 Microsoft Entra role assignments held by 2 of the 4 disabled accounts, 0 through a group.'
+        Set-PackResult $pack 'IA.15-ENTRA' @((& $entraRole 'User Administrator' $roleIds.UserAdmin 'Standing' $morgan -PimRead 'NoPermission'), (& $entraRole 'Security Reader' $roleIds.SecReader 'Standing' $lee -PimRead 'NoPermission')) 'PARTIAL' 'Eligible assignments not visible, needs RoleManagement.Read.Directory, so only active assignments are listed and an activated one reads as Standing. 2 Microsoft Entra role assignments held by 2 of the 4 disabled accounts, 0 through a group.'
         $rbac = Get-Content (Join-Path $pack 'results/IA.15-RBAC.json') -Raw | ConvertFrom-Json
         Set-PackResult $pack 'IA.15-RBAC' $rbac 'PARTIAL' "7 Azure role assignments held by 3 of the 4 disabled accounts, 1 through a group. Read through Lighthouse, which shows the managing tenant's delegations rather than the client's own role assignments, so this is incomplete."
         $null = & $generator -EvidencePath $pack
@@ -2048,7 +2048,7 @@ Describe 'Change request variants' {
         $pack = Join-Path $TestDrive 'roles-single'
         New-ChangeFixture $pack
         Set-PackResult $pack 'IA.15-RBAC' @() 'FAILED' 'The Azure role assignments could not be read. HTTP 429: Too Many Requests'
-        Set-PackResult $pack 'IA.15-ENTRA' @((& $entraRole 'Global Administrator' $roleIds.Ga 'Standing' $dana))
+        Set-PackResult $pack 'IA.15-ENTRA' @((& $entraRole 'Global Administrator' $roleIds.Ga 'Standing' $morgan))
         $null = & $generator -EvidencePath $pack
         $out = Join-Path $pack '05-change-requests'
         $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
@@ -2059,11 +2059,11 @@ Describe 'Change request variants' {
         Assert-ApprovalEmail $email 'CR-19 for one account'
         $email | Should -Match 'I would like your approval to remove the Microsoft Entra roles still assigned to 1 disabled account in your tenant\. The account is disabled, so it cannot sign in, but it still holds every role listed below\.'
         $email | Should -Match 'Nobody loses access today, since the account cannot sign in\.'
-        $email | Should -Match "The account is listed below with its Microsoft Entra roles:\r?\n\r?\nMicrosoft Entra ID directory roles:\r?\n\r?\n- Dana Whitfield \(dana\.whitfield@contoso\.com\): Global Administrator\r?\n"
+        $email | Should -Match "The account is listed below with its Microsoft Entra roles:\r?\n\r?\nMicrosoft Entra ID directory roles:\r?\n\r?\n- Morgan Reyes \(morgan\.reyes@contoso\.com\): Global Administrator\r?\n"
         $email | Should -Match 'could you tell me whether the account is expected to come back into use'
         $email | Should -Match 'Just before the change, I will check the account again and leave it unchanged if it has been turned back on since my review\.'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
-        $index | Should -Match '- 1 account in CR-19 holds Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator or a role at the Azure root scope: Dana Whitfield \(dana\.whitfield@contoso\.com\)\. Ask the client whether any of them is an emergency access account before sending'
+        $index | Should -Match '- 1 account in CR-19 holds Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator or a role at the Azure root scope: Morgan Reyes \(morgan\.reyes@contoso\.com\)\. Ask the client whether any of them is an emergency access account before sending'
         $index | Should -Match '- The Azure roles of the disabled accounts are unknown, not a zero, because IA\.15-RBAC could not be used: it reads FAILED: The Azure role assignments could not be read\. HTTP 429'
         $index | Should -Not -Match 'Resource Graph also holds the active Azure role assignments only' -Because 'the Azure side was not read'
     }
