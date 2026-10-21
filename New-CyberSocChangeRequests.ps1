@@ -868,15 +868,15 @@ $catalog = @(
             $impl = [System.Collections.Generic.List[object]]::new()
             $impl.Add((Get-OpenStep $n 'App Services' 'app'))
             $impl.Add('Go to Settings > Configuration and select the General settings tab.')
-            if (-not $k) { $impl.Add('Set Minimum Inbound TLS Version to 1.2, select Apply and confirm.') }
-            else {
-                # An app whose site minimum is already 1.2 or later, or not recorded, gets only the SCM step, and the other way round.
-                if ($s -eq $n) { $impl.Add('Set Minimum Inbound TLS Version to 1.2.') }
-                elseif ($s) { $impl.Add('If the RESOURCES section lists a minimum TLS below 1.2 for the app, set Minimum Inbound TLS Version to 1.2. Otherwise leave it as it is.') }
-                if ($k -eq $n) { $impl.Add('Set SCM Minimum Inbound TLS Version to 1.2.') }
-                else { $impl.Add('If the RESOURCES section lists an SCM minimum TLS below 1.2 for the app, set SCM Minimum Inbound TLS Version to 1.2. Otherwise leave it as it is.') }
-                $impl.Add('Select Apply and confirm.')
-            }
+            # An app whose site minimum is already 1.2 or later, or not recorded, gets only the SCM step, and the other way
+            # round. A value can be raised between collection and the change, so each step reads the value first and never
+            # lowers one that already shows 1.2 or later.
+            $still = 'If it still shows 1.0 or 1.1, set it to 1.2. If it shows 1.2 or later, the app has changed since collection, so leave it as it is and note it in the change record.'
+            if ($s -eq $n) { $impl.Add('Read Minimum Inbound TLS Version. ' + $still) }
+            elseif ($s) { $impl.Add('If the RESOURCES section lists a minimum TLS below 1.2 for the app, read Minimum Inbound TLS Version. ' + $still + ' Otherwise leave it as it is.') }
+            if ($k -eq $n) { $impl.Add('Read SCM Minimum Inbound TLS Version. ' + $still) }
+            elseif ($k) { $impl.Add('If the RESOURCES section lists an SCM minimum TLS below 1.2 for the app, read SCM Minimum Inbound TLS Version. ' + $still + ' Otherwise leave it as it is.') }
+            $impl.Add('If a setting was changed, select Apply and confirm.')
             Add-RepeatStep $impl $n 1 'app'
             $testing = @(
                 ('In the Azure portal, open {0}, go to Settings > Configuration and select the General settings tab.' -f (Get-EachStep $n 'app'))

@@ -2638,14 +2638,14 @@ Describe 'App Service minimum TLS on the site and its SCM site (CR-04, collector
         $mixed.Csv[0].ResourceId | Should -Match '^/subscriptions/[0-9a-f-]+/resourceGroups/rg-[a-z]+/providers/Microsoft\.Web/sites/app-'
     }
 
-    It 'gives an app only the step its recorded values need, checks both values in the portal and rolls each back to its recorded value' {
+    It 'gives an app only the step its recorded values need, never lowers a value raised since collection, checks both values in the portal and rolls each back to its recorded value' {
         $impl = @(Get-Section $mixed.Cr 'A) IMPLEMENTATION PLAN')
         $impl | Should -Be @(
             '1. In the Azure portal, go to App Services and open the first app listed in the RESOURCES section.'
             '2. Go to Settings > Configuration and select the General settings tab.'
-            '3. If the RESOURCES section lists a minimum TLS below 1.2 for the app, set Minimum Inbound TLS Version to 1.2. Otherwise leave it as it is.'
-            '4. If the RESOURCES section lists an SCM minimum TLS below 1.2 for the app, set SCM Minimum Inbound TLS Version to 1.2. Otherwise leave it as it is.'
-            '5. Select Apply and confirm.'
+            '3. If the RESOURCES section lists a minimum TLS below 1.2 for the app, read Minimum Inbound TLS Version. If it still shows 1.0 or 1.1, set it to 1.2. If it shows 1.2 or later, the app has changed since collection, so leave it as it is and note it in the change record. Otherwise leave it as it is.'
+            '4. If the RESOURCES section lists an SCM minimum TLS below 1.2 for the app, read SCM Minimum Inbound TLS Version. If it still shows 1.0 or 1.1, set it to 1.2. If it shows 1.2 or later, the app has changed since collection, so leave it as it is and note it in the change record. Otherwise leave it as it is.'
+            '5. If a setting was changed, select Apply and confirm.'
             '6. Repeat steps 1 to 5 for each remaining app listed.')
         @(Get-Section $mixed.Cr 'B) TESTING PLAN')[1] | Should -Be '2. Confirm Minimum Inbound TLS Version and SCM Minimum Inbound TLS Version both show 1.2 or later.'
         $rollback = @(Get-Section $mixed.Cr 'C) ROLLBACK PLAN')
@@ -2687,8 +2687,8 @@ Describe 'App Service minimum TLS on the site and its SCM site (CR-04, collector
         @(Get-Section $one.Cr 'A) IMPLEMENTATION PLAN') | Should -Be @(
             '1. In the Azure portal, go to App Services and open the app listed in the RESOURCES section.'
             '2. Go to Settings > Configuration and select the General settings tab.'
-            '3. Set SCM Minimum Inbound TLS Version to 1.2.'
-            '4. Select Apply and confirm.')
+            '3. Read SCM Minimum Inbound TLS Version. If it still shows 1.0 or 1.1, set it to 1.2. If it shows 1.2 or later, the app has changed since collection, so leave it as it is and note it in the change record.'
+            '4. If a setting was changed, select Apply and confirm.')
         @(Get-Section $one.Cr 'C) RESOURCES') | Should -Contain '- app-deploy, resource group rg-web, minimum TLS 1.3, SCM minimum TLS 1.0'
         $one.Csv.CurrentSetting | Should -Be 'minimum TLS 1.3, SCM minimum TLS 1.0'
         Assert-ApprovalEmail $one.Email 'CR-04 for the SCM site of one application'
@@ -2702,7 +2702,7 @@ Describe 'App Service minimum TLS on the site and its SCM site (CR-04, collector
         $old = Build-Tls 'before-scm' '1.12.0'
         $old.Cr | Should -Not -Match 'SCM' -Because 'the pack does not record the SCM minimum'
         @(Get-Section $old.Cr 'C) RESOURCES') | Should -Contain '- app-legacy, resource group rg-web, minimum TLS 1.0'
-        @(Get-Section $old.Cr 'A) IMPLEMENTATION PLAN')[2] | Should -Be '3. Set Minimum Inbound TLS Version to 1.2, select Apply and confirm.'
+        @(Get-Section $old.Cr 'A) IMPLEMENTATION PLAN')[2] | Should -Be '3. Read Minimum Inbound TLS Version. If it still shows 1.0 or 1.1, set it to 1.2. If it shows 1.2 or later, the app has changed since collection, so leave it as it is and note it in the change record.' -Because 'a value raised to 1.3 since collection is never lowered to 1.2'
         $old.Csv.CurrentSetting | Should -Be 'minimum TLS 1.0'
         Assert-ApprovalEmail $old.Email 'CR-04 on a pack before 1.13.0'
         $old.Email | Should -Not -Match 'SCM|Kudu'
