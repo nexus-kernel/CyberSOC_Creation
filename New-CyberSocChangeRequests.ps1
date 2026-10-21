@@ -418,15 +418,31 @@ function Get-LoggingEffect([int]$n) {
 $mysqlType = 'microsoft.dbformysql/flexibleservers'
 $mysqlAuditEvents = 'CONNECTION', 'ADMIN', 'DDL', 'DCL'
 function Get-AuditEventList($value) { @((Get-Text $value) -split ',' | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_ }) }
-# A server needs the parameter step when audit_log_enabled is not ON or audit_log_events leaves out an event the
-# baseline sets. A server that logs more than the four is left as it is and named in the index for review.
-function Test-MySqlAuditGap($row) {
-    (Get-Text $row.AuditLogEnabled).ToUpperInvariant() -ne 'ON' -or @($mysqlAuditEvents | Where-Object { $_ -notin (Get-AuditEventList $row.AuditLogEvents) }).Count -gt 0
+# The baseline events a list covers. Microsoft Learn says CONNECTION_V2 records connections with their error codes and
+# GENERAL holds ADMIN, DDL and DCL as well as DML, so either covers the baseline events it holds and is never replaced.
+function Get-AuditEventCoverage($value) {
+    $events = Get-AuditEventList $value
+    @($events) + @(if ('CONNECTION_V2' -in $events) { 'CONNECTION' }) + @(if ('GENERAL' -in $events) { 'ADMIN', 'DDL', 'DCL' })
 }
+# The events a server logs beyond the four, which the change keeps selected.
+function Get-ExtraAuditEvents($row) { @(Get-AuditEventList $row.AuditLogEvents | Where-Object { $_ -notin $mysqlAuditEvents }) }
+# A server needs the parameter step when audit_log_enabled is not ON or audit_log_events covers less than the baseline.
+# The step adds the missing events and keeps every event already selected, so no audit coverage is removed. A server
+# that already covers the baseline and logs more is left as it is and named in the index for review.
+function Test-MySqlAuditGap($row) {
+    (Get-Text $row.AuditLogEnabled).ToUpperInvariant() -ne 'ON' -or @($mysqlAuditEvents | Where-Object { $_ -notin (Get-AuditEventCoverage $row.AuditLogEvents) }).Count -gt 0
+}
+# A user filter limits which users a server audits: audit_log_include_users audits only the users it names, and
+# audit_log_exclude_users leaves out the ones it names. The change leaves both as they are, since clearing one is the
+# client's decision, and names them so the SOC knows which activity it cannot see.
+function Test-MySqlUserFilter($row) { [bool]((Get-Text $row.AuditLogIncludeUsers) -or (Get-Text $row.AuditLogExcludeUsers)) }
 # The values as the server holds them, which the rollback sets back. An empty event list reads as empty.
 function Format-AuditValue($value) { $t = ConvertTo-CopyText $value; if ($t) { $t -replace '\s+', '' } else { 'empty' } }
 function Format-MySqlAudit($row) {
-    'audit_log_enabled {0}, audit_log_events {1}{2}' -f (Format-AuditValue $row.AuditLogEnabled), (Format-AuditValue $row.AuditLogEvents), $(switch (Get-Text $row.Dynamic) { 'Yes' { '' } 'No' { ', restart needed' } default { ', restart not reported' } })
+    'audit_log_enabled {0}, audit_log_events {1}{2}{3}{4}' -f (Format-AuditValue $row.AuditLogEnabled), (Format-AuditValue $row.AuditLogEvents),
+    $(if (Get-Text $row.AuditLogIncludeUsers) { ', audit_log_include_users ' + (Format-AuditValue $row.AuditLogIncludeUsers) } else { '' }),
+    $(if (Get-Text $row.AuditLogExcludeUsers) { ', audit_log_exclude_users ' + (Format-AuditValue $row.AuditLogExcludeUsers) } else { '' }),
+    $(switch (Get-Text $row.Dynamic) { 'Yes' { '' } 'No' { ', restart needed' } default { ', restart not reported' } })
 }
 # Whether a subscription is in scope: Only names the subscriptions to take (all when null), Skip the ones to leave out.
 function Test-SubscriptionScope($subscriptionId, [string[]]$Only, [string[]]$Skip) {
@@ -466,6 +482,8 @@ function Get-MySqlAudit([string[]]$Only, [string[]]$Skip, [int]$Number) {
             $r | Add-Member -NotePropertyName Label -NotePropertyValue 'MySQL flexible server'
             $r | Add-Member -NotePropertyName Audit -NotePropertyValue (Format-MySqlAudit $_)
             $r | Add-Member -NotePropertyName Dynamic -NotePropertyValue (Get-Text $_.Dynamic)
+            $r | Add-Member -NotePropertyName Extra -NotePropertyValue (Get-ExtraAuditEvents $_)
+            $r | Add-Member -NotePropertyName Filtered -NotePropertyValue (Test-MySqlUserFilter $_)
             $r })
     $unread = @($rows | Where-Object { (Get-Text $_.ReadStatus) -ne 'OK' } | ForEach-Object $name | Sort-Object)
     if ($unread.Count) {
@@ -476,9 +494,15 @@ function Get-MySqlAudit([string[]]$Only, [string[]]$Skip, [int]$Number) {
         $audit.Notes.Add(('DR.6-MYSQLAUDIT is partial although it names no server it could not read, so Resource Graph may have returned only part of the server list, and a MySQL flexible server with audit_log_enabled OFF may be missing from {0}. Recollect the pack.' -f $label))
         $audit.Suffix = ', partial collection scope (DR.6-MYSQLAUDIT), see the notes'
     }
-    $extra = @($read | Where-Object { -not (Test-MySqlAuditGap $_) -and @(Get-AuditEventList $_.AuditLogEvents | Where-Object { $_ -notin $mysqlAuditEvents }).Count } | ForEach-Object { '{0}, audit_log_events {1}' -f (& $name), (Format-AuditValue $_.AuditLogEvents) } | Sort-Object)
+    $extra = @($read | Where-Object { -not (Test-MySqlAuditGap $_) -and @(Get-ExtraAuditEvents $_).Count } | ForEach-Object { '{0}, audit_log_events {1}' -f (& $name), (Format-AuditValue $_.AuditLogEvents) } | Sort-Object)
     if ($extra.Count) {
         $audit.Notes.Add(('{0} already {1} audit_log_enabled ON with every event the baseline sets, and also {2} more: {3}. {4} leaves {5} as {6}. Review the extra events with the client, since the baseline limits audit_log_events to CONNECTION, ADMIN, DDL and DCL so the volume stays at audit level.' -f (Get-Count $extra.Count 'MySQL flexible server' 'MySQL flexible servers'), (Get-Pick $extra.Count 'has' 'have'), (Get-Pick $extra.Count 'logs' 'log'), ($extra -join ' / '), $label, (Get-Pick $extra.Count 'it' 'them'), (Get-Pick $extra.Count 'it is' 'they are')))
+    }
+    $filtered = @($read | Where-Object { Test-MySqlUserFilter $_ } | ForEach-Object {
+            '{0}{1}{2}' -f (& $name), $(if (Get-Text $_.AuditLogIncludeUsers) { ', audit_log_include_users ' + (Format-AuditValue $_.AuditLogIncludeUsers) } else { '' }), $(if (Get-Text $_.AuditLogExcludeUsers) { ', audit_log_exclude_users ' + (Format-AuditValue $_.AuditLogExcludeUsers) } else { '' }) } | Sort-Object)
+    if ($filtered.Count) {
+        $audit.Notes.Add(('{0} {1} only some MySQL users, through audit_log_include_users or audit_log_exclude_users: {2}. {3} leaves the filters as they are, since clearing one is the client''s decision. Confirm with the client that each filter is intended, since the SOC sees no audit rows for a user it leaves out.' -f (Get-Count $filtered.Count 'MySQL flexible server' 'MySQL flexible servers'), (Get-Pick $filtered.Count 'audits' 'audit'), ($filtered -join ' / '), $label))
+        $audit.Suffix += ', MySQL audit user filters to confirm, see the notes'
     }
     $static = @($audit.Gaps | Where-Object { $_.Dynamic -ne 'Yes' } | ForEach-Object { '{0} (resource group {1})' -f $_.Name, $_.ResourceGroup } | Sort-Object)
     if ($static.Count) {
@@ -495,14 +519,14 @@ function Add-MySqlAuditSteps($Impl, $Testing, $Rollback, $Servers, [bool]$Shared
     $Impl.Add(('In the Azure portal, go to Azure Database for MySQL flexible servers and open the {0}MySQL flexible server {1}.' -f $(if ($m -gt 1) { 'first ' } else { '' }), $listed))
     $Impl.Add('Go to Settings > Server parameters and search for audit_log.')
     $Impl.Add('Read audit_log_enabled and audit_log_events. If either no longer shows the value recorded for the server in the RESOURCES section, the server has changed since collection, so note the value it shows in the change record, and set that value back instead of the recorded one if the change is rolled back.')
-    $Impl.Add('Set audit_log_enabled to ON, and set audit_log_events to CONNECTION, ADMIN, DDL and DCL only, so query-level DML and the other events stay out.')
-    $Impl.Add('Leave audit_log_include_users blank, so every MySQL user is audited. If it already names users, only those users are audited, so leave it unchanged and note it in the change record.')
+    $Impl.Add('Set audit_log_enabled to ON, and add to audit_log_events each of CONNECTION, ADMIN, DDL and DCL it leaves out, keeping every event already selected so no audit coverage is removed. CONNECTION_V2 already covers CONNECTION, and GENERAL already covers ADMIN, DDL and DCL.')
+    $Impl.Add('Leave audit_log_include_users and audit_log_exclude_users as they are. Where the RESOURCES section shows either for the server, it audits only some users, and the filter stays until the client decides otherwise.')
     if (@($Servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) {
         $Impl.Add('Select Save. A server the RESOURCES section marks restart needed, or restart not reported, may ask to be restarted, since a static parameter applies only after a restart. Select Restart later, note it in the change record and restart the server only within the maintenance window the client agreed.')
     }
     else { $Impl.Add('Select Save. Azure reported both parameters as dynamic on the server, so they apply without a restart. If the portal still asks to restart the server, select Restart later, note it in the change record and agree a restart with the client.') }
     if ($m -gt 1) { $Impl.Add(('Repeat steps {0} to {1} for each remaining MySQL flexible server {2}.' -f $from, $Impl.Count, $(if ($Shared) { 'listed with its audit parameters' } else { 'listed' }))) }
-    $Testing.Add(('On {0}MySQL flexible server {1}, go to Settings > Server parameters and confirm audit_log_enabled shows ON and audit_log_events shows CONNECTION, ADMIN, DDL and DCL.' -f $(if ($m -gt 1) { 'each ' } else { 'the ' }), $listed))
+    $Testing.Add(('On {0}MySQL flexible server {1}, go to Settings > Server parameters and confirm audit_log_enabled shows ON and audit_log_events includes CONNECTION, ADMIN, DDL and DCL, or CONNECTION_V2 or GENERAL where they cover them.' -f $(if ($m -gt 1) { 'each ' } else { 'the ' }), $listed))
     $Testing.Add(('On the same {0}, go to Monitoring > Diagnostic settings and confirm the ATMO-MXDR setting sends the MySqlAuditLogs category to {1}, with no slow query logs and no metrics.' -f (Get-Pick $m 'server' 'servers'), $workspace))
     $Testing.Add(@(('About 10 minutes after the change, once someone has connected to {0}, run this query in {1} and confirm {2} rows. Resource is the server name in upper case.' -f (Get-Pick $m 'the server' 'each server'), $workspace, (Get-Pick $m 'the server shows' 'each server shows')), 'AzureDiagnostics | where Category == "MySqlAuditLogs" | summarize count() by Resource'))
     $Rollback.Add(('On {0}MySQL flexible server the change set, go to Settings > Server parameters, set audit_log_enabled and audit_log_events back to the values recorded for the server in the RESOURCES section, or noted in the change record, and select Save.' -f $(if ($m -gt 1) { 'each ' } else { 'the ' })))
@@ -518,7 +542,11 @@ function Get-MySqlAuditEffect($Servers) {
             if ($unknown.Count) { 'Azure did not report whether the parameters are dynamic on {0}, so {1} may need a restart, which causes a short outage, before the audit log starts.' -f (Join-Words $unknown), (Get-Pick $unknown.Count 'that server' 'those servers') }
             'I would restart only within a maintenance window you agree.') -join ' '
     }
-    'On the MySQL {0}, the change sets audit_log_enabled to ON and audit_log_events to CONNECTION, ADMIN, DDL and DCL, so the audit log records sign-ins and disconnections, administrative statements such as SHOW STATUS, and statements that change database objects or permissions, such as DROP DATABASE or GRANT, while the reads and writes of everyday queries stay out. The MySQL audit log adds rows in step with the connections and administrative statements on each server, and Microsoft recommends logging only the event types an audit needs so the server''s performance is not heavily affected. {1}' -f (Get-Pick $m 'flexible server below' 'flexible servers below'), $restart
+    $extra = @($Servers | Where-Object { @($_.Extra | Where-Object { $_ }).Count } | Sort-Object Name | ForEach-Object { '{0} on {1}' -f (Join-Words @($_.Extra | Where-Object { $_ })), $_.Name })
+    $kept = if ($extra.Count) { '. The events a server already has selected stay selected, so the audit log also records {0}' -f (Join-Words $extra) } else { ', while the reads and writes of everyday queries stay out' }
+    $filtered = @($Servers | Where-Object Filtered | ForEach-Object Name | Sort-Object)
+    $filter = if ($filtered.Count) { ' {0} {1} only some MySQL users today, through the user filter shown below, which the change leaves as it is, so please let me know if every user should be audited there.' -f (Join-Words $filtered), (Get-Pick $filtered.Count 'audits' 'audit') } else { '' }
+    'On the MySQL {0}, the change sets audit_log_enabled to ON and makes sure audit_log_events includes CONNECTION, ADMIN, DDL and DCL, so the audit log records sign-ins and disconnections, administrative statements such as SHOW STATUS, and statements that change database objects or permissions, such as DROP DATABASE or GRANT{1}. The MySQL audit log adds rows in step with the connections and administrative statements on each server, and Microsoft recommends logging only the event types an audit needs so the server''s performance is not heavily affected.{2} {3}' -f (Get-Pick $m 'flexible server below' 'flexible servers below'), $kept, $filter, $restart
 }
 # CR-01 and CR-10: diagnostic settings apply without touching the workloads, and so do the MySQL audit parameters where
 # Azure reports both as dynamic.
@@ -648,7 +676,7 @@ function New-DiagnosticAssignment([string[]]$Subscriptions, [bool]$Covered) {
         -Resources $listed.ToArray()
     @{ Used = @('P0.5') + $audit.Used; Notes = $audit.Notes.ToArray(); Cr = New-ChangeRequest @{
             Number = 1; Key = 'diagnostic-logging'; Title = 'Deploy the ATMO-MXDR diagnostic logging initiative'
-            Description = "Assign the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative and run its remediation tasks, so the audit logs of supported Azure resources are sent to $workspace." + $(if ($servers.Count) { ' Set audit_log_enabled to ON and audit_log_events to CONNECTION, ADMIN, DDL and DCL on the MySQL flexible {0} listed below, so {1} audit rows to send.' -f (Get-Pick $servers.Count 'server' 'servers'), (Get-Pick $servers.Count 'its diagnostic setting has' 'their diagnostic settings have') } else { '' })
+            Description = "Assign the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative and run its remediation tasks, so the audit logs of supported Azure resources are sent to $workspace." + $(if ($servers.Count) { ' Set audit_log_enabled to ON and make audit_log_events include CONNECTION, ADMIN, DDL and DCL on the MySQL flexible {0} listed below, so {1} audit rows to send.' -f (Get-Pick $servers.Count 'server' 'servers'), (Get-Pick $servers.Count 'its diagnostic setting has' 'their diagnostic settings have') } else { '' })
             Purpose = 'The initiative keeps audit logging in place on every supported resource, including resources created later. Sending these logs to Sentinel gives the SOC the telemetry it needs to detect and investigate activity on them.'
             ResourceIntro = $intro; ResourceLines = $lines.ToArray()
             Availability = Get-DiagnosticAvailability $servers
@@ -750,7 +778,7 @@ function New-DiagnosticRemediation($rows, $audit) {
     }
     elseif (-not $p) {
         $email = New-ApprovalEmail -Subject 'turning on the MySQL audit log for Azure diagnostic logging' -Window:$restart `
-            -Change @(('I would like to turn on the audit log of {0}, with the events the MXDR baseline sets, by setting {1} audit_log_enabled server parameter to ON and its audit_log_events parameter to those events.' -f (Get-Yours $m 'MySQL flexible servers'), (Get-Pick $m 'its' 'each server''s')), ('A diagnostic setting sends the audit log of a MySQL server to {0}, but MySQL writes no audit rows to send until audit_log_enabled is ON, and only the events audit_log_events names.' -f $emailWorkspace)) `
+            -Change @(('I would like to turn on the audit log of {0}, with the events the MXDR baseline sets, by setting {1} audit_log_enabled server parameter to ON and making sure its audit_log_events parameter includes those events.' -f (Get-Yours $m 'MySQL flexible servers'), (Get-Pick $m 'its' 'each server''s')), ('A diagnostic setting sends the audit log of a MySQL server to {0}, but MySQL writes no audit rows to send until audit_log_enabled is ON, and only the events audit_log_events names.' -f $emailWorkspace)) `
             -Why ('I recommend this change because the audit log of {0} is off, or leaves out events the baseline sets, so the SOC cannot fully see who connects to {1} or which administrative and permission changes are made there.' -f (Get-Pick $m 'the server below' 'each server below'), (Get-Pick $m 'it' 'them')) `
             -Effect @((Get-MySqlAuditEffect $servers), ('This change adds Log Analytics ingestion to {0}, billed as data ingested into the workspace.' -f $emailWorkspace)) `
             -Listed (Get-Pick $m 'The server is listed below with its audit parameters today:' 'The servers are listed below by subscription, each with its audit parameters today:') `
@@ -784,14 +812,14 @@ function New-DiagnosticRemediation($rows, $audit) {
     }
     elseif (-not $p) {
         $spec.Title = 'Turn on the audit log of MySQL flexible servers for ATMO-MXDR diagnostic logging'
-        $spec.Description = 'Set audit_log_enabled to ON and audit_log_events to CONNECTION, ADMIN, DDL and DCL on {0}, so the diagnostic setting has audit rows to send to {1}.' -f (Get-Listed $m 'MySQL flexible server' 'MySQL flexible servers'), $workspace
-        $spec.Purpose = 'A diagnostic setting sends no MySQL audit rows until audit_log_enabled is ON, and only the events audit_log_events names, so {0} less than the MXDR baseline expects to Sentinel today, or nothing, even where the initiative reports {1} compliant. The events set are the ones the baseline sets, which leave query-level DML out so the volume stays at audit level.' -f (Get-Pick $m 'this server sends' 'these servers send'), (Get-Pick $m 'it' 'them')
+        $spec.Description = 'Set audit_log_enabled to ON and make audit_log_events include CONNECTION, ADMIN, DDL and DCL on {0}, so the diagnostic setting has audit rows to send to {1}.' -f (Get-Listed $m 'MySQL flexible server' 'MySQL flexible servers'), $workspace
+        $spec.Purpose = 'A diagnostic setting sends no MySQL audit rows until audit_log_enabled is ON, and only the events audit_log_events names, so {0} less than the MXDR baseline expects to Sentinel today, or nothing, even where the initiative reports {1} compliant. The events added are the ones the baseline sets, which leave query-level DML out so the volume stays at audit level, and events already selected stay.' -f (Get-Pick $m 'this server sends' 'these servers send'), (Get-Pick $m 'it' 'them')
         $spec.ResourceIntro = '{0} with {1} audit parameters today.' -f $(if ($m -eq 1) { 'The MySQL flexible server below is listed' } else { "The $m MySQL flexible servers below are listed" }), (Get-Pick $m 'its' 'their')
         $spec.Dependencies = 'Adds MySQL audit rows to the Sentinel workspace in step with the connections and administrative statements on each server.'
     }
     else {
         $spec.Title = 'Remediate resources missing ATMO-MXDR diagnostic logging and turn on the MySQL audit log'
-        $spec.Description = 'Run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on the resources listed below with their policies, so their audit logs reach {0}. Set audit_log_enabled to ON and audit_log_events to CONNECTION, ADMIN, DDL and DCL on the MySQL flexible {1} listed with audit parameters.' -f $workspace, (Get-Pick $m 'server' 'servers')
+        $spec.Description = 'Run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on the resources listed below with their policies, so their audit logs reach {0}. Set audit_log_enabled to ON and make audit_log_events include CONNECTION, ADMIN, DDL and DCL on the MySQL flexible {1} listed with audit parameters.' -f $workspace, (Get-Pick $m 'server' 'servers')
         $spec.Purpose = 'These resources are not compliant with the diagnostic logging initiative, or are MySQL servers that write no audit rows while audit_log_enabled is OFF, so their audit activity does not reach Sentinel. Remediation deploys the missing diagnostic settings, and the server parameters turn the MySQL audit log on.'
         $spec.ResourceIntro = 'The {0} resources below are not compliant with the initiative, with the policies each one fails, or are MySQL flexible servers listed with their audit parameters today.' -f $n
         $spec.Dependencies = 'Relies on the managed identity of the initiative assignment and adds audit log ingestion, MySQL audit rows included, to the Sentinel workspace.'

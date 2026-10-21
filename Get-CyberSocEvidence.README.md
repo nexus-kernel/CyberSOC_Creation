@@ -341,11 +341,12 @@ in the pack (`results/<ID>.csv`).
 - CyberSOC collector 1.15.0 (October 21, 2026): `DR.6-MYSQLAUDIT` (engine `MYSQL-AUDIT`, phase P2 Detection and
   response) reads the audit log parameters of every MySQL flexible server. Server parameters are not in Resource Graph,
   so it lists the servers from `resources` with the `{{MRG}}` exclusion and reads each one with a GET on
-  `<server>/configurations/audit_log_enabled` and `<server>/configurations/audit_log_events` (Reader is enough). Every
+  `<server>/configurations/audit_log_enabled`, `audit_log_events`, `audit_log_include_users` and
+  `audit_log_exclude_users` (Reader is enough), since the user filters decide which users are audited. Every
   server is read, not only the ones `DR.6-NONCOMPLIANT` names, since a server with the diagnostic setting is compliant
   with the initiative but writes no audit rows while `audit_log_enabled` is OFF. One row per server with its state,
-  `AuditLogEnabled` and `AuditLogEvents` as the server returns them, `Dynamic` (Yes when both parameters read as
-  dynamic, No when either reads static, empty when not reported) and `ReadStatus`, so a server that could not be read is
+  `AuditLogEnabled`, `AuditLogEvents`, `AuditLogIncludeUsers` and `AuditLogExcludeUsers` as the server returns them, `Dynamic` (Yes when `audit_log_enabled` and
+  `audit_log_events` both read as dynamic, No when either reads static, empty when not reported) and `ReadStatus`, so a server that could not be read is
   named and never read as set. Internal, since it names servers. Change requests CR-01 and CR-10 set the parameters
   from it, and on an earlier pack that may hold MySQL servers their index notes ask for recollection. The query is in
   section 6 of the CyberSOC Monthly Report Runbook.

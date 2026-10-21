@@ -8,6 +8,8 @@
       "State": "Ready",
       "AuditLogEnabled": "OFF",
       "AuditLogEvents": "CONNECTION",
+      "AuditLogIncludeUsers": "",
+      "AuditLogExcludeUsers": "",
       "Dynamic": "No",
       "ReadStatus": "OK",
       "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/mysql-static"
@@ -19,6 +21,8 @@
       "State": "Ready",
       "AuditLogEnabled": "ON",
       "AuditLogEvents": "CONNECTION,ADMIN",
+      "AuditLogIncludeUsers": "",
+      "AuditLogExcludeUsers": "",
       "Dynamic": "",
       "ReadStatus": "OK",
       "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-fin/providers/Microsoft.DBforMySQL/flexibleServers/mysql-unreported"
@@ -30,6 +34,8 @@
       "State": "Ready",
       "AuditLogEnabled": "ON",
       "AuditLogEvents": "CONNECTION,ADMIN,DDL,DCL",
+      "AuditLogIncludeUsers": "",
+      "AuditLogExcludeUsers": "",
       "Dynamic": "Yes",
       "ReadStatus": "OK",
       "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-fin/providers/Microsoft.DBforMySQL/flexibleServers/mysql-ledger"

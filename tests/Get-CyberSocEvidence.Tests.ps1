@@ -186,26 +186,28 @@ Describe 'Query catalog' {
         $item.Phase | Should -Be 'P2 Detection and response'
         $item.Notes | Should -Match '^Added in CyberSOC 1\.15\.0\. Server parameters are not in Resource Graph'
         $item.Notes | Should -Match 'Every server is read, not only the ones DR\.6-NONCOMPLIANT names'
+        $item.Notes | Should -Match 'audit_log_include_users and audit_log_exclude_users paths' -Because 'the user filters decide which users are audited'
         $item.Notes | Should -Match 'Feeds change requests CR-01 and CR-10\. Internal: names servers, the report embeds counts only\.'
         $item.Query | Should -Match 'resources\r?\n\| where type =~ "microsoft\.dbformysql/flexibleservers"\r?\n\| where id !contains "\{\{MRG\}\}"'
         $item.Query | Should -Not -Match 'policyresources' -Because 'every server is read, compliant or not'
         $item.Query | Should -Match 'project Name = name, ResourceId = id, resourceGroup, subscriptionId, State = tostring\(properties\.state\)'
-        foreach ($name in 'audit_log_enabled', 'audit_log_events') {
+        foreach ($name in 'audit_log_enabled', 'audit_log_events', 'audit_log_include_users', 'audit_log_exclude_users') {
             { Assert-EbrReadOnlyRequest -Method GET -Uri "https://management.azure.com/subscriptions/s/resourceGroups/rg/providers/Microsoft.DBforMySQL/flexibleServers/m/configurations/$($name)?api-version=2023-12-30" } | Should -Not -Throw
         }
     }
     It 'records both audit parameters as the server returns them, whether they apply without a restart, and a server it cannot read as not read' {
         $server = [pscustomobject]@{ ResourceId = '/subscriptions/s/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/mysql-a'; Name = 'mysql-a'; resourceGroup = 'rg-db'; subscriptionId = 's'; State = 'Ready' }
         Mock Invoke-EbrRest {
-            $v = if ($Uri -match 'audit_log_enabled') { 'OFF' } else { 'CONNECTION' }
-            [pscustomobject]@{ name = 'x'; properties = [pscustomobject]@{ value = $v; isDynamicConfig = 'True'; defaultValue = $v } }
+            $v = switch -Regex ($Uri) { 'audit_log_enabled' { 'OFF' } 'audit_log_events' { 'CONNECTION' } 'audit_log_exclude_users' { 'svc_backup' } default { '' } }
+            # The user filters read as static on purpose: the change leaves them as they are, so they never decide a restart.
+            [pscustomobject]@{ name = 'x'; properties = [pscustomobject]@{ value = $v; isDynamicConfig = $(if ($Uri -match 'users') { 'False' } else { 'True' }); defaultValue = $v } }
         }
         $r = Get-EbrMySqlAuditRow -Server $server -Tenant 't'
-        @($r.subscriptionId, $r.resourceGroup, $r.Name, $r.State, $r.AuditLogEnabled, $r.AuditLogEvents, $r.Dynamic, $r.ReadStatus, $r.ResourceId) | Should -Be @('s', 'rg-db', 'mysql-a', 'Ready', 'OFF', 'CONNECTION', 'Yes', 'OK', $server.ResourceId)
-        foreach ($name in 'audit_log_enabled', 'audit_log_events') {
+        @($r.subscriptionId, $r.resourceGroup, $r.Name, $r.State, $r.AuditLogEnabled, $r.AuditLogEvents, $r.AuditLogIncludeUsers, $r.AuditLogExcludeUsers, $r.Dynamic, $r.ReadStatus, $r.ResourceId) | Should -Be @('s', 'rg-db', 'mysql-a', 'Ready', 'OFF', 'CONNECTION', '', 'svc_backup', 'Yes', 'OK', $server.ResourceId)
+        foreach ($name in 'audit_log_enabled', 'audit_log_events', 'audit_log_include_users', 'audit_log_exclude_users') {
             Should -Invoke Invoke-EbrRest -Times 1 -Exactly -ParameterFilter { $Method -eq 'GET' -and $Uri -eq "https://management.azure.com/subscriptions/s/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/mysql-a/configurations/$($name)?api-version=2023-12-30" -and $Resource -eq 'https://management.azure.com/' }
         }
-        Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ value = $(if ($Uri -match 'audit_log_enabled') { 'ON' } else { '' }); isDynamicConfig = $(if ($Uri -match 'audit_log_enabled') { 'True' } else { 'False' }) } } }
+        Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ value = $(if ($Uri -match 'audit_log_enabled') { 'ON' } else { '' }); isDynamicConfig = $(if ($Uri -match 'audit_log_events') { 'False' } else { 'True' }) } } }
         $r = Get-EbrMySqlAuditRow -Server $server -Tenant 't'
         @($r.AuditLogEnabled, $r.AuditLogEvents, $r.Dynamic, $r.ReadStatus) | Should -Be @('ON', '', 'No', 'OK') -Because 'an empty event list is a reading, and one static parameter needs a restart'
         Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ value = 'ON' } } }
@@ -213,6 +215,10 @@ Describe 'Query catalog' {
         Mock Invoke-EbrRest { if ($Uri -match 'audit_log_events') { return [pscustomobject]@{ properties = [pscustomobject]@{ } } }; [pscustomobject]@{ properties = [pscustomobject]@{ value = 'ON'; isDynamicConfig = 'True' } } }
         $r = Get-EbrMySqlAuditRow -Server $server -Tenant 't'
         @($r.AuditLogEnabled, $r.AuditLogEvents, $r.Dynamic, $r.ReadStatus) | Should -Be @('', '', '', 'The audit_log_events response carried no properties.value.') -Because 'a server half read is not read'
+        Mock Invoke-EbrRest { if ($Uri -match 'audit_log_exclude_users') { throw 'HTTP 500: Internal Server Error' }; [pscustomobject]@{ properties = [pscustomobject]@{ value = 'ON'; isDynamicConfig = 'True' } } }
+        $r = Get-EbrMySqlAuditRow -Server $server -Tenant 't'
+        @($r.AuditLogEnabled, $r.AuditLogExcludeUsers) | Should -Be @('', '') -Because 'a user filter that was not read could leave users out, so the server is not read'
+        $r.ReadStatus | Should -Match '^audit_log_exclude_users: HTTP 500'
         Mock Invoke-EbrRest { throw 'HTTP 403: Forbidden | AuthorizationFailed' }
         $r = Get-EbrMySqlAuditRow -Server $server -Tenant 't'
         $r.AuditLogEnabled | Should -Be ''
@@ -229,7 +235,7 @@ Describe 'Query catalog' {
         $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
         $res.Status | Should -Be 'OK'
         $res.Detail | Should -Be '2 of 2 MySQL flexible servers read: audit_log_enabled ON in 1, not ON in 1.'
-        @($res.Rows)[0].PSObject.Properties.Name | Should -Be @('subscriptionId', 'resourceGroup', 'Name', 'State', 'AuditLogEnabled', 'AuditLogEvents', 'Dynamic', 'ReadStatus', 'ResourceId')
+        @($res.Rows)[0].PSObject.Properties.Name | Should -Be @('subscriptionId', 'resourceGroup', 'Name', 'State', 'AuditLogEnabled', 'AuditLogEvents', 'AuditLogIncludeUsers', 'AuditLogExcludeUsers', 'Dynamic', 'ReadStatus', 'ResourceId')
         $ctx.Pending.Count | Should -Be 0 -Because 'one result holds every server'
         Mock Invoke-EbrRest { if ($Uri -match 'mysql-on') { throw 'HTTP 429: Too Many Requests' }; [pscustomobject]@{ properties = [pscustomobject]@{ value = 'OFF'; isDynamicConfig = 'True' } } }
         $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item

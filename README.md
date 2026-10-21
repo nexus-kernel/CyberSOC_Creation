@@ -115,7 +115,7 @@ missing evidence never becomes a favorable zero.
    password stops working while deployment that signs in with Microsoft Entra ID is not affected, and asks whether
    anything still uses those credentials, for FTP, FTPS or local Git, on every app where it is on, an app whose FTP
    state is already Disabled included. The diagnostic logging changes (CR-01 and CR-10, collector 1.15.0) also set
-   `audit_log_enabled` ON and `audit_log_events` to CONNECTION, ADMIN, DDL and DCL on every MySQL flexible server that
+   `audit_log_enabled` ON and add CONNECTION, ADMIN, DDL and DCL to `audit_log_events` on every MySQL flexible server that
    needs them, compliant with the initiative or not, since a diagnostic setting sends no MySQL audit rows until the
    audit log is on, and their emails say the audit log adds rows in step with connections and administrative
    statements and whether the parameters apply without a restart. AKS node pools without encryption at host get no change
