@@ -84,6 +84,9 @@
     partial or found no account, no Conditional Access change is written and the index says why. CR-04 sets the SCM
     (Kudu) site minimum TLS version from the ScmMinTlsVersion column of NB.5-DETAIL, added in 1.13.0, and on an earlier
     pack sets the site minimum only and says in the index that the SCM part needs recollection.
+    CR-17 turns FTP basic authentication publishing credentials off from NB.5-FTPAUTH-DETAIL, added in 1.14.0, on every
+    app where it is On whatever its FTP state, and on an earlier pack changes the FTP state only and says in the index
+    that the FTP basic authentication part needs recollection.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -123,6 +126,7 @@ $detailVersions['DP.1-CONTAINERS-DETAIL'] = '1.8.0'
 foreach ($id in 'IA.15-DISABLED', 'IA.15-RBAC', 'IA.15-ENTRA') { $detailVersions[$id] = '1.9.0' }
 foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { $detailVersions[$id] = '1.11.0' }
 foreach ($id in 'IA.16-ACCOUNTS', 'IA.16-GROUPS') { $detailVersions[$id] = '1.12.0' }
+foreach ($id in 'NB.5-FTPAUTH', 'NB.5-FTPAUTH-DETAIL') { $detailVersions[$id] = '1.14.0' }
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -136,6 +140,9 @@ $needsIdRecollection = 'Needs recollection with CyberSOC collector 1.4.0 or late
 # CR-04 sets the SCM (Kudu) site minimum TLS version from the ScmMinTlsVersion column of NB.5-DETAIL, added in 1.13.0.
 # On an earlier pack it sets the site minimum only and its index note asks for recollection.
 $scmTlsVersion = '1.13.0'
+# CR-17 turns FTP basic authentication off from NB.5-FTPAUTH-DETAIL, added in 1.14.0. On an earlier pack it changes the
+# FTP state only and its index note asks for recollection.
+$ftpAuthVersion = $detailVersions['NB.5-FTPAUTH-DETAIL']
 
 # Get-Text, Test-True, Get-Status, Get-Rows, Test-Unreadable and Get-UnreadableState. Each result file is
 # parsed once. A result the manifest reads as OK or PARTIAL needs a file that parses, or a damaged pack would
@@ -218,6 +225,10 @@ function Format-ResourceList($resources) {
 }
 function Get-PowerText($value) {
     switch -Regex (Get-Text $value) { 'running$' { 'running' } 'deallocated$' { 'deallocated' } 'stopped$' { 'stopped' } '^$' { 'power state unknown' } default { (Get-Text $value).Replace('PowerState/', '') } }
+}
+# The FTP state as the portal names it. An empty or unknown state is never named as one of the three.
+function Format-FtpState($value) {
+    switch (Get-Text $value) { 'AllAllowed' { 'All allowed' } 'FtpsOnly' { 'FTPS only' } 'Disabled' { 'Disabled' } '' { 'not recorded' } default { ConvertTo-CopyText $value } }
 }
 function Format-TlsVersion($value) {
     # Storage writes TLS1_2, Cosmos DB Tls, Tls11 and Tls12, the other services 1.2.
@@ -1834,13 +1845,26 @@ $catalog = @(
                     Csv = $resources
                     Email = $email
                 } } } }
-    @{ Number = 17; Key = 'app-service-ftps'; Change = 'Plain FTP turned off on App Service apps'; Sources = @('NB.5-FTPS-DETAIL')
+    @{ Number = 17; Key = 'app-service-ftps'; Change = 'Plain FTP and FTP basic authentication turned off on App Service apps'; Sources = @()
        Build = {
-            # NB.5-FTPS-DETAIL lists every site whose FTP state is not FtpsOnly or Disabled. Only AllAllowed is known
-            # to accept plain FTP. Microsoft Learn documents no state App Service applies when none is set, so a site
-            # whose state reads empty, or reads a value Learn does not list, is named in the index for a portal check
-            # instead of being changed or read as safe.
-            $rows = @(Get-Rows 'NB.5-FTPS-DETAIL')
+            # Two parts on the same General settings tab. The FTP state part reads NB.5-FTPS-DETAIL, which lists every
+            # site whose FTP state is not FtpsOnly or Disabled. Only AllAllowed is known to accept plain FTP. Microsoft
+            # Learn documents no state App Service applies when none is set, so a site whose state reads empty, or reads
+            # a value Learn does not list, is named in the index for a portal check instead of being changed or read as
+            # safe. The FTP basic authentication part reads NB.5-FTPAUTH-DETAIL, added in collector 1.14.0, which lists
+            # every app where it is On whatever its FTP state, and on an earlier pack CR-17 writes the FTP state part only.
+            # The two parts are read apart, so CR-17 lists no source for the resolver and checks each one here: a part
+            # that was not read leaves the other to stand alone, and only when neither was read does the state say why.
+            $ftpsStatus = Get-Status 'NB.5-FTPS-DETAIL'
+            $ftpsRead = Test-ResultRead 'NB.5-FTPS-DETAIL'
+            $authStatus = Get-Status 'NB.5-FTPAUTH-DETAIL'
+            $authRead = Test-ResultRead 'NB.5-FTPAUTH-DETAIL'
+            if (-not $ftpsRead -and -not $authRead) {
+                if ($ftpsStatus -eq 'MISSING') { return @{ State = Get-RecollectionState @('NB.5-FTPS-DETAIL', 'NB.5-FTPAUTH-DETAIL' | Where-Object { (Get-Status $_) -eq 'MISSING' }) } }
+                if (Test-Unreadable 'NB.5-FTPS-DETAIL') { return @{ State = Get-UnreadableState 'NB.5-FTPS-DETAIL' } }
+                return @{ State = 'Not collected (NB.5-FTPS-DETAIL {0})' -f $ftpsStatus }
+            }
+            $rows = @(if ($ftpsRead) { Get-Rows 'NB.5-FTPS-DETAIL' })
             $label = { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) }
             $unread = @($rows | Where-Object { (Get-Text $_.FtpsState) -notin 'AllAllowed', 'FtpsOnly', 'Disabled' } | ForEach-Object {
                     $state = ConvertTo-CopyText $_.FtpsState
@@ -1850,69 +1874,185 @@ $catalog = @(
             if ($unread.Count) {
                 $notes.Add(('{0} left out of CR-17 because Resource Graph returned an empty FTP state, or one Microsoft Learn does not list, and Learn documents no state App Service applies when none is set, so {1} may still accept plain FTP: {2}. Check {3} under Settings > Configuration > General settings in the portal, and raise the change for any that shows All allowed.' -f (Get-Count $unread.Count 'App Service app' 'App Service apps'), (Get-Pick $unread.Count 'it' 'they'), ($unread -join ', '), (Get-Pick $unread.Count 'its FTP state' 'the FTP state of each one')))
             }
+            if (-not $ftpsRead) { $notes.Add(('NB.5-FTPS-DETAIL {0}, so CR-17 covers FTP basic authentication only. Recollect the pack for the FTP state part.' -f $(if ($ftpsStatus -eq 'MISSING') { 'is not in this pack' } elseif (Test-Unreadable 'NB.5-FTPS-DETAIL') { 'is unreadable' } else { "reads $ftpsStatus" }))) }
+            # The FTP basic authentication read, and the apps it could not read, which are never read as Off.
+            $used = @(if ($ftpsRead) { 'NB.5-FTPS-DETAIL' }) + @(if ($authRead) { 'NB.5-FTPAUTH-DETAIL' })
+            $recorded = @{}
+            if ($authStatus -eq 'MISSING') { $notes.Add(('NB.5-FTPAUTH-DETAIL is not in this pack, so CR-17 covers the FTP state only. Recollect with CyberSOC collector {0} or later for the FTP basic authentication part.' -f $ftpAuthVersion)) }
+            elseif (-not $authRead) { $notes.Add(('NB.5-FTPAUTH-DETAIL {0}, so CR-17 covers the FTP state only. Recollect the pack for the FTP basic authentication part.' -f $(if (Test-Unreadable 'NB.5-FTPAUTH-DETAIL') { 'is unreadable' } else { "reads $authStatus" }))) }
+            elseif (Test-ResultRead 'NB.5-FTPAUTH') {
+                foreach ($r in @(Get-Rows 'NB.5-FTPAUTH')) { if ((Get-Text $r.ReadStatus) -eq 'OK') { $recorded[(Get-Text $r.ResourceId).ToLowerInvariant()] = Get-Text $r.FtpBasicAuth } }
+                $notRead = @(Get-Rows 'NB.5-FTPAUTH' | Where-Object { (Get-Text $_.ReadStatus) -ne 'OK' } | ForEach-Object $label | Sort-Object)
+                if (-not $notRead.Count -and $authStatus -eq 'PARTIAL') {
+                    $notes.Add('NB.5-FTPAUTH-DETAIL is partial although NB.5-FTPAUTH names no app it could not read, so Resource Graph may have returned only part of the app list, and an app with FTP basic authentication On may be missing from CR-17. Recollect the pack.')
+                }
+                if ($notRead.Count) {
+                    $notes.Add(('{0} left out of the FTP basic authentication part of CR-17 because the collector could not read {1} setting: {2}. Check FTP Basic Auth Publishing Credentials under Settings > Configuration > General settings in the portal, and raise the change for any that shows On.' -f (Get-Count $notRead.Count 'App Service app' 'App Service apps'), (Get-Pick $notRead.Count 'its' 'their'), ($notRead -join ', ')))
+                }
+            }
+            elseif ($authStatus -eq 'PARTIAL') { $notes.Add(('NB.5-FTPAUTH-DETAIL is partial, and NB.5-FTPAUTH, which names the apps the collector could not read, {0}, so an app with FTP basic authentication On may be missing from CR-17. Recollect the pack.' -f $(if ((Get-Status 'NB.5-FTPAUTH') -eq 'MISSING') { 'is not in this pack' } elseif (Test-Unreadable 'NB.5-FTPAUTH') { 'is unreadable' } else { 'reads ' + (Get-Status 'NB.5-FTPAUTH') }))) }
             # A slot belongs to a site, so the slot note is left out only when NB.5 shows the pack has no site at all.
-            if (-not (Test-NoAppServiceSites)) { $notes.Add('NB.5-FTPS-DETAIL reads the production site of each app. Deployment slots have a configuration of their own, which the pack does not read, so CR-17 does not cover them. Check the FTP state of each slot in the portal.') }
+            if (-not (Test-NoAppServiceSites)) {
+                $notes.Add($(if ($authRead) { 'NB.5-FTPS-DETAIL and NB.5-FTPAUTH-DETAIL read the production site of each app. Deployment slots have an FTP state and an FTP basic authentication setting of their own, which the pack does not read, so CR-17 does not cover them. Check both on each slot in the portal.' }
+                        else { 'NB.5-FTPS-DETAIL reads the production site of each app. Deployment slots have a configuration of their own, which the pack does not read, so CR-17 does not cover them. Check the FTP state of each slot in the portal.' }))
+            }
+            # One entry per app, keyed by resource ID: the FTP state part where it reads AllAllowed, the basic
+            # authentication part where it reads On.
+            $entries = [ordered]@{}
             $lowTls = [System.Collections.Generic.List[string]]::new()
             $lowTlsNames = [System.Collections.Generic.List[string]]::new()
-            $resources = @(foreach ($row in @($rows | Where-Object { (Get-Text $_.FtpsState) -eq 'AllAllowed' })) {
-                    $tls = Format-TlsVersion $row.MinTlsVersion
-                    $setting = 'FTP state All allowed'
-                    # FTPS only does not support TLS 1.0 or 1.1, so an app below 1.2 needs CR-04 first.
-                    if ($tls -in '1.0', '1.1') { $setting += ', minimum TLS ' + $tls; $lowTls.Add(($row | ForEach-Object $label)); $lowTlsNames.Add((ConvertTo-CopyText $row.Name)) }
-                    New-Resource $row.Name $row.resourceGroup $row.subscriptionId $setting $row.ResourceId
+            foreach ($row in @($rows | Where-Object { (Get-Text $_.FtpsState) -eq 'AllAllowed' })) {
+                $tls = Format-TlsVersion $row.MinTlsVersion
+                # FTPS only does not support TLS 1.0 or 1.1, so an app below 1.2 needs CR-04 first.
+                if ($tls -in '1.0', '1.1') { $lowTls.Add(($row | ForEach-Object $label)); $lowTlsNames.Add((ConvertTo-CopyText $row.Name)) }
+                $entries[(Get-Text $row.ResourceId).ToLowerInvariant()] = [pscustomobject]@{ Row = $row; State = 'AllAllowed'; Tls = $tls; Ftp = $true; Auth = $false }
+            }
+            foreach ($row in @(if ($authRead) { Get-Rows 'NB.5-FTPAUTH-DETAIL' | Where-Object { (Get-Text $_.FtpBasicAuth) -eq 'On' } })) {
+                $key = (Get-Text $row.ResourceId).ToLowerInvariant()
+                if ($entries.Contains($key)) { $entries[$key].Auth = $true }
+                else { $entries[$key] = [pscustomobject]@{ Row = $row; State = Get-Text $row.FtpsState; Tls = ''; Ftp = $false; Auth = $true } }
+            }
+            $list = @($entries.Values)
+            $n = $list.Count
+            if (-not $n) {
+                $state = if ($unread.Count) { 'Only apps without a recorded FTP state remain, see the notes' } else { 'No gaps found' }
+                if ($authStatus -eq 'MISSING') { $state = $(if ($unread.Count) { 'Only apps without a recorded FTP state remain, the FTP basic authentication part needs recollection with CyberSOC collector {0} or later' } else { 'No FTP state gaps found, the FTP basic authentication part needs recollection with CyberSOC collector {0} or later' }) -f $ftpAuthVersion }
+                elseif (-not $authRead) { $state = 'No FTP state gaps found, the FTP basic authentication part was not collected, see the notes' }
+                elseif (-not $ftpsRead) { $state = 'No FTP basic authentication gaps found, the FTP state part was not collected, see the notes' }
+                # A partial read can leave out an app that still has a gap, so it never reads as no gaps.
+                $partialRead = @($used | Where-Object { (Get-Status $_) -eq 'PARTIAL' })
+                if ($partialRead.Count) { $state = $(if ($state -eq 'No gaps found') { 'No gaps found in the apps read' } else { $state }) + ', partial collection scope ({0}), see the notes' -f ($partialRead -join ', ') }
+                return @{ State = $state; Notes = $notes.ToArray() }
+            }
+            $ftp = @($list | Where-Object Ftp); $auth = @($list | Where-Object Auth)
+            $f = $ftp.Count; $a = $auth.Count
+            # On an app whose FTP state is Disabled nothing connects over FTP or FTPS, but Microsoft Learn says publishing
+            # through local Git with deployment credentials also needs FTP basic authentication On, so every app is
+            # confirmed with the client before the setting is turned off.
+            $authClosed = @($auth | Where-Object { $_.State -eq 'Disabled' })
+            $resources = @(foreach ($e in $list) {
+                    $setting = 'FTP state ' + (Format-FtpState $e.State)
+                    if ($e.Tls -in '1.0', '1.1') { $setting += ', minimum TLS ' + $e.Tls }
+                    $basic = if ($e.Auth) { 'On' } else { $recorded[(Get-Text $e.Row.ResourceId).ToLowerInvariant()] }
+                    if ($basic) { $setting += ', FTP basic authentication ' + $basic }
+                    New-Resource $e.Row.Name $e.Row.resourceGroup $e.Row.subscriptionId $setting $e.Row.ResourceId
                 })
-            $n = $resources.Count
-            if (-not $n) { return @{ State = $(if ($unread.Count) { 'Only apps without a recorded FTP state remain, see the notes' } else { 'No gaps found' }); Notes = $notes.ToArray() } }
             if ($lowTls.Count) {
                 $notes.Add(('{0} in CR-17 {1} a minimum inbound TLS version below 1.2: {2}. FTPS only does not support TLS 1.0 or 1.1, so CR-04 sets 1.2 on {3} first, or the client chooses Disabled.' -f (Get-Count $lowTls.Count 'App Service app' 'App Service apps'), (Get-Pick $lowTls.Count 'has' 'have'), ($lowTls -join ', '), (Get-Pick $lowTls.Count 'it' 'them')))
             }
-            $notes.Add('FTP Basic Auth Publishing Credentials, under the same General settings tab, is a separate setting and not part of CR-17. Turning it off stops sign-in to the FTP and FTPS endpoint with deployment credentials, and is a possible follow-up once the client confirms how each app is deployed.')
-            # The state can change between collection and the change, so each app is read again first and left
-            # unchanged when it no longer shows the recorded state.
+            if ($authRead) { $notes.Add('SCM Basic Auth Publishing Credentials, under the same General settings tab, is a separate setting and not part of CR-17. It covers Web Deploy, local Git and the other deployment methods that use the SCM (Kudu) site with deployment credentials, such as a GitHub Actions workflow or a pipeline that uses a publish profile, so turning it off can break deployments and needs its own change once the client confirms how each app is deployed. Microsoft Learn notes that FTP basic authentication also needs SCM basic authentication to be On, and its page on deployment credentials says that publishing through local Git or FTP/S needs both settings On, so the client email asks about local Git as well.') }
+            else { $notes.Add('FTP Basic Auth Publishing Credentials, under the same General settings tab, is a separate setting and not part of CR-17 in this pack. Turning it off stops sign-in to the FTP and FTPS endpoint with deployment credentials, and CR-17 covers it on a pack that records it.') }
+            $these = Get-Pick $n 'the application' 'these applications'
             $impl = [System.Collections.Generic.List[object]]::new()
             $impl.Add((Get-OpenStep $n 'App Services' 'app'))
             $impl.Add('Go to Settings > Configuration and select the General settings tab.')
-            $impl.Add('Under Platform settings, read FTP state. If it no longer shows All allowed, the state recorded for the app in the RESOURCES section, the app has changed since collection, so leave it unchanged, note it in the change record for the next pack and skip the remaining steps for it.')
-            $impl.Add('If the client chose FTPS only for the app, read Minimum Inbound TLS Version. FTPS only does not support TLS 1.0 or 1.1, so if it shows 1.0 or 1.1, leave the app unchanged until CR-04 has set 1.2 on it, note it in the change record and skip the remaining steps for it.')
-            $impl.Add('Set FTP state to FTPS only, or to Disabled only where the client confirmed that no tool, process or person uses FTP or FTPS on the app, to upload files or to download files or logs, select Apply and confirm.')
-            Add-RepeatStep $impl $n 1 'app'
-            $these = Get-Pick $n 'the application' 'these applications'
-            $effect = @(
-                ('A deployment tool or a person that connects to {0} over plain FTP, to upload files or to download them, will be refused once the change is applied, and will need to connect over FTPS, which FTP clients such as WinSCP, Cyberduck and Visual Studio support, or move to another deployment method. Disabled also turns off FTPS, so it suits only an application that nothing connects to over FTP or FTPS, to upload files or to download files or logs.' -f $these)
-                ('Deployment methods other than FTP, such as ZIP deploy, Web Deploy, local Git, GitHub Actions or an Azure DevOps pipeline without an FTP upload step, are not affected, and {0} keep serving {1} users as {2} do now.' -f $(if ($n -eq 1) { 'the application will' } else { 'these applications will' }), (Get-Pick $n 'its' 'their'), (Get-Pick $n 'it' 'they')))
-            if ($lowTls.Count) {
-                $effect += ('FTPS only needs a minimum inbound TLS version of 1.2, and {0} still {1} an older version, so for {2} I would set the minimum to 1.2 first, under my separate request for it, or set Disabled.' -f (@($lowTlsNames | Sort-Object) -join ', ' -replace ', ([^,]+)$', ' and $1'), (Get-Pick $lowTls.Count 'allows' 'allow'), (Get-Pick $lowTls.Count 'it' 'them'))
+            # Each value can change between collection and the change, so it is read again first and left unchanged
+            # when it no longer shows the recorded value.
+            if (-not $a) {
+                $impl.Add('Under Platform settings, read FTP state. If it no longer shows All allowed, the state recorded for the app in the RESOURCES section, the app has changed since collection, so leave it unchanged, note it in the change record for the next pack and skip the remaining steps for it.')
+                $impl.Add('If the client chose FTPS only for the app, read Minimum Inbound TLS Version. FTPS only does not support TLS 1.0 or 1.1, so if it shows 1.0 or 1.1, leave the app unchanged until CR-04 has set 1.2 on it, note it in the change record and skip the remaining steps for it.')
+                $impl.Add('Set FTP state to FTPS only, or to Disabled only where the client confirmed that no tool, process or person uses FTP or FTPS on the app, to upload files or to download files or logs, select Apply and confirm.')
             }
-            $email = New-ApprovalEmail -Subject 'turning off plain FTP on Azure App Service applications' `
-                -Change @(('I would like to stop plain FTP connections to {0} by setting {1} to FTPS only, or to Disabled where nothing connects to it over FTP or FTPS.' -f (Get-Yours $n 'App Service and Function applications'), (Get-Pick $n 'its FTP state' 'the FTP state of each')), 'FTP is an older way to upload files to an application, and FTPS is the same with the connection encrypted.') `
-                -Why ('I recommend this change because plain FTP sends the deployment user name, password and files unencrypted, so anyone who can see the traffic can read them and use the credentials to change {0}. FTPS only keeps file uploads working over an encrypted connection, and Disabled turns the FTP endpoint off where nothing uses it.' -f $these) `
-                -Effect $effect `
-                -Listed (Get-Pick $n 'The application is listed below with its FTP state today:' 'The applications are listed below by subscription, each with its FTP state today:') `
-                -Resources (Get-EmailResourceList $resources { '{0} (resource group {1}, FTP state All allowed)' -f $_.Name, $_.ResourceGroup }) `
-                -Reversal ('The FTP state can be set back to All allowed, the state {0} today, at any time.' -f (Get-Pick $n 'the application has' 'each application has')) `
-                -Ask ('Could you let me know whether any deployment tool, scheduled process or person still connects to {0} over FTP or FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled suits {1}? With that agreed, could you approve this change for {2}?' -f $these, (Get-Pick $n 'it' 'each one'), $proposedDay) `
-                -Options ('If something still uses plain FTP, I will hold the change for {0} until it uses FTPS, and I will set Disabled only where nothing uses FTP or FTPS at all. If another date suits you better, or anything listed above should stay out of the change, please let me know.' -f (Get-Pick $n 'the application' 'that application'))
-            @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
-                    Number = 17; Key = 'app-service-ftps'; Title = 'Set the FTP state to FTPS only or Disabled on App Service apps'
-                    Description = 'Set the FTP state to FTPS only, or to Disabled where the client confirms nothing uses FTP or FTPS, on {0}.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps')
-                    Purpose = 'Plain FTP sends the deployment credentials and files unencrypted, and {0} still {1} it. FTPS only keeps file uploads working over an encrypted connection, and Disabled turns the FTP endpoint off where it is not used.' -f (Get-Pick $n 'this app' 'these apps'), (Get-Pick $n 'allows' 'allow')
-                    ResourceIntro = '{0} with the FTP state {1} today.' -f $(if ($n -eq 1) { 'The app below is listed' } else { "The $n apps below are listed" }), (Get-Pick $n 'it has' 'each one has')
+            else {
+                if ($f) {
+                    $impl.Add(('{0}nder Platform settings, read FTP state. If it no longer shows All allowed, the state recorded for the app in the RESOURCES section, the app has changed since collection, so leave the FTP state unchanged and note it in the change record for the next pack.' -f $(if ($f -lt $n) { 'If the RESOURCES section lists FTP state All allowed for the app, u' } else { 'U' })))
+                    $impl.Add('If FTP state still shows All allowed, set it to the state the client chose for the app: FTPS only, or Disabled only where the client confirmed that no tool, process or person uses FTP or FTPS on the app, to upload files or to download files or logs. Before setting FTPS only, read Minimum Inbound TLS Version. FTPS only does not support TLS 1.0 or 1.1, so if it shows 1.0 or 1.1, leave the FTP state unchanged until CR-04 has set 1.2 on the app and note it in the change record.')
+                }
+                $when = ' If it shows On, set it to Off only where the client confirmed that no deployment tool, process or person uses deployment credentials on the app to sign in to FTP or FTPS or to deploy through local Git. Otherwise leave it On and note it in the change record.'
+                $impl.Add(('{0}ead FTP Basic Auth Publishing Credentials. If it shows Off, the app has changed since collection, so leave it as it is and note it in the change record.{1}' -f $(if ($a -lt $n) { 'If the RESOURCES section lists FTP basic authentication On for the app, r' } else { 'R' }), $when))
+                $impl.Add('If a setting was changed, select Save, or Apply where the portal shows it, and confirm.')
+            }
+            Add-RepeatStep $impl $n 1 'app'
+            $testing = @(
+                ('In the Azure portal, open {0}, go to Settings > Configuration and select the General settings tab.' -f (Get-EachStep $n 'app'))
+                if ($f) { $(if ($a) { 'Where the change set the FTP state, confirm FTP state shows FTPS only or Disabled under Platform settings, as agreed with the client for the app.' } else { 'Confirm FTP state shows FTPS only or Disabled under Platform settings, as agreed with the client for the app.' }) }
+                if ($a) { 'Where the change turned FTP basic authentication off, confirm FTP Basic Auth Publishing Credentials shows Off.' })
+            $rollback = @(
+                'In the Azure portal, open the app to revert, go to Settings > Configuration and select the General settings tab.'
+                if (-not $a) { 'Set FTP state back to All allowed, the state recorded for the app in the RESOURCES section, select Apply and confirm. An app left unchanged during the change needs no rollback.' }
+                elseif (-not $f) { 'Set FTP Basic Auth Publishing Credentials back to On, the setting recorded for the app in the RESOURCES section, then select Save, or Apply where the portal shows it, and confirm. An app left unchanged during the change needs no rollback.' }
+                else { 'Set back only the settings the change made, FTP state to All allowed and FTP Basic Auth Publishing Credentials to On, each as recorded for the app in the RESOURCES section, then select Save, or Apply where the portal shows it, and confirm. An app left unchanged during the change needs no rollback.' })
+            # The client email.
+            $ftpApps = if ($f -eq $n) { $these } else { Get-Pick $f 'the application whose FTP state is All allowed' 'the applications whose FTP state is All allowed' }
+            $plainEffect = ('A deployment tool or a person that connects to {0} over plain FTP, to upload files or to download them, will be refused once the change is applied, and will need to connect over FTPS, which FTP clients such as WinSCP, Cyberduck and Visual Studio support, or move to another deployment method. Disabled also turns off FTPS, so it suits only an application that nothing connects to over FTP or FTPS, to upload files or to download files or logs.' -f $ftpApps)
+            $tlsEffect = if ($lowTls.Count) { 'FTPS only needs a minimum inbound TLS version of 1.2, and {0} still {1} an older version, so for {2} I would set the minimum to 1.2 first, under my separate request for it, or set Disabled.' -f (@($lowTlsNames | Sort-Object) -join ', ' -replace ', ([^,]+)$', ' and $1'), (Get-Pick $lowTls.Count 'allows' 'allow'), (Get-Pick $lowTls.Count 'it' 'them') }
+            $authApps = if ($a -eq $n) { $these } else { Get-Pick $a 'the application where it is on today' 'the applications where it is on today' }
+            $authEffect = $(if ($authClosed.Count -eq $a) { 'With FTP basic authentication off, signing in to FTP or FTPS with the user name and password in the publish profile of {0}, or with a user''s own deployment credentials, would no longer work even if FTP were turned back on.' -f $authApps }
+                else { 'Turning off FTP basic authentication means that signing in to FTP or FTPS with the user name and password in the publish profile of {0}, or with a user''s own deployment credentials, stops working once the change is applied, so FTP and FTPS can no longer be used there to upload files or to download files or logs.' -f $authApps }) +
+                ' Microsoft notes that publishing through local Git with deployment credentials also needs this setting, so a local Git deployment that signs in that way would stop as well.'
+            $closedNames = @($authClosed | ForEach-Object { ConvertTo-CopyText $_.Row.Name } | Sort-Object)
+            $closedEffect = if ($authClosed.Count -eq $n) { 'The FTP state of {0} is already Disabled, so nothing connects over FTP or FTPS today, and the change matters only if a local Git deployment signs in with deployment credentials.' -f (Get-Pick $n 'the application' 'each application') }
+            elseif ($authClosed.Count) { '{0} already {1} the FTP state Disabled, so for {2} the change matters only if a local Git deployment signs in with deployment credentials.' -f ($closedNames -join ', ' -replace ', ([^,]+)$', ' and $1'), (Get-Pick $authClosed.Count 'has' 'have'), (Get-Pick $authClosed.Count 'it' 'them') }
+            $keepServing = '{0} keep serving {1} users as {2} now' -f $(if ($n -eq 1) { 'the application will' } else { 'these applications will' }), (Get-Pick $n 'its' 'their'), (Get-Pick $n 'it does' 'they do')
+            $otherMethods = if ($a) { 'Deployment that signs in with Microsoft Entra ID is not affected, nor are deployment methods other than FTP and local Git, such as ZIP deploy, Web Deploy, GitHub Actions or an Azure DevOps pipeline without an FTP upload step, and {0}.' -f $keepServing }
+            else { 'Deployment methods other than FTP, such as ZIP deploy, Web Deploy, local Git, GitHub Actions or an Azure DevOps pipeline without an FTP upload step, are not affected, and {0}.' -f $keepServing }
+            $settingsLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, ($_.Setting -replace ', minimum TLS 1\.[01]', '') }
+            $authAsk = 'whether any deployment tool, scheduled process or person still uses deployment credentials, the user name and password from a publish profile or a user''s own, to sign in to FTP or FTPS or to deploy through local Git on {0}' -f $(if ($a -eq $n) { $these } else { Get-Pick $a 'the application where FTP basic authentication is on' 'the applications where FTP basic authentication is on' })
+            $authHold = 'If something still uses deployment credentials that way, I will leave FTP basic authentication on for that application until it moves to another deployment method.'
+            $email = if (-not $a) {
+                New-ApprovalEmail -Subject 'turning off plain FTP on Azure App Service applications' `
+                    -Change @(('I would like to stop plain FTP connections to {0} by setting {1} to FTPS only, or to Disabled where nothing connects to it over FTP or FTPS.' -f (Get-Yours $n 'App Service and Function applications'), (Get-Pick $n 'its FTP state' 'the FTP state of each')), 'FTP is an older way to upload files to an application, and FTPS is the same with the connection encrypted.') `
+                    -Why ('I recommend this change because plain FTP sends the deployment user name, password and files unencrypted, so anyone who can see the traffic can read them and use the credentials to change {0}. FTPS only keeps file uploads working over an encrypted connection, and Disabled turns the FTP endpoint off where nothing uses it.' -f $these) `
+                    -Effect @($plainEffect, $otherMethods, $tlsEffect | Where-Object { $_ }) `
+                    -Listed (Get-Pick $n 'The application is listed below with its FTP state today:' 'The applications are listed below by subscription, each with its FTP state today:') `
+                    -Resources (Get-EmailResourceList $resources { '{0} (resource group {1}, FTP state All allowed)' -f $_.Name, $_.ResourceGroup }) `
+                    -Reversal ('The FTP state can be set back to All allowed, the state {0} today, at any time.' -f (Get-Pick $n 'the application has' 'each application has')) `
+                    -Ask ('Could you let me know whether any deployment tool, scheduled process or person still connects to {0} over FTP or FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled suits {1}? With that agreed, could you approve this change for {2}?' -f $these, (Get-Pick $n 'it' 'each one'), $proposedDay) `
+                    -Options ('If something still uses plain FTP, I will hold the change for {0} until it uses FTPS, and I will set Disabled only where nothing uses FTP or FTPS at all. If another date suits you better, or anything listed above should stay out of the change, please let me know.' -f (Get-Pick $n 'the application' 'that application'))
+            }
+            elseif (-not $f) {
+                New-ApprovalEmail -Subject 'turning off FTP basic authentication on Azure App Service applications' `
+                    -Change @(('I would like to turn off FTP basic authentication publishing credentials on {0}.' -f (Get-Yours $n 'App Service and Function applications')), 'This setting lets a tool or a person sign in to the FTP and FTPS endpoint of an application with a deployment user name and password, such as those in its publish profile.') `
+                    -Why ('I recommend turning it off because anyone who holds those credentials can sign in and change the files of {0}, while signing in with Microsoft Entra ID, a more secure way to deploy, uses tokens that expire, are issued for one application and cannot be reused.' -f $these) `
+                    -Effect @($authEffect, $otherMethods, $closedEffect | Where-Object { $_ }) `
+                    -Listed (Get-Pick $n 'The application is listed below with its FTP state and FTP basic authentication setting today:' 'The applications are listed below by subscription, each with its FTP state and FTP basic authentication setting today:') `
+                    -Resources (Get-EmailResourceList $resources $settingsLabel) `
+                    -Reversal ('FTP basic authentication can be turned back on, the setting {0} today, at any time.' -f (Get-Pick $n 'the application has' 'each application has')) `
+                    -Ask ('Could you let me know {0}? With that confirmed, could you approve this change for {1}?' -f $authAsk, $proposedDay) `
+                    -Options ($authHold + ' If another date suits you better, or anything listed above should stay out of the change, please let me know.')
+            }
+            else {
+                New-ApprovalEmail -Subject 'turning off plain FTP and FTP basic authentication on Azure App Service applications' `
+                    -Change @(('I would like to turn off plain FTP and FTP basic authentication publishing credentials on {0}, wherever either one is allowed today.' -f (Get-Yours $n 'App Service and Function applications')), 'FTP is an older way to upload files to an application, FTPS is the same with the connection encrypted, and basic authentication lets a tool or a person sign in to either with a deployment user name and password, such as those in the publish profile of the application.') `
+                    -Why ('I recommend this change because plain FTP sends the deployment user name, password and files unencrypted, and anyone who holds those credentials can sign in and change the files of {0}. FTPS only keeps file uploads encrypted, Disabled turns the FTP endpoint off where nothing uses it, and turning basic authentication off leaves deployment to methods such as Microsoft Entra ID sign-in, whose tokens expire, are issued for one application and cannot be reused.' -f $these) `
+                    -Effect @($plainEffect, $authEffect, $otherMethods, $tlsEffect, $closedEffect | Where-Object { $_ }) `
+                    -Listed (Get-Pick $n 'The application is listed below with its FTP state and FTP basic authentication setting today:' 'The applications are listed below by subscription, each with its FTP state and, where it was read, its FTP basic authentication setting today:') `
+                    -Resources (Get-EmailResourceList $resources $settingsLabel) `
+                    -Reversal ('Each setting the change makes can be set back to the value {0} today, shown above, at any time.' -f (Get-Pick $n 'the application has' 'each application has')) `
+                    -Ask ('Could you let me know whether any deployment tool, scheduled process or person still connects to {0} over FTP or FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled suits {1}?{2} With that agreed, could you approve this change for {3}?' -f $ftpApps, (Get-Pick $f 'it' 'each one'), (' Could you also let me know {0}?' -f $authAsk), $proposedDay) `
+                    -Options ('If something still uses plain FTP, I will hold the FTP state change for that application until it uses FTPS, and I will set Disabled only where nothing uses FTP or FTPS at all.{0} If another date suits you better, or anything listed above should stay out of the change, please let me know.' -f (' ' + $authHold))
+            }
+            $apps = Get-Pick $n 'app' 'apps'
+            @{ Notes = $notes.ToArray(); Used = $used; Cr = New-ChangeRequest @{
+                    Number = 17; Key = 'app-service-ftps'
+                    Title = $(if (-not $a) { 'Set the FTP state to FTPS only or Disabled on App Service apps' } elseif (-not $f) { 'Turn off FTP basic authentication publishing credentials on App Service apps' } else { 'Set the FTP state to FTPS only or Disabled and turn off FTP basic authentication on App Service apps' })
+                    Description = $(if (-not $a) { 'Set the FTP state to FTPS only, or to Disabled where the client confirms nothing uses FTP or FTPS, on {0}.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps') }
+                        elseif (-not $f) { 'Turn off FTP Basic Auth Publishing Credentials on {0}, so no one can sign in to FTP or FTPS on {1} with deployment credentials.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps'), (Get-Pick $n 'it' 'them') }
+                        else { 'On {0}, set the FTP state to FTPS only, or to Disabled where the client confirms nothing uses FTP or FTPS, where it reads All allowed, and turn off FTP Basic Auth Publishing Credentials where it is On.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps') })
+                    Purpose = $(if (-not $a) { 'Plain FTP sends the deployment credentials and files unencrypted, and {0} still {1} it. FTPS only keeps file uploads working over an encrypted connection, and Disabled turns the FTP endpoint off where it is not used.' -f (Get-Pick $n 'this app' 'these apps'), (Get-Pick $n 'allows' 'allow') }
+                        elseif (-not $f) { 'FTP basic authentication lets anyone who holds a deployment user name and password, such as those in the publish profile, sign in to the FTP and FTPS endpoint and change the files of the app. Turning it off leaves deployment to methods such as Microsoft Entra ID sign-in, which Microsoft Learn describes as more secure.' }
+                        else { 'Plain FTP sends the deployment credentials and files unencrypted, and FTP basic authentication lets anyone who holds those credentials sign in to the FTP and FTPS endpoint and change the files of the app. FTPS only or Disabled removes plain FTP, and turning basic authentication off leaves deployment to methods such as Microsoft Entra ID sign-in.' })
+                    ResourceIntro = $(if (-not $a) { '{0} with the FTP state {1} today.' -f $(if ($n -eq 1) { 'The app below is listed' } else { "The $n apps below are listed" }), (Get-Pick $n 'it has' 'each one has') }
+                        else { '{0} with the FTP state and, where it was read, the FTP basic authentication setting {1} today.' -f $(if ($n -eq 1) { 'The app below is listed' } else { "The $n apps below are listed" }), (Get-Pick $n 'it has' 'each one has') })
                     ResourceLines = Format-ResourceList $resources
-                    Availability = 'No impact on the requests the {0} since the FTP state applies only to the FTP and FTPS endpoint used to upload and download files.' -f (Get-Pick $n 'app serves,' 'apps serve,')
-                    UserExperience = 'No change for the users of the {0}.' -f (Get-Pick $n 'app' 'apps')
-                    Dependencies = 'Tools, processes and people that use plain FTP, or FTP or FTPS on an app set to Disabled, to upload or download files can no longer connect once the change is applied.'
+                    Availability = $(if (-not $a) { 'No impact on the requests the {0} since the FTP state applies only to the FTP and FTPS endpoint used to upload and download files.' -f (Get-Pick $n 'app serves,' 'apps serve,') }
+                        else { 'No impact on the requests the {0} since {1} only to the FTP and FTPS endpoint used to upload and download files.' -f (Get-Pick $n 'app serves,' 'apps serve,'), $(if ($f) { 'both settings apply' } else { 'the setting applies' }) })
+                    UserExperience = 'No change for the users of the {0}.' -f $apps
+                    Dependencies = $(if (-not $a) { 'Tools, processes and people that use plain FTP, or FTP or FTPS on an app set to Disabled, to upload or download files can no longer connect once the change is applied.' }
+                        elseif (-not $f) { 'Tools, processes and people that use deployment credentials to sign in to FTP or FTPS, or possibly to deploy through local Git, can no longer do so once the change is applied.' }
+                        else { 'Tools, processes and people that use plain FTP, FTP or FTPS on an app set to Disabled, or deployment credentials for FTP, FTPS or possibly local Git where FTP basic authentication is turned off, can no longer connect once the change is applied.' })
                     Implementation = $impl.ToArray()
-                    Testing = @(
-                        ('In the Azure portal, open {0}, go to Settings > Configuration and select the General settings tab.' -f (Get-EachStep $n 'app'))
-                        'Confirm FTP state shows FTPS only or Disabled under Platform settings, as agreed with the client for the app.')
-                    Rollback = @(
-                        'In the Azure portal, open the app to revert, go to Settings > Configuration and select the General settings tab.'
-                        'Set FTP state back to All allowed, the state recorded for the app in the RESOURCES section, select Apply and confirm. An app left unchanged during the change needs no rollback.')
+                    Testing = $testing
+                    Rollback = $rollback
                     References = @(
-                        , @('Deploy your app to Azure App Service using FTP/S, enforce FTPS', 'https://learn.microsoft.com/azure/app-service/deploy-ftp#enforce-ftps')
-                        , @('Configure an App Service app, general settings', 'https://learn.microsoft.com/azure/app-service/configure-common#configure-general-settings')
-                        , @('Secure your Azure App Service deployment, service-specific security', 'https://learn.microsoft.com/azure/app-service/overview-security#service-specific-security')
-                        , @('Disable basic authentication in Azure App Service deployments', 'https://learn.microsoft.com/azure/app-service/configure-basic-auth-disable'))
+                        if ($f) {
+                            , @('Deploy your app to Azure App Service using FTP/S, enforce FTPS', 'https://learn.microsoft.com/azure/app-service/deploy-ftp#enforce-ftps')
+                            , @('Configure an App Service app, general settings', 'https://learn.microsoft.com/azure/app-service/configure-common#configure-general-settings')
+                            , @('Secure your Azure App Service deployment, service-specific security', 'https://learn.microsoft.com/azure/app-service/overview-security#service-specific-security') }
+                        , @('Disable basic authentication in Azure App Service deployments', 'https://learn.microsoft.com/azure/app-service/configure-basic-auth-disable')
+                        if ($a) {
+                            , @('Disable basic authentication in Azure App Service deployments, deploy without basic authentication', 'https://learn.microsoft.com/azure/app-service/configure-basic-auth-disable#deploy-without-basic-authentication')
+                            , @('Manage deployment credentials for Azure App Service', 'https://learn.microsoft.com/azure/app-service/deploy-configure-credentials') })
                     Csv = $resources
                     Email = $email
                 } } } }

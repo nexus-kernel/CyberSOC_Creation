@@ -1,0 +1,86 @@
+{
+  "Description": "NB.5-FTPS-DETAIL and NB.5-FTPAUTH from collector 1.14.0: FTP basic authentication On and Off under each FTP state, and an app the collector could not read",
+  "FtpsDetail": [
+    {
+      "Name": "app-plain-on",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-plain-on",
+      "resourceGroup": "rg-web",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "FtpsState": "AllAllowed",
+      "MinTlsVersion": "1.0"
+    },
+    {
+      "Name": "app-plain-off",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-plain-off",
+      "resourceGroup": "rg-web",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "FtpsState": "AllAllowed",
+      "MinTlsVersion": "1.2"
+    }
+  ],
+  "FtpAuth": [
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-web",
+      "Name": "app-plain-on",
+      "FtpsState": "AllAllowed",
+      "FtpBasicAuth": "On",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-plain-on"
+    },
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-web",
+      "Name": "app-plain-off",
+      "FtpsState": "AllAllowed",
+      "FtpBasicAuth": "Off",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-plain-off"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-api",
+      "Name": "app-ftps-on",
+      "FtpsState": "FtpsOnly",
+      "FtpBasicAuth": "On",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-api/providers/Microsoft.Web/sites/app-ftps-on"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-api",
+      "Name": "app-ftps-off",
+      "FtpsState": "FtpsOnly",
+      "FtpBasicAuth": "Off",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-api/providers/Microsoft.Web/sites/app-ftps-off"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-jobs",
+      "Name": "func-closed-on",
+      "FtpsState": "Disabled",
+      "FtpBasicAuth": "On",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-jobs/providers/Microsoft.Web/sites/func-closed-on"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-jobs",
+      "Name": "func-closed-off",
+      "FtpsState": "Disabled",
+      "FtpBasicAuth": "Off",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-jobs/providers/Microsoft.Web/sites/func-closed-off"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-api",
+      "Name": "app-unread",
+      "FtpsState": "FtpsOnly",
+      "FtpBasicAuth": "",
+      "ReadStatus": "HTTP 403: Forbidden | AuthorizationFailed",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-api/providers/Microsoft.Web/sites/app-unread"
+    }
+  ]
+}

@@ -56,6 +56,7 @@
       - GET  https://api.security.microsoft.com/api/machines (the Defender for Endpoint devices, LIC.2-MACHINES)
       - GET  <workspace>/providers/Microsoft.SecurityInsights/alertRules
       - GET  <storage account>/blobServices/default/containers (container access levels, DP.1-CONTAINERS and DP.1-CONTAINERS-DETAIL)
+      - GET  <App Service app>/basicPublishingCredentialsPolicies/ftp (FTP basic authentication, NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL)
       - GET  https://graph.microsoft.com/v1.0/organization, domains,
         domains/<id>/federationConfiguration, reports/authenticationMethods/
         userRegistrationDetails, roleManagement/directory/roleAssignments,
@@ -241,7 +242,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.13.0, based on the EBR collector 1.14.0
+    Version: 1.14.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -291,7 +292,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.13.0'
+$script:EbrVersion = '1.14.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2258,6 +2259,18 @@ appserviceresources
 | order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
+    $q.Add((New-EbrQuery -Id 'NB.5-FTPAUTH' -Phase 'P2 Network' -Engine 'APPSERVICE-FTPAUTH' -Title 'App Service FTP basic authentication publishing credentials' -Notes 'Added in CyberSOC 1.14.0. Resource Graph does not index basicPublishingCredentialsPolicies, so the collector lists the App Service and Function app site configurations with the query below, read as NB.5-FTPS-DETAIL reads them, and then reads each app with a GET on its basicPublishingCredentialsPolicies/ftp path (Reader is enough). One row per app: its FTP state, FtpBasicAuth (On when properties.allow is true, Off when it is false, empty when not read) and ReadStatus, so an app that could not be read is named and never read as Off. It also writes NB.5-FTPAUTH-DETAIL, one row per app where FTP basic authentication is On, whatever its FTP state, for change request CR-17. Deployment slots are not read, and neither is the SCM basic authentication setting. Internal: names sites, the report embeds counts only.' -Query @'
+appserviceresources
+| where type =~ "microsoft.web/sites/config"
+| where id !contains "{{MRG}}"
+// appserviceresources returns site config keys in PascalCase and dynamic access is case-sensitive.
+| extend FtpsState = tostring(coalesce(properties.FtpsState, properties.ftpsState))
+| extend Parts = split(id, "/")
+| project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
+          resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), FtpsState
+| order by subscriptionId asc, resourceGroup asc, Name asc
+'@))
+
     $q.Add((New-EbrQuery -Id 'NB.6' -Phase 'P2 Network' -Engine 'ARG' -Title 'Azure SQL minimum TLS and public access' -Query @'
 resources
 | where type =~ "microsoft.sql/servers"
@@ -4180,6 +4193,28 @@ function Get-EbrBlobContainerRow {
     [pscustomobject]$row
 }
 
+function Get-EbrFtpBasicAuthRow {
+    # Reads whether one App Service app allows FTP basic authentication publishing credentials, through a GET on its
+    # basicPublishingCredentialsPolicies/ftp path that Reader can make. properties.allow is true when it is allowed. A
+    # response without the value, or a read that fails, leaves FtpBasicAuth empty and records why in ReadStatus, so
+    # the app is never read as Off.
+    param($Site, [string]$Tenant)
+    $row = [ordered]@{
+        subscriptionId = [string]$Site.subscriptionId; resourceGroup = [string]$Site.resourceGroup; Name = [string]$Site.Name
+        FtpsState = [string]$Site.FtpsState; FtpBasicAuth = ''; ReadStatus = 'OK'; ResourceId = [string]$Site.ResourceId
+    }
+    try {
+        $uri = 'https://management.azure.com{0}/basicPublishingCredentialsPolicies/ftp?api-version=2022-09-01' -f $Site.ResourceId
+        $resp = Invoke-EbrRest -Method GET -Uri $uri -Resource 'https://management.azure.com/' -Tenant $Tenant
+        $allow = ([string](Get-EbrProp (Get-EbrProp $resp 'properties') 'allow')).ToLowerInvariant()
+        if ($allow -eq 'true') { $row.FtpBasicAuth = 'On' }
+        elseif ($allow -eq 'false') { $row.FtpBasicAuth = 'Off' }
+        else { $row.ReadStatus = 'The response carried no properties.allow value.' }
+    }
+    catch { $row.ReadStatus = [string]$_.Exception.Message }
+    [pscustomobject]$row
+}
+
 function Get-EbrEncryptionAtHostSizes {
     # The virtual machine sizes of one subscription and region, each mapped to whether it supports
     # encryption at host, from the Compute resource SKUs API. A GET that Reader can make. The keys are
@@ -6084,6 +6119,46 @@ function Invoke-EbrCatalogItem {
             $detailText = '{0} containers set to Blob or Container access in {1} of {2} storage accounts listed, {3} readable anonymously today.' -f $details.Count, $read.Count, $rows.Count, @($details | Where-Object ReadableToday).Count
             if ($failed.Count) { $detailText += ' Accounts not listed add no rows, see DP.1-CONTAINERS.' }
             $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-CONTAINERS-DETAIL' -Status $detailStatus -Rows $details.ToArray() -Columns $detailColumns -Source $source -Detail $detailText -DurationSec (& $elapsed)))
+            return New-EbrResult -ResultId $Item.Id -Status $status -Rows $rows.ToArray() -Columns $columns -Source $source -Detail $detail -DurationSec (& $elapsed)
+        }
+        'APPSERVICE-FTPAUTH' {
+            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the basicPublishingCredentialsPolicies/ftp path of each app, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
+            $columns = @('subscriptionId', 'resourceGroup', 'Name', 'FtpsState', 'FtpBasicAuth', 'ReadStatus', 'ResourceId')
+            # NB.5-FTPAUTH-DETAIL (CyberSOC 1.14.0): one row per app where FTP basic authentication is On, for CR-17. It
+            # is written with every outcome of NB.5-FTPAUTH, so a failed read never reads as needing a newer collector.
+            $detailColumns = @('subscriptionId', 'resourceGroup', 'Name', 'FtpsState', 'FtpBasicAuth', 'ResourceId')
+            try { $arg = Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant }
+            catch {
+                $Ctx.Pending.Add((New-EbrResult -ResultId 'NB.5-FTPAUTH-DETAIL' -Status 'FAILED' -Columns $detailColumns -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed)))
+                return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed)
+            }
+            $sites = @($arg.Rows)
+            if ($sites.Count -eq 0) {
+                $Ctx.Pending.Add((New-EbrResult -ResultId 'NB.5-FTPAUTH-DETAIL' -Status 'EMPTY' -Columns $detailColumns -Source 'Resource Graph' -Detail 'No App Service app in scope.' -DurationSec (& $elapsed)))
+                return New-EbrResult -ResultId $Item.Id -Status 'EMPTY' -Columns $columns -Source 'Resource Graph' -Detail 'No App Service app in scope.' -DurationSec (& $elapsed)
+            }
+            $rows = [System.Collections.Generic.List[object]]::new()
+            $i = 0
+            foreach ($s in $sites) {
+                $i++
+                Write-Progress -Id 2 -ParentId 1 -Activity 'Reading FTP basic authentication' -Status ('{0} ({1} of {2})' -f $s.Name, $i, $sites.Count) -PercentComplete ([int](100 * $i / $sites.Count))
+                $rows.Add((Get-EbrFtpBasicAuthRow -Site $s -Tenant $Ctx.ArmTenant))
+            }
+            Write-Progress -Id 2 -ParentId 1 -Activity 'Reading FTP basic authentication' -Completed
+            $failed = @($rows | Where-Object ReadStatus -ne 'OK')
+            $read = @($rows | Where-Object ReadStatus -eq 'OK')
+            $on = @($read | Where-Object FtpBasicAuth -eq 'On')
+            $detail = '{0} of {1} App Service apps read: FTP basic authentication On in {2}, Off in {3}.' -f $read.Count, $rows.Count, $on.Count, ($read.Count - $on.Count)
+            if ($failed.Count) { $detail += ' Not read: ' + ((@($failed | Select-Object -First 5) | ForEach-Object { '{0}: {1}' -f $_.Name, $_.ReadStatus }) -join ' / ') + $(if ($failed.Count -gt 5) { ' / and {0} more' -f ($failed.Count - 5) } else { '' }) }
+            if ($arg.Detail) { $detail += ' ' + $arg.Detail }
+            # A truncated Resource Graph result leaves apps out, so the read is partial even when every app listed was read.
+            $status = if ($read.Count -eq 0) { 'FAILED' } elseif ($failed.Count -or $arg.Detail) { 'PARTIAL' } else { 'OK' }
+            $source = 'Resource Graph and the App Service resource provider ({0})' -f $(if ($Ctx.AccessPath) { $Ctx.AccessPath.ToLowerInvariant() } else { 'direct' })
+            $details = @($on | ForEach-Object { [pscustomobject][ordered]@{ subscriptionId = $_.subscriptionId; resourceGroup = $_.resourceGroup; Name = $_.Name; FtpsState = $_.FtpsState; FtpBasicAuth = $_.FtpBasicAuth; ResourceId = $_.ResourceId } })
+            $detailStatus = if ($status -ne 'OK') { $status } elseif ($details.Count) { 'OK' } else { 'EMPTY' }
+            $detailText = '{0} App Service apps with FTP basic authentication On, of {1} of {2} apps read.' -f $details.Count, $read.Count, $rows.Count
+            if ($failed.Count) { $detailText += ' Apps not read add no rows, see NB.5-FTPAUTH.' }
+            $Ctx.Pending.Add((New-EbrResult -ResultId 'NB.5-FTPAUTH-DETAIL' -Status $detailStatus -Rows $details -Columns $detailColumns -Source $source -Detail $detailText -DurationSec (& $elapsed)))
             return New-EbrResult -ResultId $Item.Id -Status $status -Rows $rows.ToArray() -Columns $columns -Source $source -Detail $detail -DurationSec (& $elapsed)
         }
         'DISABLED-ROLES' {

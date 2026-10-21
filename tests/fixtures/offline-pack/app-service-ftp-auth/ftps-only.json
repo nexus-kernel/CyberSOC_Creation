@@ -1,0 +1,15 @@
+{
+  "Description": "NB.5-FTPAUTH from collector 1.14.0 with one app set to FTPS only whose FTP basic authentication is On, and plain FTP off everywhere",
+  "FtpsDetail": [],
+  "FtpAuth": [
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-web",
+      "Name": "app-deploy",
+      "FtpsState": "FtpsOnly",
+      "FtpBasicAuth": "On",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-deploy"
+    }
+  ]
+}
