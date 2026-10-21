@@ -400,14 +400,16 @@ function Get-CyberSocLicensing {
                             'Mixed*' { 'Clients: mixed licensing, so the client devices tagged {0} have no vulnerability management data.' -f $script:CyberSocPlan1Tag }
                             'Plan 1' { 'Clients: Plan 1, which has no vulnerability management data.' }
                             'No Defender for Endpoint license' { 'Clients: no Defender for Endpoint license.' }
-                            'Defender for Business' { 'Clients: Defender for Business. Learn does not settle whether it includes vulnerability management, and it has no Advanced Hunting to read the data from.' }
+                            'Defender for Business' { 'Clients: Defender for Business, which includes core vulnerability management. It has no Advanced Hunting, so the collector cannot read the data itself, and a tenant beside Plan 2 keeps the Defender for Business experience until Microsoft Support switches it.' }
                             default { 'Clients: the plan is unknown.' }
                         }
                         $serverText = if ($serverGap) { 'Servers: some onboarded servers have no established server license, see Defender for Endpoint on servers.' }
                                       elseif ($serverSource) { 'Servers: Defender for Servers or server licenses cover some servers, and the device reads cannot show they cover every one.' }
                                       elseif ($servers2State -eq 'Unknown' -or $serverSku -eq 'Unknown') { 'Servers: Defender for Servers or the server licenses are unknown.' }
                                       else { 'Servers: no Defender for Servers plan or server license.' }
-                        $coverage = ($planState -eq 'Plan 2') -or ($planState -like 'Mixed*') -or $seen -or $serverSource
+                        # Defender for Business includes core vulnerability management (Learn, Defender for Business
+                        # compared with Defender for Endpoint), so it counts as client coverage like Plan 2.
+                        $coverage = ($planState -in 'Plan 2', 'Defender for Business') -or ($planState -like 'Mixed*') -or $seen -or $serverSource
                         $gap = ($planState -like 'Mixed*') -or $serverGap -or ($planState -in 'Plan 1', 'No Defender for Endpoint license')
                         if ($planState -in 'Plan 1', 'No Defender for Endpoint license' -and -not $serverSource -and -not $seen -and $servers2State -ne 'Unknown' -and $serverSku -ne 'Unknown') { $state = 'Not licensed' }
                         elseif ($coverage -and $gap) { $state = 'Partly licensed' }

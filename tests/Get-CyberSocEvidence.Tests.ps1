@@ -2290,6 +2290,19 @@ Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
         ($r.Rows | Where-Object Capability -eq 'ServersWithoutLicense').Count | Should -Be 0
     }
 
+    It 'counts Defender for Business as client coverage of the vulnerability data, and reads a server gap beside it as Partly licensed' {
+        $l = Get-LicScenario 'business-servers'
+        $vuln = (New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'MdeVulnerabilityData'
+        $vuln.Detail | Should -Match '^Clients: Defender for Business, which includes core vulnerability management\.'
+        $vuln.State | Should -Be 'Unknown' -Because 'no server gap is established, and the API reads never show every server covered'
+        # One server seat for the two servers outside Defender for Servers leaves a gap beside the covered clients.
+        $short = (Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/licensing/server-seats-short.json') -Raw | ConvertFrom-Json).Results.'LIC.1-SKUS'.Rows | Where-Object SkuPartNumber -eq 'MDATP_Server'
+        $l.Ctx.Results['LIC.1-SKUS'].Rows = @($l.Ctx.Results['LIC.1-SKUS'].Rows) + $short
+        $r = New-EbrLicensingResult -Ctx $l.Ctx
+        ($r.Rows | Where-Object Capability -eq 'MdeServers').State | Should -Be 'Partly licensed'
+        ($r.Rows | Where-Object Capability -eq 'MdeVulnerabilityData').State | Should -Be 'Partly licensed'
+    }
+
     It 'reads security settings management from the license alone, never from devices still managed by it' {
         $l = Get-LicScenario 'plan2'
         $l.Ctx.Results['LIC.1-SKUS'] = New-EbrResult -ResultId 'LIC.1-SKUS' -Status 'EMPTY'
