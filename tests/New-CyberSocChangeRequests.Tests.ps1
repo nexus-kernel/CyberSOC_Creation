@@ -1043,7 +1043,7 @@ Describe 'Change request generation' {
         $index | Should -Match '- 1 account in CR-19 is synced from on-premises Active Directory: Lee Ashford \(lee\.ashford@contoso\.com\)\. Its disabled state comes from Active Directory'
         $index | Should -Match '- IA\.15-RBAC reads the subscriptions in the pack and the management groups and root scope above them, so a role in another subscription of the tenant is not listed\. Resource Graph also holds the active Azure role assignments only, not the eligible assignments of Privileged Identity Management for Azure resources'
         $index | Should -Match '- IA\.15-DISABLED reads user accounts only\. Disabled service principals are not read'
-        $index | Should -Not -Match 'Lighthouse|Eligible Microsoft Entra role assignments were not visible|emergency access account' -Because 'the full fixture was read directly, with PIM, and holds none of the top roles'
+        $index | Should -Not -Match 'Lighthouse|Eligible Microsoft Entra role assignments were not visible|is an emergency access account' -Because 'the full fixture was read directly, with PIM, and holds none of the top roles'
     }
 
     It 'asks for approval to remove the roles and the group memberships, counts the accounts in the email and names them in the attached CSV, and asks whether any account is coming back' {
@@ -2697,7 +2697,7 @@ Describe 'Licensing check and capability gate (collector 1.11.0)' {
         # which exercises the gate in the generator loop itself. The fixtures here have no Defender for Office 365.
         $copy = Join-Path $TestDrive 'gate-tool'
         New-Item -ItemType Directory -Path (Join-Path $copy 'report') -Force | Out-Null
-        Copy-Item (Join-Path $PSScriptRoot '../report/Read-CyberSocPackResult.ps1'), (Join-Path $PSScriptRoot '../report/Get-CyberSocLicensing.ps1') (Join-Path $copy 'report')
+        Copy-Item (Join-Path $PSScriptRoot '../report/Read-CyberSocPackResult.ps1'), (Join-Path $PSScriptRoot '../report/Get-CyberSocLicensing.ps1'), (Join-Path $PSScriptRoot '../report/Get-CyberSocEmergencyAccess.ps1') (Join-Path $copy 'report')
         $text = Get-Content $generator -Raw
         $entry = "Change = 'Secure transfer required on storage accounts'; Sources = @('DP.1-DETAIL')"
         $text.Contains($entry) | Should -BeTrue
@@ -2734,5 +2734,129 @@ Describe 'Licensing check and capability gate (collector 1.11.0)' {
         New-ChangeFixture $pack
         Invoke-WithWindowsPowerShellJson { $null = & $gated -EvidencePath $pack }
         (Get-Index $pack) | Should -Match 'Confirm Defender for Office 365 Plan 1 before sending CR-02: .*LIC\.1-SKUS not collected, recollect with CyberSOC collector 1\.11\.0 or later'
+    }
+}
+
+Describe 'Emergency access accounts (collector 1.12.0)' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '../report/Get-CyberSocEmergencyAccess.ps1')
+        # A scenario from tests/fixtures/offline-pack/emergency-access written into a pack as the collector writes it: the
+        # rows from the shared match, with the status the collector tests check it gives them. A string answer is a failed read.
+        function Add-EaScenario([string]$Path, [string]$Name) {
+            $sc = Get-Content (Join-Path $PSScriptRoot "fixtures/offline-pack/emergency-access/$Name.json") -Raw | ConvertFrom-Json
+            $read = { param($v) if ($v -is [string]) { $null } else { @($v) } }
+            $members = @{}
+            foreach ($p in @($sc.Graph.Members.PSObject.Properties)) { $members[$p.Name] = & $read $p.Value }
+            $set = ConvertTo-CyberSocEmergencyAccessRows -Users (& $read $sc.Graph.Users) -Groups (& $read $sc.Graph.Groups) -Members $members
+            $bad = { param($s) $s -notin 'OK', 'PARTIAL', 'EMPTY' }
+            $accStatus = $sc.Expect.'IA.16-ACCOUNTS'.Status; $grpStatus = $sc.Expect.'IA.16-GROUPS'.Status
+            Set-PackResult $Path 'IA.16-ACCOUNTS' $(if (& $bad $accStatus) { @() } else { @($set.Accounts) }) -Status $accStatus -Detail $(if (& $bad $accStatus) { 'Not a zero: the Graph token cannot read user accounts. Needs User.Read.All.' } else { '' })
+            Set-PackResult $Path 'IA.16-GROUPS' $(if (& $bad $grpStatus) { @() } else { @($set.Groups) }) -Status $grpStatus -Detail $(if (& $bad $grpStatus) { 'The groups could not be read in full. HTTP 500: Internal Server Error' } else { '' })
+            $sc
+        }
+        function Get-Index([string]$Pack) { Get-Content (Join-Path $Pack '05-change-requests/00-index.md') -Raw }
+        function Get-EaSection([string]$Index) { ($Index -split '(?m)^## ') | Where-Object { $_ -like 'Emergency access accounts*' } | Select-Object -First 1 }
+        function Read-EaPack([string]$Pack) {
+            $manifest = @(Import-Csv (Join-Path $Pack '00-manifest.csv'))
+            . (Join-Path $PSScriptRoot '../report/Read-CyberSocPackResult.ps1')
+            Initialize-CyberSocPackReader -Pack $Pack -Manifest $manifest
+            Get-CyberSocEmergencyAccess -Read { param([string]$Id) $s = Get-Status $Id; $ok = $s -in 'OK', 'EMPTY', 'PARTIAL'; @{ Status = $s; Rows = @(if ($ok) { Get-Rows $Id }); Unreadable = ($ok -and (Test-Unreadable $Id)) } }
+        }
+        # No change request in CR-01 to CR-19 changes Conditional Access yet, so a copy of the generator marks CR-02 as one,
+        # which exercises the emergency access gate in the generator loop itself.
+        $copy = Join-Path $TestDrive 'ea-gate-tool'
+        New-Item -ItemType Directory -Path (Join-Path $copy 'report') -Force | Out-Null
+        Copy-Item (Join-Path $PSScriptRoot '../report/*.ps1') (Join-Path $copy 'report')
+        $text = Get-Content $generator -Raw
+        $entry = "Change = 'Secure transfer required on storage accounts'; Sources = @('DP.1-DETAIL')"
+        $text.Contains($entry) | Should -BeTrue
+        Set-Content (Join-Path $copy 'New-CyberSocChangeRequests.ps1') $text.Replace($entry, "$entry; EmergencyAccess = `$true") -NoNewline
+        $script:eaGated = Join-Path $copy 'New-CyberSocChangeRequests.ps1'
+    }
+
+    It 'keeps the match in one place: Atmosera in the UPN or the group name, anywhere and in any case' {
+        foreach ($upn in 'breakglass-atmosera01@contoso.onmicrosoft.com', 'jordan.lee_atmosera.com#EXT#@contoso.onmicrosoft.com', 'SOC.ATMOSERA.Analyst@contoso.onmicrosoft.com') { Test-CyberSocEmergencyAccessUpn $upn | Should -BeTrue -Because $upn }
+        foreach ($upn in 'dana.finance@contoso.onmicrosoft.com', 'atmo.sera@contoso.onmicrosoft.com', '') { Test-CyberSocEmergencyAccessUpn $upn | Should -BeFalse -Because $upn }
+        Test-CyberSocEmergencyAccessGroup 'SOC-atmosera-Tier0' | Should -BeTrue
+        Test-CyberSocEmergencyAccessGroup 'IT Admins' | Should -BeFalse
+        (Get-Content (Join-Path $PSScriptRoot '../Get-CyberSocEvidence.ps1') -Raw) | Should -Not -Match "(?i)'\*?atmosera\*?'" -Because 'the collector matches through the shared rule only'
+    }
+
+    It 'excludes each Atmosera group and each account matched by its UPN, and protects every one of them from removal' {
+        $pack = Join-Path $TestDrive 'ea-complete'
+        New-ChangeFixture $pack
+        $sc = Add-EaScenario $pack 'complete'
+        $ea = Read-EaPack $pack
+        $ea.Ready | Should -BeTrue
+        @($ea.ExcludeGroups) | Should -Be @($sc.Expect.ExcludeGroups)
+        @($ea.ExcludeUsers) | Should -Be @($sc.Expect.ExcludeUsers | Sort-Object) -Because 'an account matched by its UPN stays excluded on its own even if it is taken out of its Atmosera group'
+        @($ea.Review | ForEach-Object DisplayName) | Should -Be @('ATMOSERA Support (synced)', 'SOC-atmosera-Tier0')
+        foreach ($a in @($ea.Accounts)) { Test-CyberSocEmergencyAccessId $ea $a.PrincipalId.ToUpperInvariant() | Should -BeTrue -Because $a.UserPrincipalName }
+        foreach ($g in @($ea.Groups)) { Test-CyberSocEmergencyAccessId $ea $g.GroupId | Should -BeTrue -Because $g.DisplayName }
+        $dana = @($sc.Graph.Users | Where-Object userPrincipalName -like 'dana*')[0].id
+        Test-CyberSocEmergencyAccessId $ea $dana | Should -BeFalse
+        Test-CyberSocEmergencyAccessId $ea '' | Should -BeFalse
+    }
+
+    It 'lists the groups and accounts excluded in the index, and names the dynamic and synced groups' {
+        $pack = Join-Path $TestDrive 'ea-index'
+        New-ChangeFixture $pack
+        $sc = Add-EaScenario $pack 'complete'
+        Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack }
+        $section = Get-EaSection (Get-Index $pack)
+        $section | Should -Match 'every account with Atmosera in its UPN and every member of an Atmosera group, a group whose display name contains Atmosera'
+        $section | Should -Match 'no change removes an existing exclusion of any of them'
+        $section | Should -Match 'No change request in this build changes Conditional Access yet, and one that does is written only when the read is complete and found at least one account\.'
+        $section | Should -Match ('\| Atmosera Emergency Access \| 3 \| Assigned \| {0} \|' -f @($sc.Graph.Groups)[0].id)
+        $section | Should -Match '\| SOC-atmosera-Tier0 \| 1 \| Dynamic \|'
+        $section | Should -Match '\| breakglass-atmosera01@contoso\.onmicrosoft\.com \| Emergency Access 01 \| Member \| Yes \| UPN \|  \| the account \|'
+        $section | Should -Match '\| jordan\.lee_atmosera\.com#EXT#@contoso\.onmicrosoft\.com \| Jordan Lee \(Atmosera\) \| Guest \| Yes \| UPN \|  \| the account \|'
+        $section | Should -Match '\| SOC\.ATMOSERA\.Analyst@contoso\.onmicrosoft\.com \| SOC Analyst \| Member \| No \| UPN and group \| Atmosera Emergency Access \| the account and its group \|'
+        $section | Should -Match '\| tier0\.admin@contoso\.onmicrosoft\.com \| Tier 0 Admin \| Member \| Yes \| Group \| Atmosera Emergency Access, SOC-atmosera-Tier0 \| its group \|'
+        $section | Should -Match '- SOC-atmosera-Tier0 has dynamic membership, so its rule adds and removes members, and an account it drops loses the exclusion\.'
+        $section | Should -Match '- ATMOSERA Support \(synced\) has on-premises synced membership, so its members are managed in Active Directory'
+        $section | Should -Match '- An account Atmosera uses whose UPN does not contain Atmosera is covered only when it sits in an Atmosera group\.'
+        $section | Should -Not -Match 'dana\.finance|kai\.helpdesk|IT Admins|Platform Ops'
+        $section | Should -Not -Match 'No Conditional Access change can be written'
+    }
+
+    It 'writes no Conditional Access change when the read failed, is partial, found nothing, or was not collected, and says why' {
+        foreach ($case in @(
+                @{ Name = 'failed-read'; State = 'Not written, the emergency access read is not complete \(IA\.16-ACCOUNTS UNAVAILABLE, IA\.16-GROUPS FAILED\)' }
+                @{ Name = 'members-unread'; State = 'Not written, the emergency access read is not complete \(IA\.16-ACCOUNTS PARTIAL, IA\.16-GROUPS PARTIAL\)' }
+                @{ Name = 'no-match'; State = 'Not written, the emergency access read found no account with Atmosera in its UPN or in an Atmosera group' }
+                @{ Name = ''; State = 'Needs recollection with CyberSOC collector 1\.12\.0 or later' })) {
+            $pack = Join-Path $TestDrive "ea-gate-$($case.Name)"
+            New-ChangeFixture $pack
+            if ($case.Name) { $null = Add-EaScenario $pack $case.Name }
+            (Read-EaPack $pack).Ready | Should -BeFalse -Because $case.Name
+            Invoke-WithWindowsPowerShellJson { $null = & $script:eaGated -EvidencePath $pack }
+            Test-Path (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.txt') | Should -BeFalse -Because $case.Name
+            Test-Path (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.email.txt') | Should -BeFalse -Because $case.Name
+            $index = Get-Index $pack
+            $index | Should -Match ('\| 02 \| Secure transfer required on storage accounts \|  \| {0} \|  \|' -f $case.State) -Because $case.Name
+            $index | Should -Match 'CR-02 is not written because .*A Conditional Access change is written only with the emergency access accounts it excludes\.' -Because $case.Name
+            Test-Path (Join-Path $pack '05-change-requests/CR-03-storage-minimum-tls.txt') | Should -BeTrue -Because 'a change request that is not a Conditional Access change is unaffected'
+            $section = Get-EaSection $index
+            if ($case.Name) { $section | Should -Match 'No Conditional Access change can be written: ' -Because $case.Name }
+            else { $section | Should -Match 'The pack was collected before the emergency access read, so no Conditional Access change can be written\. Recollect with CyberSOC collector 1\.12\.0 or later\. CR-02 is written only with the emergency access accounts\.' }
+        }
+        $index | Should -Not -Match '\| Atmosera group \|'
+        $pack = Join-Path $TestDrive 'ea-gate-ok'
+        New-ChangeFixture $pack
+        $null = Add-EaScenario $pack 'complete'
+        Invoke-WithWindowsPowerShellJson { $null = & $script:eaGated -EvidencePath $pack }
+        Test-Path (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.email.txt') | Should -BeTrue -Because 'a complete read with accounts lets the change through'
+        (Get-EaSection (Get-Index $pack)) | Should -Match 'CR-02 is written only when the read is complete'
+    }
+
+    It 'reads an unreadable result file as not complete' {
+        $pack = Join-Path $TestDrive 'ea-unreadable'
+        New-ChangeFixture $pack
+        $null = Add-EaScenario $pack 'complete'
+        Set-Content (Join-Path $pack 'results/IA.16-GROUPS.json') ''
+        $ea = Read-EaPack $pack 3>$null
+        $ea.Ready | Should -BeFalse
+        $ea.Why | Should -Be 'the emergency access read is not complete (IA.16-GROUPS unreadable)'
     }
 }

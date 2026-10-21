@@ -41,6 +41,9 @@ missing evidence never becomes a favorable zero.
    Settings > Endpoints > Licenses, which no API reads. The collection runs a licensing check (LIC.5-MATRIX) of the
    Defender for Endpoint plan and usage and of the licenses each change request needs, and a change request whose
    license reads Not licensed is not written.
+   It also reads the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS): every account with Atmosera in its
+   UPN or in an Atmosera group, which every Conditional Access change excludes. No Conditional Access change is written
+   when that read failed, is partial or found no account, and the change request index lists the accounts and groups.
 
    The pack is `CyberSOC-Evidence_<client>_<report month>_<timestamp>/`. Runs dated inside the window, up to the
    collection date, are imported, and only for this client's subscriptions.

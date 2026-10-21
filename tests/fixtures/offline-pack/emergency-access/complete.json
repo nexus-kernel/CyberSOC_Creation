@@ -1,0 +1,205 @@
+{
+  "Description": "A member matched by its UPN, a guest matched by its #EXT# UPN, a disabled account in upper case, members of a nested Atmosera group and of a plain group nested in an Atmosera group, and accounts that must not match",
+  "Graph": {
+    "Users": [
+      {
+        "id": "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+        "userPrincipalName": "breakglass-atmosera01@contoso.onmicrosoft.com",
+        "displayName": "Emergency Access 01",
+        "userType": "Member",
+        "accountEnabled": true
+      },
+      {
+        "id": "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+        "userPrincipalName": "jordan.lee_atmosera.com#EXT#@contoso.onmicrosoft.com",
+        "displayName": "Jordan Lee (Atmosera)",
+        "userType": "Guest",
+        "accountEnabled": true
+      },
+      {
+        "id": "b598e961-2bb3-539e-8bf3-b7b38ab7b94d",
+        "userPrincipalName": "SOC.ATMOSERA.Analyst@contoso.onmicrosoft.com",
+        "displayName": "SOC Analyst",
+        "userType": "Member",
+        "accountEnabled": false
+      },
+      {
+        "id": "b2dc5657-a9c1-5cb7-a1f2-02138a08ff3f",
+        "userPrincipalName": "tier0.admin@contoso.onmicrosoft.com",
+        "displayName": "Tier 0 Admin",
+        "userType": "Member",
+        "accountEnabled": true
+      },
+      {
+        "id": "fc88c3c6-70c9-59dc-b4f1-052197e5d335",
+        "userPrincipalName": "pat.ops@contoso.onmicrosoft.com",
+        "displayName": "Pat Ops",
+        "userType": "Member",
+        "accountEnabled": true
+      },
+      {
+        "id": "e2fe905b-078d-55c1-a550-a1b092b6ef93",
+        "userPrincipalName": "dana.finance@contoso.onmicrosoft.com",
+        "displayName": "Dana Finance",
+        "userType": "Member",
+        "accountEnabled": true
+      },
+      {
+        "id": "33e31b69-62dd-5c79-80c5-c81a5b63f437",
+        "userPrincipalName": "kai.helpdesk@contoso.onmicrosoft.com",
+        "displayName": "Kai Helpdesk",
+        "userType": "Member",
+        "accountEnabled": true
+      }
+    ],
+    "Groups": [
+      {
+        "id": "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+        "displayName": "Atmosera Emergency Access",
+        "groupTypes": [],
+        "onPremisesSyncEnabled": null,
+        "membershipRule": null
+      },
+      {
+        "id": "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+        "displayName": "SOC-atmosera-Tier0",
+        "groupTypes": [
+          "DynamicMembership"
+        ],
+        "onPremisesSyncEnabled": null,
+        "membershipRule": "user.department -eq \"SOC Tier 0\""
+      },
+      {
+        "id": "8609bd57-3931-50b5-8dbd-1a14d439760d",
+        "displayName": "ATMOSERA Support (synced)",
+        "groupTypes": [],
+        "onPremisesSyncEnabled": true,
+        "membershipRule": null
+      },
+      {
+        "id": "2b36a5e4-a16c-5159-b0d5-a27334c1bbfe",
+        "displayName": "IT Admins",
+        "groupTypes": [],
+        "onPremisesSyncEnabled": null,
+        "membershipRule": null
+      },
+      {
+        "id": "397adba6-11ac-50a7-a75a-94e8bbfdd201",
+        "displayName": "Platform Ops",
+        "groupTypes": [],
+        "onPremisesSyncEnabled": null,
+        "membershipRule": null
+      }
+    ],
+    "Members": {
+      "60cc37ba-dee8-5330-bd03-51890d7c6baa": [
+        {
+          "id": "b598e961-2bb3-539e-8bf3-b7b38ab7b94d",
+          "userPrincipalName": "SOC.ATMOSERA.Analyst@contoso.onmicrosoft.com",
+          "displayName": "SOC Analyst",
+          "userType": "Member",
+          "accountEnabled": false
+        },
+        {
+          "id": "b2dc5657-a9c1-5cb7-a1f2-02138a08ff3f",
+          "userPrincipalName": "tier0.admin@contoso.onmicrosoft.com",
+          "displayName": "Tier 0 Admin",
+          "userType": "Member",
+          "accountEnabled": true
+        },
+        {
+          "id": "fc88c3c6-70c9-59dc-b4f1-052197e5d335",
+          "userPrincipalName": "pat.ops@contoso.onmicrosoft.com",
+          "displayName": "Pat Ops",
+          "userType": "Member",
+          "accountEnabled": true
+        }
+      ],
+      "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32": [
+        {
+          "id": "b2dc5657-a9c1-5cb7-a1f2-02138a08ff3f",
+          "userPrincipalName": "tier0.admin@contoso.onmicrosoft.com",
+          "displayName": "Tier 0 Admin",
+          "userType": "Member",
+          "accountEnabled": true
+        }
+      ],
+      "8609bd57-3931-50b5-8dbd-1a14d439760d": []
+    }
+  },
+  "Expect": {
+    "IA.16-ACCOUNTS": {
+      "Status": "OK"
+    },
+    "IA.16-GROUPS": {
+      "Status": "OK"
+    },
+    "Accounts": [
+      {
+        "UserPrincipalName": "breakglass-atmosera01@contoso.onmicrosoft.com",
+        "MatchedBy": "UPN",
+        "Groups": []
+      },
+      {
+        "UserPrincipalName": "jordan.lee_atmosera.com#EXT#@contoso.onmicrosoft.com",
+        "MatchedBy": "UPN",
+        "Groups": []
+      },
+      {
+        "UserPrincipalName": "pat.ops@contoso.onmicrosoft.com",
+        "MatchedBy": "Group",
+        "Groups": [
+          "Atmosera Emergency Access"
+        ]
+      },
+      {
+        "UserPrincipalName": "SOC.ATMOSERA.Analyst@contoso.onmicrosoft.com",
+        "MatchedBy": "UPN and group",
+        "Groups": [
+          "Atmosera Emergency Access"
+        ]
+      },
+      {
+        "UserPrincipalName": "tier0.admin@contoso.onmicrosoft.com",
+        "MatchedBy": "Group",
+        "Groups": [
+          "Atmosera Emergency Access",
+          "SOC-atmosera-Tier0"
+        ]
+      }
+    ],
+    "Groups": [
+      {
+        "DisplayName": "Atmosera Emergency Access",
+        "Members": 3,
+        "Membership": "Assigned"
+      },
+      {
+        "DisplayName": "ATMOSERA Support (synced)",
+        "Members": 0,
+        "Membership": "On-premises"
+      },
+      {
+        "DisplayName": "SOC-atmosera-Tier0",
+        "Members": 1,
+        "Membership": "Dynamic"
+      }
+    ],
+    "ExcludeUsers": [
+      "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+      "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+      "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
+    ],
+    "ExcludeGroups": [
+      "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+      "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+      "8609bd57-3931-50b5-8dbd-1a14d439760d"
+    ],
+    "NotListed": [
+      "dana.finance",
+      "kai.helpdesk",
+      "IT Admins",
+      "Platform Ops"
+    ]
+  }
+}

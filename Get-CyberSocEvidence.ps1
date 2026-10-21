@@ -37,7 +37,7 @@
          their client emails from the finished pack, offline.
 
     Microsoft Graph is read with GET requests only, on the instruction of Oct 11, 2026, for the
-    measures that have no other source: IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED,
+    measures that have no other source: IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, IA.16-ACCOUNTS,
     POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS and LIC.4-DEVICES. The Graph token comes from the Azure CLI exactly as the Defender token
     does (az account get-access-token --resource https://graph.microsoft.com/). An endpoint the
     token cannot read makes that measure UNAVAILABLE with the permission it needs, never a zero,
@@ -60,7 +60,8 @@
         domains/<id>/federationConfiguration, reports/authenticationMethods/
         userRegistrationDetails, roleManagement/directory/roleAssignments,
         roleDefinitions, roleAssignmentScheduleInstances and roleEligibilityScheduleInstances,
-        users (disabled accounts, IA.15-DISABLED), groups/<id> and groups/<id>/members,
+        users (disabled accounts, IA.15-DISABLED, and every user, IA.16-ACCOUNTS), groups (IA.16-GROUPS),
+        groups/<id>, groups/<id>/members and groups/<id>/transitiveMembers/microsoft.graph.user,
         identity/conditionalAccess/policies,
         directory/onPremisesSynchronization, policies/authorizationPolicy,
         policies/adminConsentRequestPolicy, security/secureScores,
@@ -240,7 +241,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.11.0, based on the EBR collector 1.14.0
+    Version: 1.12.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -290,7 +291,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.11.0'
+$script:EbrVersion = '1.12.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -1632,6 +1633,17 @@ authorizationresources
 | where PrincipalType !~ "ServicePrincipal"   // users and groups, and any assignment without a type
 | project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, Condition, ConditionVersion, PrincipalId, PrincipalType
 | order by PrincipalId asc, Scope asc
+'@))
+
+    # IA.16 (CyberSOC 1.12.0): the emergency access accounts every Conditional Access change excludes. Graph takes no
+    # contains on userPrincipalName or displayName, and $search matches whole words on displayName and starts with on
+    # every other property, so either could miss an account. Every user and every group is read and matched offline.
+    $q.Add((New-EbrQuery -Id 'IA.16-ACCOUNTS' -Phase 'P2 Identity' -Engine 'EMERGENCY-ACCESS' -Title 'Emergency access accounts: Atmosera in the UPN or in an Atmosera group' -Notes 'Added in CyberSOC 1.12.0. Writes IA.16-ACCOUNTS (every account, member or guest, whose UPN contains Atmosera, matched without regard to case, so a guest from an Atmosera domain matches through its #EXT# UPN, and every user in an Atmosera group, with how it matched) and IA.16-GROUPS (every group whose display name contains Atmosera, with its user member count, read transitively so a nested group''s members count, and whether its membership is dynamic or synced from on-premises). Needs User.Read.All and GroupMember.Read.All, as IA.15 does, and Member.Read.Hidden for an Atmosera group with hidden membership. The match rule lives in report/Get-CyberSocEmergencyAccess.ps1. A read that fails, is cut short or misses a group''s members makes both results PARTIAL or worse, never EMPTY, and New-CyberSocChangeRequests.ps1 then writes no Conditional Access change. Feeds the emergency access exclusions of every Conditional Access change. Internal: names accounts.' -Query @'
+GET /v1.0/users?$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999
+GET /v1.0/groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule,visibility&$top=999
+GET /v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$count=true&$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999 (ConsistencyLevel: eventual), for each Atmosera group
+Match: userPrincipalName or group displayName contains "atmosera", case-insensitive, offline
+Permission: User.Read.All, GroupMember.Read.All (Member.Read.Hidden for a group with hidden membership)
 '@))
 
     $q.Add((New-EbrQuery -Id 'IA.8' -Phase 'P2 Identity' -Engine 'GRAPH' -Title 'Conditional Access policy inventory' -Query @'
@@ -4433,7 +4445,8 @@ function Invoke-EbrGraphGet {
     # (no value array) is returned as is. A 403, or a 401 from a resource that rejects a token
     # without its scope (SharePoint settings do that), is rethrown as GRAPH-403 so the engine can
     # mark the measure UNAVAILABLE with the permission it needs instead of failing it.
-    param([string]$Uri, [string]$Tenant, [int]$MaxPages = 200)
+    # Complete throws GRAPH-TRUNCATED when pages remain after MaxPages, for a read that must not be cut short.
+    param([string]$Uri, [string]$Tenant, [int]$MaxPages = 200, [switch]$Complete)
     $headers = @{}
     if ($Uri -match '\$count=true|\$search=') { $headers['ConsistencyLevel'] = 'eventual' }
     $all = [System.Collections.Generic.List[object]]::new()
@@ -4454,6 +4467,7 @@ function Invoke-EbrGraphGet {
         }
         else { return $resp }
     }
+    if ($Complete -and $next) { throw ('GRAPH-TRUNCATED {0}: more than {1} pages, so the read was cut short.' -f ($Uri -replace '\?.*$', ''), $MaxPages) }
     , $all.ToArray()
 }
 
@@ -4794,8 +4808,8 @@ function Get-EbrGraphList {
     # Every item of a collection, emitted one by one. Callers wrap the call in @(...) and get a
     # flat array of 0, 1 or n items. (Returning ", $array" here would nest inside @(...).) Graph
     # items are never arrays themselves, so one level of flattening is safe.
-    param($Ctx, [string]$Path, [switch]$Beta)
-    $out = Invoke-EbrGraphGet -Uri (Get-EbrGraphUri $Path -Beta:$Beta) -Tenant $Ctx.TenantGuid
+    param($Ctx, [string]$Path, [switch]$Beta, [switch]$Complete)
+    $out = Invoke-EbrGraphGet -Uri (Get-EbrGraphUri $Path -Beta:$Beta) -Tenant $Ctx.TenantGuid -Complete:$Complete
     foreach ($o in @($out)) {
         if ($null -eq $o) { continue }
         if ($o -is [array]) { foreach ($i in $o) { if ($null -ne $i) { $i } } }
@@ -5303,6 +5317,102 @@ function Invoke-EbrDisabledRoles {
     }
 }
 
+function Invoke-EbrEmergencyAccess {
+    # IA.16 (CyberSOC 1.12.0), the emergency access accounts every Conditional Access change excludes. Returns two
+    # results: IA.16-ACCOUNTS, every account whose UPN contains Atmosera or that sits in an Atmosera group, and
+    # IA.16-GROUPS, every Atmosera group. Every user and every group is read in full and matched offline with the rule
+    # in report/Get-CyberSocEmergencyAccess.ps1, since Graph has no contains on these properties and $search could miss
+    # one (Microsoft Learn: tokenized search covers displayName and description only, every other property starts with).
+    # Each Atmosera group's user members are read transitively, so a member of a group nested in it is listed too.
+    # A read that fails, is cut short or misses a group's members never reads EMPTY: the change requests then write no
+    # Conditional Access change, since one without the emergency exclusions could lock everyone out.
+    param($Ctx)
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $elapsed = { $sw.Elapsed.TotalSeconds }
+    $accountColumns = @('PrincipalId', 'UserPrincipalName', 'DisplayName', 'UserType', 'AccountEnabled', 'MatchedBy', 'Groups', 'GroupIds')
+    $groupColumns = @('GroupId', 'DisplayName', 'Members', 'Membership', 'MembersRead', 'MembershipRule')
+    $graphFix = { param([string]$Permission) 'Fix: az login --tenant {0} --scope https://graph.microsoft.com/{1}, then rerun.' -f $Ctx.TenantGuid, $Permission }
+    $both = {
+        param([string]$Status, [string]$Detail)
+        @{
+            Accounts = New-EbrResult -ResultId 'IA.16-ACCOUNTS' -Status $Status -Columns $accountColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
+            Groups   = New-EbrResult -ResultId 'IA.16-GROUPS' -Status $Status -Columns $groupColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
+        }
+    }
+    if (-not (Get-Command ConvertTo-CyberSocEmergencyAccessRows -ErrorAction SilentlyContinue)) {
+        return & $both 'FAILED' 'report/Get-CyberSocEmergencyAccess.ps1 is missing from the collector folder, so the emergency access accounts could not be matched. Keep the report folder beside the collector.'
+    }
+    if (-not $Ctx.GraphAvailable) {
+        $why = if ($Ctx.GraphReason) { $Ctx.GraphReason } else { 'Microsoft Graph was not initialised.' }
+        return & $both 'UNAVAILABLE' ('Not a zero: Microsoft Graph was not reachable, so the emergency access accounts are unknown. ' + $why).Trim()
+    }
+    # A read the token is refused is UNAVAILABLE with the permission it needs, and any other failure is FAILED.
+    $fail = {
+        param([string]$Message, [string]$Permission, [string]$What)
+        $m = $Message -replace '\s+', ' '
+        if ($m -match '^GRAPH-403') {
+            Add-EbrGraphMissingScope -Ctx $Ctx -Permission $Permission
+            @{ Status = 'UNAVAILABLE'; Detail = ('Not a zero: the Graph token cannot read {0}. Needs {1}. {2} {3}' -f $What, $Permission, (& $graphFix $Permission), $m) }
+        }
+        else { @{ Status = 'FAILED'; Detail = ('The {0} could not be read in full. {1}' -f $What, $m) } }
+    }
+
+    $users = $null; $userFail = $null
+    try { $users = @(Get-EbrGraphList -Ctx $Ctx -Complete -Path 'users?$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999') }
+    catch { $userFail = & $fail $_.Exception.Message 'User.Read.All' 'user accounts' }
+    $groups = $null; $groupFail = $null
+    try { $groups = @(Get-EbrGraphList -Ctx $Ctx -Complete -Path 'groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule,visibility&$top=999') }
+    catch { $groupFail = & $fail $_.Exception.Message 'GroupMember.Read.All' 'groups' }
+
+    # The user members of each Atmosera group, through every nested group. A group whose members cannot be read is
+    # named, and its members are unknown rather than none.
+    $members = @{}
+    $unread = [System.Collections.Generic.List[string]]::new()
+    foreach ($g in @($groups | Where-Object { $null -ne $_ -and (Test-CyberSocEmergencyAccessGroup ([string](Get-EbrProp $_ 'displayName'))) })) {
+        $gid = ([string](Get-EbrProp $g 'id')).ToLowerInvariant()
+        if (-not $gid -or $members.ContainsKey($gid)) { continue }
+        try { $members[$gid] = @(Get-EbrGraphList -Ctx $Ctx -Complete -Path ('groups/{0}/transitiveMembers/microsoft.graph.user?$count=true&$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999' -f $gid)) }
+        catch {
+            $members[$gid] = $null
+            # Microsoft Learn: the members of a group with hidden membership need Member.Read.Hidden as well, so a refusal
+            # there asks for that permission rather than GroupMember.Read.All, which the token may already hold.
+            $hidden = [string](Get-EbrProp $g 'visibility') -ieq 'HiddenMembership'
+            $unread.Add(('{0} ({1}{2})' -f [string](Get-EbrProp $g 'displayName'), $gid, $(if ($hidden) { ', hidden membership, needs Member.Read.Hidden' } else { '' })))
+            if ($_.Exception.Message -match '^GRAPH-403') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission $(if ($hidden) { 'Member.Read.Hidden' } else { 'GroupMember.Read.All' }) -Partial 'IA.16 (Atmosera group members)' }
+        }
+    }
+    $set = ConvertTo-CyberSocEmergencyAccessRows -Users $users -Groups $groups -Members $members
+    $accounts = @($set.Accounts)
+    $groupRows = @($set.Groups)
+
+    $byUpn = @($accounts | Where-Object { $_.MatchedBy -in 'UPN', 'UPN and group' }).Count
+    $byGroup = @($accounts | Where-Object { $_.MatchedBy -in 'Group', 'UPN and group' }).Count
+    $unreadText = if ($unread.Count) { ' The members of {0} could not be read, so the accounts in {1} are unknown: {2}.' -f (Format-EbrCount $unread.Count 'Atmosera group' 'Atmosera groups'), $(if ($unread.Count -eq 1) { 'it' } else { 'them' }), ($unread -join ', ') } else { '' }
+
+    if ($groupFail) { $groupResult = New-EbrResult -ResultId 'IA.16-GROUPS' -Status $groupFail.Status -Columns $groupColumns -Source 'Microsoft Graph' -Detail $groupFail.Detail -DurationSec (& $elapsed) }
+    else {
+        $review = @($groupRows | Where-Object Membership -ne 'Assigned' | ForEach-Object { '{0} ({1})' -f $_.DisplayName, $_.Membership })
+        $detail = '{0} with Atmosera in the display name, of {1} read. {2}' -f (Format-EbrCount $groupRows.Count 'group' 'groups'), @($groups).Count, $(if ($review.Count) { 'Membership not assigned by hand: {0}.' -f ($review -join ', ') } else { '' })
+        $detail = ($detail.Trim() + $unreadText).Trim()
+        $status = if ($unread.Count) { 'PARTIAL' } elseif ($groupRows.Count) { 'OK' } else { 'EMPTY' }
+        $groupResult = New-EbrResult -ResultId 'IA.16-GROUPS' -Status $status -Rows $groupRows -Columns $groupColumns -Source 'Microsoft Graph' -Detail $detail -DurationSec (& $elapsed)
+    }
+    if ($userFail) {
+        # Without the users, an account matched only by its UPN is unknown, so the accounts in groups are not listed alone.
+        $accountResult = New-EbrResult -ResultId 'IA.16-ACCOUNTS' -Status $userFail.Status -Columns $accountColumns -Source 'Microsoft Graph' -Detail $userFail.Detail -DurationSec (& $elapsed)
+    }
+    else {
+        $detail = '{0}: {1} by UPN and {2} in an Atmosera group, {3} of them guests, of {4} read.' -f (Format-EbrCount $accounts.Count 'emergency access account' 'emergency access accounts'), $byUpn, $byGroup, @($accounts | Where-Object UserType -eq 'Guest').Count, (Format-EbrCount @($users).Count 'user account' 'user accounts')
+        $partial = $false
+        if ($groupFail) { $partial = $true; $detail += (' The groups were not read (IA.16-GROUPS {0}), so only the accounts matched by UPN are listed.' -f $groupFail.Status) }
+        if ($unread.Count) { $partial = $true; $detail += $unreadText }
+        $detail += ' An account whose UPN does not contain Atmosera is listed only when it sits in an Atmosera group.'
+        $status = if ($partial) { 'PARTIAL' } elseif ($accounts.Count) { 'OK' } else { 'EMPTY' }
+        $accountResult = New-EbrResult -ResultId 'IA.16-ACCOUNTS' -Status $status -Rows $accounts -Columns $accountColumns -Source 'Microsoft Graph' -Detail $detail -DurationSec (& $elapsed)
+    }
+    @{ Accounts = $accountResult; Groups = $groupResult }
+}
+
 function Get-EbrGraphCaPolicies {
     param($Ctx)
     if (-not $Ctx.GraphCache.ContainsKey('caPolicies')) {
@@ -5675,7 +5785,7 @@ function Write-EbrQueryFile {
     param([string]$OutDir, $Item, [string]$Text, [string]$Target)
     $header = "// CyberSOC evidence query {0}: {1}`n// Engine: {2}. Target: {3}`n// Expanded {4} UTC by Get-CyberSocEvidence.ps1 v{5}`n" -f $Item.Id, $Item.Title, $Item.Engine, $Target, (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss', [cultureinfo]::InvariantCulture), $script:EbrVersion
     # Graph items carry the endpoints they read rather than KQL, so they get their own extension.
-    $ext = if ($Item.Engine -eq 'GRAPH') { '.graph.txt' } else { '.kql' }
+    $ext = if ($Item.Engine -in 'GRAPH', 'EMERGENCY-ACCESS') { '.graph.txt' } else { '.kql' }
     Write-EbrTextFile -Path (Join-Path (Join-Path $OutDir 'queries') "$($Item.Id)$ext") -Text ($header + $Text + "`n")
 }
 
@@ -5982,6 +6092,13 @@ function Invoke-EbrCatalogItem {
             $Ctx.Pending.Add($r.Rbac)
             $Ctx.Pending.Add($r.Entra)
             return $r.Disabled
+        }
+        'EMERGENCY-ACCESS' {
+            # IA.16-ACCOUNTS, with IA.16-GROUPS as its detail (CyberSOC 1.12.0).
+            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target 'Microsoft Graph'
+            $r = Invoke-EbrEmergencyAccess -Ctx $Ctx
+            $Ctx.Pending.Add($r.Groups)
+            return $r.Accounts
         }
         'COMPUTE-SKUS' {
             Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the Microsoft.Compute/skus path of each subscription and region, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
@@ -6770,6 +6887,10 @@ function Invoke-EbrMain {
 # the pack for its capability gate. Without the file the matrix reads FAILED and the rest of the run is unaffected.
 $licensingModule = Join-Path $PSScriptRoot 'report/Get-CyberSocLicensing.ps1'
 if (Test-Path -LiteralPath $licensingModule -PathType Leaf) { . $licensingModule }
+# The emergency access match (IA.16) shares its rule with New-CyberSocChangeRequests.ps1, so the two never disagree on
+# which account or group is Atmosera's. Without the file IA.16 reads FAILED and the rest of the run is unaffected.
+$emergencyAccessModule = Join-Path $PSScriptRoot 'report/Get-CyberSocEmergencyAccess.ps1'
+if (Test-Path -LiteralPath $emergencyAccessModule -PathType Leaf) { . $emergencyAccessModule }
 
 if ($LoadFunctionsOnly) { return }
 

@@ -210,7 +210,7 @@ finally { $zip.Dispose(); $sha.Dispose() }
 # Reopen the zip and confirm it can run on its own.
 $expected = @(
     'Get-CyberSocEvidence.ps1', 'Import-CyberSocVulnAssessment.ps1', 'New-CyberSocReport.ps1', 'New-CyberSocSecOpsWorklist.ps1', 'New-CyberSocChangeRequests.ps1', 'New-CyberSocControlsStandard.ps1',
-    'report/Get-EbrCaEvaluation.ps1', 'report/Get-CyberSocLicensing.ps1', 'report/Read-CyberSocPackResult.ps1', 'report/report-model.js', 'report/cybersoc-model.js', 'report/report-render.js', 'report/report-review.js', 'report/report-controls.js', 'report/build-client-report.cjs', 'report/report-story.js',
+    'report/Get-EbrCaEvaluation.ps1', 'report/Get-CyberSocLicensing.ps1', 'report/Get-CyberSocEmergencyAccess.ps1', 'report/Read-CyberSocPackResult.ps1', 'report/report-model.js', 'report/cybersoc-model.js', 'report/report-render.js', 'report/report-review.js', 'report/report-controls.js', 'report/build-client-report.cjs', 'report/report-story.js',
     'report/report.html', 'report/report.css', 'report/standard.html', 'report/standard-render.js', 'report/controls-standard.json',
     'report/deck-common.cjs', 'report/build-report-deck.cjs', 'report/build-controls-deck.cjs', 'report/assets/template-background.jpg',
     'package.json', 'SETUP.md', 'MANIFEST.sha256'

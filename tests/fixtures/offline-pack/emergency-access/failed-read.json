@@ -1,0 +1,18 @@
+{
+  "Description": "The users cannot be read (the token lacks User.Read.All) and the groups read fails",
+  "Graph": {
+    "Users": "GRAPH-403 https://graph.microsoft.com/v1.0/users: HTTP 403: Forbidden | Authorization_RequestDenied",
+    "Groups": "HTTP 500: Internal Server Error",
+    "Members": {}
+  },
+  "Expect": {
+    "IA.16-ACCOUNTS": {
+      "Status": "UNAVAILABLE"
+    },
+    "IA.16-GROUPS": {
+      "Status": "FAILED"
+    },
+    "Accounts": [],
+    "Groups": []
+  }
+}

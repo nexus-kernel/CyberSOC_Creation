@@ -20,7 +20,9 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
   one into `05-change-requests` (`New-CyberSocChangeRequests.ps1`). See [Change requests](#change-requests).
 - **Licensing check.** The Defender for Endpoint plan and its usage, and the licenses each change request needs
   (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.11.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Emergency access accounts.** Every account with Atmosera in its UPN or in an Atmosera group (IA.16-ACCOUNTS and
+  IA.16-GROUPS), which every Conditional Access change excludes. See the collector 1.12.0 notes below.
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.12.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -189,7 +191,7 @@ ATMOSERA_SCRIPT_REQUIREMENTS.md 1.4 still forbids Graph; that standard has not b
 | Advanced Hunting | `api.security.microsoft.com/api/advancedqueries/run` | resource `api.securitycenter.microsoft.com`, client tenant |
 | Defender for Endpoint devices (LIC.2-MACHINES) | `api.security.microsoft.com/api/machines`, GET, `$top` 10,000 and `$skip` paging | same as Advanced Hunting. Needs Machine.Read and the View Data role. Not yet confirmed on a live run that the Azure CLI token carries Machine.Read: a 403 marks LIC.2-MACHINES UNAVAILABLE |
 | Sentinel rules (DR.9) | `{workspace}/providers/Microsoft.SecurityInsights/alertRules` | ARM |
-| Microsoft Graph (IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS, LIC.4-DEVICES) | `graph.microsoft.com/v1.0`, GET only, `@odata.nextLink` paging | resource `https://graph.microsoft.com/`, client tenant, same reauth prompt as Defender |
+| Microsoft Graph (IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, IA.16-ACCOUNTS, POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS, LIC.4-DEVICES) | `graph.microsoft.com/v1.0`, GET only, `@odata.nextLink` paging | resource `https://graph.microsoft.com/`, client tenant, same reauth prompt as Defender |
 | Exchange Online and Purview (IA.9, DP.7-ZAP, DP.6) | `ExchangeOnlineManagement` module, browser sign-in | module |
 
 **What the Graph token can read.** The Azure CLI application carries a fixed set of delegated
@@ -281,6 +283,7 @@ Details:
 | IA.6 Privileged roles | `roleManagement/directory/roleAssignmentScheduleInstances` and `roleEligibilityScheduleInstances`, falling back to `roleAssignments` without PIM | RoleManagement.Read.Directory | **IA.6-SUB**: current privileged role holders from `IdentityInfo` |
 | IA.8 Conditional Access inventory | `identity/conditionalAccess/policies` | Policy.Read.All | **IA.8-SUB**: every CA policy seen in 30 days of sign-ins |
 | IA.15-DISABLED Roles held by disabled accounts (engine DISABLED-ROLES) | `users?$filter=accountEnabled eq false`, then the IA.6 `roleAssignments` read (cached, every directory role), `roleDefinitions`, the PIM schedule instances, and `groups/{id}` and `groups/{id}/members` for each group that holds a role and each group nested in it. Also reads the Azure role assignments from Resource Graph and writes IA.15-RBAC and IA.15-ENTRA | User.Read.All (users), RoleManagement.Read.Directory (Entra roles, eligible ones), GroupMember.Read.All (group members) | None. Users unreadable makes all three UNAVAILABLE, Entra roles unreadable makes IA.15-ENTRA UNAVAILABLE only |
+| IA.16-ACCOUNTS Emergency access accounts (engine EMERGENCY-ACCESS, CyberSOC 1.12.0) | `users` and `groups` in full with `$select` and `$top=999`, matched offline, then `groups/{id}/transitiveMembers/microsoft.graph.user` (`$count=true`, `ConsistencyLevel: eventual`) for each Atmosera group. Also writes IA.16-GROUPS | User.Read.All (users), GroupMember.Read.All (groups and their members), Member.Read.Hidden (a group with hidden membership) | None. A read that fails, is cut short or misses a group's members is never EMPTY, and no Conditional Access change is written |
 | IA.11 Risk policies in force | the cached IA.8 list, plus `directory/onPremisesSynchronization` | Policy.Read.All (and OnPremDirectorySynchronization.Read.All for password hash sync) | none |
 | IA.13 Consent governance | `policies/authorizationPolicy`, `policies/adminConsentRequestPolicy` | Policy.Read.All | none |
 | POS.6 Tenant Secure Score | `security/secureScores?$top=90`, `security/secureScoreControlProfiles`. Also writes POS.6-TREND and POS.6-CATEGORIES | SecurityEvents.Read.All | **POS.6-SUB**: device secure score and exposure score from the Defender API |
@@ -335,6 +338,26 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.12.0 (October 21, 2026): `IA.16-ACCOUNTS` (engine `EMERGENCY-ACCESS`, phase P2 Identity)
+  reads the emergency access accounts every Conditional Access change excludes (decision 4 of the October 21 review),
+  with `IA.16-GROUPS` as its detail. Both are internal, since they name accounts. See section 6 of the CyberSOC Monthly
+  Report Runbook.
+  - The accounts are every account whose UPN contains Atmosera, members and guests alike (a guest from an Atmosera
+    domain carries the word in its `#EXT#` UPN), and every user in an Atmosera group, read as a group whose display
+    name contains Atmosera, both without regard to case. The rule is in `report/Get-CyberSocEmergencyAccess.ps1`, shared
+    with the change requests. Change `Test-CyberSocEmergencyAccessGroup` there if the Atmosera groups are named
+    another way.
+  - Graph has no contains on `userPrincipalName` or `displayName`, and `$search` reads whole words on `displayName` and
+    starts with on every other property, so `users` and `groups` are read in full (`$select`, `$top=999`) and matched
+    offline. Each Atmosera group's user members are read with `transitiveMembers/microsoft.graph.user`, so a member of a
+    nested group counts. Needs User.Read.All and GroupMember.Read.All, which IA.15 already holds, and Member.Read.Hidden
+    for an Atmosera group with hidden membership (`visibility` HiddenMembership), which a refusal there names.
+  - `IA.16-ACCOUNTS`: `PrincipalId`, `UserPrincipalName`, `DisplayName`, `UserType`, `AccountEnabled`, `MatchedBy`
+    (UPN, Group, or UPN and group), `Groups` and `GroupIds`. `IA.16-GROUPS`: `GroupId`, `DisplayName`, `Members`,
+    `Membership` (Assigned, Dynamic or On-premises), `MembersRead` and `MembershipRule`.
+  - These reads use a new `-Complete` switch on the Graph paging, which fails the read when pages remain after the page
+    limit instead of returning what it has. A refused read is UNAVAILABLE with its permission, a failed or cut-short one
+    FAILED, and a group whose members cannot be read makes both PARTIAL. A tenant with no match is EMPTY on both.
 - CyberSOC collector 1.11.0 (October 21, 2026): the licensing check, phase P2 Licensing, after the device reads it
   joins. See [Licensing check](#licensing-check) and section 6 of the CyberSOC Monthly Report Runbook.
   - `LIC.1-SKUS` (Graph `subscribedSkus`): the licenses in the tenant with their service plans.

@@ -1,0 +1,69 @@
+{
+  "Description": "The members of one Atmosera group cannot be read, so its accounts are unknown",
+  "Graph": {
+    "Users": [
+      {
+        "id": "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+        "userPrincipalName": "breakglass-atmosera01@contoso.onmicrosoft.com",
+        "displayName": "Emergency Access 01",
+        "userType": "Member",
+        "accountEnabled": true
+      },
+      {
+        "id": "b2dc5657-a9c1-5cb7-a1f2-02138a08ff3f",
+        "userPrincipalName": "tier0.admin@contoso.onmicrosoft.com",
+        "displayName": "Tier 0 Admin",
+        "userType": "Member",
+        "accountEnabled": true
+      },
+      {
+        "id": "e2fe905b-078d-55c1-a550-a1b092b6ef93",
+        "userPrincipalName": "dana.finance@contoso.onmicrosoft.com",
+        "displayName": "Dana Finance",
+        "userType": "Member",
+        "accountEnabled": true
+      }
+    ],
+    "Groups": [
+      {
+        "id": "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+        "displayName": "Atmosera Emergency Access",
+        "groupTypes": [],
+        "onPremisesSyncEnabled": null,
+        "membershipRule": null
+      },
+      {
+        "id": "2b36a5e4-a16c-5159-b0d5-a27334c1bbfe",
+        "displayName": "IT Admins",
+        "groupTypes": [],
+        "onPremisesSyncEnabled": null,
+        "membershipRule": null
+      }
+    ],
+    "Members": {
+      "60cc37ba-dee8-5330-bd03-51890d7c6baa": "GRAPH-403 https://graph.microsoft.com/v1.0/groups/x/transitiveMembers: HTTP 403: Forbidden"
+    }
+  },
+  "Expect": {
+    "IA.16-ACCOUNTS": {
+      "Status": "PARTIAL"
+    },
+    "IA.16-GROUPS": {
+      "Status": "PARTIAL"
+    },
+    "Accounts": [
+      {
+        "UserPrincipalName": "breakglass-atmosera01@contoso.onmicrosoft.com",
+        "MatchedBy": "UPN",
+        "Groups": []
+      }
+    ],
+    "Groups": [
+      {
+        "DisplayName": "Atmosera Emergency Access",
+        "Members": "",
+        "Membership": "Assigned"
+      }
+    ]
+  }
+}
