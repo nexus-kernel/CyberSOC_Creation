@@ -2290,9 +2290,9 @@ $catalog = @(
             # A role that reaches an account through two groups is on a line for each, since each names a group to leave.
             $emailLines = @($inScopeAzure) + @($inScopeEntra) + @($fixed)
             $multiPath = $emailLines.Count -ne @(& $distinctRoles $emailLines).Count
-            # The file also lists an account whose only roles stay, through a group the change cannot alter, so the email
-            # then speaks of every disabled account in the file and of the roles marked for removal, not of the accounts
-            # in the change alone.
+            # The file also lists a role that stays, through a group the change cannot alter, so the email then speaks of
+            # the roles marked for removal rather than of every role in the file, and, where such a role belongs to an
+            # account outside the change, of every disabled account in the file rather than of the accounts in the change.
             $inChange = @($people | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() })
             $others = @($fixed | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Where-Object { $_ -notin $inChange } | Sort-Object -Unique).Count
             $emailResources = [System.Collections.Generic.List[object]]::new()
@@ -2316,10 +2316,10 @@ $catalog = @(
                 $(if ($viaGroup.Count -and -not $pathKnown) { 'Roles that reach a disabled account through a group stay as they are for now, since my review did not record which group each account sits in, and I will come back to you about those separately.' })
                 (Get-Pick $m 'Just before the change, I will check the account again and leave it unchanged if it has been turned back on since my review.' 'Just before the change, I will check each account again and skip any that has been turned back on since my review.'))
             $email = New-ApprovalEmail -Subject 'removing the roles held by disabled accounts' `
-                -Change @($ask, ('{0} disabled, so {1} cannot sign in, but {2} still holds every role {3} in the attached file.' -f (Get-Pick $m 'The account is' 'These accounts are'), (Get-Pick $m 'it' 'they'), (Get-Pick $m 'it' 'each one'), $(if ($others) { 'marked for removal' } else { 'listed' }))) `
+                -Change @($ask, ('{0} disabled, so {1} cannot sign in, but {2} still holds every role {3} in the attached file.' -f (Get-Pick $m 'The account is' 'These accounts are'), (Get-Pick $m 'it' 'they'), (Get-Pick $m 'it' 'each one'), $(if ($fixed.Count) { 'marked for removal' } else { 'listed' }))) `
                 -Why ('I recommend removing these roles because a disabled account keeps every role it holds, so if {0} is turned back on, by mistake or by someone with access to your directory, it has all of that access again straight away. Removing the roles closes that path.' -f (Get-Pick $m 'the account' 'one of these accounts')) `
                 -Effect @($effect | Where-Object { $_ }) `
-                -Listed ('{0} in the attached file {1}, one line for each role with the account, the role, where it applies, how the account holds it and what I would do about it{2}, and {3} add up as follows:' -f $(if ($others) { 'The roles of every disabled account are' } else { Get-Pick $m 'The account and its roles are' 'The accounts and their roles are' }), $attachment, $(if ($multiPath) { ', and a role that reaches an account through more than one group on a line for each of them' } else { '' }), $(if ($others) { 'the roles I would remove' } else { 'they' })) `
+                -Listed ('{0} in the attached file {1}, one line for each role with the account, the role, where it applies, how the account holds it and what I would do about it{2}, and {3} add up as follows:' -f $(if ($others) { 'The roles of every disabled account are' } else { Get-Pick $m 'The account and its roles are' 'The accounts and their roles are' }), $attachment, $(if ($multiPath) { ', and a role that reaches an account through more than one group on a line for each of them' } else { '' }), $(if ($fixed.Count) { 'the roles I would remove' } else { 'they' })) `
                 -Resources $emailResources.ToArray() `
                 -Reversal ('I can restore any of these roles at any time from the record I keep of each one, with its role, where it applies and the account it belongs to{0}.' -f $(if ($memberships.Count) { ', and add an account back to the group it was removed from' } else { '' })) `
                 -Ask ('Before I schedule the change, could you tell me whether {0} is expected to come back into use, for example for someone on leave or a seasonal worker, or is kept for emergency access? I will leave any such account out of the change. With that confirmed, could you approve this change for {1}?' -f (Get-Pick $m 'the account' 'any of these accounts'), $proposedDay)

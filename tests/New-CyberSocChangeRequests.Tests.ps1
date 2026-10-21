@@ -2506,6 +2506,23 @@ Describe 'Change request variants' {
         (Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.csv') -Raw) | Should -Not -Match 'Kim Osei'
     }
 
+    It 'speaks of the roles marked for removal when an account in the change also holds a role that stays' {
+        $pack = Join-Path $TestDrive 'roles-mixed-account'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'IA.15-RBAC' @(
+            (& $azureRole "/subscriptions/$s1" 'Owner' $roleIds.Owner $morgan)
+            (& $azureRole "/subscriptions/$s2" 'Reader' $roleIds.Reader $morgan $dynGroup))
+        Set-PackResult $pack 'IA.15-ENTRA' @()
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-19 with an account that holds a removable role and one that stays'
+        $email | Should -Match 'I would like your approval to remove the Azure roles still assigned to 1 disabled account in your tenant\. The account is disabled, so it cannot sign in, but it still holds every role marked for removal in the attached file\.' -Because 'the file also lists the role that stays'
+        $email | Should -Match "The account and its roles are in the attached file CR-19-disabled-account-roles\.email\.csv, one line for each role with the account, the role, where it applies, how the account holds it and what I would do about it, and the roles I would remove add up as follows:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- 1 account holding 1 role\r?\n" -Because 'every row belongs to the account in the change, and the count covers the roles to remove'
+        $email | Should -Match '\r?\n\r?\n1 account holds a role through a group whose members come from a rule or from your on-premises directory'
+        @(Import-Csv (Join-Path $out 'CR-19-disabled-account-roles.email.csv') | ForEach-Object { '{0}|{1}' -f $_.Role, $_.Action }) | Should -Be @('Owner|Remove the role assignment', 'Reader|None in this change, the members of group all-staff-dynamic come from a rule')
+    }
+
     It 'keeps a value a spreadsheet would read as a formula as text in the attached file' {
         $pack = Join-Path $TestDrive 'roles-formula'
         New-ChangeFixture $pack
