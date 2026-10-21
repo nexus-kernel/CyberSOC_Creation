@@ -204,13 +204,13 @@
   },
   "Expect": {
     "DefenderEndpointPlan": "Plan 1",
-    "MdeVulnerabilityData": "Not licensed",
+    "MdeVulnerabilityData": "Unknown",
     "EntraIdP1": "Licensed",
     "EntraIdP2": "Not licensed",
     "MdoP1": "Licensed",
     "MdoP2": "Not licensed",
     "DefenderServersP2": "Not licensed",
-    "MdeServers": "Not licensed",
+    "MdeServers": "Unknown",
     "MdeSecurityManagement": "Licensed"
   }
 }

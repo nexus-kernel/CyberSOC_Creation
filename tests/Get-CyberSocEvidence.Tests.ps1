@@ -2303,6 +2303,20 @@ Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
         ($r.Rows | Where-Object Capability -eq 'MdeVulnerabilityData').State | Should -Be 'Partly licensed'
     }
 
+    It 'never reads servers Not licensed from the device list, since a hidden server may sit in a subscription outside the pack with Defender for Servers on' {
+        $l = Get-LicScenario 'plan1'
+        $sub2 = 'a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d'
+        # Every server listed sits in a pack subscription with Defender for Servers off, and the tenant has no server license.
+        $sql = [pscustomobject]@{ MachineId = 'sql'; ComputerDnsName = 'vm-sql01'; OsPlatform = 'WindowsServer2019'; DeviceClass = 'Server'; OnboardingStatus = 'Onboarded'; HealthStatus = 'Active'; MachineTags = @(); AzureResourceId = "/subscriptions/$sub2/resourcegroups/rg-app/providers/microsoft.compute/virtualmachines/vm-sql01"; subscriptionId = $sub2; TaggedPlan1 = $false }
+        $l.Ctx.Results['LIC.2-MACHINES'].Rows = @($l.Ctx.Results['LIC.2-MACHINES'].Rows) + $sql
+        $r = New-EbrLicensingResult -Ctx $l.Ctx
+        (($l.Ctx.Pending | Where-Object ResultId -eq 'LIC.5-SERVERS').Rows | Where-Object DeviceName -eq 'vm-sql01').Licensed | Should -Be 'No'
+        $servers = $r.Rows | Where-Object Capability -eq 'MdeServers'
+        $servers.State | Should -Be 'Unknown'
+        $servers.Detail | Should -Match 'No listed server is covered, but a server the device groups hide, or one in a subscription outside the pack, may be, so this is not read as Not licensed\.'
+        ($r.Rows | Where-Object Capability -eq 'MdeVulnerabilityData').State | Should -Be 'Unknown' -Because 'Plan 1 clients and no server source seen still leave hidden servers possible'
+    }
+
     It 'reads security settings management from the license alone, never from devices still managed by it' {
         $l = Get-LicScenario 'plan2'
         $l.Ctx.Results['LIC.1-SKUS'] = New-EbrResult -ResultId 'LIC.1-SKUS' -Status 'EMPTY'

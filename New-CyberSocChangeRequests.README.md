@@ -236,7 +236,7 @@ for Defender for Servers Plan 2, which just-in-time VM access needs while Azure 
 | `IntuneP1` | Microsoft Intune Plan 1 |
 | `DefenderServers`, `DefenderServersP2`, `DefenderContainers` | Defender for Servers (any plan, and Plan 2) and Defender for Containers, on every subscription in the pack (Partly licensed on some) |
 | `MdeServers` | Defender for Endpoint on servers: a server license for each onboarded server |
-| `MdeVulnerabilityData` | Defender for Endpoint Plan 2 or Defender for Servers, the vulnerability and configuration data behind EW.3, EW.4 and EW.5. Like `MdeServers`, it never reads Licensed from the API reads, which list only the devices the account's device groups allow, so a change request that requires either is written with a note to confirm, or not written when the reads show no source at all |
+| `MdeVulnerabilityData` | Defender for Endpoint Plan 2 or Defender for Servers, the vulnerability and configuration data behind EW.3, EW.4 and EW.5. Like `MdeServers`, it reads neither Licensed nor Not licensed from the API reads, which list only the devices the account's device groups allow, so a change request that requires either is always written, with a note to confirm or to say what is not covered |
 | `MdeSecurityManagement` | Defender for Endpoint security settings management, which needs a Defender for Endpoint user license even where Defender for Servers covers the servers |
 
 A new capability adds an entry to that catalog with its service plan IDs from Microsoft Learn (Product names and
