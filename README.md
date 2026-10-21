@@ -113,8 +113,8 @@ missing evidence never becomes a favorable zero.
    returned empty, for a portal check, and says that deployment slots are not covered. Where FTP basic authentication is
    on (collector 1.14.0), the same email says that signing in to FTP or FTPS with the publish profile's user name and
    password stops working while deployment that signs in with Microsoft Entra ID is not affected, and asks whether
-   anything still uses those credentials, except on an app whose FTP state is already Disabled, where it asks for
-   approval only. AKS node pools without encryption at host get no change
+   anything still uses those credentials, for FTP, FTPS or local Git, on every app where it is on, an app whose FTP
+   state is already Disabled included. AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
    pool replacement with the client. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
    account the collection read as disabled, after checking that the account still shows as disabled. Its email lists

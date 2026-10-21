@@ -2764,13 +2764,13 @@ Describe 'FTP basic authentication publishing credentials turned off with the FT
         ($mixed.Csv | Where-Object Resource -eq 'func-closed-on').ResourceId | Should -Be "/subscriptions/$s2/resourceGroups/rg-jobs/providers/Microsoft.Web/sites/func-closed-on"
     }
 
-    It 'reads each value again before changing it, turns basic authentication off without asking only where FTP is Disabled, and rolls back to the recorded values' {
+    It 'reads each value again before changing it, turns basic authentication off only where the client confirmed nothing uses the credentials, and rolls back to the recorded values' {
         @(Get-Section $mixed.Cr 'A) IMPLEMENTATION PLAN') | Should -Be @(
             '1. In the Azure portal, go to App Services and open the first app listed in the RESOURCES section.'
             '2. Go to Settings > Configuration and select the General settings tab.'
             '3. If the RESOURCES section lists FTP state All allowed for the app, under Platform settings, read FTP state. If it no longer shows All allowed, the state recorded for the app in the RESOURCES section, the app has changed since collection, so leave the FTP state unchanged and note it in the change record for the next pack.'
             '4. If FTP state still shows All allowed, set it to the state the client chose for the app: FTPS only, or Disabled only where the client confirmed that no tool, process or person uses FTP or FTPS on the app, to upload files or to download files or logs. Before setting FTPS only, read Minimum Inbound TLS Version. FTPS only does not support TLS 1.0 or 1.1, so if it shows 1.0 or 1.1, leave the FTP state unchanged until CR-04 has set 1.2 on the app and note it in the change record.'
-            '5. If the RESOURCES section lists FTP basic authentication On for the app, read FTP Basic Auth Publishing Credentials. If it shows Off, the app has changed since collection, so leave it as it is and note it in the change record. If it shows On, set it to Off where FTP state shows Disabled, or where the client confirmed that no deployment tool, process or person uses deployment credentials on the app to sign in to FTP or FTPS or to deploy through local Git. Otherwise leave it On and note it in the change record.'
+            '5. If the RESOURCES section lists FTP basic authentication On for the app, read FTP Basic Auth Publishing Credentials. If it shows Off, the app has changed since collection, so leave it as it is and note it in the change record. If it shows On, set it to Off only where the client confirmed that no deployment tool, process or person uses deployment credentials on the app to sign in to FTP or FTPS or to deploy through local Git. Otherwise leave it On and note it in the change record.'
             '6. If a setting was changed, select Save, or Apply where the portal shows it, and confirm.'
             '7. Repeat steps 1 to 6 for each remaining app listed.')
         @(Get-Section $mixed.Cr 'B) TESTING PLAN') | Should -Be @(
@@ -2794,7 +2794,7 @@ Describe 'FTP basic authentication publishing credentials turned off with the FT
         $mixed.Index | Should -Not -Match 'Recollect with CyberSOC collector 1\.14\.0|possible follow-up'
     }
 
-    It 'says that FTP sign-in with the publish profile stops, that Entra sign-in is not affected, and asks about deployment credentials only where FTP is not Disabled' {
+    It 'says that FTP sign-in with the publish profile stops, that Entra sign-in is not affected, and asks about deployment credentials on every app where it is on' {
         $email = $mixed.Email
         Assert-ApprovalEmail $email 'CR-17 with FTP basic authentication'
         $email | Should -Match '^Subject: Approval requested: turning off plain FTP and FTP basic authentication on Azure App Service applications\r?\n'
@@ -2802,12 +2802,13 @@ Describe 'FTP basic authentication publishing credentials turned off with the FT
         $email | Should -Match 'A deployment tool or a person that connects to the applications whose FTP state is All allowed over plain FTP'
         $email | Should -Match '\r?\n\r?\nTurning off FTP basic authentication means that signing in to FTP or FTPS with the user name and password in the publish profile of the applications where it is on today, or with a user''s own deployment credentials, stops working once the change is applied'
         $email | Should -Match '\r?\n\r?\nDeployment that signs in with Microsoft Entra ID is not affected, nor are deployment methods other than FTP and local Git, such as ZIP deploy, Web Deploy, GitHub Actions or an Azure DevOps pipeline without an FTP upload step, and these applications will keep serving their users as they do now\.\r?\n'
-        $email | Should -Match '\r?\n\r?\nfunc-closed-on already has the FTP state Disabled, so for it the change has no effect on how it is used today\.\r?\n'
+        $email | Should -Match '\r?\n\r?\nfunc-closed-on already has the FTP state Disabled, so for it the change matters only if a local Git deployment signs in with deployment credentials\.\r?\n'
+        $email | Should -Match 'Microsoft notes that publishing through local Git with deployment credentials also needs this setting, so a local Git deployment that signs in that way would stop as well\.'
         $email | Should -Match 'FTPS only needs a minimum inbound TLS version of 1\.2, and app-plain-on still allows an older version'
         $email | Should -Match '- app-plain-on \(resource group rg-web, FTP state All allowed, FTP basic authentication On\)' -Because 'the email names the FTP basic authentication setting, without the minimum TLS'
         $email | Should -Match '\r?\n\r?\nEach setting the change makes can be set back to the value each application has today, shown above, at any time\.\r?\n'
         $request = @($email -split "`r?`n" | Where-Object { $_ -match '^Could you' })[0]
-        $request | Should -Match 'Could you also let me know whether any deployment tool, scheduled process or person still uses deployment credentials, the user name and password from a publish profile or a user''s own, to sign in to FTP or FTPS or to deploy through local Git on the applications where FTP basic authentication is on and the FTP state is not Disabled\? With that agreed, could you approve this change for '
+        $request | Should -Match 'Could you also let me know whether any deployment tool, scheduled process or person still uses deployment credentials, the user name and password from a publish profile or a user''s own, to sign in to FTP or FTPS or to deploy through local Git on the applications where FTP basic authentication is on\? With that agreed, could you approve this change for '
         $request | Should -Match 'If something still uses deployment credentials that way, I will leave FTP basic authentication on for that application until it moves to another deployment method\.'
         $email | Should -Not -Match 'app-ftps-off|func-closed-off|app-unread'
     }
@@ -2819,7 +2820,7 @@ Describe 'FTP basic authentication publishing credentials turned off with the FT
         @(Get-Section $one.Cr 'A) IMPLEMENTATION PLAN') | Should -Be @(
             '1. In the Azure portal, go to App Services and open the app listed in the RESOURCES section.'
             '2. Go to Settings > Configuration and select the General settings tab.'
-            '3. Read FTP Basic Auth Publishing Credentials. If it shows Off, the app has changed since collection, so leave it as it is and note it in the change record. If it shows On, set it to Off where FTP state shows Disabled, or where the client confirmed that no deployment tool, process or person uses deployment credentials on the app to sign in to FTP or FTPS or to deploy through local Git. Otherwise leave it On and note it in the change record.'
+            '3. Read FTP Basic Auth Publishing Credentials. If it shows Off, the app has changed since collection, so leave it as it is and note it in the change record. If it shows On, set it to Off only where the client confirmed that no deployment tool, process or person uses deployment credentials on the app to sign in to FTP or FTPS or to deploy through local Git. Otherwise leave it On and note it in the change record.'
             '4. If a setting was changed, select Save, or Apply where the portal shows it, and confirm.')
         @(Get-Section $one.Cr 'C) ROLLBACK PLAN')[1] | Should -Be '2. Set FTP Basic Auth Publishing Credentials back to On, the setting recorded for the app in the RESOURCES section, then select Save, or Apply where the portal shows it, and confirm. An app left unchanged during the change needs no rollback.'
         @(Get-Section $one.Cr 'A) REFERENCES')[0] | Should -Be '- Disable basic authentication in Azure App Service deployments: https://learn.microsoft.com/azure/app-service/configure-basic-auth-disable'
@@ -2836,14 +2837,14 @@ Describe 'FTP basic authentication publishing credentials turned off with the FT
         $one.Index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \| 1 \| Change request and client email \|'
     }
 
-    It 'asks for approval only where FTP is already Disabled, since turning basic authentication off there changes nothing in use' {
+    It 'still asks about local Git where FTP is already Disabled, since local Git publishing also needs FTP basic authentication' {
         $closed = Build-Ftp 'disabled-only'
-        @(Get-Section $closed.Cr 'A) IMPLEMENTATION PLAN')[2] | Should -Be '3. Read FTP Basic Auth Publishing Credentials. If it shows Off, the app has changed since collection, so leave it as it is and note it in the change record. If it shows On, set it to Off.'
+        @(Get-Section $closed.Cr 'A) IMPLEMENTATION PLAN')[2] | Should -Be '3. Read FTP Basic Auth Publishing Credentials. If it shows Off, the app has changed since collection, so leave it as it is and note it in the change record. If it shows On, set it to Off only where the client confirmed that no deployment tool, process or person uses deployment credentials on the app to sign in to FTP or FTPS or to deploy through local Git. Otherwise leave it On and note it in the change record.'
         Assert-ApprovalEmail $closed.Email 'CR-17 FTP basic authentication where FTP is Disabled'
-        $closed.Email | Should -Match '\r?\n\r?\nWith FTP basic authentication off, signing in to FTP or FTPS with the user name and password in the publish profile of these applications, or with a user''s own deployment credentials, would no longer work even if FTP were turned back on\.\r?\n'
-        $closed.Email | Should -Match '\r?\n\r?\nThe FTP state of each application is already Disabled, so nothing connects over FTP or FTPS today and this change makes no difference to how they are used now\.\r?\n'
-        $closed.Email | Should -Match '\r?\n\r?\nCould you approve this change for \w+day, [^?]+\? Please reply by ' -Because 'nothing can be using FTP on these applications, so the email asks for approval only'
-        $closed.Email | Should -Not -Match 'deploy through local Git on'
+        $closed.Email | Should -Match '\r?\n\r?\nWith FTP basic authentication off, signing in to FTP or FTPS with the user name and password in the publish profile of these applications, or with a user''s own deployment credentials, would no longer work even if FTP were turned back on\. Microsoft notes that publishing through local Git with deployment credentials also needs this setting'
+        $closed.Email | Should -Match '\r?\n\r?\nThe FTP state of each application is already Disabled, so nothing connects over FTP or FTPS today, and the change matters only if a local Git deployment signs in with deployment credentials\.\r?\n'
+        $closed.Email | Should -Match 'Could you let me know whether any deployment tool, scheduled process or person still uses deployment credentials, the user name and password from a publish profile or a user''s own, to sign in to FTP or FTPS or to deploy through local Git on these applications\? With that confirmed, could you approve this change for ' -Because 'a local Git deployment can still use the credentials where FTP is Disabled'
+        $closed.Email | Should -Not -Match 'no effect|no difference'
         @($closed.Csv.Resource | Sort-Object) | Should -Be @('app-closed', 'func-closed')
     }
 
