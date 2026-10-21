@@ -2620,3 +2620,119 @@ Describe 'Windows PowerShell 5.1, where ConvertFrom-Json writes a JSON array as 
         Get-Content (Join-Path $pack '05-change-requests/CR-16-management-ports.txt') -Raw | Should -Match 'source \(Internet, 0\.0\.0\.0/0\), source ports \*, destination \*, destination ports \(22, 3389\), applies to network interface nic-web01 of virtual machine vm-web01'
     }
 }
+
+Describe 'Licensing check and capability gate (collector 1.11.0)' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '../report/Get-CyberSocLicensing.ps1')
+        # A licensing scenario from tests/fixtures/offline-pack/licensing written into a pack, as the collector writes it.
+        function Add-LicensingScenario([string]$Path, [string]$Name) {
+            $sc = Get-Content (Join-Path $PSScriptRoot "fixtures/offline-pack/licensing/$Name.json") -Raw | ConvertFrom-Json
+            foreach ($p in $sc.Results.PSObject.Properties) { Set-PackResult $Path $p.Name @($p.Value.Rows) -Status $p.Value.Status -Detail $p.Value.Detail }
+            $sc
+        }
+        function Get-Index([string]$Pack) { Get-Content (Join-Path $Pack '05-change-requests/00-index.md') -Raw }
+        function Get-LicensingSection([string]$Index) { ($Index -split '(?m)^## ')[1..9] | Where-Object { $_ -like 'Licensing*' } | Select-Object -First 1 }
+    }
+
+    It 'gates on Not licensed, keeps Unknown and Partly licensed with what to confirm, and reads a capability it does not hold as Unknown' {
+        $matrix = @(
+            [pscustomobject]@{ Kind = 'Capability'; Capability = 'EntraIdP1'; Name = 'Microsoft Entra ID P1'; State = 'Licensed'; Detail = 'In SPE_E3.' }
+            [pscustomobject]@{ Kind = 'Capability'; Capability = 'MdoP1'; Name = 'Defender for Office 365 Plan 1'; State = 'Not licensed'; Detail = 'No license in the tenant carries the service plan.' }
+            [pscustomobject]@{ Kind = 'Capability'; Capability = 'IntuneP1'; Name = 'Microsoft Intune Plan 1'; State = 'Unknown'; Detail = 'The licenses could not be read in full.' }
+            [pscustomobject]@{ Kind = 'Capability'; Capability = 'MdeServers'; Name = 'Defender for Endpoint on servers'; State = 'Partly licensed'; Detail = '1 without a server license.' })
+        (Get-CyberSocCapabilityGate -Matrix $matrix -Requires @('EntraIdP1')).Write | Should -BeTrue
+        $g = Get-CyberSocCapabilityGate -Matrix $matrix -Requires @('EntraIdP1', 'MdoP1', 'IntuneP1', 'MdeServers', 'NotAKey')
+        $g.Write | Should -BeFalse
+        @($g.Blocked.Key) | Should -Be @('MdoP1')
+        @($g.Unknown.Key) | Should -Be @('IntuneP1', 'NotAKey') -Because 'a capability the matrix does not hold is never read as licensed or not licensed'
+        @($g.Partly.Key) | Should -Be @('MdeServers')
+        (Get-CyberSocCapabilityGate -Matrix $matrix -Requires @()).Write | Should -BeTrue
+    }
+
+    It 'says in the index that a pack collected before the licensing check reads Unknown, and asks for the Licenses page reading' {
+        $pack = Join-Path $TestDrive 'lic-old'
+        New-ChangeFixture $pack
+        Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack }
+        $section = Get-LicensingSection (Get-Index $pack)
+        $section | Should -Match 'collected before the licensing check, so every capability reads Unknown\. Recollect with CyberSOC collector 1\.11\.0 or later'
+        $section | Should -Match 'Settings > Endpoints > Licenses .*-DefenderEndpointPlan Plan1, Plan2, Business or Mixed'
+        $section | Should -Not -Match '\| Capability \|'
+        Test-Path (Join-Path $pack '05-change-requests/CR-16-management-ports.txt') | Should -Be (Test-Path (Join-Path $pack 'results/NB.2-DETAIL.json'))
+    }
+
+    It 'lists the plan, the devices and every capability with its seats and the change requests that depend on it' {
+        $pack = Join-Path $TestDrive 'lic-plan2'
+        New-ChangeFixture $pack
+        $null = Add-LicensingScenario $pack 'servers-without-defender-for-servers'
+        Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack }
+        $section = Get-LicensingSection (Get-Index $pack)
+        $section | Should -Match 'Defender for Endpoint plan: Plan 2, from the API reads\. Licenses: Plan 2 licensed'
+        $section | Should -Match '- Onboarded servers without a server license: 1\. Named in LIC\.5-SERVERS: vm-sql01\.'
+        $section | Should -Match '- Client devices tagged License MDE P1: 0\.'
+        $section | Should -Match '\| Microsoft Entra ID P1, for Conditional Access \| Licensed \| 250 \| 231 \| None yet \| In SPE_E5'
+        $section | Should -Match '\| Defender for Servers Plan 2 \| Partly licensed \|  \|  \| CR-16 \(no gate\) \| On in 1 of 2 subscriptions\. Off in a0b1c2d3'
+        $section | Should -Match '\| Defender for Endpoint Plan 2 or Defender for Servers, the vulnerability and configuration data behind EW\.3, EW\.4 and EW\.5 \| Licensed \|  \|  \| EW\.3, EW\.4 and EW\.5 evidence \|'
+        $section | Should -Match '\| Defender for Endpoint on servers, a server license for each onboarded server \| Partly licensed \|'
+    }
+
+    It 'takes -DefenderEndpointPlan over the reading the collection recorded, and names where the API reads disagree' {
+        $pack = Join-Path $TestDrive 'lic-reading'
+        New-ChangeFixture $pack
+        $null = Add-LicensingScenario $pack 'plan2'
+        $params = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
+        $params | Add-Member -NotePropertyName Licensing -NotePropertyValue ([pscustomobject]@{ DefenderEndpointPlan = 'Plan2' })
+        $params | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
+        Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack }
+        $section = Get-LicensingSection (Get-Index $pack)
+        $section | Should -Match 'Defender for Endpoint plan: Plan 2, from the Licenses page reading\. Read on the Licenses page \(Settings > Endpoints > Licenses\) and passed as -DefenderEndpointPlan Plan2\.'
+        $section | Should -Not -Match 'No API reads the Licenses page' -Because 'a reading is recorded'
+        Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -DefenderEndpointPlan Plan1 }
+        $section = Get-LicensingSection (Get-Index $pack)
+        $section | Should -Match 'Defender for Endpoint plan: Plan 1, from the Licenses page reading\..*The reading and the API reads disagree: the API reads show Plan 2\.'
+        { & $generator -EvidencePath $pack -DefenderEndpointPlan 'E5' } | Should -Throw
+    }
+
+    It 'writes no change request whose capability reads Not licensed, and keeps one reading Unknown with a note to confirm it' {
+        # No change request in CR-01 to CR-19 requires a license yet, so a copy of the generator gives CR-02 a requirement,
+        # which exercises the gate in the generator loop itself. The fixtures here have no Defender for Office 365.
+        $copy = Join-Path $TestDrive 'gate-tool'
+        New-Item -ItemType Directory -Path (Join-Path $copy 'report') -Force | Out-Null
+        Copy-Item (Join-Path $PSScriptRoot '../report/Read-CyberSocPackResult.ps1'), (Join-Path $PSScriptRoot '../report/Get-CyberSocLicensing.ps1') (Join-Path $copy 'report')
+        $text = Get-Content $generator -Raw
+        $entry = "Change = 'Secure transfer required on storage accounts'; Sources = @('DP.1-DETAIL')"
+        $text.Contains($entry) | Should -BeTrue
+        Set-Content (Join-Path $copy 'New-CyberSocChangeRequests.ps1') $text.Replace($entry, "$entry; Requires = @('MdoP1')") -NoNewline
+        $gated = Join-Path $copy 'New-CyberSocChangeRequests.ps1'
+
+        $pack = Join-Path $TestDrive 'lic-gate-blocked'
+        New-ChangeFixture $pack
+        $null = Add-LicensingScenario $pack 'servers-without-defender-for-servers'
+        $lic = Get-Content (Join-Path $pack 'results/LIC.1-SKUS.json') -Raw | ConvertFrom-Json
+        foreach ($sku in @($lic)) { $sku.ServicePlans = @($sku.ServicePlans | Where-Object { $_.ServicePlanName -notin 'ATP_ENTERPRISE', 'THREAT_INTELLIGENCE' }) }
+        Set-PackResult $pack 'LIC.1-SKUS' @($lic)
+        Invoke-WithWindowsPowerShellJson { $null = & $gated -EvidencePath $pack }
+        Test-Path (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.txt') | Should -BeFalse
+        Test-Path (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.email.txt') | Should -BeFalse
+        $index = Get-Index $pack
+        $index | Should -Match '\| 02 \| Secure transfer required on storage accounts \|  \| Not written, needs Defender for Office 365 Plan 1, which reads Not licensed \|  \|'
+        $index | Should -Match 'CR-02 is not written because Defender for Office 365 Plan 1 reads Not licensed\. No license in the tenant carries the service plan\.'
+        $index | Should -Match '\| Defender for Office 365 Plan 1 \| Not licensed \|  \|  \| CR-02 \|'
+        @(Import-Csv (Join-Path $pack '05-change-requests/change-requests.csv') | Where-Object CR -eq 'CR-02').Count | Should -Be 0
+        Test-Path (Join-Path $pack '05-change-requests/CR-03-storage-minimum-tls.txt') | Should -BeTrue -Because 'a change request with no requirement is unaffected'
+
+        $pack = Join-Path $TestDrive 'lic-gate-unknown'
+        New-ChangeFixture $pack
+        $null = Add-LicensingScenario $pack 'failed-read'
+        Invoke-WithWindowsPowerShellJson { $null = & $gated -EvidencePath $pack }
+        Test-Path (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.email.txt') | Should -BeTrue -Because 'a failed read is Unknown, never Not licensed'
+        $index = Get-Index $pack
+        $index | Should -Match '\| 02 \| Secure transfer required on storage accounts \| \d+ \| Change request and client email, confirm the license before sending \|'
+        $index | Should -Match 'Confirm Defender for Office 365 Plan 1 before sending CR-02: the licensing check could not establish it\. The licenses could not be read in full \(LIC\.1-SKUS UNAVAILABLE\)'
+
+        # An older pack has no licensing reads, so the gate keeps the change request and asks to confirm.
+        $pack = Join-Path $TestDrive 'lic-gate-old'
+        New-ChangeFixture $pack
+        Invoke-WithWindowsPowerShellJson { $null = & $gated -EvidencePath $pack }
+        (Get-Index $pack) | Should -Match 'Confirm Defender for Office 365 Plan 1 before sending CR-02: .*LIC\.1-SKUS not collected, recollect with CyberSOC collector 1\.11\.0 or later'
+    }
+}

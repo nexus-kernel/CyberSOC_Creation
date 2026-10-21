@@ -61,6 +61,10 @@
     Security admin rules apply before network security groups, so CR-16 cannot close those ports. The
     CR-16 email then says a central network policy keeps them open and asks who manages it, and the change
     request and the index name them.
+.PARAMETER DefenderEndpointPlan
+    The Defender for Endpoint plan read in the Defender portal under Settings > Endpoints > Licenses: Plan1, Plan2,
+    Business or Mixed. Overrides the reading the collection recorded (Licensing in 00-parameters.json). The licensing
+    check takes it for the plan and names any disagreement with what the API reads show.
 .EXAMPLE
     ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000
 .EXAMPLE
@@ -73,7 +77,9 @@
     set IDs added in 1.4.0, and say "needs recollection" on an earlier pack that lists anything to change. CR-19 removes
     an account from the group it sits in only with the group membership columns added in 1.10.0 (MemberOfId,
     MemberOfName, MemberOfType, GroupPath, GroupPathIds), and on an earlier pack leaves the roles held through groups
-    unchanged and says so in the index.
+    unchanged and says so in the index. The licensing gate reads LIC.1-SKUS, LIC.2-MACHINES, LIC.3-TVM and LIC.4-DEVICES,
+    added in 1.11.0, and on an earlier pack reads every capability as Unknown, so a change request that requires one is
+    written with a note to confirm the license.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -87,7 +93,9 @@ param(
     [string]$SenderName,
     [switch]$PurgeProtectionApproved,
     [datetime]$ChangeDate,
-    [string[]]$AdminRuleOpen
+    [string[]]$AdminRuleOpen,
+    [ValidateSet('Plan1', 'Plan2', 'Business', 'Mixed')]
+    [string]$DefenderEndpointPlan
 )
 
 $ErrorActionPreference = 'Stop'
@@ -109,6 +117,7 @@ $detailVersions['NB.2-DETAIL'] = '1.6.0'
 $detailVersions['NB.5-FTPS-DETAIL'] = '1.7.0'
 $detailVersions['DP.1-CONTAINERS-DETAIL'] = '1.8.0'
 foreach ($id in 'IA.15-DISABLED', 'IA.15-RBAC', 'IA.15-ENTRA') { $detailVersions[$id] = '1.9.0' }
+foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { $detailVersions[$id] = '1.11.0' }
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -206,6 +215,25 @@ function Format-TlsVersion($value) {
     # Storage writes TLS1_2, Cosmos DB Tls, Tls11 and Tls12, the other services 1.2.
     switch -Regex (Get-Text $value) { '^TLS1_(\d)$' { '1.' + $Matches[1] } '^Tls1(\d)$' { '1.' + $Matches[1] } '^Tls$' { '1.0' } '^(|None)$' { 'not set' } default { ConvertTo-CopyText $value } }
 }
+
+# The licensing check (collector 1.11.0), derived again from the pack's own reads with report/Get-CyberSocLicensing.ps1,
+# the derivation the collector ran for LIC.5-MATRIX, so -DefenderEndpointPlan here can replace the reading it recorded.
+# A change request registers the capabilities it needs in its catalog entry: Requires gates it (Not licensed writes no
+# change request and the index names the missing license, Unknown writes it with a note to confirm the license before
+# sending), and Uses only lists it in the licensing section of the index. A read that failed, was refused, is partial or
+# is missing from an older pack reads Unknown, never Not licensed.
+. (Join-Path $PSScriptRoot 'report/Get-CyberSocLicensing.ps1')
+$planReading = if ($DefenderEndpointPlan) { $DefenderEndpointPlan } elseif ($parameters.PSObject.Properties['Licensing'] -and $parameters.Licensing) { Get-Text $parameters.Licensing.DefenderEndpointPlan } else { '' }
+if ($planReading -and -not $script:CyberSocPlanReadings.Contains($planReading)) { $planReading = '' }
+$readPack = {
+    param([string]$Id)
+    $status = Get-Status $Id
+    $readable = $status -in 'OK', 'EMPTY', 'PARTIAL'
+    @{ Status = $status; Rows = @(if ($readable) { Get-Rows $Id }); Unreadable = ($readable -and (Test-Unreadable $Id)); Source = Get-Text (@($manifest | Where-Object ResultId -eq $Id) | Select-Object -First 1).Source }
+}
+$licensing = Get-CyberSocLicensing -Read $readPack -Subscriptions @($parameters.Subscriptions) -Reading $planReading
+# Copy text that keeps a portal path such as Settings > Endpoints > Licenses, which the copy rules allow in the index.
+function ConvertTo-PathText($value) { (ConvertTo-CopyText ((Get-Text $value) -replace ' > ', ' NAVSTEP ')) -replace ' NAVSTEP ', ' > ' }
 
 $workspaces = @($parameters.Workspaces | Where-Object { $_ })
 $workspaceName = if ($SentinelWorkspace) { ConvertTo-CopyText $SentinelWorkspace } elseif ($workspaces.Count -eq 1) { ConvertTo-CopyText $workspaces[0].Name } else { '' }
@@ -1480,7 +1508,7 @@ $catalog = @(
             }
             @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest $spec } } }
 
-    @{ Number = 16; Key = 'management-ports'; Change = 'Internet-facing RDP, SSH and WinRM rules closed'; Sources = @('NB.2-DETAIL')
+    @{ Number = 16; Key = 'management-ports'; Change = 'Internet-facing RDP, SSH and WinRM rules closed'; Sources = @('NB.2-DETAIL'); Uses = @('DefenderServersP2')
        Build = {
             # NB.2-DETAIL lists every allow inbound rule open to any address, Internet, 0.0.0.0/0 or ::/0 on a management
             # port, * or a range. CR-16 closes those on a workload subnet or network interface that name their ports over
@@ -2383,6 +2411,11 @@ $results = foreach ($item in $catalog) {
     if ($missing.Count) { $state = if (@($missing | Where-Object { $detailVersions.Contains($_) }).Count) { Get-RecollectionState $missing } else { "Not collected ($($missing -join ', '))" } }
     elseif ($failed.Count) { $state = 'Not collected ({0})' -f (@($failed | ForEach-Object { "$_ $(Get-Status $_)" }) -join ', ') }
     elseif ($unreadable.Count) { $state = Get-UnreadableState $unreadable }
+    elseif (-not ($gate = Get-CyberSocCapabilityGate -Matrix $licensing.Matrix -Requires @($item.Requires)).Write) {
+        # A license the change needs is not in the tenant, so no change request is written.
+        $state = 'Not written, needs {0}, which reads Not licensed' -f (Join-Words @($gate.Blocked | ForEach-Object { ConvertTo-CopyText $_.Name }))
+        $notes = @($gate.Blocked | ForEach-Object { 'CR-{0:00} is not written because {1} reads Not licensed. {2}' -f $item.Number, (ConvertTo-CopyText $_.Name), (ConvertTo-PathText $_.Detail) })
+    }
     else {
         $built = & $item.Build
         $cr = $built.Cr
@@ -2399,6 +2432,10 @@ $results = foreach ($item in $catalog) {
                 elseif (Test-Unreadable $used) { $notes += ('CR-{0:00} was written without {1}, whose result file is unreadable. Recollect or restore the pack.' -f $item.Number, $used) }
             }
             if ($partial) { $state += ', partial collection scope' }
+            # A license the licensing check could not establish is confirmed before the email is sent.
+            foreach ($g in @($gate.Unknown)) { $notes += 'Confirm {0} before sending CR-{1:00}: the licensing check could not establish it. {2}' -f (ConvertTo-CopyText $g.Name), $item.Number, (ConvertTo-PathText $g.Detail) }
+            foreach ($g in @($gate.Partly)) { $notes += 'CR-{0:00} needs {1}, which covers only part of the estate. {2}' -f $item.Number, (ConvertTo-CopyText $g.Name), (ConvertTo-PathText $g.Detail) }
+            if (@($gate.Unknown).Count) { $state += ', confirm the license before sending' }
         }
     }
     [pscustomobject]@{ Item = $item; State = $state; Cr = $cr; Notes = $notes }
@@ -2434,6 +2471,34 @@ foreach ($r in $results) {
     $base = & $fileBase $r.Item
     $files = if ($r.Cr) { (@("$base.txt", "$base.email.txt") + @($r.Cr.Email.Attachments | Where-Object { $_ } | ForEach-Object Name)) -join ', ' } else { '' }
     $md.Add(('| {0:00} | {1} | {2} | {3} | {4} |' -f $r.Item.Number, $r.Item.Change, $(if ($r.Cr) { @($r.Cr.Csv).Count } else { '' }), $r.State, $files))
+}
+# The licensing check: the Defender for Endpoint plan, the devices, and each capability with the change requests that
+# depend on it, from the catalog's Requires (gated) and Uses (listed only).
+$neededBy = @{}
+foreach ($item in $catalog) {
+    foreach ($k in @($item.Requires | Where-Object { $_ })) { if (-not $neededBy[$k]) { $neededBy[$k] = @() }; $neededBy[$k] += 'CR-{0:00}' -f $item.Number }
+    foreach ($k in @($item.Uses | Where-Object { $_ })) { if (-not $neededBy[$k]) { $neededBy[$k] = @() }; $neededBy[$k] += 'CR-{0:00} (no gate)' -f $item.Number }
+}
+# The evidence behind the endpoint measures, which no change request gates on.
+$neededBy['MdeVulnerabilityData'] = @($neededBy['MdeVulnerabilityData'] | Where-Object { $_ }) + 'EW.3, EW.4 and EW.5 evidence'
+$planRow = @($licensing.Matrix | Where-Object Kind -eq 'Plan') | Select-Object -First 1
+$md.Add(''); $md.Add('## Licensing'); $md.Add('')
+$licensingRead = @('LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES' | Where-Object { (Get-Status $_) -ne 'MISSING' }).Count -gt 0
+if ($licensingRead) { $md.Add(('Defender for Endpoint plan: {0}, from the {1}. {2}' -f (ConvertTo-CopyText $planRow.State), (ConvertTo-CopyText $planRow.Source), (ConvertTo-PathText $planRow.Detail))) }
+else { $md.Add(('The pack was collected before the licensing check, so every capability reads Unknown{0}. Recollect with CyberSOC collector 1.11.0 or later.' -f $(if ($planReading) { (' and the Defender for Endpoint plan is the Licenses page reading, {0}' -f (ConvertTo-CopyText $planRow.State)) } else { '' }))) }
+if (-not $planReading) { $md.Add(''); $md.Add('No API reads the Licenses page. Read it in the Defender portal under Settings > Endpoints > Licenses (the subscription state, the available and assigned licenses, and whether mixed mode is on), and run again with -DefenderEndpointPlan Plan1, Plan2, Business or Mixed to record it.') }
+$md.Add('')
+foreach ($d in @($licensing.Matrix | Where-Object { $licensingRead -and $_.Kind -eq 'Devices' })) {
+    $md.Add(('- {0}: {1}. {2}' -f (ConvertTo-CopyText $d.Name), $(if ((Get-Text $d.State) -eq 'Read') { Get-Text $d.Count } else { 'unknown' }), (ConvertTo-PathText $d.Detail)))
+}
+$md.Add('')
+$md.Add('A change request that needs a capability reading Not licensed is not written, and one reading Unknown is written with a note to confirm the license before sending. A read that failed, was refused or is partial reads Unknown, never Not licensed.')
+if ($licensingRead) {
+    $md.Add('')
+    $md.Add('| Capability | Reading | Seats | Assigned | Needed by | Basis |'); $md.Add('| --- | --- | --- | --- | --- | --- |')
+}
+foreach ($c in @($licensing.Matrix | Where-Object { $licensingRead -and $_.Kind -eq 'Capability' })) {
+    $md.Add(('| {0} | {1} | {2} | {3} | {4} | {5} |' -f (ConvertTo-CopyText $c.Name), (ConvertTo-CopyText $c.State), (Get-Text $c.Seats), (Get-Text $c.Assigned), $(if ($neededBy[$c.Capability]) { $neededBy[$c.Capability] -join ', ' } else { 'None yet' }), ((ConvertTo-PathText $c.Detail) -replace '\|', '/')))
 }
 $notes = @($results | ForEach-Object { $_.Notes })
 $written = @($results | Where-Object Cr)

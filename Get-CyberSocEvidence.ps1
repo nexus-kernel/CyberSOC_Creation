@@ -38,7 +38,7 @@
 
     Microsoft Graph is read with GET requests only, on the instruction of Oct 11, 2026, for the
     measures that have no other source: IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED,
-    POS.6, DP.8, DP.10, DR.11 and EW.13. The Graph token comes from the Azure CLI exactly as the Defender token
+    POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS and LIC.4-DEVICES. The Graph token comes from the Azure CLI exactly as the Defender token
     does (az account get-access-token --resource https://graph.microsoft.com/). An endpoint the
     token cannot read makes that measure UNAVAILABLE with the permission it needs, never a zero,
     and the non-Graph substitute still runs. ATMOSERA_SCRIPT_REQUIREMENTS.md 1.4 still forbids
@@ -53,6 +53,7 @@
         list of additional workspaces for one combined query)
       - POST https://api.security.microsoft.com/api/advancedqueries/run (query)
       - GET  https://api.security.microsoft.com/api/configurationScore and /api/exposureScore
+      - GET  https://api.security.microsoft.com/api/machines (the Defender for Endpoint devices, LIC.2-MACHINES)
       - GET  <workspace>/providers/Microsoft.SecurityInsights/alertRules
       - GET  <storage account>/blobServices/default/containers (container access levels, DP.1-CONTAINERS and DP.1-CONTAINERS-DETAIL)
       - GET  https://graph.microsoft.com/v1.0/organization, domains,
@@ -65,7 +66,8 @@
         policies/adminConsentRequestPolicy, security/secureScores,
         security/secureScoreControlProfiles, admin/sharepoint/settings,
         security/identities/sensors, deviceManagement/managedDevices,
-        deviceManagement/configurationPolicies
+        deviceManagement/configurationPolicies, subscribedSkus (licenses, LIC.1-SKUS),
+        devices (Microsoft Entra devices, LIC.4-DEVICES)
       - Exchange Online and Purview: Get-AntiPhishPolicy, Get-AntiPhishRule,
         Get-ATPProtectionPolicyRule, Get-SafeLinksPolicy, Get-SafeAttachmentPolicy,
         Get-MalwareFilterPolicy, Get-HostedContentFilterPolicy, Get-DlpCompliancePolicy
@@ -208,6 +210,12 @@
     Passed to New-CyberSocChangeRequests.ps1: the client approved purge protection at build kickoff, so
     its approval request refers to that approval and asks the client to confirm it still stands.
 
+.PARAMETER DefenderEndpointPlan
+    The Defender for Endpoint plan read in the Defender portal under Settings > Endpoints > Licenses: Plan1, Plan2,
+    Business or Mixed. No API reads that page, so the licensing check (LIC.5-MATRIX) takes this reading for the plan
+    when it is given, says where the API reads disagree with it, and records it under Licensing in 00-parameters.json,
+    where New-CyberSocChangeRequests.ps1 reads it. Without it the plan is what the API reads show.
+
 .PARAMETER LoadFunctionsOnly
     Load the functions and stop. Used by the Pester tests.
 
@@ -232,7 +240,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.10.0, based on the EBR collector 1.14.0
+    Version: 1.11.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -276,11 +284,13 @@ param(
     [string]$ClientContact,
     [string]$SenderName,
     [switch]$PurgeProtectionApproved,
+    [ValidateSet('Plan1', 'Plan2', 'Business', 'Mixed')]
+    [string]$DefenderEndpointPlan,
     [switch]$DryRun,
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.10.0'
+$script:EbrVersion = '1.11.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -1010,13 +1020,14 @@ resources
           DailyCapGb    = todouble(properties.workspaceCapping.dailyQuotaGb)
 '@))
 
-    $q.Add((New-EbrQuery -Id 'P0.3' -Phase 'P0 Pre-flight' -Engine 'ARG' -Title 'Defender for Cloud plans by subscription' -Notes 'CloudPosture on Free means Defender CSPM is off: never quote attack path or critical recommendation tiles.' -Query @'
+    $q.Add((New-EbrQuery -Id 'P0.3' -Phase 'P0 Pre-flight' -Engine 'ARG' -Title 'Defender for Cloud plans by subscription' -Notes 'CloudPosture on Free means Defender CSPM is off: never quote attack path or critical recommendation tiles. Extensions added in CyberSOC 1.11.0: the plan components (properties.extensions, each with name and isEnabled, which the API writes as the text True or False), such as AgentlessVmScanning or ContainerSensor. Feeds the licensing check (LIC.5-MATRIX) and the plan component change requests.' -Query @'
 securityresources
 | where type =~ "microsoft.security/pricings"
 | project subscriptionId,
-          Plan    = name,
-          Tier    = tostring(properties.pricingTier),
-          SubPlan = tostring(properties.subPlan)
+          Plan       = name,
+          Tier       = tostring(properties.pricingTier),
+          SubPlan    = tostring(properties.subPlan),
+          Extensions = properties.extensions
 | order by subscriptionId asc, Tier desc, Plan asc
 '@))
 
@@ -2001,6 +2012,50 @@ GET /beta/deviceManagement/configurationPolicies?$filter=templateReference/templ
 Permission: DeviceManagementConfiguration.Read.All
 The settings catalog exists only in the beta surface. If the filter is rejected, every policy is read and filtered by template family.
 '@ -Notes 'Portal fallback: Intune admin center > Endpoint security > App Control for Business. Where the client runs ThreatLocker, read coverage from the ThreatLocker portal.'))
+
+    # The licensing check (CyberSOC 1.11.0): the Defender for Endpoint plan and its usage, and the licenses the change
+    # requests depend on. Four reads and the matrix derived from them. A read that fails, is refused or is partial reads
+    # Unknown in the matrix, never Not licensed. The Licenses page of the Defender portal has no API, so its reading
+    # comes from -DefenderEndpointPlan and the SecOps worklist asks for it on every collection.
+    $q.Add((New-EbrQuery -Id 'LIC.1-SKUS' -Phase 'P2 Licensing' -Engine 'GRAPH' -Title 'Licenses in the tenant' -Query @'
+GET /v1.0/subscribedSkus
+Permission: LicenseAssignment.Read.All (Directory.Read.All and Organization.Read.All also work)
+One row per SKU with its state, seats (prepaidUnits) and assigned (consumedUnits), and every service plan it carries.
+'@ -Notes 'Added in CyberSOC 1.11.0. The licensing check matches service plan IDs rather than SKU names, since bundles carry the plans. Portal fallback: Microsoft 365 admin center > Billing > Licenses.'))
+
+    $q.Add((New-EbrQuery -Id 'LIC.2-MACHINES' -Phase 'P2 Licensing' -Engine 'DEFENDER-MACHINES' -Title 'Defender for Endpoint devices and their tags' -Query @'
+GET https://api.security.microsoft.com/api/machines?$top=10000&$skip=<n>
+Permission: Machine.Read (delegated), Machine.Read.All (application), and the View Data role
+One row per device: osPlatform, onboardingStatus, healthStatus, machineTags, rbacGroupName, lastSeen, and whether it carries the License MDE P1 tag.
+'@ -Notes 'Added in CyberSOC 1.11.0. Every device the API lists, not only Azure virtual machines, since licensing covers every device. Each device is tied to its Azure virtual machine through EW.1-VMS (the same device ID) or, failing that, a virtual machine of the same name in EW.1-EDR, so the licensing check can join a server to the Defender for Servers plan of its subscription. The managed resource group is excluded. Internal: names devices.'))
+
+    $q.Add((New-EbrQuery -Id 'LIC.3-TVM' -Phase 'P2 Licensing' -Engine 'AH' -Title 'Onboarded devices with vulnerability management data, by platform' -Notes 'Added in CyberSOC 1.11.0. Every onboarded device, not only Azure virtual machines. Plan 2 and Defender for Servers devices have vulnerability management data, Plan 1 devices have none, and Plan 1 and Defender for Business include no Advanced Hunting, so a refused read is no Plan 1 reading on its own. TaggedPlan1 counts the devices tagged License MDE P1 by hand or by a dynamic rule (DeviceManualTags, DeviceDynamicTags). The vulnerability tables are never in Sentinel, so the workspace fallback cannot answer it.' -Query @'
+let Devices = DeviceInfo
+| where Timestamp between (ago(7d) .. now())
+| summarize arg_max(Timestamp, *) by DeviceId
+| where OnboardingStatus == "Onboarded"
+| where AzureResourceId !contains "{{MRG}}"
+| extend Tags = strcat(tostring(column_ifexists("DeviceManualTags", "")), " ", tostring(column_ifexists("DeviceDynamicTags", "")))
+| project DeviceId, OSPlatform, DeviceType, DeviceCategory, Tagged = Tags contains "License MDE P1";
+let Vulnerable = union isfuzzy = true (DeviceTvmSoftwareVulnerabilities | distinct DeviceId), (datatable(DeviceId: string) [])
+| distinct DeviceId | extend HasVulnerabilities = true;
+let Assessed = union isfuzzy = true (DeviceTvmSecureConfigurationAssessment | where Timestamp between (ago(7d) .. now()) | distinct DeviceId), (datatable(DeviceId: string) [])
+| distinct DeviceId | extend HasAssessments = true;
+Devices
+| join kind=leftouter Vulnerable on DeviceId
+| join kind=leftouter Assessed on DeviceId
+| summarize Devices = count(), WithVulnerabilities = countif(HasVulnerabilities == true), WithAssessments = countif(HasAssessments == true), TaggedPlan1 = countif(Tagged)
+          by OSPlatform, DeviceType, DeviceCategory
+| order by Devices desc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'LIC.4-DEVICES' -Phase 'P2 Licensing' -Engine 'GRAPH' -Title 'Microsoft Entra devices and their management type' -Query @'
+GET /v1.0/devices?$select=id,deviceId,displayName,accountEnabled,operatingSystem,operatingSystemVersion,trustType,isManaged,isCompliant,managementType,approximateLastSignInDateTime,registrationDateTime,onPremisesSyncEnabled&$top=999
+Permission: Device.Read.All
+One row per device. A device managed by Defender for Endpoint security settings management has managementType MicrosoftSense.
+'@ -Notes 'Added in CyberSOC 1.11.0. Counts the devices security settings management manages, and lists every Microsoft Entra device for the stale device change request. Internal: names devices. Portal fallback: Microsoft Entra admin center > Devices > All devices.'))
+
+    $q.Add((New-EbrQuery -Id 'LIC.5-MATRIX' -Phase 'P2 Licensing' -Engine 'DERIVED' -Title 'Licensing capability matrix' -Notes 'Added in CyberSOC 1.11.0. Built from LIC.1-SKUS, LIC.2-MACHINES, LIC.3-TVM, LIC.4-DEVICES and P0.3 by report/Get-CyberSocLicensing.ps1, no query. The Defender for Endpoint plan (the Licenses page reading from -DefenderEndpointPlan when given, otherwise the API reads, with any disagreement named), the devices (onboarded clients and servers, the clients tagged License MDE P1, the servers without a server license, the devices security settings management manages) and each capability a change request can depend on: Licensed, Partly licensed, Not licensed or Unknown with its source and seats. A read that failed, was refused or is partial reads Unknown, never Not licensed. Also writes LIC.5-SERVERS, each onboarded server with the license that covers it. New-CyberSocChangeRequests.ps1 gates its change requests on it.' -Derive { param($Ctx) New-EbrLicensingResult -Ctx $Ctx }))
 
     $q.Add((New-EbrQuery -Id 'NB.1' -Phase 'P2 Network' -Engine 'ARG' -Title 'Subnet segmentation by subnet class' -Notes 'Grade on workload subnets only. A route table counts only when its default route points at the firewall. Adjust the FW- prefix to the client naming.' -Query @'
 resources
@@ -3342,6 +3397,38 @@ function New-EbrOnboardingGapResult {
     New-EbrResult -ResultId 'EW.1-GAPS' -Status $status -Rows $rows -Columns $columns -Source $source -Detail (($notes -join '. ') + '.')
 }
 
+function New-EbrLicensingResult {
+    # LIC.5-MATRIX, with LIC.5-SERVERS as its detail (CyberSOC 1.11.0), from the results already collected. The
+    # derivation is report/Get-CyberSocLicensing.ps1, which New-CyberSocChangeRequests.ps1 runs again on the pack for
+    # its capability gate, so both read the licenses the same way.
+    param($Ctx)
+    $columns = @('Kind', 'Capability', 'Name', 'State', 'Count', 'Seats', 'Assigned', 'Source', 'Detail', 'Signal')
+    $serverColumns = @('DeviceName', 'OsPlatform', 'AzureResourceId', 'subscriptionId', 'DefenderForServers', 'LicenseSource', 'Licensed')
+    $source = 'Derived from LIC.1-SKUS, LIC.2-MACHINES, LIC.3-TVM, LIC.4-DEVICES and P0.3'
+    if (-not (Get-Command Get-CyberSocLicensing -ErrorAction SilentlyContinue)) {
+        return New-EbrResult -ResultId 'LIC.5-MATRIX' -Status 'FAILED' -Source $source -Columns $columns -Detail 'report/Get-CyberSocLicensing.ps1 is missing from the collector folder, so the licensing check could not be derived. Keep the report folder beside the collector.'
+    }
+    $results = $Ctx.Results
+    $read = {
+        param([string]$Id)
+        $r = $results[$Id]
+        if ($null -eq $r) { return @{ Status = 'MISSING'; Rows = @(); Unreadable = $false; Source = '' } }
+        @{ Status = [string]$r.Status; Rows = @($r.Rows); Unreadable = $false; Source = [string]$r.Source }
+    }.GetNewClosure()
+    $reading = if ($Ctx.PSObject.Properties['DefenderEndpointPlan']) { [string]$Ctx.DefenderEndpointPlan } else { '' }
+    $l = Get-CyberSocLicensing -Read $read -Subscriptions @($Ctx.Subscriptions) -Reading $reading
+    $inputs = @('LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'P0.3')
+    $short = @($inputs | Where-Object { -not $results.ContainsKey($_) -or $results[$_].Status -notin 'OK', 'EMPTY' } | ForEach-Object { '{0} {1}' -f $_, $(if ($results.ContainsKey($_)) { $results[$_].Status } else { 'not collected' }) })
+    $serversKnown = $results.ContainsKey('LIC.2-MACHINES') -and $results['LIC.2-MACHINES'].Status -in 'OK', 'EMPTY'
+    $serverStatus = if (-not $serversKnown) { 'UNAVAILABLE' } elseif (@($l.Servers).Count) { 'OK' } else { 'EMPTY' }
+    $serverDetail = if ($serversKnown) { '{0} onboarded, {1} without a server license, {2} not established.' -f @($l.Servers).Count, @($l.Servers | Where-Object Licensed -eq 'No').Count, @($l.Servers | Where-Object Licensed -eq 'Unknown').Count } else { 'Not a zero: the Defender for Endpoint devices (LIC.2-MACHINES) were not read, so the servers are unknown.' }
+    $Ctx.Pending.Add((New-EbrResult -ResultId 'LIC.5-SERVERS' -Status $serverStatus -Rows @($l.Servers) -Columns $serverColumns -Source $source -Detail $serverDetail))
+    $counts = @($l.Matrix | Where-Object Kind -eq 'Capability' | Group-Object State | Sort-Object Name | ForEach-Object { '{0} {1}' -f $_.Count, $_.Name.ToLowerInvariant() })
+    $detail = 'Defender for Endpoint plan: {0}, from the {1}. Capabilities: {2}.' -f $l.Plan.State, $l.Plan.Source, ($counts -join ', ')
+    if ($short.Count) { $detail += ' Read in part, so what they feed reads Unknown, never Not licensed: ' + ($short -join ', ') + '.' }
+    New-EbrResult -ResultId 'LIC.5-MATRIX' -Status $(if ($short.Count) { 'PARTIAL' } else { 'OK' }) -Rows @($l.Matrix) -Columns $columns -Source $source -Detail $detail
+}
+
 function Get-EbrGapSummary {
     # One sentence for the worksheet note: the EW.1-GAPS reasons, or nothing.
     param([hashtable]$Results)
@@ -4461,6 +4548,55 @@ function Get-EbrDefenderScores {
     [pscustomobject]@{ Rows = $rows.ToArray(); Detail = ($errors -join ' / ') }
 }
 
+function Get-EbrDefenderMachines {
+    # LIC.2-MACHINES (CyberSOC 1.11.0): every device the Defender for Endpoint API lists, paged with $top and $skip (at
+    # most 10,000 a page, Learn List machines API). The API answers 404 when it holds no recent device, which is an empty
+    # list. Each device is tied to its Azure virtual machine by the same device ID in EW.1-VMS or, failing that, by one
+    # virtual machine of the same name in EW.1-EDR, and a device in the managed resource group is left out.
+    param([string]$Tenant, $Vms, $AzureVms, [AllowEmptyString()][string]$ManagedRgPattern = '')
+    $byId = @{}
+    foreach ($v in @($Vms)) { $id = ([string](Get-EbrProp $v 'DeviceId')).ToLowerInvariant(); if ($id) { $byId[$id] = [string](Get-EbrProp $v 'AzureResourceId') } }
+    $byName = @{}
+    foreach ($v in @($AzureVms)) {
+        $n = ([string](Get-EbrProp $v 'VmName')).ToLowerInvariant()
+        if (-not $n) { continue }
+        # A name held by two machines ties a device to neither.
+        $byName[$n] = $(if ($byName.ContainsKey($n)) { '' } else { [string](Get-EbrProp $v 'VmId') })
+    }
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $top = 10000
+    $skip = 0
+    for ($page = 1; $page -le 100; $page++) {
+        $gap = ((Get-Date) - $script:EbrLastDefenderCall).TotalMilliseconds
+        if ($gap -lt 1500) { Start-Sleep -Milliseconds ([int](1500 - $gap)) }
+        $script:EbrLastDefenderCall = Get-Date
+        try { $resp = Invoke-EbrRest -Method GET -Uri ('https://api.security.microsoft.com/api/machines?$top={0}&$skip={1}' -f $top, $skip) -Resource 'https://api.securitycenter.microsoft.com/' -Tenant $Tenant -TimeoutSec 300 }
+        catch { if ($_.Exception.Message -match '^HTTP 404\b') { break } throw }
+        $items = @($resp.value | Where-Object { $null -ne $_ })
+        foreach ($m in $items) {
+            $id = ([string](Get-EbrProp $m 'id')).ToLowerInvariant()
+            $name = [string](Get-EbrProp $m 'computerDnsName')
+            $tags = @(Get-EbrProp $m 'machineTags' | Where-Object { $_ } | ForEach-Object { [string]$_ })
+            $resource = [string](Get-EbrProp (Get-EbrProp $m 'vmMetadata') 'resourceId')
+            if (-not $resource -and $byId.ContainsKey($id)) { $resource = $byId[$id] }
+            $short = ($name -split '\.')[0].ToLowerInvariant()
+            if (-not $resource -and $short -and $byName[$short]) { $resource = $byName[$short] }
+            if ($ManagedRgPattern -and $resource -and $resource.IndexOf($ManagedRgPattern.Trim(), [StringComparison]::OrdinalIgnoreCase) -ge 0) { continue }
+            $os = [string](Get-EbrProp $m 'osPlatform')
+            $rows.Add([pscustomobject][ordered]@{
+                    MachineId = $id; ComputerDnsName = $name; OsPlatform = $os; DeviceClass = (Get-CyberSocDeviceClass -OsPlatform $os)
+                    OnboardingStatus = [string](Get-EbrProp $m 'onboardingStatus'); HealthStatus = [string](Get-EbrProp $m 'healthStatus')
+                    MachineTags = $tags; RbacGroupName = [string](Get-EbrProp $m 'rbacGroupName'); LastSeen = Format-EbrUtc (Get-EbrProp $m 'lastSeen')
+                    AzureResourceId = $resource.ToLowerInvariant(); subscriptionId = $(if ($resource -match '^/subscriptions/([^/]+)') { $Matches[1].ToLowerInvariant() } else { '' })
+                    TaggedPlan1 = [bool]($tags -contains $script:CyberSocPlan1Tag)
+                })
+        }
+        if ($items.Count -lt $top) { break }
+        $skip += $top
+    }
+    $rows.ToArray()
+}
+
 function Find-EbrWorkspaces {
     param([string[]]$Subscriptions, [string]$Tenant)
     $query = @'
@@ -4710,6 +4846,8 @@ function Get-EbrGraphSpec {
         'DP.10' = @{ Permission = 'DeviceManagementManagedDevices.Read.All'; Collector = 'Get-EbrGraphDP10' }
         'DR.11' = @{ Permission = 'SecurityIdentitiesSensors.Read.All'; Collector = 'Get-EbrGraphDR11' }
         'EW.13' = @{ Permission = 'DeviceManagementConfiguration.Read.All'; Collector = 'Get-EbrGraphEW13' }
+        'LIC.1-SKUS'    = @{ Permission = 'LicenseAssignment.Read.All'; Collector = 'Get-EbrGraphLic1' }
+        'LIC.4-DEVICES' = @{ Permission = 'Device.Read.All'; Collector = 'Get-EbrGraphLic4' }
     }
     $specs[$Id]
 }
@@ -5433,6 +5571,44 @@ function Get-EbrGraphEW13 {
     New-EbrGraphResult -Rows @($rows) -Columns @('Policy', 'Platforms', 'Technologies', 'Assigned', 'Settings', 'ModifiedUtc') -Detail ('App Control for Business policies from the Intune settings catalog. ThreatLocker coverage, where the client runs it, is read from the ThreatLocker portal.' + $corp)
 }
 
+function Get-EbrGraphLic1 {
+    # LIC.1-SKUS (CyberSOC 1.11.0): the licenses in the tenant. Seats are the enabled prepaid units and Assigned the
+    # consumed units, the figures the Licenses page of the Defender portal is checked against.
+    param($Ctx)
+    $skus = @(Get-EbrGraphList -Ctx $Ctx -Path 'subscribedSkus?$select=skuId,skuPartNumber,appliesTo,capabilityStatus,consumedUnits,prepaidUnits,servicePlans')
+    $rows = foreach ($k in $skus) {
+        $units = Get-EbrProp $k 'prepaidUnits'
+        [pscustomobject][ordered]@{
+            SkuId = ([string](Get-EbrProp $k 'skuId')).ToLowerInvariant(); SkuPartNumber = [string](Get-EbrProp $k 'skuPartNumber'); AppliesTo = [string](Get-EbrProp $k 'appliesTo')
+            CapabilityStatus = [string](Get-EbrProp $k 'capabilityStatus')
+            Enabled = [int](Get-EbrProp $units 'enabled'); Suspended = [int](Get-EbrProp $units 'suspended'); Warning = [int](Get-EbrProp $units 'warning'); LockedOut = [int](Get-EbrProp $units 'lockedOut')
+            Consumed = [int](Get-EbrProp $k 'consumedUnits')
+            ServicePlans = @(@(Get-EbrProp $k 'servicePlans') | Where-Object { $null -ne $_ } | ForEach-Object {
+                    [pscustomobject][ordered]@{ ServicePlanId = ([string](Get-EbrProp $_ 'servicePlanId')).ToLowerInvariant(); ServicePlanName = [string](Get-EbrProp $_ 'servicePlanName'); ProvisioningStatus = [string](Get-EbrProp $_ 'provisioningStatus'); AppliesTo = [string](Get-EbrProp $_ 'appliesTo') } })
+        }
+    }
+    $rows = @($rows | Sort-Object SkuPartNumber)
+    New-EbrGraphResult -Rows $rows -Columns @('SkuId', 'SkuPartNumber', 'AppliesTo', 'CapabilityStatus', 'Enabled', 'Suspended', 'Warning', 'LockedOut', 'Consumed', 'ServicePlans') -Detail ('{0}, {1} active (Enabled or Warning).' -f $(if ($rows.Count -eq 1) { '1 SKU' } else { "$($rows.Count) SKUs" }), @($rows | Where-Object { $_.CapabilityStatus -in 'Enabled', 'Warning' }).Count)
+}
+
+function Get-EbrGraphLic4 {
+    # LIC.4-DEVICES (CyberSOC 1.11.0): every Microsoft Entra device, with the management type that marks one managed by
+    # Defender for Endpoint security settings management (MicrosoftSense) and the sign-in dates a stale device read needs.
+    param($Ctx)
+    $devices = @(Get-EbrGraphList -Ctx $Ctx -Path 'devices?$select=id,deviceId,displayName,accountEnabled,operatingSystem,operatingSystemVersion,trustType,isManaged,isCompliant,managementType,approximateLastSignInDateTime,registrationDateTime,onPremisesSyncEnabled&$top=999')
+    $rows = foreach ($d in $devices) {
+        [pscustomobject][ordered]@{
+            Id = [string](Get-EbrProp $d 'id'); DeviceId = [string](Get-EbrProp $d 'deviceId'); DisplayName = [string](Get-EbrProp $d 'displayName')
+            AccountEnabled = (Test-EbrTrue (Get-EbrProp $d 'accountEnabled')); OperatingSystem = [string](Get-EbrProp $d 'operatingSystem'); OperatingSystemVersion = [string](Get-EbrProp $d 'operatingSystemVersion')
+            TrustType = [string](Get-EbrProp $d 'trustType'); IsManaged = Get-EbrProp $d 'isManaged'; IsCompliant = Get-EbrProp $d 'isCompliant'; ManagementType = [string](Get-EbrProp $d 'managementType')
+            ApproximateLastSignInDateTime = Format-EbrUtc (Get-EbrProp $d 'approximateLastSignInDateTime'); RegistrationDateTime = Format-EbrUtc (Get-EbrProp $d 'registrationDateTime')
+            OnPremisesSyncEnabled = (Test-EbrTrue (Get-EbrProp $d 'onPremisesSyncEnabled'))
+        }
+    }
+    $rows = @($rows | Sort-Object DisplayName, Id)
+    New-EbrGraphResult -Rows $rows -Columns @('Id', 'DeviceId', 'DisplayName', 'AccountEnabled', 'OperatingSystem', 'OperatingSystemVersion', 'TrustType', 'IsManaged', 'IsCompliant', 'ManagementType', 'ApproximateLastSignInDateTime', 'RegistrationDateTime', 'OnPremisesSyncEnabled') -Detail ('{0}, {1} managed by Defender for Endpoint security settings management (managementType MicrosoftSense).' -f $(if ($rows.Count -eq 1) { '1 device' } else { "$($rows.Count) devices" }), @($rows | Where-Object { $_.ManagementType -ieq 'MicrosoftSense' }).Count)
+}
+
 function Invoke-EbrGraphCollector {
     param($Ctx, $Item)
     $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -5834,6 +6010,23 @@ function Invoke-EbrCatalogItem {
             $status = if ($sized.Count -and $unread.Count -eq $sized.Count) { 'FAILED' } elseif ($unread.Count -or $arg.Detail) { 'PARTIAL' } else { 'OK' }
             return New-EbrResult -ResultId $Item.Id -Status $status -Rows $rows -Columns $columns -Source 'Resource Graph and the Compute resource SKUs API' -Detail $detail -DurationSec (& $elapsed)
         }
+        'DEFENDER-MACHINES' {
+            # LIC.2-MACHINES (CyberSOC 1.11.0). Without the Defender API the devices are unknown, never a zero.
+            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $Item.Query -Target 'Defender for Endpoint API'
+            if (-not $Ctx.DefenderAvailable) { return New-EbrResult -ResultId $Item.Id -Status 'UNAVAILABLE' -Source 'Defender for Endpoint API' -Detail ('Not a zero: the Defender for Endpoint devices were not read. ' + $Ctx.DefenderReason).Trim() -DurationSec (& $elapsed) }
+            try {
+                $rows = @(Get-EbrDefenderMachines -Tenant $Ctx.TenantGuid -Vms (Get-EbrRows $Ctx.Results 'EW.1-VMS') -AzureVms (Get-EbrRows $Ctx.Results 'EW.1-EDR') -ManagedRgPattern $Ctx.ManagedRgPattern)
+                $onboarded = @($rows | Where-Object { $_.OnboardingStatus -ieq 'Onboarded' })
+                $detail = '{0} listed, {1} onboarded, {2} tagged {3}, {4} tied to an Azure virtual machine.' -f @($rows).Count, $onboarded.Count, @($rows | Where-Object TaggedPlan1).Count, $script:CyberSocPlan1Tag, @($rows | Where-Object AzureResourceId).Count
+                return New-EbrResult -ResultId $Item.Id -Status $(if (@($rows).Count) { 'OK' } else { 'EMPTY' }) -Rows $rows -Columns @('MachineId', 'ComputerDnsName', 'OsPlatform', 'DeviceClass', 'OnboardingStatus', 'HealthStatus', 'MachineTags', 'RbacGroupName', 'LastSeen', 'AzureResourceId', 'subscriptionId', 'TaggedPlan1') -Source 'Defender for Endpoint API' -Detail $detail -DurationSec (& $elapsed)
+            }
+            catch {
+                $m = $_.Exception.Message -replace '\s+', ' '
+                # A 403 is a token without Machine.Read or an account without the View Data role, so the devices are unknown.
+                $status = if ($m -match '^HTTP 40[13]\b') { 'UNAVAILABLE' } else { 'FAILED' }
+                return New-EbrResult -ResultId $Item.Id -Status $status -Source 'Defender for Endpoint API' -Detail ('Not a zero: the Defender for Endpoint devices could not be read. Needs Machine.Read and the View Data role. ' + $m) -DurationSec (& $elapsed)
+            }
+        }
         'DEFENDER-SCORES' {
             if (-not $Ctx.DefenderAvailable) { return New-EbrResult -ResultId $Item.Id -Status 'SKIPPED' -Source 'Defender API' -Detail $Ctx.DefenderReason }
             try {
@@ -6078,7 +6271,8 @@ function Invoke-EbrMain {
         [switch]$SkipWorkspaceBreakdown, [switch]$DryRun,
         [switch]$SkipHtmlReport, [ValidateSet('Brief', 'Balanced', 'Detailed')][string]$ReportDepth = 'Balanced',
         [switch]$SkipSecOpsWorklist, [switch]$SkipChangeRequests, [switch]$DrClient, [string]$SentinelWorkspace,
-        [string]$ManagementGroup, [string]$ClientContact, [string]$SenderName, [switch]$PurgeProtectionApproved
+        [string]$ManagementGroup, [string]$ClientContact, [string]$SenderName, [switch]$PurgeProtectionApproved,
+        [ValidateSet('', 'Plan1', 'Plan2', 'Business', 'Mixed')][string]$DefenderEndpointPlan = ''
     )
     $ErrorActionPreference = 'Stop'
     try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
@@ -6095,7 +6289,7 @@ function Invoke-EbrMain {
         PatchCadenceDays = $(if ($PatchCadenceDays -ge 1) { $PatchCadenceDays } else { 30 })
         PatchExclusionTagPattern = $(if ($PSBoundParameters.ContainsKey('PatchExclusionTagPattern')) { $PatchExclusionTagPattern } else { $script:EbrPatchExclusionTagPattern })
         EdrVendorPattern = $(if ([string]::IsNullOrWhiteSpace($EdrVendorPattern)) { $script:EbrEdrVendorPattern } else { $EdrVendorPattern })
-        AccessPath = ''; AccessDescription = ''
+        AccessPath = ''; AccessDescription = ''; DefenderEndpointPlan = $DefenderEndpointPlan
         WindowStart = $null; WindowEnd = $null; WindowBasis = ''; ReportMonth = $null; VulnAssessment = $null; ManagedRgPattern = $ManagedRgPattern
         TicketPattern = $(if ([string]::IsNullOrWhiteSpace($TicketPattern)) { $script:EbrTicketPattern } else { $TicketPattern })
         OutDir = $null; Results = @{}; Manifest = [System.Collections.Generic.List[object]]::new()
@@ -6462,6 +6656,9 @@ function Invoke-EbrMain {
             PatchExclusionTagPattern = $ctx.PatchExclusionTagPattern
             EdrVendorPattern    = $ctx.EdrVendorPattern
             ExchangeAndPurview  = $(if ($SkipExchange) { 'skipped' } else { 'attempted' })
+            # The operator's reading of the Defender portal Licenses page (-DefenderEndpointPlan), which LIC.5-MATRIX and
+            # New-CyberSocChangeRequests.ps1 take for the Defender for Endpoint plan. Null when it was not given.
+            Licensing           = [ordered]@{ DefenderEndpointPlan = $(if ($DefenderEndpointPlan) { $DefenderEndpointPlan } else { $null }) }
             # The options New-CyberSocChangeRequests.ps1 runs with. Run it on its own with others to write the files again.
             # Written turns true only once the generator has finished, and the file is written again then.
             ChangeRequests      = [ordered]@{
@@ -6568,6 +6765,11 @@ function Invoke-EbrMain {
 
 #endregion
 
+# The licensing check (LIC.5-MATRIX) shares its derivation with New-CyberSocChangeRequests.ps1, which runs it again on
+# the pack for its capability gate. Without the file the matrix reads FAILED and the rest of the run is unaffected.
+$licensingModule = Join-Path $PSScriptRoot 'report/Get-CyberSocLicensing.ps1'
+if (Test-Path -LiteralPath $licensingModule -PathType Leaf) { . $licensingModule }
+
 if ($LoadFunctionsOnly) { return }
 
 # On 2026-10-14 a click in the window after each sign-in, and each copy of the output, paused a Windows run until Enter
@@ -6584,7 +6786,7 @@ try {
         -SkipWorkspaceBreakdown:$SkipWorkspaceBreakdown -DryRun:$DryRun `
         -SkipHtmlReport:$SkipHtmlReport -ReportDepth $ReportDepth -SkipSecOpsWorklist:$SkipSecOpsWorklist `
         -SkipChangeRequests:$SkipChangeRequests -DrClient:$DrClient -SentinelWorkspace $SentinelWorkspace -ManagementGroup $ManagementGroup `
-        -ClientContact $ClientContact -SenderName $SenderName -PurgeProtectionApproved:$PurgeProtectionApproved
+        -ClientContact $ClientContact -SenderName $SenderName -PurgeProtectionApproved:$PurgeProtectionApproved -DefenderEndpointPlan $DefenderEndpointPlan
 }
 finally { Restore-EbrQuickEdit $quickEditMode }
 # The exit code is the last thing main emits. Anything else that leaked is ignored, not exited with.

@@ -1,0 +1,338 @@
+{
+  "Description": "Plan 2 user licenses, servers onboarded on a subscription without Defender for Servers and no server license",
+  "Subscriptions": [
+    "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+    "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d"
+  ],
+  "Reading": "",
+  "Results": {
+    "LIC.1-SKUS": {
+      "Status": "OK",
+      "Rows": [
+        {
+          "SkuId": "06ebc4ee-1bb5-47dd-8120-11324bc54e06",
+          "SkuPartNumber": "SPE_E5",
+          "AppliesTo": "User",
+          "CapabilityStatus": "Enabled",
+          "Enabled": 250,
+          "Suspended": 0,
+          "Warning": 0,
+          "LockedOut": 0,
+          "Consumed": 231,
+          "ServicePlans": [
+            {
+              "ServicePlanId": "41781fb2-bc02-4b7c-bd55-b576c07bb09d",
+              "ServicePlanName": "AAD_PREMIUM",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "eec0eb4f-6444-4f95-aba0-50c24d67f998",
+              "ServicePlanName": "AAD_PREMIUM_P2",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "871d91ec-ec1a-452b-a83f-bd76c7d770ef",
+              "ServicePlanName": "WINDEFATP",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "292cc034-7b7c-4950-aaf5-943befd3f1d4",
+              "ServicePlanName": "MDE_LITE",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "1689aade-3d6a-4bfc-b017-46d2672df5ad",
+              "ServicePlanName": "Intune_Defender",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "f20fedf3-f3c3-43c3-8267-2bfdd51c0939",
+              "ServicePlanName": "ATP_ENTERPRISE",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "8e0c0a52-6a6c-4d40-8370-dd62790dcd70",
+              "ServicePlanName": "THREAT_INTELLIGENCE",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "14ab5db5-e6c4-4b20-b4bc-13e36fd2227f",
+              "ServicePlanName": "ATA",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "2e2ddb96-6af9-4b1d-a3f0-d6ecfd22edb2",
+              "ServicePlanName": "ADALLOM_S_STANDALONE",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "bf28f719-7844-4079-9c78-c1307898e192",
+              "ServicePlanName": "MTP",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "c1ec4a95-1f05-45b3-a911-aa3fa01094f5",
+              "ServicePlanName": "INTUNE_A",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            }
+          ]
+        }
+      ],
+      "Detail": ""
+    },
+    "LIC.2-MACHINES": {
+      "Status": "OK",
+      "Rows": [
+        {
+          "MachineId": "ws-0101-id",
+          "ComputerDnsName": "ws-0101",
+          "OsPlatform": "Windows11",
+          "DeviceClass": "Client",
+          "OnboardingStatus": "Onboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "",
+          "subscriptionId": "",
+          "TaggedPlan1": false
+        },
+        {
+          "MachineId": "ws-0102-id",
+          "ComputerDnsName": "ws-0102",
+          "OsPlatform": "Windows11",
+          "DeviceClass": "Client",
+          "OnboardingStatus": "Onboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "",
+          "subscriptionId": "",
+          "TaggedPlan1": false
+        },
+        {
+          "MachineId": "mac-0201-id",
+          "ComputerDnsName": "mac-0201",
+          "OsPlatform": "macOS",
+          "DeviceClass": "Client",
+          "OnboardingStatus": "Onboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "",
+          "subscriptionId": "",
+          "TaggedPlan1": false
+        },
+        {
+          "MachineId": "ws-0103-id",
+          "ComputerDnsName": "ws-0103",
+          "OsPlatform": "Windows10",
+          "DeviceClass": "Client",
+          "OnboardingStatus": "CanBeOnboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "",
+          "subscriptionId": "",
+          "TaggedPlan1": false
+        },
+        {
+          "MachineId": "vm-app01-id",
+          "ComputerDnsName": "vm-app01",
+          "OsPlatform": "WindowsServer2022",
+          "DeviceClass": "Server",
+          "OnboardingStatus": "Onboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-app01",
+          "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+          "TaggedPlan1": false
+        },
+        {
+          "MachineId": "vm-web01-id",
+          "ComputerDnsName": "vm-web01",
+          "OsPlatform": "Linux",
+          "DeviceClass": "Linux",
+          "OnboardingStatus": "Onboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-web01",
+          "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+          "TaggedPlan1": false
+        },
+        {
+          "MachineId": "vm-sql01-id",
+          "ComputerDnsName": "vm-sql01",
+          "OsPlatform": "WindowsServer2019",
+          "DeviceClass": "Server",
+          "OnboardingStatus": "Onboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-sql01",
+          "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+          "TaggedPlan1": false
+        },
+        {
+          "MachineId": "dc-onprem01-id",
+          "ComputerDnsName": "dc-onprem01",
+          "OsPlatform": "WindowsServer2016",
+          "DeviceClass": "Server",
+          "OnboardingStatus": "Onboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "",
+          "subscriptionId": "",
+          "TaggedPlan1": false
+        }
+      ],
+      "Detail": ""
+    },
+    "LIC.3-TVM": {
+      "Status": "OK",
+      "Rows": [
+        {
+          "OSPlatform": "Windows11",
+          "DeviceType": "Workstation",
+          "DeviceCategory": "Endpoint",
+          "Devices": 2,
+          "WithVulnerabilities": 2,
+          "WithAssessments": 2,
+          "TaggedPlan1": 0
+        },
+        {
+          "OSPlatform": "WindowsServer2022",
+          "DeviceType": "Server",
+          "DeviceCategory": "Endpoint",
+          "Devices": 3,
+          "WithVulnerabilities": 2,
+          "WithAssessments": 2,
+          "TaggedPlan1": 0
+        }
+      ],
+      "Detail": ""
+    },
+    "LIC.4-DEVICES": {
+      "Status": "OK",
+      "Rows": [
+        {
+          "Id": "d0",
+          "DeviceId": "dev0",
+          "DisplayName": "ws-0000",
+          "AccountEnabled": true,
+          "OperatingSystem": "Windows",
+          "OperatingSystemVersion": "10.0.22631",
+          "TrustType": "AzureAd",
+          "IsManaged": true,
+          "IsCompliant": true,
+          "ManagementType": "MDM",
+          "ApproximateLastSignInDateTime": "2026-10-01T00:00:00Z",
+          "RegistrationDateTime": "2025-01-01T00:00:00Z",
+          "OnPremisesSyncEnabled": false
+        },
+        {
+          "Id": "d1",
+          "DeviceId": "dev1",
+          "DisplayName": "ws-0001",
+          "AccountEnabled": true,
+          "OperatingSystem": "Windows",
+          "OperatingSystemVersion": "10.0.22631",
+          "TrustType": "AzureAd",
+          "IsManaged": true,
+          "IsCompliant": true,
+          "ManagementType": "MDM",
+          "ApproximateLastSignInDateTime": "2026-10-01T00:00:00Z",
+          "RegistrationDateTime": "2025-01-01T00:00:00Z",
+          "OnPremisesSyncEnabled": false
+        },
+        {
+          "Id": "d2",
+          "DeviceId": "dev2",
+          "DisplayName": "ws-0002",
+          "AccountEnabled": true,
+          "OperatingSystem": "Windows",
+          "OperatingSystemVersion": "10.0.22631",
+          "TrustType": "AzureAd",
+          "IsManaged": true,
+          "IsCompliant": true,
+          "ManagementType": "MDM",
+          "ApproximateLastSignInDateTime": "2026-10-01T00:00:00Z",
+          "RegistrationDateTime": "2025-01-01T00:00:00Z",
+          "OnPremisesSyncEnabled": false
+        }
+      ],
+      "Detail": ""
+    },
+    "P0.3": {
+      "Status": "OK",
+      "Rows": [
+        {
+          "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+          "Plan": "VirtualMachines",
+          "Tier": "Standard",
+          "SubPlan": "P2",
+          "Extensions": [
+            {
+              "name": "MdeDesignatedSubscription",
+              "isEnabled": "False"
+            },
+            {
+              "name": "AgentlessVmScanning",
+              "isEnabled": "True"
+            }
+          ]
+        },
+        {
+          "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+          "Plan": "Containers",
+          "Tier": "Free",
+          "SubPlan": "",
+          "Extensions": []
+        },
+        {
+          "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+          "Plan": "VirtualMachines",
+          "Tier": "Free",
+          "SubPlan": "",
+          "Extensions": []
+        },
+        {
+          "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+          "Plan": "Containers",
+          "Tier": "Free",
+          "SubPlan": "",
+          "Extensions": []
+        }
+      ],
+      "Detail": ""
+    }
+  },
+  "Expect": {
+    "DefenderEndpointPlan": "Plan 2",
+    "MdeServers": "Partly licensed",
+    "ServersWithoutLicense": 1,
+    "DefenderServers": "Partly licensed",
+    "MdeServerSku": "Not licensed"
+  }
+}

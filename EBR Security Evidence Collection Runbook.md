@@ -86,11 +86,16 @@ This query deliberately carries no managed resource group exclusion. The Sentine
 securityresources
 | where type =~ "microsoft.security/pricings"
 | project subscriptionId,
-          Plan    = name,
-          Tier    = tostring(properties.pricingTier),
-          SubPlan = tostring(properties.subPlan)
+          Plan       = name,
+          Tier       = tostring(properties.pricingTier),
+          SubPlan    = tostring(properties.subPlan),
+          Extensions = properties.extensions
 | order by subscriptionId asc, Tier desc, Plan asc
 ```
+
+CyberSOC collector 1.11.0 adds `Extensions`, the plan components (`properties.extensions`, each with `name` and
+`isEnabled`, which the API writes as the text True or False), for the licensing check and the plan component change
+requests. See section 6 of the CyberSOC Monthly Report Runbook.
 
 If `CloudPosture` reads Free, Defender CSPM is off. The attack path and critical recommendation tiles then read zero because the analysis is not running, so never quote them. Any plan on Free also caps the coverage figure in DR.2.
 

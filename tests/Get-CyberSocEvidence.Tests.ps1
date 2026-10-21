@@ -267,7 +267,7 @@ Describe 'Query catalog' {
     }
 
     It 'uses only known engines' {
-        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'DISABLED-ROLES', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
+        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'DISABLED-ROLES', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
         $catalog | Where-Object { $_.Engine -notin $known } | Should -BeNullOrEmpty
     }
 
@@ -2062,6 +2062,209 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
     }
 }
 
+Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
+    BeforeAll {
+        Mock Write-Host { }
+        Mock Start-Sleep { }
+        $catalog = Get-EbrQueryCatalog
+        $s1 = '5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11'
+        function New-LicCtx {
+            [pscustomobject]@{
+                TenantGuid = 'client'; GraphAvailable = $true; GraphReason = ''; GraphAdvice = ''; GraphCache = @{}; DefenderAvailable = $true; DefenderReason = ''
+                GraphMissingScopes = [System.Collections.Generic.List[string]]::new(); GraphPartial = [System.Collections.Generic.List[string]]::new(); Pending = [System.Collections.Generic.List[object]]::new()
+                OutDir = $TestDrive; WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; ManagedRgPattern = 'aznativesol0'; TicketPattern = ''; PatchCadenceDays = 30
+                Results = @{}; Subscriptions = @('5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11', 'a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d'); DefenderEndpointPlan = ''
+            }
+        }
+        $null = New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force
+        # A scenario from tests/fixtures/offline-pack/licensing loaded into a context, as the collector holds its results.
+        function Get-LicScenario([string]$Name) {
+            $sc = Get-Content (Join-Path $PSScriptRoot "fixtures/offline-pack/licensing/$Name.json") -Raw | ConvertFrom-Json
+            $ctx = New-LicCtx
+            $ctx.Subscriptions = @($sc.Subscriptions)
+            $ctx.DefenderEndpointPlan = [string]$sc.Reading
+            foreach ($p in $sc.Results.PSObject.Properties) { $ctx.Results[$p.Name] = New-EbrResult -ResultId $p.Name -Status $p.Value.Status -Rows @($p.Value.Rows) -Source $(if ($p.Name -eq 'LIC.3-TVM') { 'Defender Advanced Hunting' } else { 'x' }) }
+            [pscustomobject]@{ Scenario = $sc; Ctx = $ctx }
+        }
+    }
+
+    It 'adds the four reads and the derived matrix in their own phase, after the device reads they join' {
+        $ids = @($catalog | ForEach-Object Id)
+        foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX') {
+            $item = $catalog | Where-Object Id -eq $id
+            $item.Phase | Should -Be 'P2 Licensing' -Because $id
+            $item.Notes | Should -Match 'Added in CyberSOC 1\.11\.0' -Because $id
+            [array]::IndexOf($ids, $id) | Should -BeGreaterThan ([array]::IndexOf($ids, 'EW.1-EDR')) -Because "$id reads EW.1-VMS and EW.1-EDR"
+        }
+        ($catalog | Where-Object Id -eq 'LIC.5-MATRIX').Engine | Should -Be 'DERIVED'
+        ($catalog | Where-Object Id -eq 'LIC.2-MACHINES').Engine | Should -Be 'DEFENDER-MACHINES'
+        (Get-EbrGraphSpec 'LIC.1-SKUS').Permission | Should -Be 'LicenseAssignment.Read.All'
+        (Get-EbrGraphSpec 'LIC.4-DEVICES').Permission | Should -Be 'Device.Read.All'
+        $tvm = ($catalog | Where-Object Id -eq 'LIC.3-TVM').Query
+        $tvm | Should -Match 'AzureResourceId !contains "\{\{MRG\}\}"'
+        $tvm | Should -Match 'DeviceManualTags' -Because 'a tag set by hand counts'
+        $tvm | Should -Match 'DeviceDynamicTags' -Because 'a tag set by a dynamic rule counts too'
+        $tvm | Should -Match 'DeviceTvmSoftwareVulnerabilities' ; $tvm | Should -Match 'DeviceTvmSecureConfigurationAssessment'
+        $p03 = $catalog | Where-Object Id -eq 'P0.3'
+        $p03.Query | Should -Match 'Extensions = properties\.extensions'
+        $p03.Notes | Should -Match 'Extensions added in CyberSOC 1\.11\.0'
+    }
+
+    It 'pages the device list with top and skip, ties each device to its Azure machine and leaves the managed resource group out' {
+        $script:machineUris = [System.Collections.Generic.List[string]]::new()
+        Mock Invoke-EbrRest {
+            $script:machineUris.Add($Uri)
+            $Method | Should -Be 'GET'
+            $Resource | Should -Be 'https://api.securitycenter.microsoft.com/'
+            if ($Uri -match 'skip=0') {
+                return [pscustomobject]@{ value = @(
+                        [pscustomobject]@{ id = 'ABC'; computerDnsName = 'vm-app01.corp.example'; osPlatform = 'WindowsServer2022'; onboardingStatus = 'Onboarded'; healthStatus = 'Active'; machineTags = @('License MDE P1'); rbacGroupName = 'Servers'; lastSeen = '2026-10-07T10:00:00Z' }
+                        [pscustomobject]@{ id = 'def'; computerDnsName = 'vm-web01'; osPlatform = 'Linux'; onboardingStatus = 'Onboarded'; healthStatus = 'Active'; machineTags = @(); lastSeen = '2026-10-07T10:00:00Z' }
+                        [pscustomobject]@{ id = 'ghi'; computerDnsName = 'ws-0101'; osPlatform = 'Windows11'; onboardingStatus = 'Onboarded'; healthStatus = 'Active'; machineTags = @('License MDE P1', 'VIP'); lastSeen = '2026-10-07T10:00:00Z' }
+                        [pscustomobject]@{ id = 'mrg'; computerDnsName = 'aks-node'; osPlatform = 'Linux'; onboardingStatus = 'Onboarded'; healthStatus = 'Active'; machineTags = @(); lastSeen = '2026-10-07T10:00:00Z' }) }
+            }
+            throw "unexpected $Uri"
+        }
+        $vms = @([pscustomobject]@{ DeviceId = 'abc'; AzureResourceId = "/subscriptions/$s1/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-app01" }
+            [pscustomobject]@{ DeviceId = 'mrg'; AzureResourceId = "/subscriptions/$s1/resourceGroups/aznativesol0-rg/providers/Microsoft.Compute/virtualMachines/aks-node" })
+        $azure = @([pscustomobject]@{ VmId = "/subscriptions/$s1/resourcegroups/rg-web/providers/microsoft.compute/virtualmachines/vm-web01"; VmName = 'vm-web01' })
+        $rows = @(Get-EbrDefenderMachines -Tenant 'client' -Vms $vms -AzureVms $azure -ManagedRgPattern 'aznativesol0')
+        $script:machineUris[0] | Should -Be 'https://api.security.microsoft.com/api/machines?$top=10000&$skip=0'
+        $script:machineUris.Count | Should -Be 1 -Because 'a page shorter than 10,000 is the last'
+        $rows.Count | Should -Be 3 -Because 'the device in the managed resource group is left out'
+        ($rows | Where-Object ComputerDnsName -eq 'vm-app01.corp.example').subscriptionId | Should -Be $s1 -Because 'the device ID matches EW.1-VMS'
+        ($rows | Where-Object ComputerDnsName -eq 'vm-web01').AzureResourceId | Should -Match 'rg-web/providers/microsoft\.compute/virtualmachines/vm-web01$' -Because 'the name matches one machine in EW.1-EDR'
+        ($rows | Where-Object ComputerDnsName -eq 'vm-web01').DeviceClass | Should -Be 'Linux'
+        ($rows | Where-Object ComputerDnsName -eq 'ws-0101').TaggedPlan1 | Should -BeTrue
+        ($rows | Where-Object ComputerDnsName -eq 'ws-0101').DeviceClass | Should -Be 'Client'
+        ($rows | Where-Object ComputerDnsName -eq 'ws-0101').AzureResourceId | Should -Be ''
+    }
+
+    It 'reads the next page while a page is full, ties no device to a name two machines share, and reads a 404 as no device' {
+        $script:pages = 0
+        Mock Invoke-EbrRest {
+            $script:pages++
+            if ($Uri -match 'skip=0$') { return [pscustomobject]@{ value = @(1..10000 | ForEach-Object { [pscustomobject]@{ id = "d$_"; computerDnsName = "ws-$_"; osPlatform = 'Windows11'; onboardingStatus = 'Onboarded' } }) } }
+            if ($Uri -match 'skip=10000$') { return [pscustomobject]@{ value = @([pscustomobject]@{ id = 'last'; computerDnsName = 'dup'; osPlatform = 'WindowsServer2019'; onboardingStatus = 'Onboarded' }) } }
+            throw "unexpected $Uri"
+        }
+        $azure = @([pscustomobject]@{ VmId = '/subscriptions/a/resourcegroups/r1/providers/microsoft.compute/virtualmachines/dup'; VmName = 'dup' }, [pscustomobject]@{ VmId = '/subscriptions/a/resourcegroups/r2/providers/microsoft.compute/virtualmachines/dup'; VmName = 'dup' })
+        $rows = @(Get-EbrDefenderMachines -Tenant 'client' -Vms @() -AzureVms $azure)
+        $script:pages | Should -Be 2
+        $rows.Count | Should -Be 10001
+        ($rows | Where-Object MachineId -eq 'last').AzureResourceId | Should -Be ''
+        Mock Invoke-EbrRest { throw 'HTTP 404: Not Found | No recent machines' }
+        @(Get-EbrDefenderMachines -Tenant 'client').Count | Should -Be 0
+    }
+
+    It 'marks the devices UNAVAILABLE, never a zero, without the Defender API or without the permission' {
+        $item = $catalog | Where-Object Id -eq 'LIC.2-MACHINES'
+        $ctx = New-LicCtx
+        $ctx.DefenderAvailable = $false; $ctx.DefenderReason = 'No Defender API token.'
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $r.Status | Should -Be 'UNAVAILABLE'
+        $r.Detail | Should -Match 'Not a zero'
+        Mock Get-EbrDefenderMachines { throw 'HTTP 403: Forbidden | Missing application roles' }
+        $r = Invoke-EbrCatalogItem -Ctx (New-LicCtx) -Item $item
+        $r.Status | Should -Be 'UNAVAILABLE'
+        $r.Detail | Should -Match 'Needs Machine\.Read and the View Data role'
+        Mock Get-EbrDefenderMachines { }
+        (Invoke-EbrCatalogItem -Ctx (New-LicCtx) -Item $item).Status | Should -Be 'EMPTY'
+    }
+
+    It 'reads the licenses with their service plans, and names LicenseAssignment.Read.All when Graph refuses' {
+        Mock Invoke-EbrGraphGet {
+            $Uri | Should -Match 'v1\.0/subscribedSkus\?\$select='
+            , @([pscustomobject]@{ skuId = 'CBDC14AB-D96C-4C30-B9F4-6ADA7CDC1D46'; skuPartNumber = 'SPB'; appliesTo = 'User'; capabilityStatus = 'Warning'; consumedUnits = 97; prepaidUnits = [pscustomobject]@{ enabled = 0; suspended = 0; warning = 120; lockedOut = 0 }
+                    servicePlans = @([pscustomobject]@{ servicePlanId = 'BFC1BBD9-981B-4F71-9B82-17C35FD0E2A4'; servicePlanName = 'MDE_SMB'; provisioningStatus = 'Success'; appliesTo = 'User' }) })
+        }
+        $ctx = New-LicCtx
+        $r = Invoke-EbrGraphCollector -Ctx $ctx -Item ($catalog | Where-Object Id -eq 'LIC.1-SKUS')
+        $r.Status | Should -Be 'OK'
+        $r.Rows[0].SkuId | Should -Be 'cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46'
+        $r.Rows[0].Warning | Should -Be 120
+        $r.Rows[0].Consumed | Should -Be 97
+        $r.Rows[0].ServicePlans[0].ServicePlanId | Should -Be 'bfc1bbd9-981b-4f71-9b82-17c35fd0e2a4'
+        $r.Detail | Should -Match '1 SKU, 1 active'
+        Mock Invoke-EbrGraphGet { throw 'GRAPH-403 https://graph.microsoft.com/v1.0/subscribedSkus: HTTP 403: Forbidden' }
+        $ctx = New-LicCtx
+        $r = Invoke-EbrGraphCollector -Ctx $ctx -Item ($catalog | Where-Object Id -eq 'LIC.1-SKUS')
+        $r.Status | Should -Be 'UNAVAILABLE'
+        $r.Detail | Should -Match 'Needs LicenseAssignment\.Read\.All'
+        @($ctx.GraphMissingScopes) | Should -Be @('LicenseAssignment.Read.All')
+    }
+
+    It 'lists the Microsoft Entra devices with their management type' {
+        Mock Invoke-EbrGraphGet {
+            $Uri | Should -Match 'v1\.0/devices\?\$select=.*managementType.*approximateLastSignInDateTime'
+            , @([pscustomobject]@{ id = 'o1'; deviceId = 'd1'; displayName = 'srv-01'; accountEnabled = $true; operatingSystem = 'Windows Server'; managementType = 'MicrosoftSense'; approximateLastSignInDateTime = '2026-10-01T00:00:00Z' }
+                [pscustomobject]@{ id = 'o2'; deviceId = 'd2'; displayName = 'ws-01'; accountEnabled = $false; operatingSystem = 'Windows'; managementType = 'mdm' })
+        }
+        $r = Invoke-EbrGraphCollector -Ctx (New-LicCtx) -Item ($catalog | Where-Object Id -eq 'LIC.4-DEVICES')
+        $r.Status | Should -Be 'OK'
+        $r.Rows.Count | Should -Be 2
+        ($r.Rows | Where-Object DisplayName -eq 'ws-01').AccountEnabled | Should -BeFalse
+        $r.Detail | Should -Match '2 devices, 1 managed by Defender for Endpoint security settings management'
+    }
+
+    It 'derives the matrix from every scenario fixture as the fixture expects, with the servers as its detail' {
+        foreach ($name in 'plan2', 'plan1', 'mixed', 'business', 'servers-without-defender-for-servers', 'reading-disagrees', 'failed-read') {
+            $l = Get-LicScenario $name
+            $r = New-EbrLicensingResult -Ctx $l.Ctx
+            foreach ($k in $l.Scenario.Expect.PSObject.Properties) {
+                $row = $r.Rows | Where-Object Capability -eq $k.Name
+                $got = if ($row.Kind -eq 'Devices') { $row.Count } else { $row.State }
+                "$got" | Should -Be "$($k.Value)" -Because "$name $($k.Name): $($row.Detail)"
+            }
+            ($l.Ctx.Pending | Where-Object ResultId -eq 'LIC.5-SERVERS') | Should -Not -BeNullOrEmpty -Because $name
+        }
+    }
+
+    It 'never reads Not licensed from a read that failed, was refused or is partial' {
+        $l = Get-LicScenario 'failed-read'
+        $r = New-EbrLicensingResult -Ctx $l.Ctx
+        $r.Status | Should -Be 'PARTIAL'
+        @($r.Rows | Where-Object State -eq 'Not licensed') | Should -BeNullOrEmpty
+        $r.Detail | Should -Match 'Read in part, so what they feed reads Unknown, never Not licensed: LIC\.1-SKUS UNAVAILABLE'
+        ($l.Ctx.Pending | Where-Object ResultId -eq 'LIC.5-SERVERS').Status | Should -Be 'UNAVAILABLE'
+        # A partial license read is unknown too
+        $l = Get-LicScenario 'plan2'
+        $l.Ctx.Results['LIC.1-SKUS'].Status = 'PARTIAL'
+        $l.Ctx.Results['LIC.1-SKUS'].Rows = @()
+        $r = New-EbrLicensingResult -Ctx $l.Ctx
+        ($r.Rows | Where-Object Capability -eq 'MdoP1').State | Should -Be 'Unknown'
+        ($r.Rows | Where-Object Capability -eq 'EntraIdP1').Detail | Should -Match 'could not be read in full'
+    }
+
+    It 'reads no Plan 1 from a vulnerability read the Sentinel workspace fallback answered' {
+        $l = Get-LicScenario 'plan2'
+        $l.Ctx.Results['LIC.1-SKUS'] = New-EbrResult -ResultId 'LIC.1-SKUS' -Status 'FAILED'
+        $l.Ctx.Results['LIC.3-TVM'] = New-EbrResult -ResultId 'LIC.3-TVM' -Status 'OK' -Rows @([pscustomobject]@{ OSPlatform = 'Windows11'; DeviceType = 'Workstation'; Devices = 5; WithVulnerabilities = 0; WithAssessments = 0; TaggedPlan1 = 0 }) -Source 'Sentinel workspace (AH fallback)'
+        $r = New-EbrLicensingResult -Ctx $l.Ctx
+        ($r.Rows | Where-Object Capability -eq 'DefenderEndpointPlan').State | Should -Be 'Unknown'
+    }
+
+    It 'takes the Licenses page reading for the plan and names the disagreement' {
+        $l = Get-LicScenario 'reading-disagrees'
+        $plan = (New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'DefenderEndpointPlan'
+        $plan.State | Should -Be 'Plan 1'
+        $plan.Signal | Should -Be 'Plan 2'
+        $plan.Detail | Should -Match 'The reading and the API reads disagree: the API reads show Plan 2'
+    }
+
+    It 'matches the Defender for Endpoint server SKU by its ID, never as a Plan 2 user license' {
+        $l = Get-LicScenario 'plan1'
+        $server = [pscustomobject]@{ SkuId = '509e8ab6-0274-4cda-bcbd-bd164fd562c4'; SkuPartNumber = 'MDATP_Server'; CapabilityStatus = 'Enabled'; Enabled = 10; Warning = 0; Consumed = 4
+            ServicePlans = @([pscustomobject]@{ ServicePlanId = '871d91ec-ec1a-452b-a83f-bd76c7d770ef'; ServicePlanName = 'WINDEFATP'; ProvisioningStatus = 'Success' }) }
+        $l.Ctx.Results['LIC.1-SKUS'].Rows = @($l.Ctx.Results['LIC.1-SKUS'].Rows) + $server
+        $r = New-EbrLicensingResult -Ctx $l.Ctx
+        ($r.Rows | Where-Object Capability -eq 'MdeServerSku').State | Should -Be 'Licensed'
+        ($r.Rows | Where-Object Capability -eq 'MdeServerSku').Seats | Should -Be 10
+        ($r.Rows | Where-Object Capability -eq 'MdePlan2Sku').State | Should -Be 'Not licensed'
+        ($r.Rows | Where-Object Capability -eq 'DefenderEndpointPlan').State | Should -Be 'Plan 1'
+    }
+}
+
 Describe 'Multiple workspaces' {
     BeforeAll {
         $wsA = [pscustomobject]@{ WorkspaceName = 'ws-a'; CustomerId = 'aaaa'; subscriptionId = 'sub-a'; AccessTenant = 't1' }
@@ -2369,6 +2572,10 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         (Get-Content (Join-Path $vaSource 'vuln_assessment_20260901_090000.csv') -Raw).Replace('5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11', $subs[0]) | Set-Content (Join-Path $vaDir "vuln_assessment_$vaStamp.csv") -NoNewline
         (Get-Content (Join-Path $vaSource 'run_metadata_20260901_090000.json') -Raw).Replace('5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11', $subs[0]).Replace('2026-09-01T09:00:00', $vaMonth.ToString('yyyy-MM-dd') + 'T09:00:00') | Set-Content (Join-Path $vaDir "run_metadata_$vaStamp.json")
         Mock Get-EbrDefenderScores { [pscustomobject]@{ Rows = @([pscustomobject]@{ Metric = 'Exposure score'; Score = 30; Time = '' }); Detail = '' } }
+        # The licensing check: the device list comes from the Defender API, never the network here
+        Mock Get-EbrDefenderMachines { @(
+                [pscustomobject]@{ MachineId = 'm1'; ComputerDnsName = 'ws-0101'; OsPlatform = 'Windows11'; DeviceClass = 'Client'; OnboardingStatus = 'Onboarded'; HealthStatus = 'Active'; MachineTags = @(); RbacGroupName = ''; LastSeen = ''; AzureResourceId = ''; subscriptionId = ''; TaggedPlan1 = $false }
+                [pscustomobject]@{ MachineId = 'm2'; ComputerDnsName = 'vm-app01'; OsPlatform = 'WindowsServer2022'; DeviceClass = 'Server'; OnboardingStatus = 'Onboarded'; HealthStatus = 'Active'; MachineTags = @(); RbacGroupName = ''; LastSeen = ''; AzureResourceId = "/subscriptions/$($subs[0])/resourcegroups/rg-1/providers/microsoft.compute/virtualmachines/vm-app01"; subscriptionId = $subs[0]; TaggedPlan1 = $false }) }
         # Graph: the probe works, role assignments read without PIM, Conditional Access is not permitted, everything else is empty
         Mock Invoke-EbrGraphGet {
             if ($Uri -match 'v1\.0/organization') { return [pscustomobject]@{ id = $client } }
@@ -2376,6 +2583,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
             if ($Uri -match 'roleAssignments\?') { return , @([pscustomobject]@{ roleDefinitionId = '62e90394-69f5-4237-9190-012177145e10'; principalId = 'u1'; directoryScopeId = '/'; principal = [pscustomobject]@{ '@odata.type' = '#microsoft.graph.user'; displayName = 'Ann'; userPrincipalName = 'ann@contoso.com' } }) }
             if ($Uri -match 'conditionalAccess') { throw 'GRAPH-403 https://graph.microsoft.com/v1.0/identity/conditionalAccess/policies: HTTP 403: Forbidden' }
             if ($Uri -match 'authorizationPolicy|adminConsentRequestPolicy|sharepoint/settings') { return [pscustomobject]@{} }
+            if ($Uri -match 'v1\.0/subscribedSkus') { return , @([pscustomobject]@{ skuId = '06ebc4ee-1bb5-47dd-8120-11324bc54e06'; skuPartNumber = 'SPE_E5'; appliesTo = 'User'; capabilityStatus = 'Enabled'; consumedUnits = 40; prepaidUnits = [pscustomobject]@{ enabled = 50; suspended = 0; warning = 0; lockedOut = 0 }; servicePlans = @([pscustomobject]@{ servicePlanId = '871d91ec-ec1a-452b-a83f-bd76c7d770ef'; servicePlanName = 'WINDEFATP'; provisioningStatus = 'Success'; appliesTo = 'User' }, [pscustomobject]@{ servicePlanId = '41781fb2-bc02-4b7c-bd55-b576c07bb09d'; servicePlanName = 'AAD_PREMIUM'; provisioningStatus = 'Success'; appliesTo = 'User' }) }) }
             , @()
         }
         Mock Invoke-EbrLaQuery {
@@ -2410,7 +2618,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         }
 
         $code = Invoke-EbrMain -TenantId $client -SubscriptionId $subs -OutputPath $TestDrive -SkipExchange -ManagedRgPattern 'aznativesol0' -VulnAssessmentPath $vaDir `
-            -DrClient -SentinelWorkspace 'ws-2' -ManagementGroup 'mg-contoso' -ClientContact 'Dana' -SenderName 'Scott Example' -PurgeProtectionApproved
+            -DrClient -SentinelWorkspace 'ws-2' -ManagementGroup 'mg-contoso' -ClientContact 'Dana' -SenderName 'Scott Example' -PurgeProtectionApproved -DefenderEndpointPlan 'Plan2'
         $outDir = Get-ChildItem -Path $TestDrive -Directory -Filter 'CyberSOC-Evidence_*' | Select-Object -First 1
         $manifest = Import-Csv (Join-Path $outDir.FullName '00-manifest.csv')
         $params = Get-Content (Join-Path $outDir.FullName '00-parameters.json') -Raw | ConvertFrom-Json
@@ -2564,6 +2772,25 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         (Get-M 'EW.1-EDR') | Should -Not -BeNullOrEmpty
     }
 
+    It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
+        $params.ScriptVersion | Should -Be '1.11.0'
+        $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
+        foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
+        (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
+        (Get-M 'LIC.2-MACHINES').Rows | Should -Be 2
+        (Get-M 'LIC.3-TVM').Status | Should -Be 'UNAVAILABLE' -Because 'the vulnerability tables exist only in Advanced Hunting, which answered 403'
+        (Get-M 'LIC.5-MATRIX').Status | Should -Be 'PARTIAL'
+        (Get-M 'LIC.5-MATRIX').Phase | Should -Be 'P2 Licensing'
+        $matrix = Get-Content (Join-Path $outDir.FullName 'results/LIC.5-MATRIX.json') -Raw | ConvertFrom-Json
+        ($matrix | Where-Object Capability -eq 'DefenderEndpointPlan').State | Should -Be 'Plan 2'
+        ($matrix | Where-Object Capability -eq 'DefenderEndpointPlan').Source | Should -Be 'Licenses page reading'
+        ($matrix | Where-Object Capability -eq 'EntraIdP1').State | Should -Be 'Licensed'
+        ($matrix | Where-Object Capability -eq 'EntraIdP1').Seats | Should -Be 50
+        ($matrix | Where-Object Capability -eq 'MdoP1').State | Should -Be 'Not licensed' -Because 'the licenses were read in full and none carries it'
+        $servers = Get-Content (Join-Path $outDir.FullName 'results/LIC.5-SERVERS.json') -Raw | ConvertFrom-Json
+        @($servers).Count | Should -Be 1
+    }
+
     It 'keeps the notes and the worksheet to the copy rules' {
         $notes = Get-Content (Join-Path $outDir.FullName '02-notes.txt') -Raw
         $notes | Should -Not -Match ';'
@@ -2644,7 +2871,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.10.0'
+        $params2.ScriptVersion | Should -Be '1.11.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {
@@ -2944,8 +3171,10 @@ Describe 'Azure virtual machine scope, third-party endpoint detection and patch 
             $q | Should -Match 'where isnotempty\(AzureResourceId\)' -Because $id
             $q | Should -Not -Match 'Other device' -Because $id
         }
-        $every = @($catalog | Where-Object { $_.Engine -eq 'AH' -and $_.Query -match 'DeviceInfo' -and $_.Id -ne 'P0.4' -and $_.Query -notmatch 'where isnotempty\(AzureResourceId\)' } | ForEach-Object Id)
+        $every = @($catalog | Where-Object { $_.Engine -eq 'AH' -and $_.Query -match 'DeviceInfo' -and $_.Id -notin 'P0.4', 'LIC.3-TVM' -and $_.Query -notmatch 'where isnotempty\(AzureResourceId\)' } | ForEach-Object Id)
         $every | Should -BeNullOrEmpty -Because 'every Advanced Hunting query that reads DeviceInfo is scoped to Azure virtual machines'
+        # The licensing check is the one exception: a license covers every device, so LIC.3-TVM counts them all.
+        ($catalog | Where-Object Id -eq 'LIC.3-TVM').Query | Should -Not -Match 'isnotempty\(AzureResourceId\)'
         ($catalog | Where-Object Id -eq 'EW.1').Query | Should -Match 'Unsupported\s+= countif\(OnboardingStatus == "Unsupported"\)'
         ($catalog | Where-Object Id -eq 'EW.1').Query | Should -Match 'InsufficientInfo = countif\(OnboardingStatus == "Insufficient info"\)'
     }

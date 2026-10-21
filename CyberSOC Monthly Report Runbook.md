@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, and 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, and 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -493,6 +493,73 @@ resourcecontainers
 | project subscriptionId, SubscriptionName = name
 | order by SubscriptionName asc
 ```
+
+### LIC.1-SKUS to LIC.5-MATRIX The licensing check
+
+CyberSOC collector 1.11.0, phase P2 Licensing. The Defender for Endpoint plan and its usage, and the licenses each change request needs. The results name devices and stay internal. `New-CyberSocChangeRequests.ps1` derives the matrix again from the four reads below with `report/Get-CyberSocLicensing.ps1`, the code that writes LIC.5-MATRIX, and gates its change requests on it: a change request whose capability reads Not licensed is not written, and one reading Unknown is written with a note to confirm the license before sending. A read that failed, was refused or is partial reads Unknown, never Not licensed.
+
+The Licenses page of the Defender portal (Settings > Endpoints > Licenses: the subscription state, the available and assigned licenses, a usage estimate from the users signing in to onboarded devices, and the mixed mode setting) has no API. Read it by hand, with Security Administrator, or License Administrator and Defender for Endpoint Administrator, and pass the plan as `-DefenderEndpointPlan` Plan1, Plan2, Business or Mixed. The SecOps worklist asks for it on every collection, with the enforcement scope of security settings management (Settings > Endpoints > Configuration management > Enforcement scope), which has no API either.
+
+LIC.1-SKUS, the licenses in the tenant. Needs LicenseAssignment.Read.All (Directory.Read.All and Organization.Read.All also work). The endpoint takes `$select` only. A license is matched on service plan IDs (Microsoft Learn, Product names and service plan identifiers for licensing), since bundles carry the plans, and counts while its SKU reads Enabled or Warning and the plan is not Disabled or Error. The Defender for Endpoint server SKU (MDATP_Server) carries WINDEFATP, the Plan 2 plan, so it is matched by its SKU ID and never counted as Plan 2.
+
+```http
+GET https://graph.microsoft.com/v1.0/subscribedSkus?$select=skuId,skuPartNumber,appliesTo,capabilityStatus,consumedUnits,prepaidUnits,servicePlans
+```
+
+| Capability | Service plans (ID) |
+|---|---|
+| Microsoft Entra ID P1 | AAD_PREMIUM (41781fb2-bc02-4b7c-bd55-b576c07bb09d), or AAD_PREMIUM_P2 |
+| Microsoft Entra ID P2 | AAD_PREMIUM_P2 (eec0eb4f-6444-4f95-aba0-50c24d67f998) |
+| Defender for Endpoint Plan 1 | MDE_LITE (292cc034-7b7c-4950-aaf5-943befd3f1d4) |
+| Defender for Endpoint Plan 2 | WINDEFATP (871d91ec-ec1a-452b-a83f-bd76c7d770ef), outside the server SKU |
+| Defender for Business | MDE_SMB (bfc1bbd9-981b-4f71-9b82-17c35fd0e2a4) |
+| Defender for Endpoint for servers | SKU MDATP_Server (509e8ab6-0274-4cda-bcbd-bd164fd562c4). Learn lists no SKU for Defender for Business servers |
+| Defender for Endpoint user license, which security settings management needs | MDE_LITE, WINDEFATP, MDE_SMB or Intune_Defender (MDE_SecurityManagement, 1689aade-3d6a-4bfc-b017-46d2672df5ad), outside the server SKU |
+| Defender Vulnerability Management premium | TVM_PREMIUM_1 (36810a13-b903-490a-aa45-afbeb7540832) |
+| Defender for Office 365 Plan 1 | ATP_ENTERPRISE (f20fedf3-f3c3-43c3-8267-2bfdd51c0939), ATP_ENTERPRISE_GOV (493ff600-6a2b-4db6-ad37-a7d4eb214516), or Plan 2. Office 365 E3 and Microsoft 365 E3 carry ATP_ENTERPRISE from July 1, 2026 |
+| Defender for Office 365 Plan 2 | THREAT_INTELLIGENCE (8e0c0a52-6a6c-4d40-8370-dd62790dcd70), THREAT_INTELLIGENCE_GOV (900018f1-0cdb-4ecb-94d4-90281760fdc6) |
+| Defender for Identity | ATA (14ab5db5-e6c4-4b20-b4bc-13e36fd2227f) |
+| Defender for Cloud Apps | ADALLOM_S_STANDALONE (2e2ddb96-6af9-4b1d-a3f0-d6ecfd22edb2) |
+| Microsoft Defender XDR | MTP (bf28f719-7844-4079-9c78-c1307898e192) |
+| Microsoft Intune Plan 1 | INTUNE_A (c1ec4a95-1f05-45b3-a911-aa3fa01094f5), INTUNE_A_GOV (d216f254-796f-4dab-bbfa-710686e646b9) |
+
+The other plans keep their commercial IDs in the government SKUs Learn lists.
+
+LIC.2-MACHINES, every device the Defender for Endpoint API lists, any platform. Needs Machine.Read (Machine.Read.All for an application) and the View Data role, and returns the devices the account's device groups allow. Paged with `$top` 10,000, the documented maximum, and `$skip`. A 404 means no recent device and reads EMPTY. A device carrying the `License MDE P1` tag gets Plan 1 under mixed licensing, which applies to client devices only. The API documents no Azure resource ID, so a device is tied to its Azure virtual machine by the same device ID in EW.1-VMS or, failing that, by one virtual machine of the same name in EW.1-EDR, and a device in the managed resource group is left out.
+
+```http
+GET https://api.security.microsoft.com/api/machines?$top=10000&$skip=0
+```
+
+LIC.3-TVM, Advanced Hunting. Every onboarded device, not only Azure virtual machines, by platform, with the devices that have vulnerability management data and the devices tagged `License MDE P1` by hand or by a dynamic rule. Plan 1 devices show no vulnerabilities, Plan 2 adds core vulnerability management, and Defender for Servers gives servers the Plan 2 benefits. Plan 1 and Defender for Business include no Advanced Hunting.
+
+```kql
+let Devices = DeviceInfo
+| where Timestamp between (ago(7d) .. now())
+| summarize arg_max(Timestamp, *) by DeviceId
+| where OnboardingStatus == "Onboarded"
+| where AzureResourceId !contains "{{MRG}}"
+| extend Tags = strcat(tostring(column_ifexists("DeviceManualTags", "")), " ", tostring(column_ifexists("DeviceDynamicTags", "")))
+| project DeviceId, OSPlatform, DeviceType, DeviceCategory, Tagged = Tags contains "License MDE P1";
+let Vulnerable = union isfuzzy = true (DeviceTvmSoftwareVulnerabilities | distinct DeviceId), (datatable(DeviceId: string) [])
+| distinct DeviceId | extend HasVulnerabilities = true;
+let Assessed = union isfuzzy = true (DeviceTvmSecureConfigurationAssessment | where Timestamp between (ago(7d) .. now()) | distinct DeviceId), (datatable(DeviceId: string) [])
+| distinct DeviceId | extend HasAssessments = true;
+Devices
+| join kind=leftouter Vulnerable on DeviceId
+| join kind=leftouter Assessed on DeviceId
+| summarize Devices = count(), WithVulnerabilities = countif(HasVulnerabilities == true), WithAssessments = countif(HasAssessments == true), TaggedPlan1 = countif(Tagged)
+          by OSPlatform, DeviceType, DeviceCategory
+| order by Devices desc
+```
+
+LIC.4-DEVICES, every Microsoft Entra device. Needs Device.Read.All. A device managed by security settings management has management type `MicrosoftSense`. The list also serves the stale device change request.
+
+```http
+GET https://graph.microsoft.com/v1.0/devices?$select=id,deviceId,displayName,accountEnabled,operatingSystem,operatingSystemVersion,trustType,isManaged,isCompliant,managementType,approximateLastSignInDateTime,registrationDateTime,onPremisesSyncEnabled&$top=999
+```
+
+LIC.5-MATRIX, derived, no query. One row for the Defender for Endpoint plan (the Licenses page reading when given, otherwise Plan 2, Plan 1, Mixed, Defender for Business, no license or Unknown from the API reads, with any disagreement named), one per device count (onboarded clients, onboarded servers, other Linux devices, clients tagged `License MDE P1`, servers without a server license, devices security settings management manages), and one per capability: Licensed, Partly licensed, Not licensed or Unknown, with its seats, assigned licenses, source and basis. Defender for Servers (any plan or Plan 2) and Defender for Containers come from P0.3 for each subscription, and a subscription P0.3 did not read is unknown. LIC.5-SERVERS lists each onboarded server, Windows Server or Linux on an Azure virtual machine, with Defender for Servers on its subscription, the license that covers it, and Licensed Yes, No (its subscription has Defender for Servers off and the tenant holds no server license) or Unknown.
 
 ### IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA Roles held by disabled accounts
 

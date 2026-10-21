@@ -1,4 +1,4 @@
-# CyberSOC Monthly Report Toolkit v1.10.0
+# CyberSOC Monthly Report Toolkit v1.11.0
 
 `Export-CyberSocToolkit.ps1` writes this file into each release zip with the packaging date.
 
@@ -36,7 +36,7 @@ pwsh ./New-CyberSocControlsStandard.ps1 -OutputPath ./install-check/standard.htm
 pwsh ./Get-CyberSocEvidence.ps1 -TenantId <tenant> -SubscriptionId <subscription> -ReportMonth <yyyy-MM> -VulnAssessmentPath <vulnerability assessment run folders>
 ```
 
-The window is the report month and the two full months before it, the 90-day trend. The report month defaults to the last full month. `-VulnAssessmentPath` imports the monthly Atmosera.VulnAssessment runs of that window for these subscriptions. A pack collected without them takes them later with `Import-CyberSocVulnAssessment.ps1 -EvidencePath <pack> -VulnAssessmentPath <runs>`, then `New-CyberSocReport.ps1 -EvidencePath <pack>`.
+Add `-DefenderEndpointPlan Plan1`, `Plan2`, `Business` or `Mixed` with the plan the Defender portal shows under Settings > Endpoints > Licenses, since no API reads that page. The licensing check also reads the tenant's licenses (Graph LicenseAssignment.Read.All), the Microsoft Entra devices (Graph Device.Read.All) and the Defender for Endpoint devices (Machine.Read and the View Data role). A permission the token lacks makes that read UNAVAILABLE, and what it feeds reads Unknown, never Not licensed. The window is the report month and the two full months before it, the 90-day trend. The report month defaults to the last full month. `-VulnAssessmentPath` imports the monthly Atmosera.VulnAssessment runs of that window for these subscriptions. A pack collected without them takes them later with `Import-CyberSocVulnAssessment.ps1 -EvidencePath <pack> -VulnAssessmentPath <runs>`, then `New-CyberSocReport.ps1 -EvidencePath <pack>`.
 
 Each run writes an evidence pack with the report in two HTML editions and a deck, the SecOps worklist (`04-secops-worklist.md` and `.csv`) and the hardening change requests (`05-change-requests`). Send the client `03-security-report.client.html` and `03-security-report.pptx`. `03-security-report.html` is the internal edition, with the presenter notes, the evidence review, the collection register and the subscription and workspace IDs, so it never goes to the client. The client edition and the deck need Node.js. The worklist names client resources and is internal only, so it never goes to the client either. Get-CyberSocEvidence.README.md covers parameters, permissions and sign-ins.
 

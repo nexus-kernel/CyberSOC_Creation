@@ -1,0 +1,216 @@
+{
+  "Description": "Microsoft 365 E3: Defender for Endpoint Plan 1, which has no Advanced Hunting, so the vulnerability tables are not read",
+  "Subscriptions": [
+    "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+    "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d"
+  ],
+  "Reading": "",
+  "Results": {
+    "LIC.1-SKUS": {
+      "Status": "OK",
+      "Rows": [
+        {
+          "SkuId": "05e9a617-0261-4cee-bb44-138d3ef5d965",
+          "SkuPartNumber": "SPE_E3",
+          "AppliesTo": "User",
+          "CapabilityStatus": "Enabled",
+          "Enabled": 400,
+          "Suspended": 0,
+          "Warning": 0,
+          "LockedOut": 0,
+          "Consumed": 388,
+          "ServicePlans": [
+            {
+              "ServicePlanId": "41781fb2-bc02-4b7c-bd55-b576c07bb09d",
+              "ServicePlanName": "AAD_PREMIUM",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "292cc034-7b7c-4950-aaf5-943befd3f1d4",
+              "ServicePlanName": "MDE_LITE",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "f20fedf3-f3c3-43c3-8267-2bfdd51c0939",
+              "ServicePlanName": "ATP_ENTERPRISE",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            },
+            {
+              "ServicePlanId": "c1ec4a95-1f05-45b3-a911-aa3fa01094f5",
+              "ServicePlanName": "INTUNE_A",
+              "ProvisioningStatus": "Success",
+              "AppliesTo": "User"
+            }
+          ]
+        }
+      ],
+      "Detail": ""
+    },
+    "LIC.2-MACHINES": {
+      "Status": "OK",
+      "Rows": [
+        {
+          "MachineId": "ws-0101-id",
+          "ComputerDnsName": "ws-0101",
+          "OsPlatform": "Windows11",
+          "DeviceClass": "Client",
+          "OnboardingStatus": "Onboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "",
+          "subscriptionId": "",
+          "TaggedPlan1": false
+        },
+        {
+          "MachineId": "ws-0102-id",
+          "ComputerDnsName": "ws-0102",
+          "OsPlatform": "Windows11",
+          "DeviceClass": "Client",
+          "OnboardingStatus": "Onboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "",
+          "subscriptionId": "",
+          "TaggedPlan1": false
+        },
+        {
+          "MachineId": "mac-0201-id",
+          "ComputerDnsName": "mac-0201",
+          "OsPlatform": "macOS",
+          "DeviceClass": "Client",
+          "OnboardingStatus": "Onboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "",
+          "subscriptionId": "",
+          "TaggedPlan1": false
+        },
+        {
+          "MachineId": "ws-0103-id",
+          "ComputerDnsName": "ws-0103",
+          "OsPlatform": "Windows10",
+          "DeviceClass": "Client",
+          "OnboardingStatus": "CanBeOnboarded",
+          "HealthStatus": "Active",
+          "MachineTags": [],
+          "RbacGroupName": "",
+          "LastSeen": "2026-10-07T10:00:00Z",
+          "AzureResourceId": "",
+          "subscriptionId": "",
+          "TaggedPlan1": false
+        }
+      ],
+      "Detail": ""
+    },
+    "LIC.3-TVM": {
+      "Status": "UNAVAILABLE",
+      "Rows": [],
+      "Detail": "Not a zero: Advanced Hunting returned an error: HTTP 403"
+    },
+    "LIC.4-DEVICES": {
+      "Status": "OK",
+      "Rows": [
+        {
+          "Id": "d0",
+          "DeviceId": "dev0",
+          "DisplayName": "ws-0000",
+          "AccountEnabled": true,
+          "OperatingSystem": "Windows",
+          "OperatingSystemVersion": "10.0.22631",
+          "TrustType": "AzureAd",
+          "IsManaged": true,
+          "IsCompliant": true,
+          "ManagementType": "MDM",
+          "ApproximateLastSignInDateTime": "2026-10-01T00:00:00Z",
+          "RegistrationDateTime": "2025-01-01T00:00:00Z",
+          "OnPremisesSyncEnabled": false
+        },
+        {
+          "Id": "d1",
+          "DeviceId": "dev1",
+          "DisplayName": "ws-0001",
+          "AccountEnabled": true,
+          "OperatingSystem": "Windows",
+          "OperatingSystemVersion": "10.0.22631",
+          "TrustType": "AzureAd",
+          "IsManaged": true,
+          "IsCompliant": true,
+          "ManagementType": "MDM",
+          "ApproximateLastSignInDateTime": "2026-10-01T00:00:00Z",
+          "RegistrationDateTime": "2025-01-01T00:00:00Z",
+          "OnPremisesSyncEnabled": false
+        },
+        {
+          "Id": "d2",
+          "DeviceId": "dev2",
+          "DisplayName": "ws-0002",
+          "AccountEnabled": true,
+          "OperatingSystem": "Windows",
+          "OperatingSystemVersion": "10.0.22631",
+          "TrustType": "AzureAd",
+          "IsManaged": true,
+          "IsCompliant": true,
+          "ManagementType": "MDM",
+          "ApproximateLastSignInDateTime": "2026-10-01T00:00:00Z",
+          "RegistrationDateTime": "2025-01-01T00:00:00Z",
+          "OnPremisesSyncEnabled": false
+        }
+      ],
+      "Detail": ""
+    },
+    "P0.3": {
+      "Status": "OK",
+      "Rows": [
+        {
+          "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+          "Plan": "VirtualMachines",
+          "Tier": "Free",
+          "SubPlan": "",
+          "Extensions": []
+        },
+        {
+          "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+          "Plan": "Containers",
+          "Tier": "Free",
+          "SubPlan": "",
+          "Extensions": []
+        },
+        {
+          "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+          "Plan": "VirtualMachines",
+          "Tier": "Free",
+          "SubPlan": "",
+          "Extensions": []
+        },
+        {
+          "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+          "Plan": "Containers",
+          "Tier": "Free",
+          "SubPlan": "",
+          "Extensions": []
+        }
+      ],
+      "Detail": ""
+    }
+  },
+  "Expect": {
+    "DefenderEndpointPlan": "Plan 1",
+    "MdeVulnerabilityData": "Not licensed",
+    "EntraIdP1": "Licensed",
+    "EntraIdP2": "Not licensed",
+    "MdoP1": "Licensed",
+    "MdoP2": "Not licensed",
+    "DefenderServersP2": "Not licensed",
+    "MdeServers": "Not licensed",
+    "MdeSecurityManagement": "Licensed"
+  }
+}

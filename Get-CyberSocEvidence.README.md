@@ -18,7 +18,9 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
 - **Pack name.** `CyberSOC-Evidence_<client>_<report month>_<yyyyMMdd-HHmmss>/`.
 - **Change requests.** Each collection ends by writing the hardening change requests and a client email for each
   one into `05-change-requests` (`New-CyberSocChangeRequests.ps1`). See [Change requests](#change-requests).
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.10.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Licensing check.** The Defender for Endpoint plan and its usage, and the licenses each change request needs
+  (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.11.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -101,6 +103,40 @@ approval of a proposed date two weeks after the collection, or of a maintenance 
 `-ChangeDate`: to propose another date, run the generator again with `-ChangeDate <date>`. See
 [Hardening change requests](New-CyberSocChangeRequests.README.md).
 
+### Licensing check
+
+```bash
+pwsh ./Get-CyberSocEvidence.ps1 -TenantId <guid> -SubscriptionId <sub1>,<sub2> -DefenderEndpointPlan Plan2
+```
+
+Every collection reads the licenses the change requests depend on and derives a capability matrix (LIC.5-MATRIX):
+
+- **The Defender for Endpoint plan.** What the Defender portal shows under Settings > Endpoints > Licenses (the
+  subscription state, the available and assigned licenses, and whether mixed mode is on) has no API, so read it there
+  and pass it as `-DefenderEndpointPlan` with Plan1, Plan2, Business or Mixed. The page needs Security Administrator,
+  or License Administrator with Defender for Endpoint Administrator. Without the reading the plan is what the API reads
+  show: the licenses in the tenant (LIC.1-SKUS), the `License MDE P1` tag that mixed licensing puts on client devices
+  (LIC.2-MACHINES, and LIC.3-TVM, which also sees the tags a dynamic rule sets), and the devices with vulnerability
+  management data, which Plan 2 and Defender for Servers devices have and Plan 1 devices do not (LIC.3-TVM). Where the
+  reading and the API reads disagree, the matrix says so. The reading is recorded under `Licensing` in
+  `00-parameters.json`, where the change request generator reads it.
+- **The devices.** Onboarded clients and servers, the clients tagged `License MDE P1`, the onboarded servers without a
+  server license (each one in LIC.5-SERVERS: Defender for Servers on its subscription from P0.3, or a Defender for
+  Endpoint for servers license in the tenant), the Linux devices outside Azure, which the API cannot tell client from
+  server, and the devices security settings management manages (LIC.4-DEVICES, management type `MicrosoftSense`).
+- **The capabilities**, each Licensed, Partly licensed, Not licensed or Unknown, with the source and the seats:
+  Microsoft Entra ID P1 and P2, Defender for Endpoint Plan 1, Plan 2, Defender for Business and the server license,
+  Defender Vulnerability Management premium, Defender for Office 365 Plan 1 and Plan 2, Defender for Identity, Defender
+  for Cloud Apps, Defender XDR, Intune Plan 1, Defender for Servers (any plan, and Plan 2), Defender for Containers,
+  Defender for Endpoint on servers, the vulnerability data behind EW.3, EW.4 and EW.5, and security settings
+  management. A license is matched on the service plan IDs of *Product names and service plan identifiers for
+  licensing*, never on SKU names, since bundles carry the plans. The Defender for Endpoint server SKU carries the same
+  plan as Plan 2, so it is matched by its own SKU ID.
+
+A read that failed, was refused or is partial makes what it feeds Unknown, never Not licensed. The change request
+generator gates its change requests on the matrix (see [Hardening change requests](New-CyberSocChangeRequests.README.md)),
+and the SecOps worklist shows it with the Licenses page and enforcement scope portal checks on every collection.
+
 ## What it decides for you
 
 | Runbook parameter | How the script sets it | Override |
@@ -114,7 +150,7 @@ approval of a proposed date two weeks after the collection, or of a maintenance 
 | Vulnerability assessment runs | None. Phase 5 then reads the Defender current state (VA.1 to VA.3) only | `-VulnAssessmentPath` (the tool's output folder, a folder of run folders, run folders, per_client folders or run CSVs) |
 | Posture read date | The run date | n/a |
 | Service start date | Not available from any API. The worksheet marks it MANUAL | n/a |
-| Device scope | Every Defender device query (EW.1, EW.1-DEVICES, EW.1-VMS, EW.3, EW.4, EW.5, EW.12, EW.14, EW.15, EW.16, NB.8, NB.10, NB.11, DR.5, DR.12, BKL.1) reads Azure virtual machines only, `isnotempty(AzureResourceId)`. Workstations, laptops and other endpoints that are not Azure resources are never counted (1.14.0) | n/a |
+| Device scope | Every Defender device query (EW.1, EW.1-DEVICES, EW.1-VMS, EW.3, EW.4, EW.5, EW.12, EW.14, EW.15, EW.16, NB.8, NB.10, NB.11, DR.5, DR.12, BKL.1) reads Azure virtual machines only, `isnotempty(AzureResourceId)`. Workstations, laptops and other endpoints that are not Azure resources are never counted (1.14.0). The licensing check (LIC.2-MACHINES, LIC.3-TVM) is the exception: a license covers every device, so it counts them all (CyberSOC 1.11.0) | n/a |
 | Third-party endpoint detection | `crowdstrike|falcon|sentinelone|carbon ?black|cortex ?xdr|cybereason|tanium|trellix|cylance`, matched against virtual machine extension publishers and types (`EW.1-EDR`) and against the Sentinel tables and vendors carrying the product's telemetry (`EW.1-EDR-HOSTS`). An Azure virtual machine that is not onboarded to Defender for Endpoint but carries a matching product is covered, not a gap (`EW.1-GAPS`). Recorded as `EdrVendorPattern` in `00-parameters.json` | `-EdrVendorPattern` (RE2, no double quotes) |
 | Patching waived or client owned | A regular expression against the lowercased JSON of each machine's tags. The default matches a tag whose key or value names patching together with waived or client owned (`Patching=Waived`, `PatchPolicy=Client Owned`, `Maintenance=Patching waived`). Matching machines leave `EW.6` and `EW.10` and are listed in `EW.10-EXCLUDED`. Recorded as `PatchExclusionTagPattern` in `00-parameters.json` | `-PatchExclusionTagPattern` (RE2, `''` turns the exclusion off) |
 
@@ -146,8 +182,9 @@ ATMOSERA_SCRIPT_REQUIREMENTS.md 1.4 still forbids Graph; that standard has not b
 | Resource Graph | `management.azure.com/.../Microsoft.ResourceGraph/resources` (paged) | `az account get-access-token`, the subscription's access tenant |
 | Log Analytics | `api.loganalytics.io/v1/workspaces/{id}/query`. A combined query adds the other workspaces in the `workspaces` body field | same |
 | Advanced Hunting | `api.security.microsoft.com/api/advancedqueries/run` | resource `api.securitycenter.microsoft.com`, client tenant |
+| Defender for Endpoint devices (LIC.2-MACHINES) | `api.security.microsoft.com/api/machines`, GET, `$top` 10,000 and `$skip` paging | same as Advanced Hunting. Needs Machine.Read and the View Data role. Not yet confirmed on a live run that the Azure CLI token carries Machine.Read: a 403 marks LIC.2-MACHINES UNAVAILABLE |
 | Sentinel rules (DR.9) | `{workspace}/providers/Microsoft.SecurityInsights/alertRules` | ARM |
-| Microsoft Graph (IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, POS.6, DP.8, DP.10, DR.11, EW.13) | `graph.microsoft.com/v1.0`, GET only, `@odata.nextLink` paging | resource `https://graph.microsoft.com/`, client tenant, same reauth prompt as Defender |
+| Microsoft Graph (IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS, LIC.4-DEVICES) | `graph.microsoft.com/v1.0`, GET only, `@odata.nextLink` paging | resource `https://graph.microsoft.com/`, client tenant, same reauth prompt as Defender |
 | Exchange Online and Purview (IA.9, DP.7-ZAP, DP.6) | `ExchangeOnlineManagement` module, browser sign-in | module |
 
 **What the Graph token can read.** The Azure CLI application carries a fixed set of delegated
@@ -245,6 +282,8 @@ Details:
 | DP.8 SharePoint sharing | `admin/sharepoint/settings` | SharePointTenantSettings.Read.All | Portal path in the manifest |
 | DP.10 Disk encryption | `deviceManagement/managedDevices` | DeviceManagementManagedDevices.Read.All | The BitLocker row of EW.3, used by the HTML report |
 | DR.11 Defender for Identity sensors | `security/identities/sensors` | SecurityIdentitiesSensors.Read.All | DR.4 domain controller events |
+| LIC.1-SKUS Licenses in the tenant (CyberSOC 1.11.0) | `subscribedSkus` with `$select`, one row per SKU with its state, seats (`prepaidUnits`), assigned (`consumedUnits`) and every service plan with its provisioning status | LicenseAssignment.Read.All (Directory.Read.All or Organization.Read.All also work) | Microsoft 365 admin center > Billing > Licenses |
+| LIC.4-DEVICES Microsoft Entra devices (CyberSOC 1.11.0) | `devices` with `$select` and `$top=999`, one row per device with its management type, trust type, compliance and sign-in dates. A device managed by Defender for Endpoint security settings management has management type `MicrosoftSense` (the value Intune documents for it, which the Graph device reference does not list), and the list also serves the stale device change request | Device.Read.All | Microsoft Entra admin center > Devices > All devices |
 | EW.13 App Control policies | `beta/deviceManagement/configurationPolicies` filtered to the App Control template family (beta only; v1.0 has no settings catalog) | DeviceManagementConfiguration.Read.All | Intune admin center, or the ThreatLocker portal |
 
 Results carry counts and flags into the HTML report. Names, UPNs, domains and policy titles stay
@@ -291,6 +330,30 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.11.0 (October 21, 2026): the licensing check, phase P2 Licensing, after the device reads it
+  joins. See [Licensing check](#licensing-check) and section 6 of the CyberSOC Monthly Report Runbook.
+  - `LIC.1-SKUS` (Graph `subscribedSkus`): the licenses in the tenant with their service plans.
+  - `LIC.2-MACHINES` (engine DEFENDER-MACHINES, `GET api/machines`): every device the Defender for Endpoint API lists,
+    with `osPlatform`, `onboardingStatus`, `healthStatus`, `machineTags`, `rbacGroupName`, `lastSeen`, the device class
+    (Client, Server, Linux or Other, from the platform) and whether it carries `License MDE P1`. The machine API documents
+    no Azure resource ID, so each device is tied to its Azure virtual machine by the same device ID in EW.1-VMS or, failing
+    that, by one virtual machine of the same name in EW.1-EDR, and a device in the managed resource group is left out.
+    UNAVAILABLE without the Defender API or on a 403, never a zero. A 404, which the API answers when it holds no recent
+    device, is EMPTY.
+  - `LIC.3-TVM` (Advanced Hunting): every onboarded device by platform, device type and category, with the devices that
+    have vulnerability management data (`DeviceTvmSoftwareVulnerabilities`, `DeviceTvmSecureConfigurationAssessment` in
+    the last 7 days) and the devices tagged `License MDE P1` by hand or by a dynamic rule (`DeviceManualTags`,
+    `DeviceDynamicTags`). The managed resource group is excluded. Plan 1 and Defender for Business include no Advanced
+    Hunting, so a refused read is no Plan 1 reading on its own, and an answer from the Sentinel workspace fallback, which
+    holds no vulnerability tables, is never used.
+  - `LIC.4-DEVICES` (Graph `devices`): every Microsoft Entra device with its management type.
+  - `LIC.5-MATRIX` (derived by `report/Get-CyberSocLicensing.ps1`, no query) and `LIC.5-SERVERS`. PARTIAL when one of its
+    reads is not OK or EMPTY, and what that read feeds reads Unknown.
+  - `P0.3` gains `Extensions`, the plan components of each Defender for Cloud plan (`properties.extensions`, each with
+    `name` and `isEnabled`, which the API writes as the text True or False), such as `AgentlessVmScanning` or
+    `ContainerSensor`.
+  - `-DefenderEndpointPlan` (Plan1, Plan2, Business or Mixed) records the Licenses page reading under `Licensing` in
+    `00-parameters.json`.
 - CyberSOC collector 1.10.0 (October 20, 2026): `IA.15-RBAC` and `IA.15-ENTRA` record the group each disabled
   account sits in, so CR-19 can remove the account from it. A role held through a group is followed through the
   group's direct members (`groups/{id}/members`, paged, read as an advanced query with `$count=true` and
@@ -479,6 +542,7 @@ example the NB.2 association verdicts.
 | Resource Graph, Defender for Cloud | Reader (or Security Reader) on the subscriptions |
 | Log Analytics, Sentinel rules | Microsoft Sentinel Reader or Log Analytics Reader on the workspace |
 | Advanced Hunting, Defender scores | Security Reader (Defender XDR) in the client tenant |
+| Defender for Endpoint devices (LIC.2-MACHINES) | The View Data role in Defender for Endpoint, and the Machine.Read permission on the token. The devices returned are those the account's device groups allow |
 | Microsoft Graph | Global Reader in the client tenant, plus the delegated permissions in the Graph items table consented to the Azure CLI application. Missing ones are named in the notes |
 | Exchange Online, Purview DLP | Global Reader, or Security Reader plus View-Only Organization Management |
 
