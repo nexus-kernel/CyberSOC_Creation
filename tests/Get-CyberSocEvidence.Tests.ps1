@@ -267,7 +267,7 @@ Describe 'Query catalog' {
     }
 
     It 'uses only known engines' {
-        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'DISABLED-ROLES', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
+        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'DISABLED-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
         $catalog | Where-Object { $_.Engine -notin $known } | Should -BeNullOrEmpty
     }
 
@@ -2062,6 +2062,146 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
     }
 }
 
+Describe 'Emergency access accounts (IA.16, CyberSOC 1.12.0)' {
+    BeforeAll {
+        # A scenario from tests/fixtures/offline-pack/emergency-access: the Graph answers, and what the read makes of them.
+        function script:Get-EaScenario([string]$Name) { Get-Content (Join-Path $PSScriptRoot "fixtures/offline-pack/emergency-access/$Name.json") -Raw | ConvertFrom-Json }
+        function script:New-EaCtx {
+            [pscustomobject]@{
+                TenantGuid = 'client'; GraphAvailable = $true; GraphReason = ''; GraphCache = @{}; ArmTenant = 'client'; AccessPath = 'Direct'; Subscriptions = @('s1')
+                GraphMissingScopes = [System.Collections.Generic.List[string]]::new(); GraphPartial = [System.Collections.Generic.List[string]]::new(); Pending = [System.Collections.Generic.List[object]]::new()
+                OutDir = $TestDrive; WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; ManagedRgPattern = 'aznativesol0'
+            }
+        }
+        # Runs IA.16 against a scenario's Graph answers. A string answer is the error Graph returns.
+        function script:Invoke-EaScenario($Scenario, $Ctx = (New-EaCtx)) {
+            $script:eaGraph = $Scenario.Graph
+            $accounts = Invoke-EbrCatalogItem -Ctx $Ctx -Item $script:eaItem
+            @{ Accounts = $accounts; Groups = ($Ctx.Pending | Where-Object ResultId -eq 'IA.16-GROUPS'); Ctx = $Ctx }
+        }
+        $script:eaItem = Get-EbrQueryCatalog | Where-Object Id -eq 'IA.16-ACCOUNTS'
+        $null = New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force
+    }
+    BeforeEach {
+        Mock Invoke-EbrGraphGet {
+            $answer = if ($Uri -match '/v1\.0/users\?') { $script:eaGraph.Users }
+            elseif ($Uri -match '/v1\.0/groups\?') { $script:eaGraph.Groups }
+            elseif ($Uri -match '/v1\.0/groups/([0-9a-f-]+)/transitiveMembers/microsoft\.graph\.user\?') {
+                $p = $script:eaGraph.Members.PSObject.Properties[$Matches[1]]
+                if (-not $p) { throw "unexpected $Uri" }
+                $p.Value
+            }
+            else { throw "unexpected $Uri" }
+            if ($answer -is [string]) { throw $answer }
+            , @($answer)
+        }
+    }
+
+    It 'reads every user and every group in full and matches offline, since Graph has no contains and $search could miss one' {
+        $script:eaItem.Engine | Should -Be 'EMERGENCY-ACCESS'
+        $script:eaItem.Phase | Should -Be 'P2 Identity'
+        $script:eaItem.Notes | Should -Match '^Added in CyberSOC 1\.12\.0\.'
+        $script:eaItem.Notes | Should -Match 'User\.Read\.All and GroupMember\.Read\.All'
+        $script:eaItem.Notes | Should -Match 'Internal: names accounts\.$'
+        $q = $script:eaItem.Query
+        $q | Should -Match '(?m)^GET /v1\.0/users\?\$select=id,userPrincipalName,displayName,userType,accountEnabled&\$top=999$'
+        $q | Should -Match '(?m)^GET /v1\.0/groups\?\$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule&\$top=999$'
+        $q | Should -Match 'transitiveMembers/microsoft\.graph\.user\?\$count=true'
+        $q | Should -Match '(?m)^Permission: User\.Read\.All, GroupMember\.Read\.All$'
+        $q | Should -Not -Match '\$search|\$filter' -Because 'a whole-word or starts-with match could miss an account'
+        $null = Invoke-EaScenario (Get-EaScenario 'complete')
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://graph.microsoft.com/v1.0/users?$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999' -and $Complete }
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://graph.microsoft.com/v1.0/groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule&$top=999' -and $Complete }
+        Should -Invoke Invoke-EbrGraphGet -Times 3 -Exactly -ParameterFilter { $Uri -like '*/transitiveMembers/microsoft.graph.user?$count=true&$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999' -and $Complete } -Because 'only the three Atmosera groups are read, not IT Admins or Platform Ops'
+        Test-Path (Join-Path $TestDrive 'queries/IA.16-ACCOUNTS.graph.txt') | Should -BeTrue
+    }
+
+    It 'matches a member by its UPN, a guest by its #EXT# UPN, any case, and the members of nested groups, and nothing else' {
+        $sc = Get-EaScenario 'complete'
+        $r = Invoke-EaScenario $sc
+        $r.Accounts.ResultId | Should -Be 'IA.16-ACCOUNTS'
+        $r.Accounts.Status | Should -Be $sc.Expect.'IA.16-ACCOUNTS'.Status
+        $r.Groups.Status | Should -Be $sc.Expect.'IA.16-GROUPS'.Status
+        @($r.Accounts.Rows | ForEach-Object { '{0}|{1}|{2}' -f $_.UserPrincipalName, $_.MatchedBy, (@($_.Groups) -join ',') }) | Should -Be @($sc.Expect.Accounts | ForEach-Object { '{0}|{1}|{2}' -f $_.UserPrincipalName, $_.MatchedBy, (@($_.Groups) -join ',') })
+        @($r.Groups.Rows | ForEach-Object { '{0}|{1}|{2}' -f $_.DisplayName, $_.Members, $_.Membership }) | Should -Be @($sc.Expect.Groups | ForEach-Object { '{0}|{1}|{2}' -f $_.DisplayName, $_.Members, $_.Membership })
+        $guest = $r.Accounts.Rows | Where-Object UserPrincipalName -like '*#EXT#*'
+        $guest.UserType | Should -Be 'Guest'
+        ($r.Accounts.Rows | Where-Object UserPrincipalName -like 'SOC.*').AccountEnabled | Should -BeFalse -Because 'a disabled emergency access account is still listed, with its state'
+        @($r.Accounts.Rows | ForEach-Object PrincipalId) | Should -Not -Contain $null
+        $json = ConvertTo-Json -InputObject @(@($r.Accounts.Rows) + @($r.Groups.Rows)) -Depth 5
+        foreach ($n in $sc.Expect.NotListed) { $json | Should -Not -Match ([regex]::Escape($n)) -Because "$n is not Atmosera's" }
+        ($r.Groups.Rows | Where-Object Membership -eq 'Dynamic').MembershipRule | Should -Be 'user.department -eq "SOC Tier 0"'
+        $r.Groups.Detail | Should -Match 'Membership not assigned by hand: ATMOSERA Support \(synced\) \(On-premises\), SOC-atmosera-Tier0 \(Dynamic\)\.'
+        $r.Accounts.Detail | Should -Match '^5 emergency access accounts: 3 by UPN and 3 in an Atmosera group, 1 of them guests, of 7 user accounts read\.'
+        $r.Accounts.Detail | Should -Match 'An account whose UPN does not contain Atmosera is listed only when it sits in an Atmosera group\.'
+    }
+
+    It 'reads a tenant with no Atmosera account or group as EMPTY, which the change requests never take as clearance' {
+        $sc = Get-EaScenario 'no-match'
+        $r = Invoke-EaScenario $sc
+        $r.Accounts.Status | Should -Be 'EMPTY'
+        $r.Groups.Status | Should -Be 'EMPTY'
+        Should -Invoke Invoke-EbrGraphGet -Times 0 -Exactly -ParameterFilter { $Uri -like '*transitiveMembers*' }
+    }
+
+    It 'reports a refused or failed read, never EMPTY, and names the permission' {
+        $sc = Get-EaScenario 'failed-read'
+        $r = Invoke-EaScenario $sc
+        $r.Accounts.Status | Should -Be 'UNAVAILABLE'
+        $r.Accounts.Detail | Should -Match '^Not a zero: the Graph token cannot read user accounts\. Needs User\.Read\.All\. Fix: az login --tenant client --scope https://graph\.microsoft\.com/User\.Read\.All'
+        $r.Groups.Status | Should -Be 'FAILED'
+        $r.Groups.Detail | Should -Match '^The groups could not be read in full\. HTTP 500'
+        @($r.Ctx.GraphMissingScopes) | Should -Be @('User.Read.All')
+        @($r.Accounts.Rows).Count + @($r.Groups.Rows).Count | Should -Be 0
+    }
+
+    It 'marks both results PARTIAL when an Atmosera group''s members cannot be read, and names the group' {
+        $sc = Get-EaScenario 'members-unread'
+        $r = Invoke-EaScenario $sc
+        $r.Accounts.Status | Should -Be 'PARTIAL'
+        $r.Groups.Status | Should -Be 'PARTIAL'
+        $r.Groups.Detail | Should -Match 'The members of 1 Atmosera group could not be read, so the accounts in it are unknown: Atmosera Emergency Access \('
+        ($r.Groups.Rows | Select-Object -First 1).MembersRead | Should -BeFalse
+        @($r.Accounts.Rows | ForEach-Object UserPrincipalName) | Should -Be @($sc.Expect.Accounts | ForEach-Object UserPrincipalName)
+        @($r.Ctx.GraphPartial) | Should -Be @('IA.16 (Atmosera group members)')
+    }
+
+    It 'keeps the UPN matches PARTIAL when only the groups cannot be read, and fails a read cut short' {
+        $sc = Get-EaScenario 'complete'
+        $sc.Graph.Groups = 'GRAPH-403 https://graph.microsoft.com/v1.0/groups: HTTP 403: Forbidden'
+        $r = Invoke-EaScenario $sc
+        $r.Groups.Status | Should -Be 'UNAVAILABLE'
+        $r.Groups.Detail | Should -Match 'Needs GroupMember\.Read\.All'
+        $r.Accounts.Status | Should -Be 'PARTIAL'
+        $r.Accounts.Detail | Should -Match 'The groups were not read \(IA\.16-GROUPS UNAVAILABLE\), so only the accounts matched by UPN are listed\.'
+        @($r.Accounts.Rows | ForEach-Object MatchedBy | Sort-Object -Unique) | Should -Be @('UPN')
+        $sc = Get-EaScenario 'complete'
+        $sc.Graph.Users = 'GRAPH-TRUNCATED https://graph.microsoft.com/v1.0/users: more than 200 pages, so the read was cut short.'
+        $r = Invoke-EaScenario $sc
+        $r.Accounts.Status | Should -Be 'FAILED'
+        $r.Accounts.Detail | Should -Match 'cut short'
+    }
+
+    It 'reports both UNAVAILABLE when Microsoft Graph is not reachable' {
+        $ctx = New-EaCtx
+        $ctx.GraphAvailable = $false
+        $ctx.GraphReason = 'No Graph token: AADSTS530004.'
+        $r = Invoke-EaScenario (Get-EaScenario 'complete') $ctx
+        $r.Accounts.Status | Should -Be 'UNAVAILABLE'
+        $r.Groups.Status | Should -Be 'UNAVAILABLE'
+        $r.Accounts.Detail | Should -Match '^Not a zero: Microsoft Graph was not reachable.*AADSTS530004'
+        Should -Invoke Invoke-EbrGraphGet -Times 0 -Exactly
+    }
+}
+
+Describe 'Graph paging that must not be cut short' {
+    It 'throws GRAPH-TRUNCATED with Complete when pages remain, and returns what it read without it' {
+        Mock Invoke-EbrRest { [pscustomobject]@{ value = @([pscustomobject]@{ id = '1' }); '@odata.nextLink' = 'https://graph.microsoft.com/v1.0/users?$skiptoken=x' } }
+        { Invoke-EbrGraphGet -Uri 'https://graph.microsoft.com/v1.0/users?$top=999' -Tenant 't' -MaxPages 2 -Complete } | Should -Throw 'GRAPH-TRUNCATED https://graph.microsoft.com/v1.0/users: more than 2 pages*'
+        (Invoke-EbrGraphGet -Uri 'https://graph.microsoft.com/v1.0/users?$top=999' -Tenant 't' -MaxPages 2).Count | Should -Be 2 -Because 'the other reads keep their behaviour'
+    }
+}
+
 Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
     BeforeAll {
         Mock Write-Host { }
@@ -2885,7 +3025,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
     }
 
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.11.0'
+        $params.ScriptVersion | Should -Be '1.12.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -2983,7 +3123,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.11.0'
+        $params2.ScriptVersion | Should -Be '1.12.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

@@ -79,7 +79,9 @@
     MemberOfName, MemberOfType, GroupPath, GroupPathIds), and on an earlier pack leaves the roles held through groups
     unchanged and says so in the index. The licensing gate reads LIC.1-SKUS, LIC.2-MACHINES, LIC.3-TVM and LIC.4-DEVICES,
     added in 1.11.0, and on an earlier pack reads every capability as Unknown, so a change request that requires one is
-    written with a note to confirm the license.
+    written with a note to confirm the license. The emergency access accounts every Conditional Access change excludes are
+    read from IA.16-ACCOUNTS and IA.16-GROUPS, added in 1.12.0, and on an earlier pack, or when that read failed, is
+    partial or found no account, no Conditional Access change is written and the index says why.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -118,6 +120,7 @@ $detailVersions['NB.5-FTPS-DETAIL'] = '1.7.0'
 $detailVersions['DP.1-CONTAINERS-DETAIL'] = '1.8.0'
 foreach ($id in 'IA.15-DISABLED', 'IA.15-RBAC', 'IA.15-ENTRA') { $detailVersions[$id] = '1.9.0' }
 foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { $detailVersions[$id] = '1.11.0' }
+foreach ($id in 'IA.16-ACCOUNTS', 'IA.16-GROUPS') { $detailVersions[$id] = '1.12.0' }
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -232,6 +235,12 @@ $readPack = {
     @{ Status = $status; Rows = @(if ($readable) { Get-Rows $Id }); Unreadable = ($readable -and (Test-Unreadable $Id)); Source = Get-Text (@($manifest | Where-Object ResultId -eq $Id) | Select-Object -First 1).Source }
 }
 $licensing = Get-CyberSocLicensing -Read $readPack -Subscriptions @($parameters.Subscriptions) -Reading $planReading
+# The emergency access accounts (collector 1.12.0, IA.16-ACCOUNTS and IA.16-GROUPS), shared by every Conditional Access
+# change with report/Get-CyberSocEmergencyAccess.ps1. A change request whose catalog entry sets EmergencyAccess = $true
+# is written only when $emergencyAccess.Ready, and every policy it proposes excludes $emergencyAccess.ExcludeGroups and
+# $emergencyAccess.ExcludeUsers. Test-CyberSocEmergencyAccessId names an existing exclusion it must never remove.
+. (Join-Path $PSScriptRoot 'report/Get-CyberSocEmergencyAccess.ps1')
+$emergencyAccess = Get-CyberSocEmergencyAccess -Read $readPack
 # Copy text that keeps a portal path such as Settings > Endpoints > Licenses, which the copy rules allow in the index.
 function ConvertTo-PathText($value) { (ConvertTo-CopyText ((Get-Text $value) -replace ' > ', ' NAVSTEP ')) -replace ' NAVSTEP ', ' > ' }
 
@@ -2416,6 +2425,11 @@ $results = foreach ($item in $catalog) {
         $state = 'Not written, needs {0}, which reads Not licensed' -f (Join-Words @($gate.Blocked | ForEach-Object { ConvertTo-CopyText $_.Name }))
         $notes = @($gate.Blocked | ForEach-Object { 'CR-{0:00} is not written because {1} reads Not licensed. {2}' -f $item.Number, (ConvertTo-CopyText $_.Name), (ConvertTo-PathText $_.Detail) })
     }
+    elseif ($item.EmergencyAccess -and -not $emergencyAccess.Ready) {
+        # A Conditional Access change is never written without the emergency access exclusions.
+        $state = if ($emergencyAccess.Why -eq 'Missing') { Get-RecollectionState 'IA.16-ACCOUNTS', 'IA.16-GROUPS' } else { 'Not written, {0}' -f $emergencyAccess.Why }
+        $notes = @('CR-{0:00} is not written because {1}. A Conditional Access change is written only with the emergency access accounts it excludes.' -f $item.Number, $(if ($emergencyAccess.Why -eq 'Missing') { 'the pack was collected before the emergency access read' } else { $emergencyAccess.Why }))
+    }
     else {
         $built = & $item.Build
         $cr = $built.Cr
@@ -2499,6 +2513,40 @@ if ($licensingRead) {
 }
 foreach ($c in @($licensing.Matrix | Where-Object { $licensingRead -and $_.Kind -eq 'Capability' })) {
     $md.Add(('| {0} | {1} | {2} | {3} | {4} | {5} |' -f (ConvertTo-CopyText $c.Name), (ConvertTo-CopyText $c.State), (Get-Text $c.Seats), (Get-Text $c.Assigned), $(if ($neededBy[$c.Capability]) { $neededBy[$c.Capability] -join ', ' } else { 'None yet' }), ((ConvertTo-PathText $c.Detail) -replace '\|', '/')))
+}
+# The emergency access accounts every Conditional Access change excludes, and why none can be written when the read is
+# not complete.
+$md.Add(''); $md.Add('## Emergency access accounts'); $md.Add('')
+# A table cell, with any pipe in a name turned into a slash so it cannot split the row.
+function ConvertTo-CellText($value) { (ConvertTo-CopyText $value) -replace '\|', '/' }
+$caChanges = @($catalog | Where-Object { $_.EmergencyAccess } | ForEach-Object { 'CR-{0:00}' -f $_.Number })
+$caText = if ($caChanges.Count) { Join-Words $caChanges } else { 'No change request in this build changes Conditional Access yet, and one that does' }
+if ($emergencyAccess.Why -eq 'Missing') {
+    $md.Add(('The pack was collected before the emergency access read, so no Conditional Access change can be written. Recollect with CyberSOC collector 1.12.0 or later. {0} {1} written only with the emergency access accounts.' -f $caText, $(Get-Pick ([math]::Max(1, $caChanges.Count)) 'is' 'are')))
+}
+else {
+    $md.Add(('The emergency access accounts are every account with Atmosera in its UPN and every member of an Atmosera group, a group whose display name contains Atmosera. Every Conditional Access change excludes each Atmosera group, so a new member is covered without a change, and each account matched by its UPN alone, and no change removes an existing exclusion of any of them. {0} {1} written only when the read is complete and found at least one account.' -f $caText, $(Get-Pick ([math]::Max(1, $caChanges.Count)) 'is' 'are')))
+    $md.Add('')
+    if (-not $emergencyAccess.Ready) { $md.Add(('No Conditional Access change can be written: {0}. {1}' -f $emergencyAccess.Why, (@('IA.16-ACCOUNTS', 'IA.16-GROUPS' | ForEach-Object { Get-ResultDetail $_ } | Where-Object { $_ }) -join ' '))); $md.Add('') }
+    if (@($emergencyAccess.Groups).Count) {
+        $md.Add('| Atmosera group | Members | Membership | Object ID |'); $md.Add('| --- | --- | --- | --- |')
+        foreach ($g in @($emergencyAccess.Groups)) {
+            $md.Add(('| {0} | {1} | {2} | {3} |' -f (ConvertTo-CellText $g.DisplayName), $(if (Test-True $g.MembersRead) { Get-Text $g.Members } else { 'not read' }), (ConvertTo-CellText $g.Membership), (ConvertTo-CellText $g.GroupId)))
+        }
+        $md.Add('')
+    }
+    if (@($emergencyAccess.Accounts).Count) {
+        $md.Add('| Account | Name | Type | Enabled | Matched by | Atmosera groups | Excluded as |'); $md.Add('| --- | --- | --- | --- | --- | --- | --- |')
+        foreach ($a in @($emergencyAccess.Accounts)) {
+            $inGroups = @($a.Groups | Where-Object { $_ } | ForEach-Object { ConvertTo-CellText $_ })
+            $md.Add(('| {0} | {1} | {2} | {3} | {4} | {5} | {6} |' -f (ConvertTo-CellText $a.UserPrincipalName), (ConvertTo-CellText $a.DisplayName), (ConvertTo-CellText $a.UserType), $(if ((Get-Text $a.AccountEnabled) -eq '') { 'unknown' } elseif (Test-True $a.AccountEnabled) { 'Yes' } else { 'No' }), (ConvertTo-CellText $a.MatchedBy), ($inGroups -join ', '), $(if ($inGroups.Count) { 'its group' } else { 'the account' })))
+        }
+        $md.Add('')
+    }
+    foreach ($g in @($emergencyAccess.Review)) {
+        $md.Add(('- {0} has {1} membership, so {2}. Confirm that every emergency access account stays in it, or exclude the account on its own.' -f (ConvertTo-CellText $g.DisplayName), $(if ((Get-Text $g.Membership) -eq 'Dynamic') { 'dynamic' } else { 'on-premises synced' }), $(if ((Get-Text $g.Membership) -eq 'Dynamic') { 'its rule adds and removes members, and an account it drops loses the exclusion' } else { 'its members are managed in Active Directory, and an account removed there loses the exclusion' })))
+    }
+    $md.Add('- An account Atmosera uses whose UPN does not contain Atmosera is covered only when it sits in an Atmosera group. Add any such account to one before a Conditional Access change is made.')
 }
 $notes = @($results | ForEach-Object { $_.Notes })
 $written = @($results | Where-Object Cr)

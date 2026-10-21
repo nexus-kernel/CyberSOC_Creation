@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, and 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, and 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -611,6 +611,26 @@ authorizationresources
 | project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, Condition, ConditionVersion, PrincipalId, PrincipalType
 | order by PrincipalId asc, Scope asc
 ```
+
+### IA.16-ACCOUNTS and IA.16-GROUPS Emergency access accounts
+
+Engine EMERGENCY-ACCESS. CyberSOC collector 1.12.0. Microsoft Graph, read-only. Both results name accounts and stay internal. Feeds the emergency access exclusions of every Conditional Access change: the change requests write a Conditional Access block or MFA policy only with these exclusions, and none when this read failed, is partial or found no account.
+
+The emergency access accounts are every account whose user principal name contains Atmosera, members and guests alike, and every user in an Atmosera group, read as a group whose display name contains Atmosera. Both matches ignore case and look anywhere in the value, and the rule lives in one place, `report/Get-CyberSocEmergencyAccess.ps1`, which the collector and the change requests share. A guest from an Atmosera domain matches through its UPN, which Microsoft Learn (List users) documents as the external address with `@` turned into `_`, followed by `#EXT#`. Graph `$filter` has no contains on `userPrincipalName` or `displayName`, and Learn (Use the $search query parameter) documents that `$search` tokenizes `displayName` and `description` only and reads every other property as starts with, so a search could miss `breakglass-atmosera01@...` or a group named `SOCatmosera`. Every user and every group is therefore read in full and matched offline. Needs User.Read.All (List users) and GroupMember.Read.All (List groups, List group transitive members), which IA.15 already holds.
+
+```http
+GET https://graph.microsoft.com/v1.0/users?$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999
+GET https://graph.microsoft.com/v1.0/groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule&$top=999
+```
+
+The user members of each Atmosera group are read transitively, so a member of a group nested in it, an Atmosera group or any other, is listed too. Learn (List group transitive members) requires `$count=true` and the `ConsistencyLevel: eventual` header for the OData cast, and notes that the index behind it might not show a very recent change, and that a group with hidden membership needs Member.Read.Hidden.
+
+```http
+GET https://graph.microsoft.com/v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$count=true&$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999
+ConsistencyLevel: eventual
+```
+
+IA.16-ACCOUNTS, one row per account: `PrincipalId`, `UserPrincipalName`, `DisplayName`, `UserType`, `AccountEnabled`, `MatchedBy` (UPN, Group, or UPN and group) and the Atmosera groups it sits in (`Groups`, `GroupIds`). IA.16-GROUPS, one row per Atmosera group: `GroupId`, `DisplayName`, `Members` (its user members, counted once each), `Membership` (Assigned, Dynamic for a dynamic membership group, On-premises for a group synced from Active Directory), `MembersRead` and the `MembershipRule` of a dynamic group. Each read pages through `@odata.nextLink` and fails when pages remain after the page limit, so a read cut short is never taken as complete. A refused read is UNAVAILABLE with the permission it needs, any other failure FAILED. A group whose members cannot be read makes both results PARTIAL and is named. The groups unread leave IA.16-ACCOUNTS PARTIAL with the UPN matches only. A tenant with no match reads EMPTY on both, which the change requests treat as no emergency access account, not as clearance. An account Atmosera uses whose UPN does not contain the word is found only when it sits in an Atmosera group.
 
 ### NB.2-DETAIL Internet-exposed management port rules with their properties and attachments
 
