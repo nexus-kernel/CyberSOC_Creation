@@ -59,7 +59,7 @@
         domains/<id>/federationConfiguration, reports/authenticationMethods/
         userRegistrationDetails, roleManagement/directory/roleAssignments,
         roleDefinitions, roleAssignmentScheduleInstances and roleEligibilityScheduleInstances,
-        users (disabled accounts, IA.15-DISABLED), groups/<id>/transitiveMembers,
+        users (disabled accounts, IA.15-DISABLED), groups/<id> and groups/<id>/members,
         identity/conditionalAccess/policies,
         directory/onPremisesSynchronization, policies/authorizationPolicy,
         policies/adminConsentRequestPolicy, security/secureScores,
@@ -232,7 +232,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.9.0, based on the EBR collector 1.14.0
+    Version: 1.10.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -280,7 +280,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.9.0'
+$script:EbrVersion = '1.10.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -1600,7 +1600,7 @@ authorizationresources
     # the disabled users from Graph, then every Azure role assignment with this query, run with the Resource Graph
     # authorizationScopeFilter AtScopeAboveAndBelow so assignments at the management groups and root above the
     # subscriptions come back too, and the Entra role assignments through Graph.
-    $q.Add((New-EbrQuery -Id 'IA.15-DISABLED' -Phase 'P2 Identity' -Engine 'DISABLED-ROLES' -LighthouseIncomplete -Title 'Roles held by disabled accounts' -Notes ('Added in CyberSOC 1.9.0. Writes IA.15-DISABLED (the disabled user accounts, GET /v1.0/users?$filter=accountEnabled eq false, needs User.Read.All), IA.15-RBAC (every Azure role assignment those accounts hold, directly or through a group, from authorizationresources with the query here) and IA.15-ENTRA (every Microsoft Entra role assignment they hold: GET /v1.0/roleManagement/directory/roleAssignments, roleDefinitions, roleAssignmentScheduleInstances and roleEligibilityScheduleInstances, needs RoleManagement.Read.Directory for the eligible ones). Roles held through a group are read from the transitiveMembers of each such group (GroupMember.Read.All). Through Lighthouse, Resource Graph shows the managing tenant''s delegations instead of the client''s role assignments, so IA.15-RBAC is incomplete there. Feeds change request CR-19. Internal: names accounts.') -Query @'
+    $q.Add((New-EbrQuery -Id 'IA.15-DISABLED' -Phase 'P2 Identity' -Engine 'DISABLED-ROLES' -LighthouseIncomplete -Title 'Roles held by disabled accounts' -Notes ('Added in CyberSOC 1.9.0, the group each member sits in from 1.10.0. Writes IA.15-DISABLED (the disabled user accounts, GET /v1.0/users?$filter=accountEnabled eq false, needs User.Read.All), IA.15-RBAC (every Azure role assignment those accounts hold, directly or through a group, from authorizationresources with the query here) and IA.15-ENTRA (every Microsoft Entra role assignment they hold: GET /v1.0/roleManagement/directory/roleAssignments, roleDefinitions, roleAssignmentScheduleInstances and roleEligibilityScheduleInstances, needs RoleManagement.Read.Directory for the eligible ones). Roles held through a group are followed to the group''s disabled members through its direct members and those of each group nested in it (GroupMember.Read.All), with the group each member sits in and its membership type, so CR-19 can remove the account from that group. Through Lighthouse, Resource Graph shows the managing tenant''s delegations instead of the client''s role assignments, so IA.15-RBAC is incomplete there. Feeds change request CR-19. Internal: names accounts.') -Query @'
 authorizationresources
 | where type =~ "microsoft.authorization/roleassignments"
 | where id !contains "{{MRG}}"
@@ -4880,7 +4880,7 @@ function Get-EbrScopeLevel {
 function Invoke-EbrDisabledRoles {
     # IA.15 (CyberSOC 1.9.0), for change request CR-19. Returns three results: IA.15-DISABLED, the disabled user
     # accounts, IA.15-RBAC, every Azure role assignment they hold, and IA.15-ENTRA, every Microsoft Entra role
-    # assignment they hold, directly or through a group. An account is kept only when Graph returns it with
+    # assignment they hold, directly or through a group, with the group each account sits in (1.10.0). An account is kept only when Graph returns it with
     # accountEnabled false, so an enabled account is never listed, even if the filter were ignored. Disabled
     # service principals are not read: CR-19 asks about people, and the portal check it makes before removing a
     # role reads a user's account status. When the users cannot be read, the roles cannot be tied to anyone, so
@@ -4889,8 +4889,8 @@ function Invoke-EbrDisabledRoles {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $elapsed = { $sw.Elapsed.TotalSeconds }
     $userColumns = @('PrincipalId', 'PrincipalType', 'DisplayName', 'UserPrincipalName', 'AccountEnabled', 'OnPremisesSyncEnabled')
-    $rbacColumns = @('subscriptionId', 'resourceGroup', 'ScopeLevel', 'Scope', 'Role', 'RoleDefinitionId', 'Condition', 'ConditionVersion', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'AssignmentId')
-    $entraColumns = @('Role', 'RoleDefinitionId', 'DirectoryScope', 'AssignmentType', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'EndDateUtc', 'AssignmentId', 'PimRead')
+    $rbacColumns = @('subscriptionId', 'resourceGroup', 'ScopeLevel', 'Scope', 'Role', 'RoleDefinitionId', 'Condition', 'ConditionVersion', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'MemberOfId', 'MemberOfName', 'MemberOfType', 'GroupPath', 'GroupPathIds', 'AssignmentId')
+    $entraColumns = @('Role', 'RoleDefinitionId', 'DirectoryScope', 'AssignmentType', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'MemberOfId', 'MemberOfName', 'MemberOfType', 'GroupPath', 'GroupPathIds', 'EndDateUtc', 'AssignmentId', 'PimRead')
     $graphFix = { param([string]$Permission) 'Fix: az login --tenant {0} --scope https://graph.microsoft.com/{1}, then rerun.' -f $Ctx.TenantGuid, $Permission }
     $all = {
         param([string]$Status, [string]$Detail)
@@ -4932,19 +4932,27 @@ function Invoke-EbrDisabledRoles {
         return $r
     }
 
-    # A row for each disabled account a role reaches: the account itself, or the disabled members of the group that
-    # holds it. A group is read once, with its nested groups, and one that cannot be read is named in the detail.
-    # Microsoft Graph takes the user cast on transitiveMembers only as an advanced query, so the request carries
-    # $count=true and Invoke-EbrGraphGet adds ConsistencyLevel eventual.
+    # A row for each disabled account a role reaches: the account itself, or each disabled member of the group that
+    # holds it, with the group the member sits in, so CR-19 can remove the account from that group and leave the
+    # role with the group. A group is read once: its properties, then its direct members (groups/{id}/members), and
+    # a group nested in it is followed the same way, so a member of a nested group is listed with the nested group
+    # and the path from the role group down to it. The membership type of the group the account sits in says whether
+    # a member can be removed from it: Assigned, Dynamic (a rule decides) or On-premises (synced from Active
+    # Directory). A group that cannot be read is named in the detail. Microsoft Graph takes $select and $top on
+    # members only as an advanced query, so the request carries $count=true and Invoke-EbrGraphGet adds
+    # ConsistencyLevel eventual.
     $groups = @{}
-    $groupFor = {
+    $groupInfo = {
         param([string]$GroupId, [string]$Name)
         if ($groups.ContainsKey($GroupId)) { return $groups[$GroupId] }
-        $g = [pscustomobject]@{ Id = $GroupId; Name = $Name; Members = @(); Read = $true }
+        $g = [pscustomobject]@{ Id = $GroupId; Name = $Name; Membership = 'Assigned'; Members = @(); Read = $true }
         try {
-            if (-not $g.Name) { $g.Name = [string](Get-EbrProp (Get-EbrGraphObject -Ctx $Ctx -Path ('groups/{0}?$select=id,displayName' -f $GroupId)) 'displayName') }
-            $g.Members = @(Get-EbrGraphList -Ctx $Ctx -Path ('groups/{0}/transitiveMembers/microsoft.graph.user?$count=true&$select=id&$top=999' -f $GroupId) |
-                    ForEach-Object { ([string](Get-EbrProp $_ 'id')).ToLowerInvariant() } | Where-Object { $disabled.ContainsKey($_) } | Sort-Object -Unique)
+            $o = Get-EbrGraphObject -Ctx $Ctx -Path ('groups/{0}?$select=id,displayName,groupTypes,onPremisesSyncEnabled' -f $GroupId)
+            if ([string](Get-EbrProp $o 'displayName')) { $g.Name = [string](Get-EbrProp $o 'displayName') }
+            if (@(Get-EbrProp $o 'groupTypes') -contains 'DynamicMembership') { $g.Membership = 'Dynamic' }
+            elseif (Test-EbrTrue (Get-EbrProp $o 'onPremisesSyncEnabled')) { $g.Membership = 'On-premises' }
+            $g.Members = @(Get-EbrGraphList -Ctx $Ctx -Path ('groups/{0}/members?$count=true&$select=id,displayName&$top=999' -f $GroupId) | ForEach-Object {
+                    [pscustomobject]@{ Id = ([string](Get-EbrProp $_ 'id')).ToLowerInvariant(); Type = (([string](Get-EbrProp $_ '@odata.type')) -replace '^#microsoft\.graph\.', ''); Name = [string](Get-EbrProp $_ 'displayName') } })
         }
         catch {
             $m = $_.Exception.Message
@@ -4957,26 +4965,65 @@ function Invoke-EbrDisabledRoles {
         $groups[$GroupId] = $g
         $g
     }
+    # The disabled accounts a role group reaches, each with the path from the role group down to the group the
+    # account is a member of, and the groups on the way that could not be read. Walked once per role group, breadth
+    # first, so a group nested at two depths, in the role group and in another group nested in it, is reached by its
+    # shortest route, and a group already reached is not walked again, which also stops a loop.
+    $reaches = @{}
+    $groupReach = {
+        param([string]$GroupId, [string]$Name)
+        if ($reaches.ContainsKey($GroupId)) { return $reaches[$GroupId] }
+        $r = @{ Paths = @{}; Unread = [System.Collections.Generic.List[string]]::new() }
+        $visited = @{ $GroupId = $true }
+        $queue = [System.Collections.Generic.Queue[object]]::new()
+        $queue.Enqueue(@{ Group = (& $groupInfo $GroupId $Name); Chain = @() })
+        while ($queue.Count) {
+            $next = $queue.Dequeue()
+            $group = $next.Group
+            $chain = @($next.Chain) + @($group)
+            if (-not $group.Read) { if ($group.Id -notin $r.Unread) { $r.Unread.Add($group.Id) }; continue }
+            foreach ($m in @($group.Members)) {
+                if ($m.Type -eq 'user') {
+                    if (-not $disabled.ContainsKey($m.Id)) { continue }
+                    if (-not $r.Paths.ContainsKey($m.Id)) { $r.Paths[$m.Id] = @() }
+                    $r.Paths[$m.Id] += , $chain
+                }
+                elseif ($m.Type -eq 'group' -and -not $visited.ContainsKey($m.Id)) {
+                    $visited[$m.Id] = $true
+                    $queue.Enqueue(@{ Group = (& $groupInfo $m.Id $m.Name); Chain = $chain })
+                }
+            }
+        }
+        $reaches[$GroupId] = $r
+        $r
+    }
     $reach = {
         param([string]$PrincipalId, [bool]$IsGroup, [string]$GroupName, [hashtable]$Fields, $Unread)
-        if ($disabled.ContainsKey($PrincipalId)) {
-            $u = $disabled[$PrincipalId]
+        $empty = @{ HeldThrough = 'Direct'; GroupId = ''; GroupName = ''; MemberOfId = ''; MemberOfName = ''; MemberOfType = ''; GroupPath = @(); GroupPathIds = @() }
+        $rowFor = { param($u, [hashtable]$Held)
             $o = [ordered]@{}
             foreach ($k in $Fields.Keys) { $o[$k] = $Fields[$k] }
             $o.PrincipalId = $u.PrincipalId; $o.UserPrincipalName = $u.UserPrincipalName; $o.DisplayName = $u.DisplayName; $o.OnPremisesSyncEnabled = $u.OnPremisesSyncEnabled
-            $o.HeldThrough = 'Direct'; $o.GroupId = ''; $o.GroupName = ''
-            [pscustomobject]$o
-        }
+            foreach ($k in 'HeldThrough', 'GroupId', 'GroupName', 'MemberOfId', 'MemberOfName', 'MemberOfType', 'GroupPath', 'GroupPathIds') { $o[$k] = $Held[$k] }
+            [pscustomobject]$o }
+        if ($disabled.ContainsKey($PrincipalId)) { & $rowFor $disabled[$PrincipalId] $empty }
         elseif ($IsGroup -and $PrincipalId) {
-            $g = & $groupFor $PrincipalId $GroupName
-            if (-not $g.Read -and $g.Id -notin $Unread) { $Unread.Add($g.Id) }
-            foreach ($member in $g.Members) {
-                $u = $disabled[$member]
-                $o = [ordered]@{}
-                foreach ($k in $Fields.Keys) { $o[$k] = $Fields[$k] }
-                $o.PrincipalId = $u.PrincipalId; $o.UserPrincipalName = $u.UserPrincipalName; $o.DisplayName = $u.DisplayName; $o.OnPremisesSyncEnabled = $u.OnPremisesSyncEnabled
-                $o.HeldThrough = 'Group'; $o.GroupId = $g.Id; $o.GroupName = $g.Name
-                [pscustomobject]$o
+            $g = & $groupReach $PrincipalId $GroupName
+            foreach ($id in @($g.Unread)) { if ($id -notin $Unread) { $Unread.Add($id) } }
+            foreach ($member in @($g.Paths.Keys | Sort-Object)) {
+                # One row per group the account sits in, with the shortest path from the role group down to it.
+                $byGroup = [ordered]@{}
+                foreach ($path in $g.Paths[$member]) {
+                    $last = $path[-1].Id
+                    if (-not $byGroup.Contains($last) -or $path.Count -lt $byGroup[$last].Count) { $byGroup[$last] = $path }
+                }
+                foreach ($last in @($byGroup.Keys)) {
+                    $path = $byGroup[$last]
+                    & $rowFor $disabled[$member] @{
+                        HeldThrough = 'Group'; GroupId = $path[0].Id; GroupName = $path[0].Name
+                        MemberOfId = $path[-1].Id; MemberOfName = $path[-1].Name; MemberOfType = $path[-1].Membership
+                        GroupPath = @($path | ForEach-Object { $_.Name }); GroupPathIds = @($path | ForEach-Object { $_.Id }) }
+                }
             }
         }
     }

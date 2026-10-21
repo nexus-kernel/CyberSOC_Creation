@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, and 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, and 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -496,7 +496,7 @@ resourcecontainers
 
 ### IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA Roles held by disabled accounts
 
-Engine DISABLED-ROLES. CyberSOC collector 1.9.0. Microsoft Graph for the accounts and the Entra roles, Resource Graph for the Azure roles. All three results name accounts and stay internal. Feeds CR-19, which removes each role assigned directly to a disabled account, and names in the index the roles held through groups, the accounts synced from on-premises and anything that could not be read.
+Engine DISABLED-ROLES. CyberSOC collector 1.9.0, the group membership columns 1.10.0. Microsoft Graph for the accounts and the Entra roles, Resource Graph for the Azure roles. All three results name accounts and stay internal. Feeds CR-19, which removes each role assigned directly to a disabled account, removes the account from the group it sits in where a group holds the role, and names in the index the roles held through a dynamic or synced group, the accounts synced from on-premises and anything that could not be read.
 
 IA.15-DISABLED, the disabled user accounts, paged through `@odata.nextLink`. An account is kept only when Graph returns `accountEnabled` false. Needs User.Read.All. Without it all three results are UNAVAILABLE ("Not a zero"), since no role can be tied to an account. Disabled service principals are not read.
 
@@ -513,11 +513,11 @@ GET https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignmentSche
 GET https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilityScheduleInstances?$expand=principal
 ```
 
-A role held by a group, on either side, is followed to the group's disabled members, nested groups included (GroupMember.Read.All). Graph takes the user cast on `transitiveMembers` only as an advanced query, so the request carries `$count=true` and the `ConsistencyLevel: eventual` header. Each row names the group (`HeldThrough` Group), and CR-19 leaves it unchanged for review.
+A role held by a group, on either side, is followed to the group's disabled members through its direct members and those of each group nested in it (GroupMember.Read.All), breadth first, so each group is read once and reached by its shortest route, a loop stopped at a group already seen, and a group deleted since the role was given to it holding the role for no one. Graph takes `$select` and `$top` on `members` only as an advanced query, so the request carries `$count=true` and the `ConsistencyLevel: eventual` header. Each row names the role group (`HeldThrough` Group, `GroupId`, `GroupName`) and, from collector 1.10.0, the group the account sits in (`MemberOfId`, `MemberOfName`), its membership type (`MemberOfType`: Assigned, Dynamic for a dynamic membership group, On-premises for a group synced from Active Directory, from `groupTypes` and `onPremisesSyncEnabled`) and the path from the role group down to it (`GroupPath`, `GroupPathIds`). CR-19 removes the account from an Assigned group, so the group keeps its role and its other members, and names a Dynamic or On-premises membership for review.
 
 ```http
-GET https://graph.microsoft.com/v1.0/groups/{id}?$select=id,displayName
-GET https://graph.microsoft.com/v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$count=true&$select=id&$top=999
+GET https://graph.microsoft.com/v1.0/groups/{id}?$select=id,displayName,groupTypes,onPremisesSyncEnabled
+GET https://graph.microsoft.com/v1.0/groups/{id}/members?$count=true&$select=id,displayName&$top=999
 ConsistencyLevel: eventual
 ```
 

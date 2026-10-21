@@ -64,7 +64,9 @@ missing evidence never becomes a favorable zero.
    Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
    machines and on scale sets, closing internet-facing RDP, SSH and WinRM rules, turning off plain FTP on App
    Service apps, setting the blob containers anyone can read today to private, and removing the Azure and Microsoft
-   Entra roles that disabled accounts still hold), and a ready-to-send client email for every change request. Every email asks for the
+   Entra roles that disabled accounts still hold, assigned to the account or reached through a group, from which the
+   account is then removed), and a ready-to-send client email for every change request. The CR-19 email names the
+   accounts and their roles in a CSV written beside it, to attach, since the list can be long. Every email asks for the
    client's approval and reads as a letter, with no titles and each paragraph opening in its own words, in one order:
    what is to change, why, what it means for the client, the resources
    by subscription, how it can be reversed, and the request. It asks the client to approve the proposed date, two
