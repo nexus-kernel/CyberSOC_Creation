@@ -117,12 +117,16 @@ Every collection reads the licenses the change requests depend on and derives a 
   or License Administrator with Defender for Endpoint Administrator. Without the reading the plan is what the API reads
   show: the licenses in the tenant (LIC.1-SKUS), the `License MDE P1` tag that mixed licensing puts on client devices
   (LIC.2-MACHINES, and LIC.3-TVM, which also sees the tags a dynamic rule sets), and the devices with vulnerability
-  management data, which Plan 2 and Defender for Servers devices have and Plan 1 devices do not (LIC.3-TVM). Where the
+  management data, which Plan 2 and Defender for Servers devices have and Plan 1 devices do not (LIC.3-TVM). A tenant
+  holding Defender for Business beside Plan 2 reads Defender for Business, the experience it keeps until Microsoft
+  Support switches it. Where the
   reading and the API reads disagree, the matrix says so. The reading is recorded under `Licensing` in
   `00-parameters.json`, where the change request generator reads it.
 - **The devices.** Onboarded clients and servers, the clients tagged `License MDE P1`, the onboarded servers without a
   server license (each one in LIC.5-SERVERS: Defender for Servers on its subscription from P0.3, or a Defender for
-  Endpoint for servers license in the tenant), the Linux devices outside Azure, which the API cannot tell client from
+  Endpoint for servers seat in the tenant, one per server, so too few seats leave the servers outside Defender for
+  Servers unknown with the shortfall named, and a tenant with Defender for Business, whose server licenses no read can
+  identify, leaves them unknown rather than unlicensed), the Linux devices outside Azure, which the API cannot tell client from
   server, and the devices security settings management manages (LIC.4-DEVICES, management type `MicrosoftSense`).
 - **The capabilities**, each Licensed, Partly licensed, Not licensed or Unknown, with the source and the seats:
   Microsoft Entra ID P1 and P2, Defender for Endpoint Plan 1, Plan 2, Defender for Business and the server license,

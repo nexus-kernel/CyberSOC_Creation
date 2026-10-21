@@ -252,13 +252,17 @@ function Get-CyberSocLicensing {
     $signal = 'Unknown'
     # Plan 1 licenses beside Plan 2 do not make mixed mode, since Microsoft 365 E3 carries Plan 1 too. Mixed mode shows in
     # the License MDE P1 tag on client devices.
+    # Defender for Business supports no mixed licensing, and a tenant holding it beside Plan 2 keeps the Defender for
+    # Business experience until Microsoft Support switches it (Learn, Defender for Business FAQ), so Business decides
+    # first and the Licenses page reading confirms a switch.
     if ($skuRead.State -eq 'Complete') {
-        if ($p2 -eq 'Licensed' -and $taggedCount) { $signal = 'Mixed (Plan 1 and Plan 2)' }
+        if ($smb -eq 'Licensed') { $signal = 'Defender for Business' }
+        elseif ($p2 -eq 'Licensed' -and $taggedCount) { $signal = 'Mixed (Plan 1 and Plan 2)' }
         elseif ($p2 -eq 'Licensed') { $signal = 'Plan 2' }
-        elseif ($smb -eq 'Licensed') { $signal = 'Defender for Business' }
         elseif ($p1 -eq 'Licensed') { $signal = 'Plan 1' }
         else { $signal = 'No Defender for Endpoint license' }
         $basis.Add(('Licenses: Plan 2 {0}, Plan 1 {1}, Defender for Business {2}.' -f $p2.ToLowerInvariant(), $p1.ToLowerInvariant(), $smb.ToLowerInvariant()))
+        if ($smb -eq 'Licensed' -and $p2 -eq 'Licensed') { $basis.Add('Defender for Business and Plan 2 are both licensed. The tenant keeps the Defender for Business experience until Microsoft Support switches it to Plan 2, so confirm the plan on the Licenses page.') }
     }
     elseif ($taggedCount) { $signal = 'Mixed (Plan 1 and Plan 2)' }
     elseif ($tvmKnown -and $tvmClientsWithData -gt 0) { $signal = 'Plan 2' }
@@ -280,16 +284,28 @@ function Get-CyberSocLicensing {
     $rows.Add((New-CyberSocMatrixRow -Kind 'Plan' -Capability 'DefenderEndpointPlan' -Name 'Defender for Endpoint plan' -State $plan.State -Seats $skuState['MdePlan2Sku'].Seats -Assigned $skuState['MdePlan2Sku'].Assigned -Source $plan.Source -Detail $plan.Detail -Signal $signal))
 
     # Server coverage: each onboarded server with the license that covers it. An Azure server in a pack subscription
-    # is covered by that subscription's Defender for Servers plan, any server by server licenses in the tenant.
+    # is covered by that subscription's Defender for Servers plan. The servers outside it need a Defender for Endpoint
+    # for servers license each (one per operating system environment, Learn, Microsoft Defender service description),
+    # so the server seats cover them only when there are enough of them, and which server holds a seat cannot be told
+    # when there are not. Defender for Business servers is a valid alternative that no license read can identify, so a
+    # tenant with Defender for Business, or whose licenses were not read, leaves a server unknown, never unlicensed.
     $serverSku = $skuState['MdeServerSku'].State
+    $serverSeats = if ($serverSku -eq 'Licensed') { [int64]$skuState['MdeServerSku'].Seats } else { [int64]0 }
+    $businessExcluded = $smb -eq 'Not licensed'
     $servers2 = $azure['DefenderServers']
+    $planOf = { param([string]$Sub) if ($Sub -and $Sub -in $servers2.On) { 'On' } elseif ($Sub -and $Sub -in $servers2.Off) { 'Off' } elseif ($Sub -and $Sub -in $subs) { 'Not read' } elseif ($Sub) { 'Outside the pack' } else { 'Not an Azure machine' } }
+    $outside = @($servers | Where-Object { (& $planOf (Get-CyberSocLicText (Get-CyberSocLicValue $_ 'subscriptionId')).ToLowerInvariant()) -ne 'On' }).Count
+    $seatsEnough = $serverSku -eq 'Licensed' -and $serverSeats -ge $outside
+    $seatShortfall = if ($serverSku -eq 'Licensed' -and -not $seatsEnough) { $outside - $serverSeats } else { 0 }
     $serverRows = foreach ($m in $servers) {
         $sub = (Get-CyberSocLicText (Get-CyberSocLicValue $m 'subscriptionId')).ToLowerInvariant()
-        $plan2 = if ($sub -and $sub -in $servers2.On) { 'On' } elseif ($sub -and $sub -in $servers2.Off) { 'Off' } elseif ($sub -and $sub -in $subs) { 'Not read' } elseif ($sub) { 'Outside the pack' } else { 'Not an Azure machine' }
+        $plan2 = & $planOf $sub
         $source = ''; $licensed = 'Unknown'
         if ($plan2 -eq 'On') { $source = 'Defender for Servers on the subscription'; $licensed = 'Yes' }
-        elseif ($serverSku -eq 'Licensed') { $source = 'Server licenses in the tenant'; $licensed = 'Yes' }
-        elseif ($plan2 -eq 'Off' -and $serverSku -eq 'Not licensed') { $source = 'None found'; $licensed = 'No' }
+        elseif ($seatsEnough) { $source = 'Server licenses in the tenant, {0} for {1}' -f (Format-CyberSocLicCount $serverSeats 'seat' 'seats'), (Format-CyberSocLicCount $outside 'server outside Defender for Servers' 'servers outside Defender for Servers'); $licensed = 'Yes' }
+        elseif ($seatShortfall) { $source = 'Server licenses in the tenant, {0} for {1}, so not every one is covered' -f (Format-CyberSocLicCount $serverSeats 'seat' 'seats'), (Format-CyberSocLicCount $outside 'server outside Defender for Servers' 'servers outside Defender for Servers') }
+        elseif ($plan2 -eq 'Off' -and $serverSku -eq 'Not licensed' -and $businessExcluded) { $source = 'None found'; $licensed = 'No' }
+        elseif ($plan2 -eq 'Off' -and $serverSku -eq 'Not licensed' -and $smb -eq 'Licensed') { $source = 'Not established, Defender for Business servers cannot be read from the licenses' }
         else { $source = 'Not established' }
         [pscustomobject][ordered]@{
             DeviceName = Get-CyberSocLicText (Get-CyberSocLicValue $m 'ComputerDnsName'); OsPlatform = Get-CyberSocLicText (Get-CyberSocLicValue $m 'OsPlatform')
@@ -309,6 +325,7 @@ function Get-CyberSocLicensing {
     $rows.Add((& $deviceRow 'TaggedPlan1' ('Client devices tagged {0}' -f $script:CyberSocPlan1Tag) $taggedCount ('Mixed licensing applies Plan 1 to the client devices with this tag. {0} from the device API, {1} from Advanced Hunting, which also records the tags a dynamic rule sets.' -f $tagged.Count, $(if ($tvmKnown) { $tvmTagged } else { 'not read' })) $taggedKnown ((@($machineRead.Why, $tvmRead.Why) | Where-Object { $_ }) -join ', ')))
     $unlicensedDetail = if ($unlicensed.Count) { 'Named in LIC.5-SERVERS: ' + ((@($unlicensed | Select-Object -First 10 | ForEach-Object DeviceName)) -join ', ') + $(if ($unlicensed.Count -gt 10) { ', and {0} more.' -f ($unlicensed.Count - 10) } else { '.' }) } else { 'None found.' }
     if ($serverUnknown.Count) { $unlicensedDetail += ' {0} not established, in LIC.5-SERVERS.' -f (Format-CyberSocLicCount $serverUnknown.Count 'server' 'servers') }
+    if ($seatShortfall) { $unlicensedDetail += ' The server licenses are {0} short of the servers outside Defender for Servers.' -f (Format-CyberSocLicCount $seatShortfall 'seat' 'seats') }
     $rows.Add((& $deviceRow 'ServersWithoutLicense' 'Onboarded servers without a server license' $unlicensed.Count $unlicensedDetail $machinesKnown $machineRead.Why))
     $managed = @(@($deviceResult.Rows) | Where-Object { (Get-CyberSocLicText (Get-CyberSocLicValue $_ 'ManagementType')) -ieq 'MicrosoftSense' })
     if ($deviceRead.State -eq 'Complete') { $rows.Add((New-CyberSocMatrixRow -Kind 'Devices' -Capability 'SecuritySettingsManaged' -Name 'Devices managed by security settings management' -State 'Read' -Count $managed.Count -Source 'Microsoft Graph devices' -Detail 'Microsoft Entra devices whose management type reads MicrosoftSense. The enforcement scope (Windows Server, Linux, macOS) is a portal check.')) }
@@ -323,11 +340,13 @@ function Get-CyberSocLicensing {
                 switch ($c.Key) {
                     'MdeServers' {
                         if ($machinesKnown -and $servers.Count) {
-                            $state = if ($unlicensed.Count -eq $servers.Count) { 'Not licensed' } elseif ($unlicensed.Count) { 'Partly licensed' } elseif ($serverUnknown.Count) { 'Unknown' } else { 'Licensed' }
+                            # Too few server seats leaves some servers uncovered for certain, even though which ones is unknown.
+                            $state = if ($unlicensed.Count -eq $servers.Count) { 'Not licensed' } elseif ($unlicensed.Count -or $seatShortfall) { 'Partly licensed' } elseif ($serverUnknown.Count) { 'Unknown' } else { 'Licensed' }
                             $detail = '{0} of {1} covered, {2} without a server license, {3} not established.' -f @($serverRows | Where-Object Licensed -eq 'Yes').Count, (Format-CyberSocLicCount $servers.Count 'onboarded server' 'onboarded servers'), $unlicensed.Count, $serverUnknown.Count
+                            if ($seatShortfall) { $detail += ' The server licenses are {0} short of the {1}.' -f (Format-CyberSocLicCount $seatShortfall 'seat' 'seats'), (Format-CyberSocLicCount $outside 'server outside Defender for Servers' 'servers outside Defender for Servers') }
                         }
                         elseif ($serverSku -eq 'Licensed' -or $servers2.State -eq 'Licensed') { $state = 'Licensed'; $detail = $(if ($machinesKnown) { 'No onboarded server, and server licenses are in place.' } else { 'Server licenses are in place. Devices not read ({0}).' -f $machineRead.Why }) }
-                        elseif ($machinesKnown -and $serverSku -eq 'Not licensed' -and $servers2.State -eq 'Not licensed') { $state = 'Not licensed'; $detail = 'No onboarded server, and no server license or Defender for Servers plan.' }
+                        elseif ($machinesKnown -and $serverSku -eq 'Not licensed' -and $servers2.State -eq 'Not licensed' -and $businessExcluded) { $state = 'Not licensed'; $detail = 'No onboarded server, and no server license or Defender for Servers plan.' }
                         else { $state = 'Unknown'; $detail = 'Not established: ' + ((@($machineRead.Why, $(if ($serverSku -eq 'Unknown') { 'server licenses unknown' }), $(if ($servers2.State -eq 'Unknown') { 'Defender for Servers unknown' })) | Where-Object { $_ }) -join ', ') + '.' }
                         $rows.Add((New-CyberSocMatrixRow -Kind 'Capability' -Capability $c.Key -Name $c.Name -State $state -Count $(if ($machinesKnown) { $servers.Count } else { '' }) -Source 'Devices (LIC.2-MACHINES), licenses and P0.3' -Detail $detail))
                     }

@@ -2208,7 +2208,7 @@ Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
     }
 
     It 'derives the matrix from every scenario fixture as the fixture expects, with the servers as its detail' {
-        foreach ($name in 'plan2', 'plan1', 'mixed', 'business', 'servers-without-defender-for-servers', 'reading-disagrees', 'failed-read') {
+        foreach ($name in 'plan2', 'plan1', 'mixed', 'business', 'business-servers', 'business-and-plan2', 'servers-without-defender-for-servers', 'server-seats-short', 'server-seats-enough', 'reading-disagrees', 'failed-read') {
             $l = Get-LicScenario $name
             $r = New-EbrLicensingResult -Ctx $l.Ctx
             foreach ($k in $l.Scenario.Expect.PSObject.Properties) {
@@ -2234,6 +2234,31 @@ Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
         $r = New-EbrLicensingResult -Ctx $l.Ctx
         ($r.Rows | Where-Object Capability -eq 'MdoP1').State | Should -Be 'Unknown'
         ($r.Rows | Where-Object Capability -eq 'EntraIdP1').Detail | Should -Match 'could not be read in full'
+    }
+
+    It 'never counts one server seat for two servers, never reads a server unlicensed while Defender for Business servers is possible, and lets Business decide beside Plan 2' {
+        $l = Get-LicScenario 'server-seats-short'
+        $r = New-EbrLicensingResult -Ctx $l.Ctx
+        $servers = ($l.Ctx.Pending | Where-Object ResultId -eq 'LIC.5-SERVERS').Rows
+        foreach ($name in 'vm-sql01', 'dc-onprem01') {
+            ($servers | Where-Object DeviceName -eq $name).Licensed | Should -Be 'Unknown' -Because "$name may or may not hold the one seat"
+            ($servers | Where-Object DeviceName -eq $name).LicenseSource | Should -Be 'Server licenses in the tenant, 1 seat for 2 servers outside Defender for Servers, so not every one is covered'
+        }
+        ($r.Rows | Where-Object Capability -eq 'MdeServers').Detail | Should -Match 'The server licenses are 1 seat short of the 2 servers outside Defender for Servers\.'
+        ($r.Rows | Where-Object Capability -eq 'ServersWithoutLicense').Detail | Should -Match '1 seat short'
+
+        $l = Get-LicScenario 'business-servers'
+        $null = New-EbrLicensingResult -Ctx $l.Ctx
+        $sql = ($l.Ctx.Pending | Where-Object ResultId -eq 'LIC.5-SERVERS').Rows | Where-Object DeviceName -eq 'vm-sql01'
+        $sql.Licensed | Should -Be 'Unknown'
+        $sql.LicenseSource | Should -Be 'Not established, Defender for Business servers cannot be read from the licenses'
+
+        $l = Get-LicScenario 'business-and-plan2'
+        $plan = (New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'DefenderEndpointPlan'
+        $plan.State | Should -Be 'Defender for Business'
+        $plan.Detail | Should -Match 'keeps the Defender for Business experience until Microsoft Support switches it to Plan 2'
+        $l.Ctx.DefenderEndpointPlan = 'Plan2'
+        ((New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'MdeVulnerabilityData').State | Should -Be 'Licensed' -Because 'the Licenses page reading confirms the switch'
     }
 
     It 'reads no Plan 1 from a vulnerability read the Sentinel workspace fallback answered' {

@@ -213,7 +213,7 @@
     "MdeVulnerabilityData": "Unknown",
     "EntraIdP1": "Licensed",
     "MdoP1": "Licensed",
-    "MdeServers": "Not licensed",
+    "MdeServers": "Unknown",
     "MdeSecurityManagement": "Licensed",
     "IntuneP1": "Licensed"
   }
