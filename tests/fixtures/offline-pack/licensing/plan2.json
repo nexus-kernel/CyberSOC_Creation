@@ -378,7 +378,7 @@
   },
   "Expect": {
     "DefenderEndpointPlan": "Plan 2",
-    "MdeVulnerabilityData": "Licensed",
+    "MdeVulnerabilityData": "Unknown",
     "EntraIdP1": "Licensed",
     "MdoP1": "Licensed",
     "DefenderServersP2": "Licensed",

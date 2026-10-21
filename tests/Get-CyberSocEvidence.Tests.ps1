@@ -2258,7 +2258,47 @@ Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
         $plan.State | Should -Be 'Defender for Business'
         $plan.Detail | Should -Match 'keeps the Defender for Business experience until Microsoft Support switches it to Plan 2'
         $l.Ctx.DefenderEndpointPlan = 'Plan2'
-        ((New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'MdeVulnerabilityData').State | Should -Be 'Licensed' -Because 'the Licenses page reading confirms the switch'
+        $vuln = (New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'MdeVulnerabilityData'
+        $vuln.Detail | Should -Match '^Clients: Plan 2, read on the Licenses page\.' -Because 'the Licenses page reading confirms the switch'
+        $vuln.State | Should -Be 'Unknown' -Because 'no device read can show that every server has a server license'
+    }
+
+    It 'never reads the vulnerability data Licensed from the API reads, and reads a server without a license as a gap' {
+        $l = Get-LicScenario 'plan2'
+        $vuln = (New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'MdeVulnerabilityData'
+        $vuln.State | Should -Be 'Unknown' -Because 'a Plan 2 license with no tag seen cannot exclude mixed mode on devices the account cannot see'
+        $vuln.Detail | Should -Match 'the device reads cannot exclude mixed mode, so read the Licenses page'
+        $l = Get-LicScenario 'servers-without-defender-for-servers'
+        $l.Ctx.DefenderEndpointPlan = 'Plan2'
+        $vuln = (New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'MdeVulnerabilityData'
+        $vuln.State | Should -Be 'Partly licensed' -Because 'vm-sql01 has neither Defender for Servers nor a server license'
+        $vuln.Detail | Should -Match 'Servers: some onboarded servers have no established server license'
+    }
+
+    It 'lets a pricing set on one machine decide that machine, and reads the subscription from subscription-scope pricings only' {
+        $l = Get-LicScenario 'servers-without-defender-for-servers'
+        $sub2 = 'a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d'
+        $vm = "/subscriptions/$sub2/resourceGroups/rg-app/providers/Microsoft.Compute/virtualMachines/vm-sql01"
+        # A machine-level pricing listed first must not be read as the subscription's own.
+        $l.Ctx.Results['P0.3'].Rows = @([pscustomobject]@{ subscriptionId = $sub2; Plan = 'VirtualMachines'; Tier = 'Standard'; SubPlan = 'P1'; PricingId = "$vm/providers/Microsoft.Security/pricings/virtualMachines".ToLowerInvariant() }) +
+            @($l.Ctx.Results['P0.3'].Rows | ForEach-Object { $c = $_.PSObject.Copy(); $c | Add-Member -NotePropertyName PricingId -NotePropertyValue ('/subscriptions/{0}/providers/microsoft.security/pricings/{1}' -f $c.subscriptionId, $c.Plan.ToLowerInvariant()); $c })
+        $r = New-EbrLicensingResult -Ctx $l.Ctx
+        ($r.Rows | Where-Object Capability -eq 'DefenderServers').State | Should -Be 'Partly licensed' -Because 'the second subscription is still off at subscription scope'
+        $sql = ($l.Ctx.Pending | Where-Object ResultId -eq 'LIC.5-SERVERS').Rows | Where-Object DeviceName -eq 'vm-sql01'
+        $sql.DefenderForServers | Should -Be 'On for the machine'
+        $sql.Licensed | Should -Be 'Yes'
+        ($r.Rows | Where-Object Capability -eq 'ServersWithoutLicense').Count | Should -Be 0
+    }
+
+    It 'reads security settings management from the license alone, never from devices still managed by it' {
+        $l = Get-LicScenario 'plan2'
+        $l.Ctx.Results['LIC.1-SKUS'] = New-EbrResult -ResultId 'LIC.1-SKUS' -Status 'EMPTY'
+        $row = (New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'MdeSecurityManagement'
+        $row.State | Should -Be 'Not licensed' -Because 'the licenses were read in full and none is a Defender for Endpoint user license'
+        $row.Count | Should -Be 2
+        $row.Detail | Should -Match 'A device still managed by it shows it was set up, not that it is licensed today'
+        $l.Ctx.Results['LIC.1-SKUS'] = New-EbrResult -ResultId 'LIC.1-SKUS' -Status 'FAILED'
+        ((New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'MdeSecurityManagement').State | Should -Be 'Unknown'
     }
 
     It 'never reads every server covered from a device list the account''s device groups may limit, or from a failed device read' {

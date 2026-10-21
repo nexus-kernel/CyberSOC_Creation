@@ -1020,14 +1020,15 @@ resources
           DailyCapGb    = todouble(properties.workspaceCapping.dailyQuotaGb)
 '@))
 
-    $q.Add((New-EbrQuery -Id 'P0.3' -Phase 'P0 Pre-flight' -Engine 'ARG' -Title 'Defender for Cloud plans by subscription' -Notes 'CloudPosture on Free means Defender CSPM is off: never quote attack path or critical recommendation tiles. Extensions added in CyberSOC 1.11.0: the plan components (properties.extensions, each with name and isEnabled, which the API writes as the text True or False), such as AgentlessVmScanning or ContainerSensor. Feeds the licensing check (LIC.5-MATRIX) and the plan component change requests.' -Query @'
+    $q.Add((New-EbrQuery -Id 'P0.3' -Phase 'P0 Pre-flight' -Engine 'ARG' -Title 'Defender for Cloud plans by subscription' -Notes 'CloudPosture on Free means Defender CSPM is off: never quote attack path or critical recommendation tiles. Extensions added in CyberSOC 1.11.0: the plan components (properties.extensions, each with name and isEnabled, which the API writes as the text True or False), such as AgentlessVmScanning or ContainerSensor. PricingId, also added in 1.11.0, tells a pricing at subscription scope from one set on a single machine (Defender for Servers Plan 1 enabled, or either plan disabled, at the resource level), which decides that machine. Feeds the licensing check (LIC.5-MATRIX) and the plan component change requests.' -Query @'
 securityresources
 | where type =~ "microsoft.security/pricings"
 | project subscriptionId,
           Plan       = name,
           Tier       = tostring(properties.pricingTier),
           SubPlan    = tostring(properties.subPlan),
-          Extensions = properties.extensions
+          Extensions = properties.extensions,
+          PricingId  = tolower(id)
 | order by subscriptionId asc, Tier desc, Plan asc
 '@))
 

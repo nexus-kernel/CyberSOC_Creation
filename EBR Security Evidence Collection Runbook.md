@@ -89,13 +89,16 @@ securityresources
           Plan       = name,
           Tier       = tostring(properties.pricingTier),
           SubPlan    = tostring(properties.subPlan),
-          Extensions = properties.extensions
+          Extensions = properties.extensions,
+          PricingId  = tolower(id)
 | order by subscriptionId asc, Tier desc, Plan asc
 ```
 
 CyberSOC collector 1.11.0 adds `Extensions`, the plan components (`properties.extensions`, each with `name` and
 `isEnabled`, which the API writes as the text True or False), for the licensing check and the plan component change
-requests. See section 6 of the CyberSOC Monthly Report Runbook.
+requests, and `PricingId`, which tells a pricing at subscription scope from one set on a single machine (Defender for
+Servers Plan 1 enabled, or either plan disabled, at the resource level). See section 6 of the CyberSOC Monthly Report
+Runbook.
 
 If `CloudPosture` reads Free, Defender CSPM is off. The attack path and critical recommendation tiles then read zero because the analysis is not running, so never quote them. Any plan on Free also caps the coverage figure in DR.2.
 

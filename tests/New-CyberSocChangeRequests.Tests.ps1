@@ -2671,7 +2671,7 @@ Describe 'Licensing check and capability gate (collector 1.11.0)' {
         $section | Should -Match '- Client devices tagged License MDE P1: 0\.'
         $section | Should -Match '\| Microsoft Entra ID P1, for Conditional Access \| Licensed \| 250 \| 231 \| None yet \| In SPE_E5'
         $section | Should -Match '\| Defender for Servers Plan 2 \| Partly licensed \|  \|  \| CR-16 \(no gate\) \| On in 1 of 2 subscriptions\. Off in a0b1c2d3'
-        $section | Should -Match '\| Defender for Endpoint Plan 2 or Defender for Servers, the vulnerability and configuration data behind EW\.3, EW\.4 and EW\.5 \| Licensed \|  \|  \| EW\.3, EW\.4 and EW\.5 evidence \|'
+        $section | Should -Match '\| Defender for Endpoint Plan 2 or Defender for Servers, the vulnerability and configuration data behind EW\.3, EW\.4 and EW\.5 \| Partly licensed \|  \|  \| EW\.3, EW\.4 and EW\.5 evidence \|'
         $section | Should -Match '\| Defender for Endpoint on servers, a server license for each onboarded server \| Partly licensed \|'
     }
 
