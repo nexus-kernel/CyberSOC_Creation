@@ -2456,8 +2456,33 @@ Describe 'Change request variants' {
         Assert-ApprovalEmail $email 'CR-19 with a group membership only'
         $email | Should -Match 'I would like your approval to remove the Azure roles that 1 disabled account still holds in your tenant through group membership, by removing it from the group that holds the role\. The account is disabled, so it cannot sign in, but it still holds every role listed in the attached file\.'
         $email | Should -Match 'Where a group holds the role, I would remove the account from the group rather than take the role away from the group, so its other members keep their access, and where the account sits in a group nested inside the one that holds the role, it is the nested group it is removed from\.'
-        $email | Should -Match "Subscription Example, Dev Test \($s2\):\r?\n\r?\n- 1 account holding 1 role, 1 of them through a group\r?\n"
+        $email | Should -Match "Subscription Example, Dev Test \($s2\):\r?\n\r?\n- 1 account holding 1 role, held through a group\r?\n"
         @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-19' | ForEach-Object Resource) | Should -Be @('kim.osei@contoso.com, member of group platform-operators')
+    }
+
+    It 'counts a role once when it reaches the account through two groups, and removes the account from each' {
+        # Kim is a member of platform-operators and of ops-tier2, nested in it, so the one Contributor assignment comes
+        # back as two rows with the same assignment ID: two memberships to remove, one role.
+        $pack = Join-Path $TestDrive 'roles-two-paths'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'IA.15-RBAC' @(
+            (& $azureRole "/subscriptions/$s2/resourceGroups/rg-ops" 'Contributor' $roleIds.Contributor $kim $opsGroup)
+            (& $azureRole "/subscriptions/$s2/resourceGroups/rg-ops" 'Contributor' $roleIds.Contributor $kim $opsNested))
+        Set-PackResult $pack 'IA.15-ENTRA' @()
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the disabled user account listed below from the 2 groups through which it holds 1 role assignment.'
+        $res = @(Get-Section $text 'C) RESOURCES')
+        @($res | Where-Object { $_ -match '^- Kim Osei' }).Count | Should -Be 2 -Because 'each group the account sits in is left'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| 2 \| Change request and client email \|' -Because 'one tracking row per membership'
+        $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
+        Assert-ApprovalEmail $email 'CR-19 with a role reached through two groups'
+        $email | Should -Match "one line for each role with the account, the role, where it applies, how the account holds it and what I would do about it, and a role that reaches an account through more than one group on a line for each of them, and they add up as follows:\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- 1 account holding 1 role, held through a group\r?\n" -Because 'the role is counted once, however many groups carry it'
+        @(Import-Csv (Join-Path $out 'CR-19-disabled-account-roles.email.csv') | ForEach-Object { '{0}|{1}|{2}' -f $_.Role, $_.HeldThrough, $_.Action }) | Should -Be @(
+            'Contributor|Group platform-operators|Remove the account from group platform-operators'
+            'Contributor|Group platform-operators, through the group ops-tier2 nested in it|Remove the account from group ops-tier2')
     }
 
     It 'leaves the roles held through groups unchanged on a pack collected before the group membership columns, and asks for a recollection' {

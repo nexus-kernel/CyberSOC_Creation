@@ -2006,6 +2006,10 @@ $catalog = @(
             $groupLabel = { param($r) '{0} ({1})' -f (ConvertTo-CopyText $r.GroupName), (Get-Text $r.GroupId) }
             $memberOfLabel = { param($r) '{0} ({1})' -f (ConvertTo-CopyText $r.MemberOfName), (Get-Text $r.MemberOfId) }
             $roleWords = { param($r) if ($r.Side -eq 'Azure') { 'Azure {0} on {1}' -f (ConvertTo-CopyText $r.Role), (ConvertTo-CopyText $r.Scope) } else { 'Microsoft Entra {0}' -f (& $entraKind $r) } }
+            # An account that reaches one assignment through two groups has a row for each group, one removal each, but
+            # holds one role, so the roles are counted by assignment and account, never by row.
+            $roleKey = { param($r) '{0}|{1}|{2}' -f $r.Side, $(if (Get-Text $r.AssignmentId) { (Get-Text $r.AssignmentId).ToLowerInvariant() } else { '{0}|{1}|{2}|{3}' -f (Get-Text $r.Role), (Get-Text $r.Scope), (Get-Text $r.DirectoryScope), (Get-Text $r.AssignmentType) }), (Get-Text $r.PrincipalId).ToLowerInvariant() }
+            $distinctRoles = { param($rows) @($rows | Group-Object { & $roleKey $_ } | ForEach-Object { $_.Group[0] }) }
             # ", nested in platform-operators (id) through ops-tier2" for a member of a nested group, else nothing.
             $nestedWords = { param($r)
                 if ((Get-Text $r.GroupId).ToLowerInvariant() -eq (Get-Text $r.MemberOfId).ToLowerInvariant()) { return '' }
@@ -2276,8 +2280,12 @@ $catalog = @(
             if ($emailRows.Count) { $emailCsv = @($emailRows | ConvertTo-Csv -NoTypeInformation) }
             $summary = { param($rows)
                 $holders = @($rows | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Sort-Object -Unique).Count
-                $through = @($rows | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' }).Count
-                '{0} holding {1}{2}' -f (Get-Count $holders 'account' 'accounts'), (Get-Count $rows.Count 'role' 'roles'), $(if ($through) { ', {0} of them through a group' -f $through } else { '' }) }
+                $roles = @(& $distinctRoles $rows).Count
+                $through = @(& $distinctRoles @($rows | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' })).Count
+                '{0} holding {1}{2}' -f (Get-Count $holders 'account' 'accounts'), (Get-Count $roles 'role' 'roles'), $(if (-not $through) { '' } elseif ($through -eq $roles) { Get-Pick $roles ', held through a group' ', all held through a group' } else { ', {0} of them through a group' -f $through }) }
+            # A role that reaches an account through two groups is on a line for each, since each names a group to leave.
+            $emailLines = @($inScopeAzure) + @($inScopeEntra) + @($fixed)
+            $multiPath = $emailLines.Count -ne @(& $distinctRoles $emailLines).Count
             $emailResources = [System.Collections.Generic.List[object]]::new()
             foreach ($g in @($inScopeAzure | Group-Object { & $heading $_ } | Sort-Object { & $headingOrder $_.Name })) {
                 $emailResources.Add("$($g.Name):")
@@ -2302,7 +2310,7 @@ $catalog = @(
                 -Change @($ask, ('{0} disabled, so {1} cannot sign in, but {2} still holds every role listed in the attached file.' -f (Get-Pick $m 'The account is' 'These accounts are'), (Get-Pick $m 'it' 'they'), (Get-Pick $m 'it' 'each one'))) `
                 -Why ('I recommend removing these roles because a disabled account keeps every role it holds, so if {0} is turned back on, by mistake or by someone with access to your directory, it has all of that access again straight away. Removing the roles closes that path.' -f (Get-Pick $m 'the account' 'one of these accounts')) `
                 -Effect @($effect | Where-Object { $_ }) `
-                -Listed ('{0} in the attached file {1}, one line for each role with the account, the role, where it applies, how the account holds it and what I would do about it, and they add up as follows:' -f (Get-Pick $m 'The account and its roles are' 'The accounts and their roles are'), $attachment) `
+                -Listed ('{0} in the attached file {1}, one line for each role with the account, the role, where it applies, how the account holds it and what I would do about it{2}, and they add up as follows:' -f (Get-Pick $m 'The account and its roles are' 'The accounts and their roles are'), $attachment, $(if ($multiPath) { ', and a role that reaches an account through more than one group on a line for each of them' } else { '' })) `
                 -Resources $emailResources.ToArray() `
                 -Reversal ('I can restore any of these roles at any time from the record I keep of each one, with its role, where it applies and the account it belongs to{0}.' -f $(if ($memberships.Count) { ', and add an account back to the group it was removed from' } else { '' })) `
                 -Ask ('Before I schedule the change, could you tell me whether {0} is expected to come back into use, for example for someone on leave or a seasonal worker, or is kept for emergency access? I will leave any such account out of the change. With that confirmed, could you approve this change for {1}?' -f (Get-Pick $m 'the account' 'any of these accounts'), $proposedDay)
@@ -2310,9 +2318,10 @@ $catalog = @(
             $email.Attachments = @(@{ Name = $attachment; Lines = $emailCsv })
             $what = @(if ($azure.Count) { Get-Count $azure.Count 'Azure role assignment' 'Azure role assignments' }; if ($entra.Count) { Get-Count $entra.Count 'Microsoft Entra role assignment' 'Microsoft Entra role assignments' }) -join ' and '
             $groupsTouched = @($memberships | ForEach-Object { $_.MemberOfId.ToLowerInvariant() } | Sort-Object -Unique).Count
+            $groupRoles = @(& $distinctRoles $removable).Count
             $description = if (-not $memberships.Count) { 'Remove the {0} held by {1}, at the scope where each was made.' -f $what, (Get-Listed $m 'disabled user account' 'disabled user accounts') }
-            elseif (-not $direct) { 'Remove {0} from the {1} through which {2} {3} {4}.' -f (Get-Listed $m 'disabled user account' 'disabled user accounts'), (Get-Count $groupsTouched 'group' 'groups'), (Get-Pick $m 'it' 'they'), (Get-Pick $m 'holds' 'hold'), (Get-Count $removable.Count 'role assignment' 'role assignments') }
-            else { 'Remove the {0} assigned directly to {1}, at the scope where each was made, and remove {2} from {3} through which {4} {5} {6}.' -f $what, (Get-Listed $m 'disabled user account' 'disabled user accounts'), $(if ($k -eq $m) { Get-Pick $m 'it' 'each of them' } else { "$k of them" }), (Get-Count $groupsTouched 'group' 'groups'), (Get-Pick $k 'it' 'they'), (Get-Pick $k 'holds' 'hold'), (Get-Count $removable.Count 'more role assignment' 'more role assignments') }
+            elseif (-not $direct) { 'Remove {0} from the {1} through which {2} {3} {4}.' -f (Get-Listed $m 'disabled user account' 'disabled user accounts'), (Get-Count $groupsTouched 'group' 'groups'), (Get-Pick $m 'it' 'they'), (Get-Pick $m 'holds' 'hold'), (Get-Count $groupRoles 'role assignment' 'role assignments') }
+            else { 'Remove the {0} assigned directly to {1}, at the scope where each was made, and remove {2} from {3} through which {4} {5} {6}.' -f $what, (Get-Listed $m 'disabled user account' 'disabled user accounts'), $(if ($k -eq $m) { Get-Pick $m 'it' 'each of them' } else { "$k of them" }), (Get-Count $groupsTouched 'group' 'groups'), (Get-Pick $k 'it' 'they'), (Get-Pick $k 'holds' 'hold'), (Get-Count $groupRoles 'more role assignment' 'more role assignments') }
             $intro = '{0} recorded as disabled at collection.' -f (Get-Pick $m 'The account below is' "The $m accounts below are")
             if ($direct -and $memberships.Count) { $intro += ' Each role listed is assigned directly to {0}, or reaches the account through the group it is removed from.' -f (Get-Pick $m 'it' 'one of them') }
             elseif ($direct) { $intro += ' Each role listed is assigned directly to {0}.' -f (Get-Pick $m 'it' 'one of them') }
