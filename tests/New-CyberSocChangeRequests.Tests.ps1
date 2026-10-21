@@ -2506,6 +2506,20 @@ Describe 'Change request variants' {
         (Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.csv') -Raw) | Should -Not -Match 'Kim Osei'
     }
 
+    It 'keeps a value a spreadsheet would read as a formula as text in the attached file' {
+        $pack = Join-Path $TestDrive 'roles-formula'
+        New-ChangeFixture $pack
+        $row = & $azureRole "/subscriptions/$s1" 'Owner' $roleIds.Owner $morgan
+        $row.DisplayName = '=Morgan Reyes'; $row.Role = '+Owner'
+        Set-PackResult $pack 'IA.15-RBAC' @($row)
+        Set-PackResult $pack 'IA.15-ENTRA' @()
+        $null = & $generator -EvidencePath $pack
+        $attached = @(Import-Csv (Join-Path $pack '05-change-requests/CR-19-disabled-account-roles.email.csv'))
+        $attached.Count | Should -Be 1
+        @($attached[0].Account, $attached[0].Role, $attached[0].SignInName) | Should -Be @("'=Morgan Reyes", "'+Owner", 'morgan.reyes@contoso.com') -Because 'an apostrophe in front keeps a spreadsheet from running the cell, and a plain value is left alone'
+        (Get-Content (Join-Path $pack '05-change-requests/CR-19-disabled-account-roles.email.csv') -Raw) | Should -Match "^`"Account`",[^\r\n]*\r?\n`"'=Morgan Reyes`",`"morgan\.reyes@contoso\.com`",`"Azure`",`"'\+Owner`","
+    }
+
     It 'cleans every character the copy check rejects from pack values instead of stopping' {
         $pack = Join-Path $TestDrive 'symbols'
         New-ChangeFixture $pack

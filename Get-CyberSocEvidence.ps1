@@ -4965,20 +4965,24 @@ function Invoke-EbrDisabledRoles {
         $groups[$GroupId] = $g
         $g
     }
-    # The disabled accounts a role group reaches, each with every path from the role group down to the group the
-    # account is a member of, and the groups on the way that could not be read. Walked once per role group.
+    # The disabled accounts a role group reaches, each with the path from the role group down to the group the
+    # account is a member of, and the groups on the way that could not be read. Walked once per role group, breadth
+    # first, so a group nested at two depths, in the role group and in another group nested in it, is reached by its
+    # shortest route, and a group already reached is not walked again, which also stops a loop.
     $reaches = @{}
     $groupReach = {
         param([string]$GroupId, [string]$Name)
         if ($reaches.ContainsKey($GroupId)) { return $reaches[$GroupId] }
         $r = @{ Paths = @{}; Unread = [System.Collections.Generic.List[string]]::new() }
         $visited = @{ $GroupId = $true }
-        $walk = $null
-        $walk = {
-            param($Group, [object[]]$Chain)
-            $chain = @($Chain) + @($Group)
-            if (-not $Group.Read) { if ($Group.Id -notin $r.Unread) { $r.Unread.Add($Group.Id) }; return }
-            foreach ($m in @($Group.Members)) {
+        $queue = [System.Collections.Generic.Queue[object]]::new()
+        $queue.Enqueue(@{ Group = (& $groupInfo $GroupId $Name); Chain = @() })
+        while ($queue.Count) {
+            $next = $queue.Dequeue()
+            $group = $next.Group
+            $chain = @($next.Chain) + @($group)
+            if (-not $group.Read) { if ($group.Id -notin $r.Unread) { $r.Unread.Add($group.Id) }; continue }
+            foreach ($m in @($group.Members)) {
                 if ($m.Type -eq 'user') {
                     if (-not $disabled.ContainsKey($m.Id)) { continue }
                     if (-not $r.Paths.ContainsKey($m.Id)) { $r.Paths[$m.Id] = @() }
@@ -4986,11 +4990,10 @@ function Invoke-EbrDisabledRoles {
                 }
                 elseif ($m.Type -eq 'group' -and -not $visited.ContainsKey($m.Id)) {
                     $visited[$m.Id] = $true
-                    & $walk (& $groupInfo $m.Id $m.Name) $chain
+                    $queue.Enqueue(@{ Group = (& $groupInfo $m.Id $m.Name); Chain = $chain })
                 }
             }
         }
-        & $walk (& $groupInfo $GroupId $Name) @()
         $reaches[$GroupId] = $r
         $r
     }

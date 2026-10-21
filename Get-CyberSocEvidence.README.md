@@ -295,7 +295,8 @@ in the pack (`results/<ID>.csv`).
   account sits in, so CR-19 can remove the account from it. A role held through a group is followed through the
   group's direct members (`groups/{id}/members`, paged, read as an advanced query with `$count=true` and
   `ConsistencyLevel: eventual`, which Graph requires for `$select` and `$top` on members) and through the members of
-  each group nested in it, each group read once and a loop stopped at a group already seen. Every row held through
+  each group nested in it, breadth first, each group read once and reached by its shortest route, with a loop
+  stopped at a group already seen. Every row held through
   a group adds `MemberOfId`, `MemberOfName` and `MemberOfType` (the group the account is a direct member of, the role
   group itself or a group nested in it, and whether a member can be removed from it: Assigned, Dynamic for a dynamic
   membership group, On-premises for a group synced from Active Directory, read from `groups/{id}` with `groupTypes`

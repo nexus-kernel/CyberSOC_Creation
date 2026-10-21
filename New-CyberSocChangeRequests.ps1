@@ -2269,12 +2269,16 @@ $catalog = @(
             $detailWords = { param($r)
                 if ($r.Side -eq 'Azure') { if (Get-Text $r.Condition) { 'with a condition that narrows what the role allows' } else { '' } }
                 else { @(& $entraParts $r | Where-Object { $_ -notmatch '^(in administrative unit |for the single application |at directory scope )' }) -join ', ' } }
+            # A spreadsheet reads a cell that starts with =, +, - or @ as a formula, quoted or not, and a display name or
+            # role name comes from the directory, so such a value gets an apostrophe in front, which the spreadsheet
+            # hides and which keeps the text as it is.
+            $cellSafe = { param([string]$v) if ($v -match '^[=+\-@]') { "'" + $v } else { $v } }
             $emailRows = @(@($inScopeAzure) + @($inScopeEntra) + @($fixed) | ForEach-Object {
                     [pscustomobject]@{
-                        Account = ConvertTo-CopyText $_.DisplayName; SignInName = ConvertTo-CopyText $_.UserPrincipalName
-                        RoleType = $(if ($_.Side -eq 'Azure') { 'Azure' } else { 'Microsoft Entra' }); Role = ConvertTo-CopyText $_.Role
-                        Scope = $(if ($_.Side -eq 'Azure') { & $azureWhere $_ } else { & $entraWhere $_ })
-                        Detail = & $detailWords $_; HeldThrough = & $heldWords $_; Action = & $actionWords $_ } } |
+                        Account = & $cellSafe (ConvertTo-CopyText $_.DisplayName); SignInName = & $cellSafe (ConvertTo-CopyText $_.UserPrincipalName)
+                        RoleType = $(if ($_.Side -eq 'Azure') { 'Azure' } else { 'Microsoft Entra' }); Role = & $cellSafe (ConvertTo-CopyText $_.Role)
+                        Scope = & $cellSafe $(if ($_.Side -eq 'Azure') { & $azureWhere $_ } else { & $entraWhere $_ })
+                        Detail = & $cellSafe (& $detailWords $_); HeldThrough = & $cellSafe (& $heldWords $_); Action = & $cellSafe (& $actionWords $_) } } |
                     Sort-Object Account, SignInName, @{ Expression = { if ($_.RoleType -eq 'Azure') { 0 } else { 1 } } }, Scope, Role, Detail)
             $emailCsv = @('"Account","SignInName","RoleType","Role","Scope","Detail","HeldThrough","Action"')
             if ($emailRows.Count) { $emailCsv = @($emailRows | ConvertTo-Csv -NoTypeInformation) }

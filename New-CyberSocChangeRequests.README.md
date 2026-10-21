@@ -316,7 +316,9 @@ Each change keeps its own content inside that structure:
   removing an account from a group also ends anything else the group gives it, that a membership a rule or the
   on-premises directory decides stays as it is, marked in the file, and that each account is checked again just
   before the change. Where the file also lists an account whose only roles stay, the email speaks of every disabled
-  account in the file and of the roles marked for removal, rather than of the accounts in the change alone. It offers to restore any role from the record and to add an account back to its group, and
+  account in the file and of the roles marked for removal, rather than of the accounts in the change alone. A value
+  in the file that a spreadsheet would read as a formula, one starting with `=`, `+`, `-` or `@`, such as a display
+  name from the directory, gets an apostrophe in front, which the spreadsheet hides. It offers to restore any role from the record and to add an account back to its group, and
   before asking for approval it asks whether any account is expected back in use, such as someone on leave or a
   seasonal worker, or is kept for emergency access, and says such an account stays out of the change.
 - CR-05, CR-11, CR-12 and CR-14 say that the change cannot be reversed, because the service takes no lower minimum,
