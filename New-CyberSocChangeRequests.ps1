@@ -1845,7 +1845,7 @@ $catalog = @(
                     Csv = $resources
                     Email = $email
                 } } } }
-    @{ Number = 17; Key = 'app-service-ftps'; Change = 'Plain FTP and FTP basic authentication turned off on App Service apps'; Sources = @('NB.5-FTPS-DETAIL')
+    @{ Number = 17; Key = 'app-service-ftps'; Change = 'Plain FTP and FTP basic authentication turned off on App Service apps'; Sources = @()
        Build = {
             # Two parts on the same General settings tab. The FTP state part reads NB.5-FTPS-DETAIL, which lists every
             # site whose FTP state is not FtpsOnly or Disabled. Only AllAllowed is known to accept plain FTP. Microsoft
@@ -1853,7 +1853,18 @@ $catalog = @(
             # a value Learn does not list, is named in the index for a portal check instead of being changed or read as
             # safe. The FTP basic authentication part reads NB.5-FTPAUTH-DETAIL, added in collector 1.14.0, which lists
             # every app where it is On whatever its FTP state, and on an earlier pack CR-17 writes the FTP state part only.
-            $rows = @(Get-Rows 'NB.5-FTPS-DETAIL')
+            # The two parts are read apart, so CR-17 lists no source for the resolver and checks each one here: a part
+            # that was not read leaves the other to stand alone, and only when neither was read does the state say why.
+            $ftpsStatus = Get-Status 'NB.5-FTPS-DETAIL'
+            $ftpsRead = Test-ResultRead 'NB.5-FTPS-DETAIL'
+            $authStatus = Get-Status 'NB.5-FTPAUTH-DETAIL'
+            $authRead = Test-ResultRead 'NB.5-FTPAUTH-DETAIL'
+            if (-not $ftpsRead -and -not $authRead) {
+                if ($ftpsStatus -eq 'MISSING') { return @{ State = Get-RecollectionState @('NB.5-FTPS-DETAIL', 'NB.5-FTPAUTH-DETAIL' | Where-Object { (Get-Status $_) -eq 'MISSING' }) } }
+                if (Test-Unreadable 'NB.5-FTPS-DETAIL') { return @{ State = Get-UnreadableState 'NB.5-FTPS-DETAIL' } }
+                return @{ State = 'Not collected (NB.5-FTPS-DETAIL {0})' -f $ftpsStatus }
+            }
+            $rows = @(if ($ftpsRead) { Get-Rows 'NB.5-FTPS-DETAIL' })
             $label = { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) }
             $unread = @($rows | Where-Object { (Get-Text $_.FtpsState) -notin 'AllAllowed', 'FtpsOnly', 'Disabled' } | ForEach-Object {
                     $state = ConvertTo-CopyText $_.FtpsState
@@ -1863,16 +1874,18 @@ $catalog = @(
             if ($unread.Count) {
                 $notes.Add(('{0} left out of CR-17 because Resource Graph returned an empty FTP state, or one Microsoft Learn does not list, and Learn documents no state App Service applies when none is set, so {1} may still accept plain FTP: {2}. Check {3} under Settings > Configuration > General settings in the portal, and raise the change for any that shows All allowed.' -f (Get-Count $unread.Count 'App Service app' 'App Service apps'), (Get-Pick $unread.Count 'it' 'they'), ($unread -join ', '), (Get-Pick $unread.Count 'its FTP state' 'the FTP state of each one')))
             }
+            if (-not $ftpsRead) { $notes.Add(('NB.5-FTPS-DETAIL {0}, so CR-17 covers FTP basic authentication only. Recollect the pack for the FTP state part.' -f $(if ($ftpsStatus -eq 'MISSING') { 'is not in this pack' } elseif (Test-Unreadable 'NB.5-FTPS-DETAIL') { 'is unreadable' } else { "reads $ftpsStatus" }))) }
             # The FTP basic authentication read, and the apps it could not read, which are never read as Off.
-            $authStatus = Get-Status 'NB.5-FTPAUTH-DETAIL'
-            $authRead = Test-ResultRead 'NB.5-FTPAUTH-DETAIL'
-            $used = @(if ($authRead) { 'NB.5-FTPAUTH-DETAIL' })
+            $used = @(if ($ftpsRead) { 'NB.5-FTPS-DETAIL' }) + @(if ($authRead) { 'NB.5-FTPAUTH-DETAIL' })
             $recorded = @{}
             if ($authStatus -eq 'MISSING') { $notes.Add(('NB.5-FTPAUTH-DETAIL is not in this pack, so CR-17 covers the FTP state only. Recollect with CyberSOC collector {0} or later for the FTP basic authentication part.' -f $ftpAuthVersion)) }
             elseif (-not $authRead) { $notes.Add(('NB.5-FTPAUTH-DETAIL {0}, so CR-17 covers the FTP state only. Recollect the pack for the FTP basic authentication part.' -f $(if (Test-Unreadable 'NB.5-FTPAUTH-DETAIL') { 'is unreadable' } else { "reads $authStatus" }))) }
             elseif (Test-ResultRead 'NB.5-FTPAUTH') {
                 foreach ($r in @(Get-Rows 'NB.5-FTPAUTH')) { if ((Get-Text $r.ReadStatus) -eq 'OK') { $recorded[(Get-Text $r.ResourceId).ToLowerInvariant()] = Get-Text $r.FtpBasicAuth } }
                 $notRead = @(Get-Rows 'NB.5-FTPAUTH' | Where-Object { (Get-Text $_.ReadStatus) -ne 'OK' } | ForEach-Object $label | Sort-Object)
+                if (-not $notRead.Count -and $authStatus -eq 'PARTIAL') {
+                    $notes.Add('NB.5-FTPAUTH-DETAIL is partial although NB.5-FTPAUTH names no app it could not read, so Resource Graph may have returned only part of the app list, and an app with FTP basic authentication On may be missing from CR-17. Recollect the pack.')
+                }
                 if ($notRead.Count) {
                     $notes.Add(('{0} left out of the FTP basic authentication part of CR-17 because the collector could not read {1} setting: {2}. Check FTP Basic Auth Publishing Credentials under Settings > Configuration > General settings in the portal, and raise the change for any that shows On.' -f (Get-Count $notRead.Count 'App Service app' 'App Service apps'), (Get-Pick $notRead.Count 'its' 'their'), ($notRead -join ', ')))
                 }
@@ -1905,6 +1918,10 @@ $catalog = @(
                 $state = if ($unread.Count) { 'Only apps without a recorded FTP state remain, see the notes' } else { 'No gaps found' }
                 if ($authStatus -eq 'MISSING') { $state = $(if ($unread.Count) { 'Only apps without a recorded FTP state remain, the FTP basic authentication part needs recollection with CyberSOC collector {0} or later' } else { 'No FTP state gaps found, the FTP basic authentication part needs recollection with CyberSOC collector {0} or later' }) -f $ftpAuthVersion }
                 elseif (-not $authRead) { $state = 'No FTP state gaps found, the FTP basic authentication part was not collected, see the notes' }
+                elseif (-not $ftpsRead) { $state = 'No FTP basic authentication gaps found, the FTP state part was not collected, see the notes' }
+                # A partial read can leave out an app that still has a gap, so it never reads as no gaps.
+                $partialRead = @($used | Where-Object { (Get-Status $_) -eq 'PARTIAL' })
+                if ($partialRead.Count) { $state = $(if ($state -eq 'No gaps found') { 'No gaps found in the apps read' } else { $state }) + ', partial collection scope ({0}), see the notes' -f ($partialRead -join ', ') }
                 return @{ State = $state; Notes = $notes.ToArray() }
             }
             $ftp = @($list | Where-Object Ftp); $auth = @($list | Where-Object Auth)

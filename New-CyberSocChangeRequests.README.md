@@ -494,9 +494,14 @@ Each change reports one of these statuses in the index: change request and clien
 license before sending" when a capability it needs reads Unknown), not written because a capability it needs reads Not
 licensed, no gaps found, not collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
 later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15, 1.4.0 or later for CR-09 and CR-15 when they
-have a machine or scale set to change, 1.6.0 or later for CR-16, 1.7.0 or later for CR-17, and 1.8.0 or later for CR-18). CR-17 on a pack collected before
-1.14.0 writes its FTP state part only, and with no FTP state gap reads no FTP state gaps found, the FTP basic
-authentication part needs recollection with CyberSOC collector 1.14.0 or later. A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
+have a machine or scale set to change, 1.6.0 or later for CR-16, 1.14.0 or later for CR-17 when neither of its results is in the pack, and 1.8.0 or later
+for CR-18). CR-17 reads its two results apart: on a pack collected before 1.14.0 it writes its FTP state part only,
+and with no FTP state gap reads no FTP state gaps found, the FTP basic authentication part needs recollection with
+CyberSOC collector 1.14.0 or later. When NB.5-FTPS-DETAIL failed or is unreadable but NB.5-FTPAUTH-DETAIL was read, it
+writes the FTP basic authentication part only and says so in a note, and only when neither was read does it read not
+collected or result file unreadable for NB.5-FTPS-DETAIL. A partial read with no app to change never reads no gaps found: it reads
+"No gaps found in the apps read, partial collection scope" with the partial result named, and the notes name the apps
+NB.5-FTPAUTH could not read, or say that the app list itself may be incomplete. A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
 read as no gaps. A change request that also reads a result beyond its sources (DR.6-COVERAGE and P0.5 for CR-01,
 DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07 and CR-18, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack, P0.3 for
 CR-16, NB.5-FTPAUTH-DETAIL for CR-17) reads "partial

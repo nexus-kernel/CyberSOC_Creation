@@ -1871,7 +1871,7 @@ Describe 'Change request variants' {
         foreach ($n in 11..14) { $index | Should -Match ('\| {0} \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.2\.0 or later \|' -f $n) -Because 'NB.6-PAAS-DETAIL was added in 1.2.0' }
         $index | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \|  \| Needs recollection with CyberSOC collector 1\.3\.0 or later \|' -Because 'DP.4-VMSS-ELIGIBILITY was added in 1.3.0'
         $index | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \|  \| Needs recollection with CyberSOC collector 1\.6\.0 or later \|' -Because 'NB.2-DETAIL was added in 1.6.0'
-        $index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| Needs recollection with CyberSOC collector 1\.7\.0 or later \|' -Because 'NB.5-FTPS-DETAIL was added in 1.7.0'
+        $index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| Needs recollection with CyberSOC collector 1\.14\.0 or later \|' -Because 'NB.5-FTPS-DETAIL was added in 1.7.0 and NB.5-FTPAUTH-DETAIL, also missing, in 1.14.0'
         $index | Should -Match '\| 18 \| Blob containers set to private access \|  \| Needs recollection with CyberSOC collector 1\.8\.0 or later \|' -Because 'DP.1-CONTAINERS-DETAIL was added in 1.8.0'
         $index | Should -Match '\| 19 \| Roles removed from disabled accounts \|  \| Needs recollection with CyberSOC collector 1\.9\.0 or later \|' -Because 'IA.15-DISABLED was added in 1.9.0'
         $index | Should -Match 'Subscription names were not read \(P0\.7\)'
@@ -2846,6 +2846,52 @@ Describe 'FTP basic authentication publishing credentials turned off with the FT
         $closed.Email | Should -Match 'Could you let me know whether any deployment tool, scheduled process or person still uses deployment credentials, the user name and password from a publish profile or a user''s own, to sign in to FTP or FTPS or to deploy through local Git on these applications\? With that confirmed, could you approve this change for ' -Because 'a local Git deployment can still use the credentials where FTP is Disabled'
         $closed.Email | Should -Not -Match 'no effect|no difference'
         @($closed.Csv.Resource | Sort-Object) | Should -Be @('app-closed', 'func-closed')
+    }
+
+    It 'writes the FTP basic authentication part when the FTP state read failed, and the old state when neither part was read' {
+        $pack = Join-Path $TestDrive 'ftp-state-failed'
+        New-ChangeFixture $pack
+        $fx = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/app-service-ftp-auth/ftps-only.json') -Raw | ConvertFrom-Json
+        Set-PackResult $pack 'NB.5-FTPS-DETAIL' @() 'FAILED' 'Resource Graph throttled'
+        Set-PackResult $pack 'NB.5-FTPAUTH' @($fx.FtpAuth)
+        Set-PackResult $pack 'NB.5-FTPAUTH-DETAIL' @($fx.FtpAuth | Select-Object subscriptionId, resourceGroup, Name, FtpsState, FtpBasicAuth, ResourceId)
+        $null = & $generator -EvidencePath $pack
+        $out = Join-Path $pack '05-change-requests'
+        $index = Get-Content (Join-Path $out '00-index.md') -Raw
+        $index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \| 1 \| Change request and client email \|' -Because 'a failed FTP state read does not hold back the FTP basic authentication part'
+        $index | Should -Match '- NB\.5-FTPS-DETAIL reads FAILED, so CR-17 covers FTP basic authentication only\. Recollect the pack for the FTP state part\.'
+        Get-Content (Join-Path $out 'CR-17-app-service-ftps.txt') -Raw | Should -Match '^Title: Turn off FTP basic authentication publishing credentials on App Service apps\r?\n'
+        Set-PackResult $pack 'NB.5-FTPAUTH-DETAIL' @()
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| No FTP basic authentication gaps found, the FTP state part was not collected, see the notes \|  \|'
+        Remove-PackResult $pack 'NB.5-FTPAUTH'
+        Remove-PackResult $pack 'NB.5-FTPAUTH-DETAIL'
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| Not collected \(NB\.5-FTPS-DETAIL FAILED\) \|  \|'
+        Set-PackResult $pack 'NB.5-FTPS-DETAIL' @(@{ Name = 'x' })
+        Set-Content (Join-Path $pack 'results/NB.5-FTPS-DETAIL.json') '{not json'
+        $null = & $generator -EvidencePath $pack
+        Get-Content (Join-Path $out '00-index.md') -Raw | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| Result file unreadable \(NB\.5-FTPS-DETAIL\), recollect or restore the pack \|  \|'
+    }
+
+    It 'never reads a partial read with no app to change as no gaps' {
+        $pack = Join-Path $TestDrive 'ftp-partial-off'
+        New-ChangeFixture $pack
+        $fx = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/app-service-ftp-auth/all-off.json') -Raw | ConvertFrom-Json
+        $denied = [pscustomobject]@{ subscriptionId = $s1; resourceGroup = 'rg-web'; Name = 'app-denied'; FtpsState = 'FtpsOnly'; FtpBasicAuth = ''; ReadStatus = 'HTTP 403: Forbidden'; ResourceId = "/subscriptions/$s1/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-denied" }
+        Set-PackResult $pack 'NB.5-FTPS-DETAIL' @()
+        Set-PackResult $pack 'NB.5-FTPAUTH' (@($fx.FtpAuth) + $denied) 'PARTIAL'
+        Set-PackResult $pack 'NB.5-FTPAUTH-DETAIL' @() 'PARTIAL'
+        $null = & $generator -EvidencePath $pack
+        $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+        $index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| No gaps found in the apps read, partial collection scope \(NB\.5-FTPAUTH-DETAIL\), see the notes \|  \|' -Because 'an app not read may still have FTP basic authentication On'
+        $index | Should -Match '- 1 App Service app left out of the FTP basic authentication part of CR-17 because the collector could not read its setting: app-denied \(resource group rg-web\)\.'
+        # Resource Graph truncated the app list: every app listed was read, and the detail is still partial.
+        Set-PackResult $pack 'NB.5-FTPAUTH' @($fx.FtpAuth) 'PARTIAL'
+        $null = & $generator -EvidencePath $pack
+        $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+        $index | Should -Match 'No gaps found in the apps read, partial collection scope \(NB\.5-FTPAUTH-DETAIL\)'
+        $index | Should -Match '- NB\.5-FTPAUTH-DETAIL is partial although NB\.5-FTPAUTH names no app it could not read, so Resource Graph may have returned only part of the app list'
     }
 
     It 'reads no gaps when every app has FTP basic authentication Off and plain FTP off' {
