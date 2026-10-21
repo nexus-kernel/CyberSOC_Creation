@@ -2244,7 +2244,7 @@ Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
             ($servers | Where-Object DeviceName -eq $name).Licensed | Should -Be 'Unknown' -Because "$name may or may not hold the one seat"
             ($servers | Where-Object DeviceName -eq $name).LicenseSource | Should -Be 'Server licenses in the tenant, 1 seat for 2 servers outside Defender for Servers, so not every one is covered'
         }
-        ($r.Rows | Where-Object Capability -eq 'MdeServers').Detail | Should -Match 'The server licenses are 1 seat short of the 2 servers outside Defender for Servers\.'
+        ($r.Rows | Where-Object Capability -eq 'MdeServers').Detail | Should -Match 'The server licenses are 1 seat short of the 2 servers outside Defender for Servers listed\.'
         ($r.Rows | Where-Object Capability -eq 'ServersWithoutLicense').Detail | Should -Match '1 seat short'
 
         $l = Get-LicScenario 'business-servers'
@@ -2259,6 +2259,26 @@ Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
         $plan.Detail | Should -Match 'keeps the Defender for Business experience until Microsoft Support switches it to Plan 2'
         $l.Ctx.DefenderEndpointPlan = 'Plan2'
         ((New-EbrLicensingResult -Ctx $l.Ctx).Rows | Where-Object Capability -eq 'MdeVulnerabilityData').State | Should -Be 'Licensed' -Because 'the Licenses page reading confirms the switch'
+    }
+
+    It 'never reads every server covered from a device list the account''s device groups may limit, or from a failed device read' {
+        $l = Get-LicScenario 'server-seats-enough'
+        $r = New-EbrLicensingResult -Ctx $l.Ctx
+        $servers = ($l.Ctx.Pending | Where-Object ResultId -eq 'LIC.5-SERVERS').Rows
+        ($servers | Where-Object DeviceName -eq 'vm-sql01').Licensed | Should -Be 'Unknown' -Because 'enough seats for the servers listed is not enough for every server'
+        ($servers | Where-Object DeviceName -eq 'vm-sql01').LicenseSource | Should -Match 'not established for any server the device groups hide'
+        ($servers | Where-Object DeviceName -eq 'vm-app01').Licensed | Should -Be 'Yes' -Because 'Defender for Servers covers every server on its subscription'
+        $row = $r.Rows | Where-Object Capability -eq 'MdeServers'
+        $row.State | Should -Be 'Unknown'
+        $row.Detail | Should -Match 'lists only the devices the account''s device groups allow'
+        ($r.Rows | Where-Object Capability -eq 'OnboardedClients').Detail | Should -Match 'every device count is a lower bound'
+        # A failed device read leaves the servers unknown even with server seats and Defender for Servers on everywhere.
+        $l.Ctx.Results['LIC.2-MACHINES'] = New-EbrResult -ResultId 'LIC.2-MACHINES' -Status 'FAILED'
+        $l.Ctx.Results['P0.3'].Rows = @($l.Ctx.Results['P0.3'].Rows | ForEach-Object { $c = $_.PSObject.Copy(); if ($c.Plan -eq 'VirtualMachines') { $c.Tier = 'Standard'; $c.SubPlan = 'P2' }; $c })
+        $r = New-EbrLicensingResult -Ctx $l.Ctx
+        ($r.Rows | Where-Object Capability -eq 'DefenderServers').State | Should -Be 'Licensed'
+        ($r.Rows | Where-Object Capability -eq 'MdeServers').State | Should -Be 'Unknown'
+        ($r.Rows | Where-Object Capability -eq 'MdeServers').Detail | Should -Match 'Without the device list the servers are unknown, whatever licenses are in place'
     }
 
     It 'reads no Plan 1 from a vulnerability read the Sentinel workspace fallback answered' {

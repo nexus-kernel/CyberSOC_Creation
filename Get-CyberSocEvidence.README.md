@@ -126,7 +126,8 @@ Every collection reads the licenses the change requests depend on and derives a 
   server license (each one in LIC.5-SERVERS: Defender for Servers on its subscription from P0.3, or a Defender for
   Endpoint for servers seat in the tenant, one per server, so too few seats leave the servers outside Defender for
   Servers unknown with the shortfall named, and a tenant with Defender for Business, whose server licenses no read can
-  identify, leaves them unknown rather than unlicensed), the Linux devices outside Azure, which the API cannot tell client from
+  identify, leaves them unknown rather than unlicensed. The device API lists only the devices the account's device
+  groups allow, so every device count is a lower bound and no device list shows that every server is covered), the Linux devices outside Azure, which the API cannot tell client from
   server, and the devices security settings management manages (LIC.4-DEVICES, management type `MicrosoftSense`).
 - **The capabilities**, each Licensed, Partly licensed, Not licensed or Unknown, with the source and the seats:
   Microsoft Entra ID P1 and P2, Defender for Endpoint Plan 1, Plan 2, Defender for Business and the server license,

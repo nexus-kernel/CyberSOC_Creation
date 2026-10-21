@@ -1,5 +1,5 @@
 {
-  "Description": "Enough Defender for Endpoint for servers seats for every server outside Defender for Servers",
+  "Description": "Enough Defender for Endpoint for servers seats for every server listed outside Defender for Servers: still not established, since the device API lists only the devices the account can see",
   "Subscriptions": [
     "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
     "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d"
@@ -354,7 +354,7 @@
     }
   },
   "Expect": {
-    "MdeServers": "Licensed",
+    "MdeServers": "Unknown",
     "ServersWithoutLicense": 0
   }
 }

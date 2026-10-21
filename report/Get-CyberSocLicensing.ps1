@@ -302,7 +302,9 @@ function Get-CyberSocLicensing {
         $plan2 = & $planOf $sub
         $source = ''; $licensed = 'Unknown'
         if ($plan2 -eq 'On') { $source = 'Defender for Servers on the subscription'; $licensed = 'Yes' }
-        elseif ($seatsEnough) { $source = 'Server licenses in the tenant, {0} for {1}' -f (Format-CyberSocLicCount $serverSeats 'seat' 'seats'), (Format-CyberSocLicCount $outside 'server outside Defender for Servers' 'servers outside Defender for Servers'); $licensed = 'Yes' }
+        # The API lists only the devices the account's device groups allow, so enough seats for the servers listed
+        # does not show enough for every server.
+        elseif ($seatsEnough) { $source = 'Server licenses in the tenant, {0} for the {1} listed, not established for any server the device groups hide' -f (Format-CyberSocLicCount $serverSeats 'seat' 'seats'), (Format-CyberSocLicCount $outside 'server outside Defender for Servers' 'servers outside Defender for Servers') }
         elseif ($seatShortfall) { $source = 'Server licenses in the tenant, {0} for {1}, so not every one is covered' -f (Format-CyberSocLicCount $serverSeats 'seat' 'seats'), (Format-CyberSocLicCount $outside 'server outside Defender for Servers' 'servers outside Defender for Servers') }
         elseif ($plan2 -eq 'Off' -and $serverSku -eq 'Not licensed' -and $businessExcluded) { $source = 'None found'; $licensed = 'No' }
         elseif ($plan2 -eq 'Off' -and $serverSku -eq 'Not licensed' -and $smb -eq 'Licensed') { $source = 'Not established, Defender for Business servers cannot be read from the licenses' }
@@ -319,7 +321,7 @@ function Get-CyberSocLicensing {
     $deviceRow = { param([string]$Key, [string]$Name, $Count, [string]$Detail, [bool]$Known, [string]$Why)
         if ($Known) { New-CyberSocMatrixRow -Kind 'Devices' -Capability $Key -Name $Name -State 'Read' -Count $Count -Source 'Defender for Endpoint API' -Detail $Detail }
         else { New-CyberSocMatrixRow -Kind 'Devices' -Capability $Key -Name $Name -State 'Unknown' -Source 'Defender for Endpoint API' -Detail ('Not read ({0}).' -f $Why) } }
-    $rows.Add((& $deviceRow 'OnboardedClients' 'Onboarded client devices' $clients.Count ('{0} onboarded of {1} listed by the Defender for Endpoint API.' -f $onboarded.Count, (Format-CyberSocLicCount $machines.Count 'device' 'devices')) $machinesKnown $machineRead.Why))
+    $rows.Add((& $deviceRow 'OnboardedClients' 'Onboarded client devices' $clients.Count ('{0} onboarded of {1} listed by the Defender for Endpoint API, which lists only the devices the account''s device groups allow, so every device count is a lower bound.' -f $onboarded.Count, (Format-CyberSocLicCount $machines.Count 'device' 'devices')) $machinesKnown $machineRead.Why))
     $rows.Add((& $deviceRow 'OnboardedServers' 'Onboarded servers' $servers.Count 'Windows Server devices, and Linux devices on Azure virtual machines.' $machinesKnown $machineRead.Why))
     $rows.Add((& $deviceRow 'OnboardedLinux' 'Other onboarded Linux devices' $otherLinux.Count 'Linux devices outside Azure. The API records no device type, so a Linux client cannot be told from a server, and each needs a check of its license.' $machinesKnown $machineRead.Why))
     $rows.Add((& $deviceRow 'TaggedPlan1' ('Client devices tagged {0}' -f $script:CyberSocPlan1Tag) $taggedCount ('Mixed licensing applies Plan 1 to the client devices with this tag. {0} from the device API, {1} from Advanced Hunting, which also records the tags a dynamic rule sets.' -f $tagged.Count, $(if ($tvmKnown) { $tvmTagged } else { 'not read' })) $taggedKnown ((@($machineRead.Why, $tvmRead.Why) | Where-Object { $_ }) -join ', ')))
@@ -339,15 +341,22 @@ function Get-CyberSocLicensing {
             'Derived' {
                 switch ($c.Key) {
                     'MdeServers' {
-                        if ($machinesKnown -and $servers.Count) {
+                        # The device list is a lower bound: the API lists only the devices the account's device groups
+                        # allow, so it can show servers without a license but never that every server has one. Not
+                        # licensed needs no server license source at all, which holds for any server, listed or not.
+                        $noSource = $serverSku -eq 'Not licensed' -and $servers2.State -eq 'Not licensed' -and $businessExcluded
+                        if ($noSource) { $state = 'Not licensed'; $detail = 'No server license, Defender for Servers plan or Defender for Business in the tenant{0}.' -f $(if ($machinesKnown) { ', so {0} listed has none' -f (Format-CyberSocLicCount $servers.Count 'onboarded server' 'onboarded servers') } else { '' }) }
+                        elseif ($machinesKnown -and ($unlicensed.Count -or $seatShortfall)) {
                             # Too few server seats leaves some servers uncovered for certain, even though which ones is unknown.
-                            $state = if ($unlicensed.Count -eq $servers.Count) { 'Not licensed' } elseif ($unlicensed.Count -or $seatShortfall) { 'Partly licensed' } elseif ($serverUnknown.Count) { 'Unknown' } else { 'Licensed' }
-                            $detail = '{0} of {1} covered, {2} without a server license, {3} not established.' -f @($serverRows | Where-Object Licensed -eq 'Yes').Count, (Format-CyberSocLicCount $servers.Count 'onboarded server' 'onboarded servers'), $unlicensed.Count, $serverUnknown.Count
-                            if ($seatShortfall) { $detail += ' The server licenses are {0} short of the {1}.' -f (Format-CyberSocLicCount $seatShortfall 'seat' 'seats'), (Format-CyberSocLicCount $outside 'server outside Defender for Servers' 'servers outside Defender for Servers') }
+                            $state = 'Partly licensed'
+                            $detail = '{0} of {1} listed covered, {2} without a server license, {3} not established.' -f @($serverRows | Where-Object Licensed -eq 'Yes').Count, (Format-CyberSocLicCount $servers.Count 'onboarded server' 'onboarded servers'), $unlicensed.Count, $serverUnknown.Count
+                            if ($seatShortfall) { $detail += ' The server licenses are {0} short of the {1} listed.' -f (Format-CyberSocLicCount $seatShortfall 'seat' 'seats'), (Format-CyberSocLicCount $outside 'server outside Defender for Servers' 'servers outside Defender for Servers') }
                         }
-                        elseif ($serverSku -eq 'Licensed' -or $servers2.State -eq 'Licensed') { $state = 'Licensed'; $detail = $(if ($machinesKnown) { 'No onboarded server, and server licenses are in place.' } else { 'Server licenses are in place. Devices not read ({0}).' -f $machineRead.Why }) }
-                        elseif ($machinesKnown -and $serverSku -eq 'Not licensed' -and $servers2.State -eq 'Not licensed' -and $businessExcluded) { $state = 'Not licensed'; $detail = 'No onboarded server, and no server license or Defender for Servers plan.' }
-                        else { $state = 'Unknown'; $detail = 'Not established: ' + ((@($machineRead.Why, $(if ($serverSku -eq 'Unknown') { 'server licenses unknown' }), $(if ($servers2.State -eq 'Unknown') { 'Defender for Servers unknown' })) | Where-Object { $_ }) -join ', ') + '.' }
+                        elseif ($machinesKnown) {
+                            $state = 'Unknown'
+                            $detail = '{0} of {1} listed covered, {2} not established. The device API lists only the devices the account''s device groups allow, so a server it does not list may have no server license. Confirm in the Defender portal device inventory.' -f @($serverRows | Where-Object Licensed -eq 'Yes').Count, (Format-CyberSocLicCount $servers.Count 'onboarded server' 'onboarded servers'), $serverUnknown.Count
+                        }
+                        else { $state = 'Unknown'; $detail = 'Not established: ' + ((@($machineRead.Why, $(if ($serverSku -eq 'Unknown') { 'server licenses unknown' }), $(if ($servers2.State -eq 'Unknown') { 'Defender for Servers unknown' })) | Where-Object { $_ }) -join ', ') + '. Without the device list the servers are unknown, whatever licenses are in place.' }
                         $rows.Add((New-CyberSocMatrixRow -Kind 'Capability' -Capability $c.Key -Name $c.Name -State $state -Count $(if ($machinesKnown) { $servers.Count } else { '' }) -Source 'Devices (LIC.2-MACHINES), licenses and P0.3' -Detail $detail))
                     }
                     'MdeVulnerabilityData' {
