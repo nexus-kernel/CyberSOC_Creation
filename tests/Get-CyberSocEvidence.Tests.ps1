@@ -180,6 +180,73 @@ Describe 'Query catalog' {
         $item.Query | Should -Match 'subscriptionId = tostring\(Parts\[2\]\), FtpsState\r?\n'
         { Assert-EbrReadOnlyRequest -Method GET -Uri 'https://management.azure.com/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/sites/a/basicPublishingCredentialsPolicies/ftp?api-version=2022-09-01' } | Should -Not -Throw
     }
+    It 'reads the audit log parameters of every MySQL flexible server through a GET on its configurations (1.15.0)' {
+        $item = $catalog | Where-Object Id -eq 'DR.6-MYSQLAUDIT'
+        $item.Engine | Should -Be 'MYSQL-AUDIT'
+        $item.Phase | Should -Be 'P2 Detection and response'
+        $item.Notes | Should -Match '^Added in CyberSOC 1\.15\.0\. Server parameters are not in Resource Graph'
+        $item.Notes | Should -Match 'Every server is read, not only the ones DR\.6-NONCOMPLIANT names'
+        $item.Notes | Should -Match 'Feeds change requests CR-01 and CR-10\. Internal: names servers, the report embeds counts only\.'
+        $item.Query | Should -Match 'resources\r?\n\| where type =~ "microsoft\.dbformysql/flexibleservers"\r?\n\| where id !contains "\{\{MRG\}\}"'
+        $item.Query | Should -Not -Match 'policyresources' -Because 'every server is read, compliant or not'
+        $item.Query | Should -Match 'project Name = name, ResourceId = id, resourceGroup, subscriptionId, State = tostring\(properties\.state\)'
+        foreach ($name in 'audit_log_enabled', 'audit_log_events') {
+            { Assert-EbrReadOnlyRequest -Method GET -Uri "https://management.azure.com/subscriptions/s/resourceGroups/rg/providers/Microsoft.DBforMySQL/flexibleServers/m/configurations/$($name)?api-version=2023-12-30" } | Should -Not -Throw
+        }
+    }
+    It 'records both audit parameters as the server returns them, whether they apply without a restart, and a server it cannot read as not read' {
+        $server = [pscustomobject]@{ ResourceId = '/subscriptions/s/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/mysql-a'; Name = 'mysql-a'; resourceGroup = 'rg-db'; subscriptionId = 's'; State = 'Ready' }
+        Mock Invoke-EbrRest {
+            $v = if ($Uri -match 'audit_log_enabled') { 'OFF' } else { 'CONNECTION' }
+            [pscustomobject]@{ name = 'x'; properties = [pscustomobject]@{ value = $v; isDynamicConfig = 'True'; defaultValue = $v } }
+        }
+        $r = Get-EbrMySqlAuditRow -Server $server -Tenant 't'
+        @($r.subscriptionId, $r.resourceGroup, $r.Name, $r.State, $r.AuditLogEnabled, $r.AuditLogEvents, $r.Dynamic, $r.ReadStatus, $r.ResourceId) | Should -Be @('s', 'rg-db', 'mysql-a', 'Ready', 'OFF', 'CONNECTION', 'Yes', 'OK', $server.ResourceId)
+        foreach ($name in 'audit_log_enabled', 'audit_log_events') {
+            Should -Invoke Invoke-EbrRest -Times 1 -Exactly -ParameterFilter { $Method -eq 'GET' -and $Uri -eq "https://management.azure.com/subscriptions/s/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/mysql-a/configurations/$($name)?api-version=2023-12-30" -and $Resource -eq 'https://management.azure.com/' }
+        }
+        Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ value = $(if ($Uri -match 'audit_log_enabled') { 'ON' } else { '' }); isDynamicConfig = $(if ($Uri -match 'audit_log_enabled') { 'True' } else { 'False' }) } } }
+        $r = Get-EbrMySqlAuditRow -Server $server -Tenant 't'
+        @($r.AuditLogEnabled, $r.AuditLogEvents, $r.Dynamic, $r.ReadStatus) | Should -Be @('ON', '', 'No', 'OK') -Because 'an empty event list is a reading, and one static parameter needs a restart'
+        Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ value = 'ON' } } }
+        (Get-EbrMySqlAuditRow -Server $server -Tenant 't').Dynamic | Should -Be '' -Because 'a response that does not report it leaves it unknown'
+        Mock Invoke-EbrRest { if ($Uri -match 'audit_log_events') { return [pscustomobject]@{ properties = [pscustomobject]@{ } } }; [pscustomobject]@{ properties = [pscustomobject]@{ value = 'ON'; isDynamicConfig = 'True' } } }
+        $r = Get-EbrMySqlAuditRow -Server $server -Tenant 't'
+        @($r.AuditLogEnabled, $r.AuditLogEvents, $r.Dynamic, $r.ReadStatus) | Should -Be @('', '', '', 'The audit_log_events response carried no properties.value.') -Because 'a server half read is not read'
+        Mock Invoke-EbrRest { throw 'HTTP 403: Forbidden | AuthorizationFailed' }
+        $r = Get-EbrMySqlAuditRow -Server $server -Tenant 't'
+        $r.AuditLogEnabled | Should -Be ''
+        $r.ReadStatus | Should -Match '^audit_log_enabled: .*403'
+    }
+    It 'reads every MySQL flexible server, and never reads a partial or failed read as complete' {
+        New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force | Out-Null
+        $ctx = [pscustomobject]@{ WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; ManagedRgPattern = 'aznativesol0'; OutDir = $TestDrive; Subscriptions = @('s1'); ArmTenant = 't'; AccessPath = ''; Pending = [System.Collections.Generic.List[object]]::new() }
+        $item = Get-EbrQueryCatalog | Where-Object Id -eq 'DR.6-MYSQLAUDIT'
+        $server = { param($n) [pscustomobject]@{ Name = $n; ResourceId = "/subscriptions/s1/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/$n"; resourceGroup = 'rg-db'; subscriptionId = 's1'; State = 'Ready' } }
+        $servers = @((& $server 'mysql-off'), (& $server 'mysql-on'))
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = $servers; Detail = '' } }
+        Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ value = $(if ($Uri -match 'audit_log_events') { 'CONNECTION,ADMIN,DDL,DCL' } elseif ($Uri -match 'mysql-on') { 'ON' } else { 'OFF' }); isDynamicConfig = 'True' } } }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $res.Status | Should -Be 'OK'
+        $res.Detail | Should -Be '2 of 2 MySQL flexible servers read: audit_log_enabled ON in 1, not ON in 1.'
+        @($res.Rows)[0].PSObject.Properties.Name | Should -Be @('subscriptionId', 'resourceGroup', 'Name', 'State', 'AuditLogEnabled', 'AuditLogEvents', 'Dynamic', 'ReadStatus', 'ResourceId')
+        $ctx.Pending.Count | Should -Be 0 -Because 'one result holds every server'
+        Mock Invoke-EbrRest { if ($Uri -match 'mysql-on') { throw 'HTTP 429: Too Many Requests' }; [pscustomobject]@{ properties = [pscustomobject]@{ value = 'OFF'; isDynamicConfig = 'True' } } }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $res.Status | Should -Be 'PARTIAL' -Because 'a server not read may have audit_log_enabled OFF'
+        ($res.Rows | Where-Object Name -eq 'mysql-on').ReadStatus | Should -Match '429'
+        $res.Detail | Should -Match 'Not read: mysql-on: audit_log_enabled: HTTP 429'
+        Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ value = 'ON'; isDynamicConfig = 'True' } } }
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = $servers; Detail = 'Truncated at 1000 rows.' } }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'PARTIAL' -Because 'a truncated Resource Graph result leaves servers out'
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = $servers; Detail = '' } }
+        Mock Invoke-EbrRest { throw 'HTTP 403: Forbidden' }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'FAILED' -Because 'no server was read'
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @(); Detail = '' } }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'EMPTY'
+        Mock Invoke-EbrArgQuery { throw 'HTTP 403: Forbidden' }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'FAILED'
+    }
     It 'records FTP basic authentication On or Off from properties.allow, and an app it cannot read as not read, never as Off' {
         $site = [pscustomobject]@{ ResourceId = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/sites/app-a'; Name = 'app-a'; resourceGroup = 'rg'; subscriptionId = 's'; FtpsState = 'FtpsOnly' }
         Mock Invoke-EbrRest { [pscustomobject]@{ name = 'ftp'; properties = [pscustomobject]@{ allow = $true } } }
@@ -353,7 +420,7 @@ Describe 'Query catalog' {
     }
 
     It 'uses only known engines' {
-        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'APPSERVICE-FTPAUTH', 'DISABLED-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
+        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'APPSERVICE-FTPAUTH', 'MYSQL-AUDIT', 'DISABLED-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
         $catalog | Where-Object { $_.Engine -notin $known } | Should -BeNullOrEmpty
     }
 
@@ -2905,6 +2972,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         Mock Invoke-EbrArgQuery { [pscustomobject]@{ Columns = @('Resources'); Rows = @([pscustomobject]@{ Resources = 5 }); Detail = '' } }
         Mock Invoke-EbrAhQuery { throw 'HTTP 403: Forbidden' }
         Mock Invoke-EbrRest -ParameterFilter { $Uri -match '/basicPublishingCredentialsPolicies/ftp\?' } { throw 'HTTP 403: Forbidden' }
+        Mock Invoke-EbrRest -ParameterFilter { $Uri -match '/configurations/audit_log_(enabled|events)\?' } { throw 'HTTP 403: Forbidden' }
         Mock Get-EbrSentinelRules { [pscustomobject]@{ RuleName = 'r1'; Kind = 'Scheduled'; Enabled = $true; Severity = 'High'; LastModifiedUtc = '2026-09-01T00:00:00Z'; Tactics = ''; TemplateName = ''; RuleId = 'id' } }
         Mock Test-EbrDirectAccess { [pscustomobject]@{ Ok = $false; Missing = @(); Error = 'no direct token' } }
         Mock Read-EbrInput { 'n' }
@@ -3124,8 +3192,14 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         @(Get-ChildItem (Join-Path $outDir.FullName 'queries') -Filter 'NB.5-FTPAUTH.*').Count | Should -Be 1 -Because 'the Resource Graph query is written to the pack'
     }
 
+    It 'writes DR.6-MYSQLAUDIT, and reads a server it could not read as failed, never as set (CyberSOC 1.15.0)' {
+        (Get-M 'DR.6-MYSQLAUDIT').Status | Should -Be 'FAILED' -Because 'the mocked GET is refused for every server'
+        (Get-M 'DR.6-MYSQLAUDIT').Phase | Should -Be 'P2 Detection and response'
+        @(Get-ChildItem (Join-Path $outDir.FullName 'queries') -Filter 'DR.6-MYSQLAUDIT.*').Count | Should -Be 1 -Because 'the Resource Graph query is written to the pack'
+    }
+
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.14.0'
+        $params.ScriptVersion | Should -Be '1.15.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -3223,7 +3297,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.14.0'
+        $params2.ScriptVersion | Should -Be '1.15.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

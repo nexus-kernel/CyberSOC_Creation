@@ -1,0 +1,39 @@
+{
+  "Description": "DR.6-MYSQLAUDIT from collector 1.15.0 with every resource compliant with the initiative: one server with audit OFF whose parameters read as static, one with audit ON but DDL and DCL left out whose response did not report them, and one with audit ON as the baseline sets",
+  "MySqlAudit": [
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-db",
+      "Name": "mysql-static",
+      "State": "Ready",
+      "AuditLogEnabled": "OFF",
+      "AuditLogEvents": "CONNECTION",
+      "Dynamic": "No",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/mysql-static"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-fin",
+      "Name": "mysql-unreported",
+      "State": "Ready",
+      "AuditLogEnabled": "ON",
+      "AuditLogEvents": "CONNECTION,ADMIN",
+      "Dynamic": "",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-fin/providers/Microsoft.DBforMySQL/flexibleServers/mysql-unreported"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-fin",
+      "Name": "mysql-ledger",
+      "State": "Ready",
+      "AuditLogEnabled": "ON",
+      "AuditLogEvents": "CONNECTION,ADMIN,DDL,DCL",
+      "Dynamic": "Yes",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-fin/providers/Microsoft.DBforMySQL/flexibleServers/mysql-ledger"
+    }
+  ],
+  "NonCompliant": []
+}

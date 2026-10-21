@@ -2921,6 +2921,183 @@ Describe 'FTP basic authentication publishing credentials turned off with the FT
     }
 }
 
+Describe 'MySQL flexible server audit parameters set with the diagnostic logging changes (CR-01 and CR-10, collector 1.15.0)' {
+    BeforeAll {
+        # A scenario from tests/fixtures/offline-pack/mysql-audit written into a pack as DR.6-MYSQLAUDIT, beside
+        # DR.6-NONCOMPLIANT, with the initiative assigned on both subscriptions unless Initiative is given.
+        function Build-MySql([string]$Name, [string]$Status, $Initiative, $Coverage) {
+            $pack = Join-Path $TestDrive "mysql-$Name-$([guid]::NewGuid().ToString('N').Substring(0, 6))"
+            New-ChangeFixture $pack
+            $fx = Get-Content (Join-Path $PSScriptRoot "fixtures/offline-pack/mysql-audit/$Name.json") -Raw | ConvertFrom-Json
+            $nc = @($fx.NonCompliant | Where-Object { $_ })
+            if ($null -eq $Initiative) { $Initiative = @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 8; Compliant = 8 - $nc.Count; NonCompliant = $nc.Count }) }
+            if ($null -eq $Coverage) { $Coverage = @(@{ subscriptionId = $s1; Resources = 5; Assignments = 1 }, @{ subscriptionId = $s2; Resources = 3; Assignments = 1 }) }
+            Set-PackResult $pack 'DR.6-INITIATIVE' @($Initiative)
+            if (@($Initiative).Count) { Set-PackResult $pack 'DR.6-COVERAGE' @($Coverage) }
+            if ($nc.Count) { Set-PackResult $pack 'DR.6-NONCOMPLIANT' $nc }
+            Set-PackResult $pack 'DR.6-MYSQLAUDIT' @($fx.MySqlAudit | Where-Object { $_ }) $Status
+            $null = & $generator -EvidencePath $pack
+            $out = Join-Path $pack '05-change-requests'
+            $read = { param($f) if (Test-Path (Join-Path $out $f)) { Get-Content (Join-Path $out $f) -Raw } }
+            @{ Pack = $pack; Out = $out; Index = Get-Content (Join-Path $out '00-index.md') -Raw; Csv = @(Import-Csv (Join-Path $out 'change-requests.csv'))
+                Cr01 = & $read 'CR-01-diagnostic-logging.txt'; Email01 = & $read 'CR-01-diagnostic-logging.email.txt'
+                Cr = & $read 'CR-10-diagnostic-remediation.txt'; Email = & $read 'CR-10-diagnostic-remediation.email.txt' }
+        }
+        $mixed = Build-MySql 'mixed' 'PARTIAL'
+    }
+
+    It 'sets the audit parameters on every MySQL server that needs them, compliant or not, before the remediation tasks' {
+        $text = $mixed.Cr
+        $text | Should -Match '^Title: Remediate resources missing ATMO-MXDR diagnostic logging and turn on the MySQL audit log\r?\n'
+        @(Get-Section $text 'C) RESOURCES') | Should -Be @(
+            'The 3 resources below are not compliant with the initiative, with the policies each one fails, or are MySQL flexible servers listed with their audit parameters today.'
+            "Subscription: Example Production ($s1)"
+            '- kv-app, resource group rg-app, Key vault, policies ATMO-MXDR-KV-TOSENT'
+            '- mysql-billing, resource group rg-db, MySQL flexible server, audit_log_enabled OFF, audit_log_events CONNECTION,DDL'
+            '- mysql-orders, resource group rg-db, MySQL flexible server, policies ATMO-MXDR-MYSQL-TOSENT, audit_log_enabled OFF, audit_log_events CONNECTION') -Because 'a compliant server with audit OFF writes no audit rows, and a non-compliant one is listed once with both'
+        $text | Should -Not -Match 'mysql-ledger|mysql-reports|mysql-legacy' -Because 'a server set as the baseline sets it, or not read, is not changed'
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $impl[0] | Should -Be '1. In the Azure portal, go to Azure Database for MySQL flexible servers and open the first MySQL flexible server listed with its audit parameters in the RESOURCES section.'
+        $impl[1] | Should -Be '2. Go to Settings > Server parameters and search for audit_log.'
+        $impl[2] | Should -Match '^3\. Read audit_log_enabled and audit_log_events\. If either no longer shows the value recorded for the server in the RESOURCES section, .*set that value back instead of the recorded one if the change is rolled back\.$'
+        $impl[3] | Should -Be '4. Set audit_log_enabled to ON, and set audit_log_events to CONNECTION, ADMIN, DDL and DCL only, so query-level DML and the other events stay out.'
+        $impl[4] | Should -Be '5. Leave audit_log_include_users blank, so every MySQL user is audited. If it already names users, only those users are audited, so leave it unchanged and note it in the change record.'
+        $impl[5] | Should -Match '^6\. Select Save\. Azure reported both parameters as dynamic on the server, so they apply without a restart\.'
+        $impl[6] | Should -Be '7. Repeat steps 1 to 6 for each remaining MySQL flexible server listed with its audit parameters.'
+        $impl[7] | Should -Be '8. In the Azure portal, go to Policy > Remediation and select the Policies to remediate tab.' -Because 'the parameters go on before the remediation tasks'
+        $impl[9] | Should -Be "    - Assignment ATMO-MXDR-DIAG-TOSENT at subscription Example Production ($s1): ATMO-MXDR-KV-TOSENT, ATMO-MXDR-MYSQL-TOSENT"
+        $testing = @(Get-Section $text 'B) TESTING PLAN')
+        $testing[0] | Should -Match 'confirm audit_log_enabled shows ON and audit_log_events shows CONNECTION, ADMIN, DDL and DCL\.$'
+        $testing[1] | Should -Match 'confirm the ATMO-MXDR setting sends the MySqlAuditLogs category to the Sentinel workspace law-example-sentinel, with no slow query logs and no metrics\.$'
+        $testing[2] | Should -Match '^3\. About 10 minutes after the change, .*Resource is the server name in upper case\.$'
+        $testing[3] | Should -Be '    AzureDiagnostics | where Category == "MySqlAuditLogs" | summarize count() by Resource'
+        @(Get-Section $text 'C) ROLLBACK PLAN')[0] | Should -Match '^1\. On each MySQL flexible server the change set, go to Settings > Server parameters, set audit_log_enabled and audit_log_events back to the values recorded for the server'
+        $refs = @(Get-Section $text 'A) REFERENCES')
+        $refs | Should -Contain '- Tutorial: Configure audit logs by using Azure Database for MySQL - Flexible Server: https://learn.microsoft.com/azure/mysql/flexible-server/tutorial-configure-audit'
+        foreach ($r in $refs) { $r | Should -Match ': https://learn\.microsoft\.com/' -Because 'References lists Microsoft Learn pages only' }
+        $refs | Should -Not -Match 'how-to-restart-server-portal' -Because 'every server reads both parameters as dynamic'
+        @(Get-Section $text 'A) AVAILABILITY/PERFORMANCE') | Should -Be 'No impact, since the Azure platform applies diagnostic settings without touching the running workloads and both MySQL audit parameters apply without a restart.'
+        @($mixed.Csv | Where-Object CR -eq 'CR-10' | ForEach-Object { '{0}|{1}' -f $_.Resource, $_.CurrentSetting }) | Should -Be @(
+            'kv-app|Key vault, policies ATMO-MXDR-KV-TOSENT'
+            'mysql-orders|MySQL flexible server, policies ATMO-MXDR-MYSQL-TOSENT, audit_log_enabled OFF, audit_log_events CONNECTION'
+            'mysql-billing|MySQL flexible server, audit_log_enabled OFF, audit_log_events CONNECTION,DDL')
+    }
+
+    It 'names the servers it could not read and the ones that log more than the baseline, and never reads them as set' {
+        $mixed.Index | Should -Match '\| 10 \| Diagnostic logging remediated on non-compliant resources \| 3 \| Change request and client email, partial collection scope \|'
+        $mixed.Index | Should -Match '- 1 MySQL flexible server left out of the MySQL audit parameter step of CR-10 because the collector could not read its audit parameters: mysql-legacy \(resource group rg-fin\)\. Read audit_log_enabled and audit_log_events under Settings > Server parameters in the portal'
+        $mixed.Index | Should -Match '- 1 MySQL flexible server already has audit_log_enabled ON with every event the baseline sets, and also logs more: mysql-reports \(resource group rg-fin\), audit_log_events CONNECTION,ADMIN,DDL,DCL,DML_SELECT\. CR-10 leaves it as it is\.'
+        $mixed.Index | Should -Not -Match 'mysql-ledger' -Because 'a server set as the baseline sets it needs nothing'
+    }
+
+    It 'asks the client in a letter that covers the audit log, its rows in step with connections and administrative statements, and no restart' {
+        $email = $mixed.Email
+        Assert-ApprovalEmail $email 'CR-10 with MySQL audit parameters'
+        $email | Should -Match '^Subject: Approval requested: diagnostic logging remediation for Azure resources'
+        $email | Should -Match 'I would like your approval to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on 3 of your Azure resources and turn on the MySQL audit log on the 2 MySQL flexible servers among them\.'
+        $email | Should -Match 'The MySQL audit parameters are the exception, since they change what each server logs, as set out next\.'
+        $email | Should -Match 'The MySQL audit log adds rows in step with the connections and administrative statements on each server'
+        $email | Should -Match 'Azure reports both parameters as dynamic, so they apply without a restart and the databases stay available\.'
+        $email | Should -Match 'This change adds Log Analytics ingestion to your Sentinel workspace law-example-sentinel\.'
+        $email | Should -Match "- mysql-billing \(resource group rg-db, MySQL flexible server, audit_log_enabled OFF, audit_log_events CONNECTION,DDL\)\r?\n- mysql-orders \(resource group rg-db, MySQL flexible server, audit_log_enabled OFF, audit_log_events CONNECTION\)"
+        $email | Should -Not -Match 'ATMO-MXDR-MYSQL-TOSENT' -Because 'the client email names the resource type, not the policy'
+        $email | Should -Match ('Could you approve this change for {0}\?' -f $dayPattern) -Because 'parameters that apply without a restart need no maintenance window'
+    }
+
+    It 'writes CR-10 for the audit parameters alone when every resource is compliant, and asks for a window where a parameter is static or not reported' {
+        $static = Build-MySql 'static'
+        $static.Index | Should -Match '\| 10 \| Diagnostic logging remediated on non-compliant resources \| 2 \| Change request and client email \|' -Because 'a server compliant with the initiative still writes no audit rows while audit_log_enabled is OFF'
+        $text = $static.Cr
+        $text | Should -Match '^Title: Turn on the audit log of MySQL flexible servers for ATMO-MXDR diagnostic logging\r?\n'
+        @(Get-Section $text 'C) RESOURCES') | Should -Be @(
+            'The 2 MySQL flexible servers below are listed with their audit parameters today.'
+            "Subscription: Example Production ($s1)"
+            '- mysql-static, resource group rg-db, MySQL flexible server, audit_log_enabled OFF, audit_log_events CONNECTION, restart needed'
+            "Subscription: Example, Dev Test ($s2)"
+            '- mysql-unreported, resource group rg-fin, MySQL flexible server, audit_log_enabled ON, audit_log_events CONNECTION,ADMIN, restart not reported') -Because 'audit_log_enabled ON without DDL and DCL still leaves events out'
+        $text | Should -Not -Match 'Policy > Remediation' -Because 'nothing is left to remediate'
+        @(Get-Section $text 'A) IMPLEMENTATION PLAN')[5] | Should -Match '^6\. Select Save\. A server the RESOURCES section marks restart needed, or restart not reported, may ask to be restarted, since a static parameter applies only after a restart\. Select Restart later'
+        @(Get-Section $text 'A) AVAILABILITY/PERFORMANCE') | Should -Match '^No impact from the diagnostic settings, but a MySQL server that does not report both audit parameters as dynamic may need a restart, a short outage,'
+        @(Get-Section $text 'A) REFERENCES') | Should -Contain '- Restart an Azure Database for MySQL - Flexible Server instance by using the Azure portal: https://learn.microsoft.com/azure/mysql/flexible-server/how-to-restart-server-portal'
+        @(Get-Section $text 'A) REFERENCES') | Should -Not -Match 'governance/policy' -Because 'no remediation task is run'
+        $email = $static.Email
+        Assert-ApprovalEmail $email 'CR-10 MySQL audit parameters alone'
+        $email | Should -Match '^Subject: Approval requested: turning on the MySQL audit log for Azure diagnostic logging'
+        $email | Should -Match 'Azure reports a parameter as static on mysql-static, so that server needs a restart, which causes a short outage, before the audit log starts\. Azure did not report whether the parameters are dynamic on mysql-unreported, so that server may need a restart'
+        $email | Should -Match 'Could you approve this change and suggest a maintenance window that works for you\?'
+        $email | Should -Match 'The audit parameters can be set back to the values each server has today, shown above, at any time'
+        $static.Index | Should -Match '- 2 MySQL flexible servers in CR-10 do not report both audit parameters as dynamic: mysql-static \(resource group rg-db\), mysql-unreported \(resource group rg-fin\)\.'
+    }
+
+    It 'sets the audit parameters in CR-01 on the servers of the subscriptions it assigns, and leaves them out of CR-10' {
+        # Not assigned anywhere: CR-01 takes every server.
+        $fresh = Build-MySql 'mixed' 'PARTIAL' @()
+        $fresh.Index | Should -Match '\| 10 \| .* \| Nothing to remediate until the initiative is assigned \(CR-01\) \|'
+        $text = $fresh.Cr01
+        @(Get-Section $text 'A) CHANGE DESCRIPTION') | Should -Match ' Set audit_log_enabled to ON and audit_log_events to CONNECTION, ADMIN, DDL and DCL on the MySQL flexible servers listed below, so their diagnostic settings have audit rows to send\.$'
+        $text | Should -Match "MySQL flexible servers whose audit parameters this change sets, with their values today:\r?\nSubscription: Example Production \($s1\)\r?\n- mysql-billing, resource group rg-db, MySQL flexible server, audit_log_enabled OFF, audit_log_events CONNECTION,DDL\r?\n- mysql-orders, "
+        $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+        $impl[7] | Should -Be '8. In the Azure portal, go to Azure Database for MySQL flexible servers and open the first MySQL flexible server listed with its audit parameters in the RESOURCES section.' -Because 'the parameters follow the assignments'
+        $impl[13] | Should -Be '14. Repeat steps 8 to 13 for each remaining MySQL flexible server listed with its audit parameters.'
+        $impl[14] | Should -Match '^15\. Once the first compliance scan completes, go to Policy > Remediation' -Because 'the parameters go on before the remediation tasks'
+        @(Get-Section $text 'B) TESTING PLAN') | Should -Contain '    AzureDiagnostics | where Category == "MySqlAuditLogs" | summarize count() by Resource'
+        @($fresh.Csv | Where-Object { $_.CR -eq 'CR-01' -and $_.Resource -like 'mysql-*' } | ForEach-Object Resource | Sort-Object) | Should -Be @('mysql-billing', 'mysql-orders')
+        $email = $fresh.Email01
+        Assert-ApprovalEmail $email 'CR-01 with MySQL audit parameters'
+        $email | Should -Match 'On the MySQL flexible servers below, the change sets audit_log_enabled to ON and audit_log_events to CONNECTION, ADMIN, DDL and DCL'
+        $email | Should -Match "- Subscription Activity Log\r?\n- MySQL flexible server mysql-billing \(resource group rg-db, audit_log_enabled OFF, audit_log_events CONNECTION,DDL\)\r?\n- MySQL flexible server mysql-orders "
+        $email | Should -Match 'The MySQL audit parameters can be set back to the values shown above at any time as well\.'
+        $fresh.Index | Should -Match '- 1 MySQL flexible server left out of the MySQL audit parameter step of CR-01 because the collector could not read its audit parameters: mysql-legacy'
+        # Assigned on the first subscription only: CR-01 assigns the second and takes its servers, CR-10 the rest.
+        $split = Build-MySql 'static' '' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 4; Compliant = 4; NonCompliant = 0 }) @(@{ subscriptionId = $s1; Resources = 4; Assignments = 1 })
+        $split.Cr01 | Should -Match '- mysql-unreported, resource group rg-fin, MySQL flexible server' -Because "CR-01 assigns $s2"
+        $split.Cr01 | Should -Not -Match 'mysql-static'
+        $split.Cr | Should -Match '- mysql-static, resource group rg-db, MySQL flexible server'
+        $split.Cr | Should -Not -Match 'mysql-unreported' -Because 'CR-01 sets the servers of the subscriptions it assigns'
+        Assert-ApprovalEmail $split.Email01 'CR-01 with a static MySQL parameter'
+        $split.Email01 | Should -Match 'Could you approve this change and suggest a maintenance window that works for you\?' -Because 'a parameter not reported as dynamic may need a restart'
+    }
+
+    It 'never reads a MySQL read that is missing, failed or partial as no gaps' {
+        # The base fixture counts no MySQL server in P0.5, so a pack without the read has nothing to say about MySQL.
+        $none = Join-Path $TestDrive 'mysql-none'
+        New-ChangeFixture $none
+        Set-PackResult $none 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 6; Compliant = 6; NonCompliant = 0 })
+        Set-PackResult $none 'DR.6-COVERAGE' @(@{ subscriptionId = $s1; Resources = 5; Assignments = 1 }, @{ subscriptionId = $s2; Resources = 1; Assignments = 1 })
+        $null = & $generator -EvidencePath $none
+        $index = Get-Content (Join-Path $none '05-change-requests/00-index.md') -Raw
+        $index | Should -Match '\| 10 \| .* \| No gaps found, every resource is compliant with the initiative \|'
+        $index | Should -Not -Match 'DR\.6-MYSQLAUDIT'
+        # P0.5 counts a MySQL server, so the missing read needs recollection.
+        Set-PackResult $none 'P0.5' @(@{ subscriptionId = $s1; ResourceType = 'microsoft.keyvault/vaults'; Resources = 4 }, @{ subscriptionId = $s2; ResourceType = 'microsoft.dbformysql/flexibleservers'; Resources = 1 })
+        $null = & $generator -EvidencePath $none
+        $index = Get-Content (Join-Path $none '05-change-requests/00-index.md') -Raw
+        $index | Should -Match '\| 10 \| .* \| No gaps found, every resource is compliant with the initiative, the MySQL audit parameters need recollection with CyberSOC collector 1\.15\.0 or later \|'
+        $index | Should -Match '- DR\.6-MYSQLAUDIT is not in this pack, so CR-10 does not set the MySQL flexible server audit parameters, and a server with the diagnostic setting writes no audit rows while audit_log_enabled is OFF\. Recollect with CyberSOC collector 1\.15\.0 or later\.'
+        Set-PackResult $none 'DR.6-MYSQLAUDIT' @() 'FAILED' 'Resource Graph throttled'
+        $null = & $generator -EvidencePath $none
+        $index = Get-Content (Join-Path $none '05-change-requests/00-index.md') -Raw
+        $index | Should -Match '\| 10 \| .* \| No gaps found, every resource is compliant with the initiative, the MySQL audit parameters were not read, see the notes \|'
+        $index | Should -Match '- DR\.6-MYSQLAUDIT reads FAILED, so CR-10 does not set the MySQL flexible server audit parameters'
+        # Every server read is set as the baseline sets it, but Resource Graph truncated the list.
+        $set = @{ subscriptionId = $s2; resourceGroup = 'rg-fin'; Name = 'mysql-ledger'; State = 'Ready'; AuditLogEnabled = 'ON'; AuditLogEvents = 'CONNECTION,ADMIN,DDL,DCL'; Dynamic = 'Yes'; ReadStatus = 'OK'; ResourceId = "/subscriptions/$s2/resourceGroups/rg-fin/providers/Microsoft.DBforMySQL/flexibleServers/mysql-ledger" }
+        Set-PackResult $none 'DR.6-MYSQLAUDIT' @($set) 'PARTIAL'
+        $null = & $generator -EvidencePath $none
+        $index = Get-Content (Join-Path $none '05-change-requests/00-index.md') -Raw
+        $index | Should -Match '\| 10 \| .* \| No gaps found, every resource is compliant with the initiative, partial collection scope \(DR\.6-MYSQLAUDIT\), see the notes \|'
+        $index | Should -Match '- DR\.6-MYSQLAUDIT is partial although it names no server it could not read, so Resource Graph may have returned only part of the server list'
+        # A server not read leaves the state open too.
+        Set-PackResult $none 'DR.6-MYSQLAUDIT' @($set, @{ subscriptionId = $s2; resourceGroup = 'rg-fin'; Name = 'mysql-denied'; State = 'Ready'; AuditLogEnabled = ''; AuditLogEvents = ''; Dynamic = ''; ReadStatus = 'audit_log_enabled: HTTP 403: Forbidden'; ResourceId = "/subscriptions/$s2/resourceGroups/rg-fin/providers/Microsoft.DBforMySQL/flexibleServers/mysql-denied" }) 'PARTIAL'
+        $null = & $generator -EvidencePath $none
+        Get-Content (Join-Path $none '05-change-requests/00-index.md') -Raw | Should -Match '\| 10 \| .* \| No gaps found, every resource is compliant with the initiative, the MySQL audit parameters of some servers were not read, see the notes \|'
+        # Read in full, with every server set as the baseline sets it.
+        Set-PackResult $none 'DR.6-MYSQLAUDIT' @($set)
+        $null = & $generator -EvidencePath $none
+        Get-Content (Join-Path $none '05-change-requests/00-index.md') -Raw | Should -Match '\| 10 \| .* \| No gaps found, every resource is compliant with the initiative \|'
+        Test-Path (Join-Path $none '05-change-requests/CR-10-diagnostic-remediation.txt') | Should -BeFalse
+    }
+}
+
 Describe 'Windows PowerShell 5.1, where ConvertFrom-Json writes a JSON array as one object' {
     It 'reads JSON as Windows PowerShell 5.1 does, so the test below cannot pass by accident' {
         (Invoke-WithWindowsPowerShellJson { , @('[{"a":1},{"a":2}]' | ConvertFrom-Json | Where-Object { $null -ne $_ }) }).Count | Should -Be 1

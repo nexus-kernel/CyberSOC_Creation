@@ -1,0 +1,76 @@
+{
+  "Description": "DR.6-MYSQLAUDIT from collector 1.15.0 with a server not compliant with the initiative and audit OFF, a compliant server with audit OFF, a compliant server with audit ON, one that also logs DML and one the collector could not read, beside a key vault DR.6-NONCOMPLIANT names",
+  "MySqlAudit": [
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-db",
+      "Name": "mysql-orders",
+      "State": "Ready",
+      "AuditLogEnabled": "OFF",
+      "AuditLogEvents": "CONNECTION",
+      "Dynamic": "Yes",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/mysql-orders"
+    },
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-db",
+      "Name": "mysql-billing",
+      "State": "Ready",
+      "AuditLogEnabled": "OFF",
+      "AuditLogEvents": "CONNECTION,DDL",
+      "Dynamic": "Yes",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/mysql-billing"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-fin",
+      "Name": "mysql-ledger",
+      "State": "Ready",
+      "AuditLogEnabled": "ON",
+      "AuditLogEvents": "CONNECTION,ADMIN,DDL,DCL",
+      "Dynamic": "Yes",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-fin/providers/Microsoft.DBforMySQL/flexibleServers/mysql-ledger"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-fin",
+      "Name": "mysql-reports",
+      "State": "Ready",
+      "AuditLogEnabled": "ON",
+      "AuditLogEvents": "CONNECTION,ADMIN,DDL,DCL,DML_SELECT",
+      "Dynamic": "Yes",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-fin/providers/Microsoft.DBforMySQL/flexibleServers/mysql-reports"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-fin",
+      "Name": "mysql-legacy",
+      "State": "Ready",
+      "AuditLogEnabled": "",
+      "AuditLogEvents": "",
+      "Dynamic": "",
+      "ReadStatus": "audit_log_enabled: HTTP 403: Forbidden | AuthorizationFailed",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-fin/providers/Microsoft.DBforMySQL/flexibleServers/mysql-legacy"
+    }
+  ],
+  "NonCompliant": [
+    {
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourcegroups/rg-app/providers/microsoft.keyvault/vaults/kv-app",
+      "ResourceType": "microsoft.keyvault/vaults",
+      "AssignmentName": "ATMO-MXDR-DIAG-TOSENT",
+      "AssignmentId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/microsoft.authorization/policyassignments/atmo-mxdr-diag-tosent",
+      "Policies": "ATMO-MXDR-KV-TOSENT"
+    },
+    {
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourcegroups/rg-db/providers/microsoft.dbformysql/flexibleservers/mysql-orders",
+      "ResourceType": "microsoft.dbformysql/flexibleservers",
+      "AssignmentName": "ATMO-MXDR-DIAG-TOSENT",
+      "AssignmentId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/microsoft.authorization/policyassignments/atmo-mxdr-diag-tosent",
+      "Policies": "ATMO-MXDR-MYSQL-TOSENT"
+    }
+  ]
+}
