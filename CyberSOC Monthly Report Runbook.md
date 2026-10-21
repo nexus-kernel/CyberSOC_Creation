@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, and 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, and 1.14.0 for NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, the FTP basic authentication setting of each App Service app that CR-17 turns off. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -751,6 +751,22 @@ appserviceresources
 | extend Parts = split(id, "/")
 | project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
           resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), FtpsState, MinTlsVersion
+| order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+### NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL App Service FTP basic authentication publishing credentials
+
+Engine APPSERVICE-FTPAUTH. CyberSOC collector 1.14.0. Resource Graph does not index `basicPublishingCredentialsPolicies` (it is not among the `appserviceresources` or `resources` types), so NB.5-FTPAUTH lists every App Service and Function app site configuration with the query below, read as NB.5-FTPS-DETAIL reads them but with no filter on the FTP state, and then reads each app with `GET <app>/basicPublishingCredentialsPolicies/ftp?api-version=2022-09-01` on the App Service resource provider (Reader is enough). NB.5-FTPAUTH has one row per app: `subscriptionId`, `resourceGroup`, `Name`, `FtpsState`, `FtpBasicAuth` (On when `properties.allow` is true, Off when it is false, empty when not read), `ReadStatus` and `ResourceId`. An app whose read fails, or whose response carries no `properties.allow`, records why in `ReadStatus` and is never read as Off. NB.5-FTPAUTH-DETAIL has one row per app read as On, whatever its FTP state, with the same columns but `ReadStatus`. Both read PARTIAL when an app was not read or Resource Graph truncated the list, FAILED when no app was read, and EMPTY when no app is in scope. Deployment slots and the SCM basic authentication setting are not read. Feeds CR-17, which turns FTP basic authentication off on each app in NB.5-FTPAUTH-DETAIL and names in the index the apps NB.5-FTPAUTH could not read.
+
+```kql
+appserviceresources
+| where type =~ "microsoft.web/sites/config"
+| where id !contains "{{MRG}}"
+// appserviceresources returns site config keys in PascalCase and dynamic access is case-sensitive.
+| extend FtpsState = tostring(coalesce(properties.FtpsState, properties.ftpsState))
+| extend Parts = split(id, "/")
+| project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
+          resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), FtpsState
 | order by subscriptionId asc, resourceGroup asc, Name asc
 ```
 

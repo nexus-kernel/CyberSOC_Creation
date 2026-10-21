@@ -1,0 +1,24 @@
+{
+  "Description": "NB.5-FTPAUTH from collector 1.14.0 with FTP basic authentication Off on every app and plain FTP off everywhere",
+  "FtpsDetail": [],
+  "FtpAuth": [
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-web",
+      "Name": "app-secure",
+      "FtpsState": "FtpsOnly",
+      "FtpBasicAuth": "Off",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-secure"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-jobs",
+      "Name": "func-closed",
+      "FtpsState": "Disabled",
+      "FtpBasicAuth": "Off",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-jobs/providers/Microsoft.Web/sites/func-closed"
+    }
+  ]
+}

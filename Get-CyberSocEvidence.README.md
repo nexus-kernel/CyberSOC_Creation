@@ -22,7 +22,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
   (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
 - **Emergency access accounts.** Every account with Atmosera in its UPN or in an Atmosera group (IA.16-ACCOUNTS and
   IA.16-GROUPS), which every Conditional Access change excludes. See the collector 1.12.0 notes below.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.13.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.14.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -338,6 +338,16 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.14.0 (October 21, 2026): `NB.5-FTPAUTH` (engine `APPSERVICE-FTPAUTH`, phase P2 Network) reads
+  whether each App Service and Function app allows FTP basic authentication publishing credentials. Resource Graph
+  does not index `basicPublishingCredentialsPolicies`, so it lists the site configurations from `appserviceresources`,
+  read as `NB.5-FTPS-DETAIL` reads them with the `{{MRG}}` exclusion but every FTP state kept, and reads each app with a
+  GET on `<app>/basicPublishingCredentialsPolicies/ftp` (Reader is enough). One row per app with its FTP state,
+  `FtpBasicAuth` (On, Off, or empty when not read) and `ReadStatus`, so an app that could not be read is named and never
+  read as Off. It also writes `NB.5-FTPAUTH-DETAIL`, one row per app where it is On whatever its FTP state, which
+  change request CR-17 turns off beside the FTP state. Both are internal, since they name apps. Deployment slots and the
+  SCM basic authentication setting are not read. On an earlier pack CR-17 writes the FTP state part only and its index
+  note asks for recollection. The query is in section 6 of the CyberSOC Monthly Report Runbook.
 - CyberSOC collector 1.13.0 (October 21, 2026): `NB.5-DETAIL` also reads `ScmMinTlsVersion`, the minimum inbound
   TLS version of the SCM (Kudu) site, from the same `appserviceresources` rows and with the same PascalCase key
   handling as `MinTlsVersion`, and lists a site when either value is below 1.2 or empty. Change request CR-04 sets

@@ -70,8 +70,8 @@ missing evidence never becomes a favorable zero.
    `05-change-requests/` holds one change request for each low-impact hardening item that still has resources to
    fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service apps and their SCM sites, Azure SQL, Redis, Service Bus,
    Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
-   machines and on scale sets, closing internet-facing RDP, SSH and WinRM rules, turning off plain FTP on App
-   Service apps, setting the blob containers anyone can read today to private, and removing the Azure and Microsoft
+   machines and on scale sets, closing internet-facing RDP, SSH and WinRM rules, turning off plain FTP and FTP basic
+   authentication on App Service apps, setting the blob containers anyone can read today to private, and removing the Azure and Microsoft
    Entra roles that disabled accounts still hold, assigned to the account or reached through a group, from which the
    account is then removed), and a ready-to-send client email for every change request. The CR-19 email names the
    accounts and their roles in a CSV written beside it, to attach, since the list can be long. Every email asks for the
@@ -110,7 +110,11 @@ missing evidence never becomes a favorable zero.
    range rules (for review). The App Service minimum TLS email covers the SCM (Kudu) site as well, the deployment and management endpoint beside
    each app, and asks whether any deployment tool still reaches it over TLS 1.0 or 1.1. The FTP email asks whether any deployment tool, process or person still connects over FTP or
    FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled suits each app, and the index names the apps whose FTP state Resource Graph
-   returned empty, for a portal check, and says that deployment slots are not covered. AKS node pools without encryption at host get no change
+   returned empty, for a portal check, and says that deployment slots are not covered. Where FTP basic authentication is
+   on (collector 1.14.0), the same email says that signing in to FTP or FTPS with the publish profile's user name and
+   password stops working while deployment that signs in with Microsoft Entra ID is not affected, and asks whether
+   anything still uses those credentials, except on an app whose FTP state is already Disabled, where it asks for
+   approval only. AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
    pool replacement with the client. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
    account the collection read as disabled, after checking that the account still shows as disabled. Its email lists

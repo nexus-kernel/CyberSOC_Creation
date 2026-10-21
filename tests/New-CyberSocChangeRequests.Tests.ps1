@@ -894,12 +894,13 @@ Describe 'Change request generation' {
         @(Get-Section $text 'C) DEPENDENCIES') | Should -Be 'Tools, processes and people that use plain FTP, or FTP or FTPS on an app set to Disabled, to upload or download files can no longer connect once the change is applied.'
     }
 
-    It 'names in the index the apps without a recorded FTP state, the uncovered slots, the apps below TLS 1.2 and the basic authentication follow-up' {
-        $index | Should -Match '\| 17 \| Plain FTP turned off on App Service apps \| 3 \| Change request and client email \| CR-17-app-service-ftps\.txt, CR-17-app-service-ftps\.email\.txt \|'
+    It 'names in the index the apps without a recorded FTP state, the uncovered slots, the apps below TLS 1.2 and the basic authentication part this pack does not record' {
+        $index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \| 3 \| Change request and client email \| CR-17-app-service-ftps\.txt, CR-17-app-service-ftps\.email\.txt \|'
         $index | Should -Match '- 1 App Service app left out of CR-17 because Resource Graph returned an empty FTP state, or one Microsoft Learn does not list, and Learn documents no state App Service applies when none is set, so it may still accept plain FTP: app-blank \(resource group rg-web\)\. Check its FTP state under Settings > Configuration > General settings in the portal, and raise the change for any that shows All allowed\.'
         $index | Should -Match '- NB\.5-FTPS-DETAIL reads the production site of each app\. Deployment slots have a configuration of their own, which the pack does not read, so CR-17 does not cover them\. Check the FTP state of each slot in the portal\.'
         $index | Should -Match '- 1 App Service app in CR-17 has a minimum inbound TLS version below 1\.2: app-portal \(resource group rg-web\)\. FTPS only does not support TLS 1\.0 or 1\.1, so CR-04 sets 1\.2 on it first, or the client chooses Disabled\.'
-        $index | Should -Match '- FTP Basic Auth Publishing Credentials, under the same General settings tab, is a separate setting and not part of CR-17\. .* is a possible follow-up'
+        $index | Should -Match '- NB\.5-FTPAUTH-DETAIL is not in this pack, so CR-17 covers the FTP state only\. Recollect with CyberSOC collector 1\.14\.0 or later for the FTP basic authentication part\.' -Because 'the fixture pack predates the FTP basic authentication read'
+        $index | Should -Match '- FTP Basic Auth Publishing Credentials, under the same General settings tab, is a separate setting and not part of CR-17 in this pack\. Turning it off stops sign-in to the FTP and FTPS endpoint with deployment credentials, and CR-17 covers it on a pack that records it\.'
     }
 
     It 'asks for approval to turn off plain FTP, whether anything still uses FTP or FTPS to upload or download and whether FTPS only or Disabled suits each app' {
@@ -1839,13 +1840,13 @@ Describe 'Change request variants' {
         $null = & $generator -EvidencePath $pack
         Test-Path (Join-Path $out 'CR-17-app-service-ftps.txt') | Should -BeFalse -Because 'an app without a recorded state is not changed'
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
-        $index | Should -Match '\| 17 \| Plain FTP turned off on App Service apps \|  \| Only apps without a recorded FTP state remain, see the notes \|  \|'
+        $index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| Only apps without a recorded FTP state remain, the FTP basic authentication part needs recollection with CyberSOC collector 1\.14\.0 or later \|  \|'
         $index | Should -Match '1 App Service app left out of CR-17 because Resource Graph returned an empty FTP state.*: func-flex \(resource group rg-jobs\)\.'
 
         Set-PackResult $pack 'NB.5-FTPS-DETAIL' @()
         $null = & $generator -EvidencePath $pack
         $index = Get-Content (Join-Path $out '00-index.md') -Raw
-        $index | Should -Match '\| 17 \| Plain FTP turned off on App Service apps \|  \| No gaps found \|  \|'
+        $index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| No FTP state gaps found, the FTP basic authentication part needs recollection with CyberSOC collector 1\.14\.0 or later \|  \|' -Because 'a pack before 1.14.0 does not record FTP basic authentication, which matters on every app'
         $index | Should -Match 'Deployment slots have a configuration of their own, which the pack does not read, so CR-17 does not cover them\.' -Because 'a slot can still allow plain FTP when every production site is enforced'
         Set-PackResult $pack 'NB.5' @(@{ Configs = 0; FtpsEnforced = 0; MinTls12 = 0 })
         $null = & $generator -EvidencePath $pack
@@ -1870,7 +1871,7 @@ Describe 'Change request variants' {
         foreach ($n in 11..14) { $index | Should -Match ('\| {0} \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.2\.0 or later \|' -f $n) -Because 'NB.6-PAAS-DETAIL was added in 1.2.0' }
         $index | Should -Match '\| 15 \| Encryption at host on virtual machine scale sets \|  \| Needs recollection with CyberSOC collector 1\.3\.0 or later \|' -Because 'DP.4-VMSS-ELIGIBILITY was added in 1.3.0'
         $index | Should -Match '\| 16 \| Internet-facing RDP, SSH and WinRM rules closed \|  \| Needs recollection with CyberSOC collector 1\.6\.0 or later \|' -Because 'NB.2-DETAIL was added in 1.6.0'
-        $index | Should -Match '\| 17 \| Plain FTP turned off on App Service apps \|  \| Needs recollection with CyberSOC collector 1\.7\.0 or later \|' -Because 'NB.5-FTPS-DETAIL was added in 1.7.0'
+        $index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| Needs recollection with CyberSOC collector 1\.7\.0 or later \|' -Because 'NB.5-FTPS-DETAIL was added in 1.7.0'
         $index | Should -Match '\| 18 \| Blob containers set to private access \|  \| Needs recollection with CyberSOC collector 1\.8\.0 or later \|' -Because 'DP.1-CONTAINERS-DETAIL was added in 1.8.0'
         $index | Should -Match '\| 19 \| Roles removed from disabled accounts \|  \| Needs recollection with CyberSOC collector 1\.9\.0 or later \|' -Because 'IA.15-DISABLED was added in 1.9.0'
         $index | Should -Match 'Subscription names were not read \(P0\.7\)'
@@ -2715,6 +2716,161 @@ Describe 'App Service minimum TLS on the site and its SCM site (CR-04, collector
         $old = Build-Tls 'empty' '1.12.0'
         $old.Index | Should -Match '\| 04 \| Minimum TLS 1\.2 on App Service apps \|  \| No site gaps found, the SCM part needs recollection with CyberSOC collector 1\.13\.0 or later \|  \|' -Because 'before 1.13.0 the list left out a site at 1.2 whatever its SCM minimum'
         $old.Index | Should -Match 'Recollect with CyberSOC collector 1\.13\.0 or later for the SCM part\.'
+    }
+}
+
+Describe 'FTP basic authentication publishing credentials turned off with the FTP state (CR-17, collector 1.14.0)' {
+    BeforeAll {
+        # A scenario from tests/fixtures/offline-pack/app-service-ftp-auth written into a pack as NB.5-FTPS-DETAIL,
+        # NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, the detail taken from the apps read as On as the collector writes it, and
+        # the change requests built from it.
+        function Build-Ftp([string]$Name) {
+            $pack = Join-Path $TestDrive "ftp-$Name"
+            New-ChangeFixture $pack
+            $fx = Get-Content (Join-Path $PSScriptRoot "fixtures/offline-pack/app-service-ftp-auth/$Name.json") -Raw | ConvertFrom-Json
+            $all = @($fx.FtpAuth | Where-Object { $_ })
+            $notRead = @($all | Where-Object ReadStatus -ne 'OK')
+            Set-PackResult $pack 'NB.5-FTPS-DETAIL' @($fx.FtpsDetail | Where-Object { $_ })
+            Set-PackResult $pack 'NB.5-FTPAUTH' $all $(if ($notRead.Count) { 'PARTIAL' })
+            Set-PackResult $pack 'NB.5-FTPAUTH-DETAIL' @($all | Where-Object { $_.ReadStatus -eq 'OK' -and $_.FtpBasicAuth -eq 'On' } | Select-Object subscriptionId, resourceGroup, Name, FtpsState, FtpBasicAuth, ResourceId) $(if ($notRead.Count) { 'PARTIAL' })
+            $null = & $generator -EvidencePath $pack
+            $out = Join-Path $pack '05-change-requests'
+            @{ Pack = $pack; Out = $out; Index = Get-Content (Join-Path $out '00-index.md') -Raw; Csv = @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-17')
+                Cr = $(if (Test-Path (Join-Path $out 'CR-17-app-service-ftps.txt')) { Get-Content (Join-Path $out 'CR-17-app-service-ftps.txt') -Raw })
+                Email = $(if (Test-Path (Join-Path $out 'CR-17-app-service-ftps.email.txt')) { Get-Content (Join-Path $out 'CR-17-app-service-ftps.email.txt') -Raw }) }
+        }
+        $mixed = Build-Ftp 'mixed'
+    }
+
+    It 'turns FTP basic authentication off on every app where it is On, whatever its FTP state, beside the FTP state part' {
+        $text = $mixed.Cr
+        $text | Should -Match '^Title: Set the FTP state to FTPS only or Disabled and turn off FTP basic authentication on App Service apps\r?\n'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION') | Should -Be 'On the 4 App Service and Function apps listed below, set the FTP state to FTPS only, or to Disabled where the client confirms nothing uses FTP or FTPS, where it reads All allowed, and turn off FTP Basic Auth Publishing Credentials where it is On.'
+        @(Get-Section $text 'C) RESOURCES') | Should -Be @(
+            'The 4 apps below are listed with the FTP state and, where it was read, the FTP basic authentication setting each one has today.'
+            "Subscription: Example Production ($s1)"
+            '- app-plain-off, resource group rg-web, FTP state All allowed, FTP basic authentication Off'
+            '- app-plain-on, resource group rg-web, FTP state All allowed, minimum TLS 1.0, FTP basic authentication On'
+            "Subscription: Example, Dev Test ($s2)"
+            '- app-ftps-on, resource group rg-api, FTP state FTPS only, FTP basic authentication On'
+            '- func-closed-on, resource group rg-jobs, FTP state Disabled, FTP basic authentication On') -Because 'an app already set to FTPS only or Disabled is in CR-17 when its FTP basic authentication is On'
+        $text | Should -Not -Match 'app-ftps-off|func-closed-off|app-unread' -Because 'an app read as Off, or not read, is not changed'
+        @(Get-Section $text 'C) DEPENDENCIES') | Should -Be 'Tools, processes and people that use plain FTP, FTP or FTPS on an app set to Disabled, or deployment credentials for FTP, FTPS or possibly local Git where FTP basic authentication is turned off, can no longer connect once the change is applied.'
+        @($mixed.Csv | ForEach-Object { '{0}|{1}' -f $_.Resource, $_.CurrentSetting }) | Should -Be @(
+            'app-plain-on|FTP state All allowed, minimum TLS 1.0, FTP basic authentication On'
+            'app-plain-off|FTP state All allowed, FTP basic authentication Off'
+            'app-ftps-on|FTP state FTPS only, FTP basic authentication On'
+            'func-closed-on|FTP state Disabled, FTP basic authentication On') -Because 'the rollback restores the recorded values'
+        ($mixed.Csv | Where-Object Resource -eq 'func-closed-on').ResourceId | Should -Be "/subscriptions/$s2/resourceGroups/rg-jobs/providers/Microsoft.Web/sites/func-closed-on"
+    }
+
+    It 'reads each value again before changing it, turns basic authentication off without asking only where FTP is Disabled, and rolls back to the recorded values' {
+        @(Get-Section $mixed.Cr 'A) IMPLEMENTATION PLAN') | Should -Be @(
+            '1. In the Azure portal, go to App Services and open the first app listed in the RESOURCES section.'
+            '2. Go to Settings > Configuration and select the General settings tab.'
+            '3. If the RESOURCES section lists FTP state All allowed for the app, under Platform settings, read FTP state. If it no longer shows All allowed, the state recorded for the app in the RESOURCES section, the app has changed since collection, so leave the FTP state unchanged and note it in the change record for the next pack.'
+            '4. If FTP state still shows All allowed, set it to the state the client chose for the app: FTPS only, or Disabled only where the client confirmed that no tool, process or person uses FTP or FTPS on the app, to upload files or to download files or logs. Before setting FTPS only, read Minimum Inbound TLS Version. FTPS only does not support TLS 1.0 or 1.1, so if it shows 1.0 or 1.1, leave the FTP state unchanged until CR-04 has set 1.2 on the app and note it in the change record.'
+            '5. If the RESOURCES section lists FTP basic authentication On for the app, read FTP Basic Auth Publishing Credentials. If it shows Off, the app has changed since collection, so leave it as it is and note it in the change record. If it shows On, set it to Off where FTP state shows Disabled, or where the client confirmed that no deployment tool, process or person uses deployment credentials on the app to sign in to FTP or FTPS or to deploy through local Git. Otherwise leave it On and note it in the change record.'
+            '6. If a setting was changed, select Save, or Apply where the portal shows it, and confirm.'
+            '7. Repeat steps 1 to 6 for each remaining app listed.')
+        @(Get-Section $mixed.Cr 'B) TESTING PLAN') | Should -Be @(
+            '1. In the Azure portal, open each app listed in the RESOURCES section, go to Settings > Configuration and select the General settings tab.'
+            '2. Where the change set the FTP state, confirm FTP state shows FTPS only or Disabled under Platform settings, as agreed with the client for the app.'
+            '3. Where the change turned FTP basic authentication off, confirm FTP Basic Auth Publishing Credentials shows Off.')
+        @(Get-Section $mixed.Cr 'C) ROLLBACK PLAN')[1] | Should -Be '2. Set back only the settings the change made, FTP state to All allowed and FTP Basic Auth Publishing Credentials to On, each as recorded for the app in the RESOURCES section, then select Save, or Apply where the portal shows it, and confirm. An app left unchanged during the change needs no rollback.'
+        $refs = @(Get-Section $mixed.Cr 'A) REFERENCES')
+        $refs | Should -Contain '- Disable basic authentication in Azure App Service deployments, deploy without basic authentication: https://learn.microsoft.com/azure/app-service/configure-basic-auth-disable#deploy-without-basic-authentication'
+        $refs | Should -Contain '- Manage deployment credentials for Azure App Service: https://learn.microsoft.com/azure/app-service/deploy-configure-credentials'
+        foreach ($r in $refs) { $r | Should -Match ': https://learn\.microsoft\.com/' -Because 'References lists Microsoft Learn pages only' }
+    }
+
+    It 'names in the index the app it could not read, the slots, the SCM setting it leaves out and the partial read' {
+        $mixed.Index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \| 4 \| Change request and client email, partial collection scope \|'
+        $mixed.Index | Should -Match '- 1 App Service app left out of the FTP basic authentication part of CR-17 because the collector could not read its setting: app-unread \(resource group rg-api\)\. Check FTP Basic Auth Publishing Credentials under Settings > Configuration > General settings in the portal, and raise the change for any that shows On\.'
+        $mixed.Index | Should -Match '- NB\.5-FTPS-DETAIL and NB\.5-FTPAUTH-DETAIL read the production site of each app\. Deployment slots have an FTP state and an FTP basic authentication setting of their own, which the pack does not read, so CR-17 does not cover them\.'
+        $mixed.Index | Should -Match '- SCM Basic Auth Publishing Credentials, under the same General settings tab, is a separate setting and not part of CR-17\. It covers Web Deploy, local Git and the other deployment methods that use the SCM \(Kudu\) site'
+        $mixed.Index | Should -Match 'its page on deployment credentials says that publishing through local Git or FTP/S needs both settings On, so the client email asks about local Git as well\.'
+        $mixed.Index | Should -Match '- 1 App Service app in CR-17 has a minimum inbound TLS version below 1\.2: app-plain-on \(resource group rg-web\)\.'
+        $mixed.Index | Should -Not -Match 'Recollect with CyberSOC collector 1\.14\.0|possible follow-up'
+    }
+
+    It 'says that FTP sign-in with the publish profile stops, that Entra sign-in is not affected, and asks about deployment credentials only where FTP is not Disabled' {
+        $email = $mixed.Email
+        Assert-ApprovalEmail $email 'CR-17 with FTP basic authentication'
+        $email | Should -Match '^Subject: Approval requested: turning off plain FTP and FTP basic authentication on Azure App Service applications\r?\n'
+        $email | Should -Match 'I would like your approval to turn off plain FTP and FTP basic authentication publishing credentials on 4 of your App Service and Function applications, wherever either one is allowed today\.'
+        $email | Should -Match 'A deployment tool or a person that connects to the applications whose FTP state is All allowed over plain FTP'
+        $email | Should -Match '\r?\n\r?\nTurning off FTP basic authentication means that signing in to FTP or FTPS with the user name and password in the publish profile of the applications where it is on today, or with a user''s own deployment credentials, stops working once the change is applied'
+        $email | Should -Match '\r?\n\r?\nDeployment that signs in with Microsoft Entra ID is not affected, nor are deployment methods other than FTP and local Git, such as ZIP deploy, Web Deploy, GitHub Actions or an Azure DevOps pipeline without an FTP upload step, and these applications will keep serving their users as they do now\.\r?\n'
+        $email | Should -Match '\r?\n\r?\nfunc-closed-on already has the FTP state Disabled, so for it the change has no effect on how it is used today\.\r?\n'
+        $email | Should -Match 'FTPS only needs a minimum inbound TLS version of 1\.2, and app-plain-on still allows an older version'
+        $email | Should -Match '- app-plain-on \(resource group rg-web, FTP state All allowed, FTP basic authentication On\)' -Because 'the email names the FTP basic authentication setting, without the minimum TLS'
+        $email | Should -Match '\r?\n\r?\nEach setting the change makes can be set back to the value each application has today, shown above, at any time\.\r?\n'
+        $request = @($email -split "`r?`n" | Where-Object { $_ -match '^Could you' })[0]
+        $request | Should -Match 'Could you also let me know whether any deployment tool, scheduled process or person still uses deployment credentials, the user name and password from a publish profile or a user''s own, to sign in to FTP or FTPS or to deploy through local Git on the applications where FTP basic authentication is on and the FTP state is not Disabled\? With that agreed, could you approve this change for '
+        $request | Should -Match 'If something still uses deployment credentials that way, I will leave FTP basic authentication on for that application until it moves to another deployment method\.'
+        $email | Should -Not -Match 'app-ftps-off|func-closed-off|app-unread'
+    }
+
+    It 'writes the FTP basic authentication part alone, in singular wording, for one app already set to FTPS only' {
+        $one = Build-Ftp 'ftps-only'
+        $one.Cr | Should -Match '^Title: Turn off FTP basic authentication publishing credentials on App Service apps\r?\n'
+        @(Get-Section $one.Cr 'A) CHANGE DESCRIPTION') | Should -Be 'Turn off FTP Basic Auth Publishing Credentials on the App Service app listed below, so no one can sign in to FTP or FTPS on it with deployment credentials.'
+        @(Get-Section $one.Cr 'A) IMPLEMENTATION PLAN') | Should -Be @(
+            '1. In the Azure portal, go to App Services and open the app listed in the RESOURCES section.'
+            '2. Go to Settings > Configuration and select the General settings tab.'
+            '3. Read FTP Basic Auth Publishing Credentials. If it shows Off, the app has changed since collection, so leave it as it is and note it in the change record. If it shows On, set it to Off where FTP state shows Disabled, or where the client confirmed that no deployment tool, process or person uses deployment credentials on the app to sign in to FTP or FTPS or to deploy through local Git. Otherwise leave it On and note it in the change record.'
+            '4. If a setting was changed, select Save, or Apply where the portal shows it, and confirm.')
+        @(Get-Section $one.Cr 'C) ROLLBACK PLAN')[1] | Should -Be '2. Set FTP Basic Auth Publishing Credentials back to On, the setting recorded for the app in the RESOURCES section, then select Save, or Apply where the portal shows it, and confirm. An app left unchanged during the change needs no rollback.'
+        @(Get-Section $one.Cr 'A) REFERENCES')[0] | Should -Be '- Disable basic authentication in Azure App Service deployments: https://learn.microsoft.com/azure/app-service/configure-basic-auth-disable'
+        $one.Cr | Should -Not -Match 'Platform settings|Minimum Inbound TLS' -Because 'the FTP state is not changed'
+        Assert-ApprovalEmail $one.Email 'CR-17 FTP basic authentication for one application'
+        $one.Email | Should -Match '^Subject: Approval requested: turning off FTP basic authentication on Azure App Service applications\r?\n'
+        $one.Email | Should -Match 'I would like your approval to turn off FTP basic authentication publishing credentials on one of your App Service and Function applications\.'
+        $one.Email | Should -Match 'I recommend turning it off because anyone who holds those credentials can sign in and change the files of the application, while signing in with Microsoft Entra ID, a more secure way to deploy, uses tokens that expire, are issued for one application and cannot be reused\.'
+        $one.Email | Should -Match 'the application will keep serving its users as it does now\.'
+        $one.Email | Should -Match 'The application is listed below with its FTP state and FTP basic authentication setting today:'
+        $one.Email | Should -Match '\r?\n\r?\nFTP basic authentication can be turned back on, the setting the application has today, at any time\.\r?\n'
+        $one.Email | Should -Match 'Could you let me know whether any deployment tool, scheduled process or person still uses deployment credentials, the user name and password from a publish profile or a user''s own, to sign in to FTP or FTPS or to deploy through local Git on the application\? With that confirmed, could you approve this change for '
+        $one.Email | Should -Not -Match 'plain FTP|FTPS only or Disabled'
+        $one.Index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \| 1 \| Change request and client email \|'
+    }
+
+    It 'asks for approval only where FTP is already Disabled, since turning basic authentication off there changes nothing in use' {
+        $closed = Build-Ftp 'disabled-only'
+        @(Get-Section $closed.Cr 'A) IMPLEMENTATION PLAN')[2] | Should -Be '3. Read FTP Basic Auth Publishing Credentials. If it shows Off, the app has changed since collection, so leave it as it is and note it in the change record. If it shows On, set it to Off.'
+        Assert-ApprovalEmail $closed.Email 'CR-17 FTP basic authentication where FTP is Disabled'
+        $closed.Email | Should -Match '\r?\n\r?\nWith FTP basic authentication off, signing in to FTP or FTPS with the user name and password in the publish profile of these applications, or with a user''s own deployment credentials, would no longer work even if FTP were turned back on\.\r?\n'
+        $closed.Email | Should -Match '\r?\n\r?\nThe FTP state of each application is already Disabled, so nothing connects over FTP or FTPS today and this change makes no difference to how they are used now\.\r?\n'
+        $closed.Email | Should -Match '\r?\n\r?\nCould you approve this change for \w+day, [^?]+\? Please reply by ' -Because 'nothing can be using FTP on these applications, so the email asks for approval only'
+        $closed.Email | Should -Not -Match 'deploy through local Git on'
+        @($closed.Csv.Resource | Sort-Object) | Should -Be @('app-closed', 'func-closed')
+    }
+
+    It 'reads no gaps when every app has FTP basic authentication Off and plain FTP off' {
+        $off = Build-Ftp 'all-off'
+        $off.Cr | Should -BeNullOrEmpty
+        $off.Index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| No gaps found \|  \|'
+    }
+
+    It 'never reads a failed or partial FTP basic authentication read as Off' {
+        $pack = Join-Path $TestDrive 'ftp-failed'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'NB.5-FTPS-DETAIL' @()
+        Set-PackResult $pack 'NB.5-FTPAUTH' @() 'FAILED' 'Resource Graph throttled'
+        Set-PackResult $pack 'NB.5-FTPAUTH-DETAIL' @() 'FAILED' 'Resource Graph throttled'
+        $null = & $generator -EvidencePath $pack
+        $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+        $index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \|  \| No FTP state gaps found, the FTP basic authentication part was not collected, see the notes \|  \|'
+        $index | Should -Match '- NB\.5-FTPAUTH-DETAIL reads FAILED, so CR-17 covers the FTP state only\. Recollect the pack for the FTP basic authentication part\.'
+        # A partial detail whose per-app list is missing still says an app may be missing.
+        $fx = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/app-service-ftp-auth/ftps-only.json') -Raw | ConvertFrom-Json
+        Set-PackResult $pack 'NB.5-FTPAUTH-DETAIL' @($fx.FtpAuth | Select-Object subscriptionId, resourceGroup, Name, FtpsState, FtpBasicAuth, ResourceId) 'PARTIAL'
+        Remove-PackResult $pack 'NB.5-FTPAUTH'
+        $null = & $generator -EvidencePath $pack
+        $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+        $index | Should -Match '\| 17 \| Plain FTP and FTP basic authentication turned off on App Service apps \| 1 \| Change request and client email, partial collection scope \|'
+        $index | Should -Match '- NB\.5-FTPAUTH-DETAIL is partial, and NB\.5-FTPAUTH, which names the apps the collector could not read, is not in this pack, so an app with FTP basic authentication On may be missing from CR-17\.'
     }
 }
 

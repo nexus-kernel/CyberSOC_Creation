@@ -167,6 +167,83 @@ Describe 'Query catalog' {
         $d.Query | Should -Match 'where id !contains "\{\{MRG\}\}"'
     }
 
+    It 'reads FTP basic authentication per App Service app through a GET on its basicPublishingCredentialsPolicies/ftp path (1.14.0)' {
+        $item = $catalog | Where-Object Id -eq 'NB.5-FTPAUTH'
+        $item.Engine | Should -Be 'APPSERVICE-FTPAUTH'
+        $item.Phase | Should -Be 'P2 Network'
+        $item.Notes | Should -Match '^Added in CyberSOC 1\.14\.0\. Resource Graph does not index basicPublishingCredentialsPolicies'
+        $item.Notes | Should -Match 'It also writes NB\.5-FTPAUTH-DETAIL, one row per app where FTP basic authentication is On, whatever its FTP state, for change request CR-17\.'
+        $item.Notes | Should -Match 'Internal: names sites, the report embeds counts only\.'
+        $item.Query | Should -Match 'appserviceresources\r?\n\| where type =~ "microsoft\.web/sites/config"\r?\n\| where id !contains "\{\{MRG\}\}"'
+        $item.Query | Should -MatchExactly 'coalesce\(properties\.FtpsState, properties\.ftpsState\)' -Because 'appserviceresources returns the config keys in PascalCase'
+        $item.Query | Should -Not -Match '\| where not\(' -Because 'every app is read, an app already set to FTPS only or Disabled included'
+        $item.Query | Should -Match 'subscriptionId = tostring\(Parts\[2\]\), FtpsState\r?\n'
+        { Assert-EbrReadOnlyRequest -Method GET -Uri 'https://management.azure.com/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/sites/a/basicPublishingCredentialsPolicies/ftp?api-version=2022-09-01' } | Should -Not -Throw
+    }
+    It 'records FTP basic authentication On or Off from properties.allow, and an app it cannot read as not read, never as Off' {
+        $site = [pscustomobject]@{ ResourceId = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/sites/app-a'; Name = 'app-a'; resourceGroup = 'rg'; subscriptionId = 's'; FtpsState = 'FtpsOnly' }
+        Mock Invoke-EbrRest { [pscustomobject]@{ name = 'ftp'; properties = [pscustomobject]@{ allow = $true } } }
+        $r = Get-EbrFtpBasicAuthRow -Site $site -Tenant 't'
+        @($r.subscriptionId, $r.resourceGroup, $r.Name, $r.FtpsState, $r.FtpBasicAuth, $r.ReadStatus, $r.ResourceId) | Should -Be @('s', 'rg', 'app-a', 'FtpsOnly', 'On', 'OK', $site.ResourceId)
+        Should -Invoke Invoke-EbrRest -ParameterFilter { $Method -eq 'GET' -and $Uri -eq 'https://management.azure.com/subscriptions/s/resourceGroups/rg/providers/Microsoft.Web/sites/app-a/basicPublishingCredentialsPolicies/ftp?api-version=2022-09-01' -and $Resource -eq 'https://management.azure.com/' }
+        Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ allow = $false } } }
+        (Get-EbrFtpBasicAuthRow -Site $site -Tenant 't').FtpBasicAuth | Should -Be 'Off'
+        Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ } } }
+        $r = Get-EbrFtpBasicAuthRow -Site $site -Tenant 't'
+        @($r.FtpBasicAuth, $r.ReadStatus) | Should -Be @('', 'The response carried no properties.allow value.')
+        Mock Invoke-EbrRest { throw 'HTTP 403: Forbidden | AuthorizationFailed' }
+        $r = Get-EbrFtpBasicAuthRow -Site $site -Tenant 't'
+        $r.FtpBasicAuth | Should -Be ''
+        $r.ReadStatus | Should -Match '403'
+    }
+    It 'writes NB.5-FTPAUTH-DETAIL with every outcome of NB.5-FTPAUTH, listing every app where it is On whatever its FTP state' {
+        New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force | Out-Null
+        $ctx = [pscustomobject]@{ WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; ManagedRgPattern = 'aznativesol0'; OutDir = $TestDrive; Subscriptions = @('s1'); ArmTenant = 't'; AccessPath = ''; Pending = [System.Collections.Generic.List[object]]::new() }
+        $item = Get-EbrQueryCatalog | Where-Object Id -eq 'NB.5-FTPAUTH'
+        $site = { param($n, $state) [pscustomobject]@{ Name = $n; ResourceId = "/subscriptions/s1/resourceGroups/rg-web/providers/Microsoft.Web/sites/$n"; resourceGroup = 'rg-web'; subscriptionId = 's1'; FtpsState = $state } }
+        $sites = @((& $site 'app-plain' 'AllAllowed'), (& $site 'app-ftps' 'FtpsOnly'), (& $site 'func-off' 'Disabled'), (& $site 'app-secure' 'FtpsOnly'))
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = $sites; Detail = '' } }
+        Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ allow = ($Uri -notmatch 'app-secure') } } }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $res.Status | Should -Be 'OK'
+        @($res.Rows).Count | Should -Be 4
+        $res.Detail | Should -Be '4 of 4 App Service apps read: FTP basic authentication On in 3, Off in 1.'
+        $d = $ctx.Pending[0]
+        @($d.ResultId, $d.Status) | Should -Be @('NB.5-FTPAUTH-DETAIL', 'OK')
+        @($d.Rows | ForEach-Object { '{0}|{1}|{2}' -f $_.Name, $_.FtpsState, $_.FtpBasicAuth }) | Should -Be @('app-plain|AllAllowed|On', 'app-ftps|FtpsOnly|On', 'func-off|Disabled|On') -Because 'FTP basic authentication matters on every app, FtpsOnly and Disabled included'
+        @($d.Rows)[0].PSObject.Properties.Name | Should -Be @('subscriptionId', 'resourceGroup', 'Name', 'FtpsState', 'FtpBasicAuth', 'ResourceId')
+        $ctx.Pending.Clear()
+        Mock Invoke-EbrRest { if ($Uri -match 'app-ftps') { throw 'HTTP 429: Too Many Requests' }; [pscustomobject]@{ properties = [pscustomobject]@{ allow = $true } } }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        @($res.Status, $ctx.Pending[0].Status) | Should -Be @('PARTIAL', 'PARTIAL') -Because 'an app not read may have it On'
+        ($res.Rows | Where-Object Name -eq 'app-ftps').ReadStatus | Should -Match '429'
+        $res.Detail | Should -Match 'Not read: app-ftps: HTTP 429'
+        @($ctx.Pending[0].Rows).Name | Should -Not -Contain 'app-ftps'
+        $ctx.Pending[0].Detail | Should -Match 'Apps not read add no rows, see NB\.5-FTPAUTH\.$'
+        $ctx.Pending.Clear()
+        Mock Invoke-EbrRest { [pscustomobject]@{ properties = [pscustomobject]@{ allow = $false } } }
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = $sites; Detail = 'Truncated at 1000 rows.' } }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        @($res.Status, $ctx.Pending[0].Status) | Should -Be @('PARTIAL', 'PARTIAL') -Because 'a truncated Resource Graph result leaves apps out'
+        $ctx.Pending.Clear()
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = $sites; Detail = '' } }
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $ctx.Pending[0].Status | Should -Be 'EMPTY' -Because 'every app has it Off'
+        $ctx.Pending.Clear()
+        Mock Invoke-EbrRest { throw 'HTTP 403: Forbidden' }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'FAILED' -Because 'no app was read'
+        $ctx.Pending[0].Status | Should -Be 'FAILED'
+        $ctx.Pending.Clear()
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @(); Detail = '' } }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'EMPTY'
+        $ctx.Pending[0].Status | Should -Be 'EMPTY'
+        $ctx.Pending.Clear()
+        Mock Invoke-EbrArgQuery { throw 'Resource Graph throttled' }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'FAILED'
+        $ctx.Pending[0].Status | Should -Be 'FAILED'
+        $ctx.Pending[0].Detail | Should -Match 'throttled'
+    }
+
     It 'lists each App Service site that still allows plain FTP, read as NB.5-DETAIL reads its sites (1.7.0)' {
         $d = $catalog | Where-Object Id -eq 'NB.5-FTPS-DETAIL'
         $d.Engine | Should -Be 'ARG'
@@ -276,7 +353,7 @@ Describe 'Query catalog' {
     }
 
     It 'uses only known engines' {
-        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'DISABLED-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
+        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'APPSERVICE-FTPAUTH', 'DISABLED-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
         $catalog | Where-Object { $_.Engine -notin $known } | Should -BeNullOrEmpty
     }
 
@@ -2827,6 +2904,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         }
         Mock Invoke-EbrArgQuery { [pscustomobject]@{ Columns = @('Resources'); Rows = @([pscustomobject]@{ Resources = 5 }); Detail = '' } }
         Mock Invoke-EbrAhQuery { throw 'HTTP 403: Forbidden' }
+        Mock Invoke-EbrRest -ParameterFilter { $Uri -match '/basicPublishingCredentialsPolicies/ftp\?' } { throw 'HTTP 403: Forbidden' }
         Mock Get-EbrSentinelRules { [pscustomobject]@{ RuleName = 'r1'; Kind = 'Scheduled'; Enabled = $true; Severity = 'High'; LastModifiedUtc = '2026-09-01T00:00:00Z'; Tactics = ''; TemplateName = ''; RuleId = 'id' } }
         Mock Test-EbrDirectAccess { [pscustomobject]@{ Ok = $false; Missing = @(); Error = 'no direct token' } }
         Mock Read-EbrInput { 'n' }
@@ -3040,8 +3118,14 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         (Get-M 'EW.1-EDR') | Should -Not -BeNullOrEmpty
     }
 
+    It 'writes NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, and reads an app it could not read as failed, never as Off (CyberSOC 1.14.0)' {
+        (Get-M 'NB.5-FTPAUTH').Status | Should -Be 'FAILED' -Because 'the mocked GET is refused for every app'
+        (Get-M 'NB.5-FTPAUTH-DETAIL').Status | Should -Be 'FAILED'
+        @(Get-ChildItem (Join-Path $outDir.FullName 'queries') -Filter 'NB.5-FTPAUTH.*').Count | Should -Be 1 -Because 'the Resource Graph query is written to the pack'
+    }
+
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.13.0'
+        $params.ScriptVersion | Should -Be '1.14.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -3139,7 +3223,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.13.0'
+        $params2.ScriptVersion | Should -Be '1.14.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {
