@@ -620,10 +620,10 @@ The emergency access accounts are every account whose user principal name contai
 
 ```http
 GET https://graph.microsoft.com/v1.0/users?$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999
-GET https://graph.microsoft.com/v1.0/groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule&$top=999
+GET https://graph.microsoft.com/v1.0/groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule,visibility&$top=999
 ```
 
-The user members of each Atmosera group are read transitively, so a member of a group nested in it, an Atmosera group or any other, is listed too. Learn (List group transitive members) requires `$count=true` and the `ConsistencyLevel: eventual` header for the OData cast, and notes that the index behind it might not show a very recent change, and that a group with hidden membership needs Member.Read.Hidden.
+The user members of each Atmosera group are read transitively, so a member of a group nested in it, an Atmosera group or any other, is listed too. Learn (List group transitive members) requires `$count=true` and the `ConsistencyLevel: eventual` header for the OData cast, and notes that the index behind it might not show a very recent change, and that a group with hidden membership needs Member.Read.Hidden. The groups read `visibility`, so a refusal on a group with `HiddenMembership` asks for Member.Read.Hidden rather than GroupMember.Read.All.
 
 ```http
 GET https://graph.microsoft.com/v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$count=true&$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999

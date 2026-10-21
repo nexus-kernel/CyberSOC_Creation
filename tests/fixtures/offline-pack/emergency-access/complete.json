@@ -187,7 +187,8 @@
     ],
     "ExcludeUsers": [
       "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
-      "6ed69dbd-f1b1-5207-9f50-41d3c37d461b"
+      "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+      "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
     ],
     "ExcludeGroups": [
       "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",

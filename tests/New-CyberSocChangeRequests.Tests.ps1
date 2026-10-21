@@ -2782,14 +2782,14 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
         (Get-Content (Join-Path $PSScriptRoot '../Get-CyberSocEvidence.ps1') -Raw) | Should -Not -Match "(?i)'\*?atmosera\*?'" -Because 'the collector matches through the shared rule only'
     }
 
-    It 'excludes each Atmosera group and each account matched by its UPN alone, and protects every one of them from removal' {
+    It 'excludes each Atmosera group and each account matched by its UPN, and protects every one of them from removal' {
         $pack = Join-Path $TestDrive 'ea-complete'
         New-ChangeFixture $pack
         $sc = Add-EaScenario $pack 'complete'
         $ea = Read-EaPack $pack
         $ea.Ready | Should -BeTrue
         @($ea.ExcludeGroups) | Should -Be @($sc.Expect.ExcludeGroups)
-        @($ea.ExcludeUsers) | Should -Be @($sc.Expect.ExcludeUsers | Sort-Object) -Because 'an account in an Atmosera group is covered by the group'
+        @($ea.ExcludeUsers) | Should -Be @($sc.Expect.ExcludeUsers | Sort-Object) -Because 'an account matched by its UPN stays excluded on its own even if it is taken out of its Atmosera group'
         @($ea.Review | ForEach-Object DisplayName) | Should -Be @('ATMOSERA Support (synced)', 'SOC-atmosera-Tier0')
         foreach ($a in @($ea.Accounts)) { Test-CyberSocEmergencyAccessId $ea $a.PrincipalId.ToUpperInvariant() | Should -BeTrue -Because $a.UserPrincipalName }
         foreach ($g in @($ea.Groups)) { Test-CyberSocEmergencyAccessId $ea $g.GroupId | Should -BeTrue -Because $g.DisplayName }
@@ -2811,7 +2811,7 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
         $section | Should -Match '\| SOC-atmosera-Tier0 \| 1 \| Dynamic \|'
         $section | Should -Match '\| breakglass-atmosera01@contoso\.onmicrosoft\.com \| Emergency Access 01 \| Member \| Yes \| UPN \|  \| the account \|'
         $section | Should -Match '\| jordan\.lee_atmosera\.com#EXT#@contoso\.onmicrosoft\.com \| Jordan Lee \(Atmosera\) \| Guest \| Yes \| UPN \|  \| the account \|'
-        $section | Should -Match '\| SOC\.ATMOSERA\.Analyst@contoso\.onmicrosoft\.com \| SOC Analyst \| Member \| No \| UPN and group \| Atmosera Emergency Access \| its group \|'
+        $section | Should -Match '\| SOC\.ATMOSERA\.Analyst@contoso\.onmicrosoft\.com \| SOC Analyst \| Member \| No \| UPN and group \| Atmosera Emergency Access \| the account and its group \|'
         $section | Should -Match '\| tier0\.admin@contoso\.onmicrosoft\.com \| Tier 0 Admin \| Member \| Yes \| Group \| Atmosera Emergency Access, SOC-atmosera-Tier0 \| its group \|'
         $section | Should -Match '- SOC-atmosera-Tier0 has dynamic membership, so its rule adds and removes members, and an account it drops loses the exclusion\.'
         $section | Should -Match '- ATMOSERA Support \(synced\) has on-premises synced membership, so its members are managed in Active Directory'

@@ -2525,7 +2525,7 @@ if ($emergencyAccess.Why -eq 'Missing') {
     $md.Add(('The pack was collected before the emergency access read, so no Conditional Access change can be written. Recollect with CyberSOC collector 1.12.0 or later. {0} {1} written only with the emergency access accounts.' -f $caText, $(Get-Pick ([math]::Max(1, $caChanges.Count)) 'is' 'are')))
 }
 else {
-    $md.Add(('The emergency access accounts are every account with Atmosera in its UPN and every member of an Atmosera group, a group whose display name contains Atmosera. Every Conditional Access change excludes each Atmosera group, so a new member is covered without a change, and each account matched by its UPN alone, and no change removes an existing exclusion of any of them. {0} {1} written only when the read is complete and found at least one account.' -f $caText, $(Get-Pick ([math]::Max(1, $caChanges.Count)) 'is' 'are')))
+    $md.Add(('The emergency access accounts are every account with Atmosera in its UPN and every member of an Atmosera group, a group whose display name contains Atmosera. Every Conditional Access change excludes each Atmosera group, so a new member is covered without a change, and each account matched by its UPN on its own as well, so it stays excluded if it leaves the group, and no change removes an existing exclusion of any of them. {0} {1} written only when the read is complete and found at least one account.' -f $caText, $(Get-Pick ([math]::Max(1, $caChanges.Count)) 'is' 'are')))
     $md.Add('')
     if (-not $emergencyAccess.Ready) { $md.Add(('No Conditional Access change can be written: {0}. {1}' -f $emergencyAccess.Why, (@('IA.16-ACCOUNTS', 'IA.16-GROUPS' | ForEach-Object { Get-ResultDetail $_ } | Where-Object { $_ }) -join ' '))); $md.Add('') }
     if (@($emergencyAccess.Groups).Count) {
@@ -2539,7 +2539,7 @@ else {
         $md.Add('| Account | Name | Type | Enabled | Matched by | Atmosera groups | Excluded as |'); $md.Add('| --- | --- | --- | --- | --- | --- | --- |')
         foreach ($a in @($emergencyAccess.Accounts)) {
             $inGroups = @($a.Groups | Where-Object { $_ } | ForEach-Object { ConvertTo-CellText $_ })
-            $md.Add(('| {0} | {1} | {2} | {3} | {4} | {5} | {6} |' -f (ConvertTo-CellText $a.UserPrincipalName), (ConvertTo-CellText $a.DisplayName), (ConvertTo-CellText $a.UserType), $(if ((Get-Text $a.AccountEnabled) -eq '') { 'unknown' } elseif (Test-True $a.AccountEnabled) { 'Yes' } else { 'No' }), (ConvertTo-CellText $a.MatchedBy), ($inGroups -join ', '), $(if ($inGroups.Count) { 'its group' } else { 'the account' })))
+            $md.Add(('| {0} | {1} | {2} | {3} | {4} | {5} | {6} |' -f (ConvertTo-CellText $a.UserPrincipalName), (ConvertTo-CellText $a.DisplayName), (ConvertTo-CellText $a.UserType), $(if ((Get-Text $a.AccountEnabled) -eq '') { 'unknown' } elseif (Test-True $a.AccountEnabled) { 'Yes' } else { 'No' }), (ConvertTo-CellText $a.MatchedBy), ($inGroups -join ', '), $(switch (Get-Text $a.MatchedBy) { 'UPN' { 'the account' } 'Group' { 'its group' } default { 'the account and its group' } })))
         }
         $md.Add('')
     }

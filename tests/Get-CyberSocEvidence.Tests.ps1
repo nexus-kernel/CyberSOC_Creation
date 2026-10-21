@@ -2105,13 +2105,13 @@ Describe 'Emergency access accounts (IA.16, CyberSOC 1.12.0)' {
         $script:eaItem.Notes | Should -Match 'Internal: names accounts\.$'
         $q = $script:eaItem.Query
         $q | Should -Match '(?m)^GET /v1\.0/users\?\$select=id,userPrincipalName,displayName,userType,accountEnabled&\$top=999$'
-        $q | Should -Match '(?m)^GET /v1\.0/groups\?\$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule&\$top=999$'
+        $q | Should -Match '(?m)^GET /v1\.0/groups\?\$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule,visibility&\$top=999$'
         $q | Should -Match 'transitiveMembers/microsoft\.graph\.user\?\$count=true'
-        $q | Should -Match '(?m)^Permission: User\.Read\.All, GroupMember\.Read\.All$'
+        $q | Should -Match '(?m)^Permission: User\.Read\.All, GroupMember\.Read\.All \(Member\.Read\.Hidden for a group with hidden membership\)$'
         $q | Should -Not -Match '\$search|\$filter' -Because 'a whole-word or starts-with match could miss an account'
         $null = Invoke-EaScenario (Get-EaScenario 'complete')
         Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://graph.microsoft.com/v1.0/users?$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999' -and $Complete }
-        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://graph.microsoft.com/v1.0/groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule&$top=999' -and $Complete }
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://graph.microsoft.com/v1.0/groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule,visibility&$top=999' -and $Complete }
         Should -Invoke Invoke-EbrGraphGet -Times 3 -Exactly -ParameterFilter { $Uri -like '*/transitiveMembers/microsoft.graph.user?$count=true&$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999' -and $Complete } -Because 'only the three Atmosera groups are read, not IT Admins or Platform Ops'
         Test-Path (Join-Path $TestDrive 'queries/IA.16-ACCOUNTS.graph.txt') | Should -BeTrue
     }
@@ -2164,6 +2164,13 @@ Describe 'Emergency access accounts (IA.16, CyberSOC 1.12.0)' {
         ($r.Groups.Rows | Select-Object -First 1).MembersRead | Should -BeFalse
         @($r.Accounts.Rows | ForEach-Object UserPrincipalName) | Should -Be @($sc.Expect.Accounts | ForEach-Object UserPrincipalName)
         @($r.Ctx.GraphPartial) | Should -Be @('IA.16 (Atmosera group members)')
+        @($r.Ctx.GraphMissingScopes) | Should -Be @('GroupMember.Read.All')
+        # Microsoft Learn: the members of a group with hidden membership need Member.Read.Hidden as well.
+        $sc = Get-EaScenario 'members-unread'
+        $sc.Graph.Groups[0] | Add-Member -NotePropertyName visibility -NotePropertyValue 'HiddenMembership'
+        $r = Invoke-EaScenario $sc
+        @($r.Ctx.GraphMissingScopes) | Should -Be @('Member.Read.Hidden') -Because 'the token may already hold GroupMember.Read.All'
+        $r.Groups.Detail | Should -Match 'Atmosera Emergency Access \([0-9a-f-]+, hidden membership, needs Member\.Read\.Hidden\)'
     }
 
     It 'keeps the UPN matches PARTIAL when only the groups cannot be read, and fails a read cut short' {

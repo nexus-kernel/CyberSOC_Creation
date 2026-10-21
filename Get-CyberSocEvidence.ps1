@@ -1638,12 +1638,12 @@ authorizationresources
     # IA.16 (CyberSOC 1.12.0): the emergency access accounts every Conditional Access change excludes. Graph takes no
     # contains on userPrincipalName or displayName, and $search matches whole words on displayName and starts with on
     # every other property, so either could miss an account. Every user and every group is read and matched offline.
-    $q.Add((New-EbrQuery -Id 'IA.16-ACCOUNTS' -Phase 'P2 Identity' -Engine 'EMERGENCY-ACCESS' -Title 'Emergency access accounts: Atmosera in the UPN or in an Atmosera group' -Notes 'Added in CyberSOC 1.12.0. Writes IA.16-ACCOUNTS (every account, member or guest, whose UPN contains Atmosera, matched without regard to case, so a guest from an Atmosera domain matches through its #EXT# UPN, and every user in an Atmosera group, with how it matched) and IA.16-GROUPS (every group whose display name contains Atmosera, with its user member count, read transitively so a nested group''s members count, and whether its membership is dynamic or synced from on-premises). Needs User.Read.All and GroupMember.Read.All, as IA.15 does. The match rule lives in report/Get-CyberSocEmergencyAccess.ps1. A read that fails, is cut short or misses a group''s members makes both results PARTIAL or worse, never EMPTY, and New-CyberSocChangeRequests.ps1 then writes no Conditional Access change. Feeds the emergency access exclusions of every Conditional Access change. Internal: names accounts.' -Query @'
+    $q.Add((New-EbrQuery -Id 'IA.16-ACCOUNTS' -Phase 'P2 Identity' -Engine 'EMERGENCY-ACCESS' -Title 'Emergency access accounts: Atmosera in the UPN or in an Atmosera group' -Notes 'Added in CyberSOC 1.12.0. Writes IA.16-ACCOUNTS (every account, member or guest, whose UPN contains Atmosera, matched without regard to case, so a guest from an Atmosera domain matches through its #EXT# UPN, and every user in an Atmosera group, with how it matched) and IA.16-GROUPS (every group whose display name contains Atmosera, with its user member count, read transitively so a nested group''s members count, and whether its membership is dynamic or synced from on-premises). Needs User.Read.All and GroupMember.Read.All, as IA.15 does, and Member.Read.Hidden for an Atmosera group with hidden membership. The match rule lives in report/Get-CyberSocEmergencyAccess.ps1. A read that fails, is cut short or misses a group''s members makes both results PARTIAL or worse, never EMPTY, and New-CyberSocChangeRequests.ps1 then writes no Conditional Access change. Feeds the emergency access exclusions of every Conditional Access change. Internal: names accounts.' -Query @'
 GET /v1.0/users?$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999
-GET /v1.0/groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule&$top=999
+GET /v1.0/groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule,visibility&$top=999
 GET /v1.0/groups/{id}/transitiveMembers/microsoft.graph.user?$count=true&$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999 (ConsistencyLevel: eventual), for each Atmosera group
 Match: userPrincipalName or group displayName contains "atmosera", case-insensitive, offline
-Permission: User.Read.All, GroupMember.Read.All
+Permission: User.Read.All, GroupMember.Read.All (Member.Read.Hidden for a group with hidden membership)
 '@))
 
     $q.Add((New-EbrQuery -Id 'IA.8' -Phase 'P2 Identity' -Engine 'GRAPH' -Title 'Conditional Access policy inventory' -Query @'
@@ -5361,7 +5361,7 @@ function Invoke-EbrEmergencyAccess {
     try { $users = @(Get-EbrGraphList -Ctx $Ctx -Complete -Path 'users?$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999') }
     catch { $userFail = & $fail $_.Exception.Message 'User.Read.All' 'user accounts' }
     $groups = $null; $groupFail = $null
-    try { $groups = @(Get-EbrGraphList -Ctx $Ctx -Complete -Path 'groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule&$top=999') }
+    try { $groups = @(Get-EbrGraphList -Ctx $Ctx -Complete -Path 'groups?$select=id,displayName,groupTypes,onPremisesSyncEnabled,membershipRule,visibility&$top=999') }
     catch { $groupFail = & $fail $_.Exception.Message 'GroupMember.Read.All' 'groups' }
 
     # The user members of each Atmosera group, through every nested group. A group whose members cannot be read is
@@ -5374,8 +5374,11 @@ function Invoke-EbrEmergencyAccess {
         try { $members[$gid] = @(Get-EbrGraphList -Ctx $Ctx -Complete -Path ('groups/{0}/transitiveMembers/microsoft.graph.user?$count=true&$select=id,userPrincipalName,displayName,userType,accountEnabled&$top=999' -f $gid)) }
         catch {
             $members[$gid] = $null
-            $unread.Add(('{0} ({1})' -f [string](Get-EbrProp $g 'displayName'), $gid))
-            if ($_.Exception.Message -match '^GRAPH-403') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'GroupMember.Read.All' -Partial 'IA.16 (Atmosera group members)' }
+            # Microsoft Learn: the members of a group with hidden membership need Member.Read.Hidden as well, so a refusal
+            # there asks for that permission rather than GroupMember.Read.All, which the token may already hold.
+            $hidden = [string](Get-EbrProp $g 'visibility') -ieq 'HiddenMembership'
+            $unread.Add(('{0} ({1}{2})' -f [string](Get-EbrProp $g 'displayName'), $gid, $(if ($hidden) { ', hidden membership, needs Member.Read.Hidden' } else { '' })))
+            if ($_.Exception.Message -match '^GRAPH-403') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission $(if ($hidden) { 'Member.Read.Hidden' } else { 'GroupMember.Read.All' }) -Partial 'IA.16 (Atmosera group members)' }
         }
     }
     $set = ConvertTo-CyberSocEmergencyAccessRows -Users $users -Groups $groups -Members $members

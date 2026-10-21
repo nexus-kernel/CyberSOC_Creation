@@ -100,7 +100,8 @@ function Get-CyberSocEmergencyAccess {
     #   Accounts       every emergency access account, with how it matched (UPN, Group, or UPN and group).
     #   Groups         every Atmosera group, with its members and membership type.
     #   ExcludeGroups  the group IDs a policy excludes, so a new member is covered without a change.
-    #   ExcludeUsers   the account IDs a policy excludes on their own: those matched by their UPN and in no Atmosera group.
+    #   ExcludeUsers   the account IDs a policy excludes on their own: every account matched by its UPN, also when it sits in
+    #                  an Atmosera group, so it stays excluded if it is later taken out of the group.
     #   Review         the Atmosera groups whose membership is dynamic or synced from on-premises.
     param([Parameter(Mandatory)][scriptblock]$Read)
     $acc = & $Read 'IA.16-ACCOUNTS'
@@ -125,7 +126,7 @@ function Get-CyberSocEmergencyAccess {
         Accounts = $accounts
         Groups = $groups
         ExcludeGroups = $groupIds
-        ExcludeUsers = @($accounts | Where-Object { @($_.GroupIds | Where-Object { $_ }).Count -eq 0 } | ForEach-Object { & $lower $_.PrincipalId } | Where-Object { $_ } | Sort-Object -Unique)
+        ExcludeUsers = @($accounts | Where-Object { (Get-CyberSocEaText $_.MatchedBy) -in 'UPN', 'UPN and group' } | ForEach-Object { & $lower $_.PrincipalId } | Where-Object { $_ } | Sort-Object -Unique)
         Review = @($groups | Where-Object { (Get-CyberSocEaText $_.Membership) -in 'Dynamic', 'On-premises' })
         Protected = @(@($groupIds) + @($accounts | ForEach-Object { & $lower $_.PrincipalId }) | Where-Object { $_ } | Sort-Object -Unique)
     }

@@ -255,7 +255,7 @@ calls, `Get-CyberSocEmergencyAccess`, which the generator runs once into `$emerg
 | `Ready` | True only when both reads are complete (OK or EMPTY, readable) and found at least one account |
 | `Why` | Why it is not ready: `Missing` on a pack collected before 1.12.0, the result that is not complete, or no account found |
 | `ExcludeGroups` | The object ID of each Atmosera group. A policy excludes the group, so a new member is covered without a change |
-| `ExcludeUsers` | The object ID of each account matched by its UPN and in no Atmosera group, excluded on its own |
+| `ExcludeUsers` | The object ID of each account matched by its UPN, excluded on its own even when it also sits in an Atmosera group, so it stays excluded if it is taken out of the group |
 | `Accounts`, `Groups` | The IA.16-ACCOUNTS and IA.16-GROUPS rows |
 | `Review` | The Atmosera groups whose membership is dynamic or synced from on-premises |
 | `Protected` | Every account and group ID above. `Test-CyberSocEmergencyAccessId $emergencyAccess <id>` is true for one, and a change that removes stale exclusions keeps it |
@@ -268,7 +268,7 @@ never lets one through.
 
 `00-index.md` has an Emergency access accounts section on every run: the rule, which change requests it gates, a
 table of the Atmosera groups (members, membership type, object ID) and of the accounts (UPN, name, user type, enabled,
-how it matched, its Atmosera groups and whether a policy excludes it through its group or on its own), a note for each
+how it matched, its Atmosera groups and whether a policy excludes it through its group, on its own, or both), a note for each
 dynamic or synced group, whose members can drop out of the exclusion, and the reminder that an account Atmosera uses
 without the word in its UPN is covered only when it sits in an Atmosera group. When the read is not complete it says
 why no Conditional Access change can be written.
