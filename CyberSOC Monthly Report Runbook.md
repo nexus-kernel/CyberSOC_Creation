@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, and 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, and 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -720,18 +720,19 @@ resources
 
 ### NB.5-DETAIL App Service sites below minimum TLS 1.2
 
-Engine ARG. The site configurations NB.5 counts as below TLS 1.2, one row per site. The site name, resource group and subscription are read from the configuration ID, because the config record is not the site. Feeds CR-04, which leaves out a site whose value reads empty, since App Service applies 1.2 when no minimum is set.
+Engine ARG. The site configurations NB.5 counts as below TLS 1.2, one row per site. The site name, resource group and subscription are read from the configuration ID, because the config record is not the site. CyberSOC collector 1.13.0 adds `ScmMinTlsVersion`, the minimum inbound TLS version of the SCM (Kudu) site, read with the same PascalCase key handling, and lists a site when either value is below 1.2 or empty. Deployment slots (`sites/slots/config`) are not read. Feeds CR-04, which sets each value to 1.2 only where it is below 1.2, and leaves to the index notes a value that reads empty, since App Service applies 1.2 to the site and to the SCM site when no minimum is set.
 
 ```kql
 appserviceresources
 | where type =~ "microsoft.web/sites/config"
 | where id !contains "{{MRG}}"
 // appserviceresources returns site config keys in PascalCase and dynamic access is case-sensitive.
-| extend MinTlsVersion = tostring(coalesce(properties.MinTlsVersion, properties.minTlsVersion))
-| where not(MinTlsVersion in ("1.2", "1.3"))
+| extend MinTlsVersion    = tostring(coalesce(properties.MinTlsVersion, properties.minTlsVersion)),
+         ScmMinTlsVersion = tostring(coalesce(properties.ScmMinTlsVersion, properties.scmMinTlsVersion))
+| where not(MinTlsVersion in ("1.2", "1.3")) or not(ScmMinTlsVersion in ("1.2", "1.3"))
 | extend Parts = split(id, "/")
 | project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
-          resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), MinTlsVersion
+          resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), MinTlsVersion, ScmMinTlsVersion
 | order by subscriptionId asc, resourceGroup asc, Name asc
 ```
 

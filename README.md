@@ -68,7 +68,7 @@ missing evidence never becomes a favorable zero.
    ```
 
    `05-change-requests/` holds one change request for each low-impact hardening item that still has resources to
-   fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service, Azure SQL, Redis, Service Bus,
+   fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service apps and their SCM sites, Azure SQL, Redis, Service Bus,
    Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
    machines and on scale sets, closing internet-facing RDP, SSH and WinRM rules, turning off plain FTP on App
    Service apps, setting the blob containers anyone can read today to private, and removing the Azure and Microsoft
@@ -107,7 +107,8 @@ missing evidence never becomes a favorable zero.
    says that a machine an Azure Virtual Network Manager security admin rule with Always Allow keeps open is outside
    what CR-16 can close (its steps record and escalate that rule, and `-AdminRuleOpen` names the machine in the email,
    which then asks who manages that central policy), and names the rules left out: appliance untrust interfaces, groups attached to nothing (a cleanup item) and `*` or port
-   range rules (for review). The FTP email asks whether any deployment tool, process or person still connects over FTP or
+   range rules (for review). The App Service minimum TLS email covers the SCM (Kudu) site as well, the deployment and management endpoint beside
+   each app, and asks whether any deployment tool still reaches it over TLS 1.0 or 1.1. The FTP email asks whether any deployment tool, process or person still connects over FTP or
    FTPS, to upload files or to download files or logs, and whether FTPS only or Disabled suits each app, and the index names the apps whose FTP state Resource Graph
    returned empty, for a portal check, and says that deployment slots are not covered. AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node

@@ -81,7 +81,9 @@
     added in 1.11.0, and on an earlier pack reads every capability as Unknown, so a change request that requires one is
     written with a note to confirm the license. The emergency access accounts every Conditional Access change excludes are
     read from IA.16-ACCOUNTS and IA.16-GROUPS, added in 1.12.0, and on an earlier pack, or when that read failed, is
-    partial or found no account, no Conditional Access change is written and the index says why.
+    partial or found no account, no Conditional Access change is written and the index says why. CR-04 sets the SCM
+    (Kudu) site minimum TLS version from the ScmMinTlsVersion column of NB.5-DETAIL, added in 1.13.0, and on an earlier
+    pack sets the site minimum only and says in the index that the SCM part needs recollection.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -131,6 +133,9 @@ $needsRecollection = Get-RecollectionState 'DR.6-COVERAGE', 'DR.6-NONCOMPLIANT'
 # UniqueId in DP.4-VMSS-ELIGIBILITY), added in 1.4.0. A name alone cannot tell the machine that was checked
 # from one deleted and created again under the same name, which would be stopped for a change Azure rejects.
 $needsIdRecollection = 'Needs recollection with CyberSOC collector 1.4.0 or later'
+# CR-04 sets the SCM (Kudu) site minimum TLS version from the ScmMinTlsVersion column of NB.5-DETAIL, added in 1.13.0.
+# On an earlier pack it sets the site minimum only and its index note asks for recollection.
+$scmTlsVersion = '1.13.0'
 
 # Get-Text, Test-True, Get-Status, Get-Rows, Test-Unreadable and Get-UnreadableState. Each result file is
 # parsed once. A result the manifest reads as OK or PARTIAL needs a file that parses, or a damaged pack would
@@ -634,6 +639,18 @@ function New-EncryptionAtHostRegistration($resources) {
     , $register
     , $check
 }
+# Whether NB.5-DETAIL records the SCM minimum: a row carries the column, or a pack from 1.13.0 or later lists no site,
+# since before 1.13.0 the list left out a site whose site minimum was 1.2 whatever its SCM minimum.
+function Test-ScmTlsRead($rows) {
+    if (@($rows).Count) { return @($rows)[0].PSObject.Properties.Name -contains 'ScmMinTlsVersion' }
+    $version = $null
+    [version]::TryParse((Get-Text $parameters.ScriptVersion), [ref]$version) -and $version -ge [version]$scmTlsVersion
+}
+# NB.5 counts every site configuration, so it shows when the pack has no App Service site at all, and then a note about
+# deployment slots has nothing to say.
+function Test-NoAppServiceSites {
+    (Get-Status 'NB.5') -eq 'EMPTY' -or ((Get-Status 'NB.5') -eq 'OK' -and -not (Test-Unreadable 'NB.5') -and @(Get-Rows 'NB.5').Count -eq 1 -and (Get-Text @(Get-Rows 'NB.5')[0].Configs) -eq '0')
+}
 # A value quoted for Bash. Resource group names may hold parentheses, which Bash reads as syntax unquoted.
 function Format-ShellArgument([string]$Value) { "'" + ($Value -replace "'", "'\''") + "'" }
 function Format-UpgradePolicy($value) { $p = ConvertTo-CopyText $value; if ($p) { "upgrade policy $p" } else { 'no upgrade policy' } }
@@ -814,46 +831,106 @@ $catalog = @(
 
     @{ Number = 4; Key = 'app-service-minimum-tls'; Change = 'Minimum TLS 1.2 on App Service apps'; Sources = @('NB.5-DETAIL')
        Build = {
-            # App Service applies TLS 1.2 to an app without a minimum, so a site whose value reads empty is
-            # named in the index instead of changed.
+            # NB.5-DETAIL lists each site whose minimum inbound TLS version, or since collector 1.13.0 that of its SCM
+            # (Kudu) site, is below 1.2 or empty. Each part is changed only where its value is below 1.2. App Service
+            # applies 1.2 to a site or an SCM site without a minimum, so an empty value is named in the index instead.
             $rows = @(Get-Rows 'NB.5-DETAIL')
+            $scmRead = Test-ScmTlsRead $rows
+            $low = { param($v) (Get-Text $v) -and (Get-Text $v) -notin '1.2', '1.3' }
+            $label = { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) }
+            $siteLow = @($rows | Where-Object { & $low $_.MinTlsVersion })
+            $scmLow = @(if ($scmRead) { $rows | Where-Object { & $low $_.ScmMinTlsVersion } })
             $unset = @($rows | Where-Object { -not (Get-Text $_.MinTlsVersion) })
-            $notes = @(if ($unset.Count) { '{0} left out of CR-04 because Resource Graph returned no minimum TLS version, and App Service applies 1.2 when none is set: {1}. Check {2} in the portal if the value may be missing from Resource Graph.' -f (Get-Count $unset.Count 'App Service app' 'App Service apps'), (@($unset | ForEach-Object { ConvertTo-CopyText $_.Name } | Sort-Object) -join ', '), (Get-Pick $unset.Count 'it' 'them') })
-            $resources = @($rows | Where-Object { Get-Text $_.MinTlsVersion } | ForEach-Object { New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('minimum TLS ' + (Format-TlsVersion $_.MinTlsVersion)) $_.ResourceId })
+            $notes = [System.Collections.Generic.List[string]]::new()
+            $siteOnlyUnset = @($unset | Where-Object { $_ -notin $scmLow })
+            if ($siteOnlyUnset.Count) { $notes.Add(('{0} left out of CR-04 because Resource Graph returned no minimum TLS version, and App Service applies 1.2 when none is set: {1}. Check {2} in the portal if the value may be missing from Resource Graph.' -f (Get-Count $siteOnlyUnset.Count 'App Service app' 'App Service apps'), (@($siteOnlyUnset | ForEach-Object { ConvertTo-CopyText $_.Name } | Sort-Object) -join ', '), (Get-Pick $siteOnlyUnset.Count 'it' 'them'))) }
+            $scmOnlyUnset = @($unset | Where-Object { $_ -in $scmLow })
+            if ($scmOnlyUnset.Count) { $notes.Add(('{0} in CR-04 {1} no site minimum TLS version recorded, and App Service applies 1.2 when none is set, so CR-04 changes only {2} SCM site minimum: {3}.' -f (Get-Count $scmOnlyUnset.Count 'App Service app' 'App Service apps'), (Get-Pick $scmOnlyUnset.Count 'has' 'have'), (Get-Pick $scmOnlyUnset.Count 'its' 'their'), (@($scmOnlyUnset | ForEach-Object $label | Sort-Object) -join ', '))) }
+            if ($scmRead) {
+                $scmUnset = @($rows | Where-Object { -not (Get-Text $_.ScmMinTlsVersion) })
+                if ($scmUnset.Count) { $notes.Add(('{0} left out of the SCM part of CR-04 because Resource Graph returned no SCM minimum TLS version, and App Service applies 1.2 to the SCM site when none is set: {1}. Check SCM Minimum Inbound TLS Version under Settings > Configuration > General settings in the portal if the value may be missing from Resource Graph.' -f (Get-Count $scmUnset.Count 'App Service app' 'App Service apps'), (@($scmUnset | ForEach-Object $label | Sort-Object) -join ', '))) }
+            }
+            else { $notes.Add(('NB.5-DETAIL in this pack does not record the SCM (Kudu) site minimum TLS version, so CR-04 covers the site minimum only. Recollect with CyberSOC collector {0} or later for the SCM part.' -f $scmTlsVersion)) }
+            if (-not (Test-NoAppServiceSites)) { $notes.Add('NB.5-DETAIL reads the production site of each app. Deployment slots have a minimum TLS version and an SCM minimum TLS version of their own, which the pack does not read, so CR-04 does not cover them. Check both on each slot in the portal.') }
+            $resources = @($rows | Where-Object { $_ -in $siteLow -or $_ -in $scmLow } | ForEach-Object {
+                    $setting = 'minimum TLS ' + (Format-TlsVersion $_.MinTlsVersion)
+                    if ($scmRead) { $setting += ', SCM minimum TLS ' + (Format-TlsVersion $_.ScmMinTlsVersion) }
+                    New-Resource $_.Name $_.resourceGroup $_.subscriptionId $setting $_.ResourceId
+                })
             $n = $resources.Count
-            if (-not $n) { return @{ State = $(if ($unset.Count) { 'Only apps without a recorded minimum remain' } else { 'No gaps found' }); Notes = $notes } }
+            if (-not $n) {
+                $state = if ($rows.Count) { 'Only apps without a recorded minimum remain' } else { 'No gaps found' }
+                if (-not $scmRead) { $state = 'No site gaps found, the SCM part needs recollection with CyberSOC collector {0} or later' -f $scmTlsVersion }
+                return @{ State = $state; Notes = $notes.ToArray() }
+            }
+            $s = $siteLow.Count; $k = $scmLow.Count
+            $these = Get-Pick $n 'the application' 'these applications'
             $impl = [System.Collections.Generic.List[object]]::new()
             $impl.Add((Get-OpenStep $n 'App Services' 'app'))
             $impl.Add('Go to Settings > Configuration and select the General settings tab.')
-            $impl.Add('Set Minimum Inbound TLS Version to 1.2, select Apply and confirm.')
+            if (-not $k) { $impl.Add('Set Minimum Inbound TLS Version to 1.2, select Apply and confirm.') }
+            else {
+                # An app whose site minimum is already 1.2 or later, or not recorded, gets only the SCM step, and the other way round.
+                if ($s -eq $n) { $impl.Add('Set Minimum Inbound TLS Version to 1.2.') }
+                elseif ($s) { $impl.Add('If the RESOURCES section lists a minimum TLS below 1.2 for the app, set Minimum Inbound TLS Version to 1.2. Otherwise leave it as it is.') }
+                if ($k -eq $n) { $impl.Add('Set SCM Minimum Inbound TLS Version to 1.2.') }
+                else { $impl.Add('If the RESOURCES section lists an SCM minimum TLS below 1.2 for the app, set SCM Minimum Inbound TLS Version to 1.2. Otherwise leave it as it is.') }
+                $impl.Add('Select Apply and confirm.')
+            }
             Add-RepeatStep $impl $n 1 'app'
-            @{ Notes = $notes; Cr = New-ChangeRequest @{
+            $testing = @(
+                ('In the Azure portal, open {0}, go to Settings > Configuration and select the General settings tab.' -f (Get-EachStep $n 'app'))
+                $(if ($k) { 'Confirm Minimum Inbound TLS Version and SCM Minimum Inbound TLS Version both show 1.2 or later.' } else { 'Confirm Minimum Inbound TLS Version shows 1.2.' }))
+            # Each part goes back to the value recorded before the change, never to a fixed version.
+            $rollback = @(
+                'In the Azure portal, open the app to revert, go to Settings > Configuration and select the General settings tab.'
+                $(if ($k) { 'Set Minimum Inbound TLS Version and SCM Minimum Inbound TLS Version back to the versions recorded for the app in the RESOURCES section, only for the settings the change set to 1.2, then select Apply and confirm.' } else { 'Set Minimum Inbound TLS Version back to the version recorded for the app in the RESOURCES section, select Apply and confirm.' }))
+            $email = if (-not $k) {
+                New-ApprovalEmail -Subject 'minimum TLS 1.2 for Azure App Service applications' `
+                    -Change @(('I would like to set the minimum inbound TLS version to 1.2 on {0}.' -f (Get-Yours $n 'App Service and Function applications')), $explainTls) `
+                    -Why ('I recommend setting this minimum now because TLS 1.0 and 1.1 have known weaknesses, and App Service stops accepting them on May 31, 2027. This change makes {0} refuse them now, and matches the default for new applications.' -f $these) `
+                    -Listed (Get-Pick $n 'The application is listed below with its minimum TLS version today:' 'The applications are listed below by subscription, each with its minimum TLS version today:') `
+                    -Resources (Get-EmailResourceList $resources $settingLabel) `
+                    -Reversal ('The minimum TLS version can be set back to the version {0} today, shown above.' -f (Get-Pick $n 'the application has' 'each application has')) `
+                    -Effect ('Browsers and applications that connect over TLS 1.2 or later will see no change. A client that can only use TLS 1.0 or 1.1, for example one on an old operating system or runtime, will no longer be able to connect to {0} once the change is applied.' -f $these)
+            }
+            else {
+                $ask = if (-not $s) { 'I would like to set the minimum inbound TLS version of the SCM site to 1.2 on {0}.' -f (Get-Yours $n 'App Service and Function applications') }
+                else { 'I would like to set the minimum inbound TLS version to 1.2 on {0} and on {1}, wherever either one allows an older version today.' -f (Get-Yours $n 'App Service and Function applications'), (Get-Pick $n 'its SCM site' 'the SCM site of each') }
+                New-ApprovalEmail -Subject 'minimum TLS 1.2 for Azure App Service applications and their SCM sites' `
+                    -Change @($ask, $explainTls) `
+                    -Why ('I recommend setting this minimum now because TLS 1.0 and 1.1 have known weaknesses, and App Service stops accepting them on May 31, 2027, on each application and on its SCM site alike. This change makes {0} refuse them now, and matches the default for new applications.' -f $these) `
+                    -Effect @(
+                        ('The SCM site, also called Kudu, is the deployment and management endpoint that App Service runs beside each application, which tools such as zip deploy, Web Deploy and local Git reach to upload code, stream logs and manage {0}.' -f $these)
+                        ('Browsers and applications that connect over TLS 1.2 or later will see no change. A deployment tool, build agent or script that reaches the SCM site over TLS 1.0 or 1.1, for example one on an old operating system or runtime, would fail to deploy once the change is applied, {0}.' -f $(if ($s) { 'and a client that can only use TLS 1.0 or 1.1 would no longer be able to connect to the application itself' } else { 'while the application itself is not affected' }))) `
+                    -Listed (Get-Pick $n 'The application is listed below with its minimum TLS versions today, for the application and for its SCM site:' 'The applications are listed below by subscription, each with its minimum TLS versions today, for the application and for its SCM site:') `
+                    -Resources (Get-EmailResourceList $resources $settingLabel) `
+                    -Reversal ('Each minimum TLS version the change sets can be set back to the version {0} today, shown above.' -f (Get-Pick $n 'the application has' 'each application has')) `
+                    -Ask ('Could you let me know whether any deployment tool, build agent or script still reaches the SCM site of {0} over TLS 1.0 or 1.1? With that confirmed, could you approve this change for {1}?' -f $these, $proposedDay) `
+                    -Options ('If one still does, I will hold the SCM part of the change for {0} until it is updated. If another date suits you better, or anything listed above should stay out of the change, please let me know.' -f (Get-Pick $n 'the application' 'that application'))
+            }
+            @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
                     Number = 4; Key = 'app-service-minimum-tls'; Title = 'Set minimum inbound TLS version 1.2 on App Service apps'
-                    Description = 'Set the minimum inbound TLS version to 1.2 on {0}.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps')
-                    Purpose = 'TLS 1.0 and 1.1 have known weaknesses, and App Service stops accepting them on May 31, 2027. Setting 1.2 now refuses these older protocols and matches the default for new apps.'
-                    ResourceIntro = '{0} with the minimum TLS version {1} today.' -f $(if ($n -eq 1) { 'The app below is listed' } else { "The $n apps below are listed" }), (Get-Pick $n 'it allows' 'each one allows')
+                    Description = $(if (-not $k) { 'Set the minimum inbound TLS version to 1.2 on {0}.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps') }
+                        elseif (-not $s) { 'Set the SCM (Kudu) site minimum inbound TLS version to 1.2 on {0}.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps') }
+                        else { 'Set the minimum inbound TLS version and the SCM (Kudu) site minimum inbound TLS version to 1.2 on {0}, each where it is below 1.2.' -f (Get-Listed $n 'App Service app' 'App Service and Function apps') })
+                    Purpose = $(if ($k) { 'TLS 1.0 and 1.1 have known weaknesses, and App Service stops accepting them on May 31, 2027, on the app endpoint and on the SCM (Kudu) endpoint used for deployments. Setting 1.2 on both now refuses these older protocols and matches the default for new apps.' }
+                        else { 'TLS 1.0 and 1.1 have known weaknesses, and App Service stops accepting them on May 31, 2027. Setting 1.2 now refuses these older protocols and matches the default for new apps.' })
+                    ResourceIntro = $(if ($scmRead) { '{0} with the minimum TLS versions {1} today, for the site and for its SCM site.' -f $(if ($n -eq 1) { 'The app below is listed' } else { "The $n apps below are listed" }), (Get-Pick $n 'it allows' 'each one allows') }
+                        else { '{0} with the minimum TLS version {1} today.' -f $(if ($n -eq 1) { 'The app below is listed' } else { "The $n apps below are listed" }), (Get-Pick $n 'it allows' 'each one allows') })
                     ResourceLines = Format-ResourceList $resources
                     Availability = 'No downtime expected while the setting is applied.'
                     UserExperience = 'No change for browsers and clients that use TLS 1.2 or later.'
-                    Dependencies = 'Clients limited to TLS 1.0 or 1.1 can no longer connect once the change is applied.'
+                    Dependencies = $(if ($k) { 'Clients and deployment tools limited to TLS 1.0 or 1.1 can no longer connect to the site or its SCM site once the change is applied.' } else { 'Clients limited to TLS 1.0 or 1.1 can no longer connect once the change is applied.' })
                     Implementation = $impl.ToArray()
-                    Testing = @(
-                        ('In the Azure portal, open {0}, go to Settings > Configuration and select the General settings tab.' -f (Get-EachStep $n 'app'))
-                        'Confirm Minimum Inbound TLS Version shows 1.2.')
-                    Rollback = @(
-                        'In the Azure portal, open the app to revert, go to Settings > Configuration and select the General settings tab.'
-                        'Set Minimum Inbound TLS Version back to the version recorded for the app in the RESOURCES section, select Apply and confirm.')
+                    Testing = $testing
+                    Rollback = $rollback
                     References = @(
                         , @('Set the minimum TLS version for App Service', 'https://learn.microsoft.com/azure/app-service/tls-minimum-version')
-                        , @('Transport Layer Security in Azure App Service', 'https://learn.microsoft.com/azure/app-service/overview-tls'))
+                        , @('Transport Layer Security in Azure App Service', 'https://learn.microsoft.com/azure/app-service/overview-tls')
+                        if ($k) { , @('Kudu service overview', 'https://learn.microsoft.com/azure/app-service/resources-kudu') })
                     Csv = $resources
-                    Email = New-ApprovalEmail -Subject 'minimum TLS 1.2 for Azure App Service applications' `
-                        -Change @(('I would like to set the minimum inbound TLS version to 1.2 on {0}.' -f (Get-Yours $n 'App Service and Function applications')), $explainTls) `
-                        -Why ('I recommend setting this minimum now because TLS 1.0 and 1.1 have known weaknesses, and App Service stops accepting them on May 31, 2027. This change makes {0} refuse them now, and matches the default for new applications.' -f (Get-Pick $n 'the application' 'these applications')) `
-                        -Listed (Get-Pick $n 'The application is listed below with its minimum TLS version today:' 'The applications are listed below by subscription, each with its minimum TLS version today:') `
-                        -Resources (Get-EmailResourceList $resources $settingLabel) `
-                        -Reversal ('The minimum TLS version can be set back to the version {0} today, shown above.' -f (Get-Pick $n 'the application has' 'each application has')) `
-                        -Effect ('Browsers and applications that connect over TLS 1.2 or later will see no change. A client that can only use TLS 1.0 or 1.1, for example one on an old operating system or runtime, will no longer be able to connect to {0} once the change is applied.' -f (Get-Pick $n 'the application' 'these applications'))
+                    Email = $email
                 } } } }
 
     @{ Number = 5; Key = 'sql-minimum-tls'; Change = 'Minimum TLS 1.2 on Azure SQL servers'; Sources = @('NB.6-DETAIL')
@@ -1774,8 +1851,7 @@ $catalog = @(
                 $notes.Add(('{0} left out of CR-17 because Resource Graph returned an empty FTP state, or one Microsoft Learn does not list, and Learn documents no state App Service applies when none is set, so {1} may still accept plain FTP: {2}. Check {3} under Settings > Configuration > General settings in the portal, and raise the change for any that shows All allowed.' -f (Get-Count $unread.Count 'App Service app' 'App Service apps'), (Get-Pick $unread.Count 'it' 'they'), ($unread -join ', '), (Get-Pick $unread.Count 'its FTP state' 'the FTP state of each one')))
             }
             # A slot belongs to a site, so the slot note is left out only when NB.5 shows the pack has no site at all.
-            $noSites = (Get-Status 'NB.5') -eq 'EMPTY' -or ((Get-Status 'NB.5') -eq 'OK' -and -not (Test-Unreadable 'NB.5') -and @(Get-Rows 'NB.5').Count -eq 1 -and (Get-Text @(Get-Rows 'NB.5')[0].Configs) -eq '0')
-            if (-not $noSites) { $notes.Add('NB.5-FTPS-DETAIL reads the production site of each app. Deployment slots have a configuration of their own, which the pack does not read, so CR-17 does not cover them. Check the FTP state of each slot in the portal.') }
+            if (-not (Test-NoAppServiceSites)) { $notes.Add('NB.5-FTPS-DETAIL reads the production site of each app. Deployment slots have a configuration of their own, which the pack does not read, so CR-17 does not cover them. Check the FTP state of each slot in the portal.') }
             $lowTls = [System.Collections.Generic.List[string]]::new()
             $lowTlsNames = [System.Collections.Generic.List[string]]::new()
             $resources = @(foreach ($row in @($rows | Where-Object { (Get-Text $_.FtpsState) -eq 'AllAllowed' })) {

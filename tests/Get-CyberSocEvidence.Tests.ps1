@@ -92,7 +92,7 @@ Describe 'Query catalog' {
         ($catalog | Where-Object Id -eq 'P0.7').Query | Should -Match 'resourcecontainers'
         ($catalog | Where-Object Id -eq 'NB.4-DETAIL').Query | Should -Match 'where not\(coalesce\(tobool\(properties\.httpsOnly\), false\)\)'
         ($catalog | Where-Object Id -eq 'NB.5-DETAIL').Query | Should -Match 'coalesce\(properties\.MinTlsVersion, properties\.minTlsVersion\)' -Because 'appserviceresources returns the config keys in PascalCase'
-        ($catalog | Where-Object Id -eq 'NB.5-DETAIL').Query | Should -Match 'where not\(MinTlsVersion in \("1\.2", "1\.3"\)\)'
+        ($catalog | Where-Object Id -eq 'NB.5-DETAIL').Query | Should -Match 'where not\(MinTlsVersion in \("1\.2", "1\.3"\)\) or not\(ScmMinTlsVersion in \("1\.2", "1\.3"\)\)' -Because 'an app is listed when the site or the SCM site minimum is below 1.2 or empty (1.13.0)'
         ($catalog | Where-Object Id -eq 'NB.6-DETAIL').Query | Should -Match 'where not\(MinimalTlsVersion in \("1\.2", "1\.3"\)\)'
         $paas = $catalog | Where-Object Id -eq 'NB.6-PAAS-DETAIL'
         $paas.Engine | Should -Be 'ARG'
@@ -156,6 +156,15 @@ Describe 'Query catalog' {
         $ss.Notes | Should -Match 'Since CyberSOC 1\.4\.0 each row carries UniqueId \(properties\.uniqueId\)'
         $ss.Query | Should -Match 'project Name = name, ResourceId = id, resourceGroup, subscriptionId, Location = tolower\(location\), OrchestrationMode,\s+UpgradePolicy, Instances, Size, UniqueId, HasModel, AdeUsed, OldSectorDisk, Aks, AksCluster, AksClusterResourceGroup, AksNodePool'
         ([regex]::Matches($ss.Query, 'join kind=')).Count | Should -BeLessOrEqual 3 -Because 'Resource Graph allows three joins per query'
+    }
+
+    It 'reads the SCM (Kudu) site minimum TLS version beside the site minimum in NB.5-DETAIL (1.13.0)' {
+        $d = $catalog | Where-Object Id -eq 'NB.5-DETAIL'
+        $d.Notes | Should -Match 'Added in CyberSOC 1\.13\.0: ScmMinTlsVersion, the minimum inbound TLS version of the SCM \(Kudu\) site'
+        $d.Notes | Should -Match 'Deployment slots \(sites/slots/config\) are not read\.'
+        $d.Query | Should -MatchExactly 'ScmMinTlsVersion = tostring\(coalesce\(properties\.ScmMinTlsVersion, properties\.scmMinTlsVersion\)\)' -Because 'appserviceresources returns the config keys in PascalCase, as for MinTlsVersion'
+        $d.Query | Should -Match 'subscriptionId = tostring\(Parts\[2\]\), MinTlsVersion, ScmMinTlsVersion\r?\n'
+        $d.Query | Should -Match 'where id !contains "\{\{MRG\}\}"'
     }
 
     It 'lists each App Service site that still allows plain FTP, read as NB.5-DETAIL reads its sites (1.7.0)' {
@@ -3032,7 +3041,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
     }
 
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.12.0'
+        $params.ScriptVersion | Should -Be '1.13.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -3130,7 +3139,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.12.0'
+        $params2.ScriptVersion | Should -Be '1.13.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

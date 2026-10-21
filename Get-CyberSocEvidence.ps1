@@ -241,7 +241,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.12.0, based on the EBR collector 1.14.0
+    Version: 1.13.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -291,7 +291,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.12.0'
+$script:EbrVersion = '1.13.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2230,16 +2230,17 @@ appserviceresources
             MinTls12     = countif(MinTls in ("1.2", "1.3"))
 '@))
 
-    $q.Add((New-EbrQuery -Id 'NB.5-DETAIL' -Phase 'P2 Network' -Engine 'ARG' -Title 'App Service sites below minimum TLS 1.2' -Notes 'Added in CyberSOC 1.1.0. The site configurations NB.5 counts as below TLS 1.2, one row per site, for the change requests. The site name and resource group are read from the configuration ID. Internal: names sites, the report embeds counts only.' -Query @'
+    $q.Add((New-EbrQuery -Id 'NB.5-DETAIL' -Phase 'P2 Network' -Engine 'ARG' -Title 'App Service sites below minimum TLS 1.2' -Notes 'Added in CyberSOC 1.1.0. The site configurations NB.5 counts as below TLS 1.2, one row per site, for the change requests. The site name and resource group are read from the configuration ID. Added in CyberSOC 1.13.0: ScmMinTlsVersion, the minimum inbound TLS version of the SCM (Kudu) site, read as MinTlsVersion is, and a site is listed when either value is below 1.2 or empty, for change request CR-04. Deployment slots (sites/slots/config) are not read. Internal: names sites, the report embeds counts only.' -Query @'
 appserviceresources
 | where type =~ "microsoft.web/sites/config"
 | where id !contains "{{MRG}}"
 // appserviceresources returns site config keys in PascalCase and dynamic access is case-sensitive.
-| extend MinTlsVersion = tostring(coalesce(properties.MinTlsVersion, properties.minTlsVersion))
-| where not(MinTlsVersion in ("1.2", "1.3"))
+| extend MinTlsVersion    = tostring(coalesce(properties.MinTlsVersion, properties.minTlsVersion)),
+         ScmMinTlsVersion = tostring(coalesce(properties.ScmMinTlsVersion, properties.scmMinTlsVersion))
+| where not(MinTlsVersion in ("1.2", "1.3")) or not(ScmMinTlsVersion in ("1.2", "1.3"))
 | extend Parts = split(id, "/")
 | project Name = tostring(Parts[8]), ResourceId = tostring(split(id, "/config/")[0]),
-          resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), MinTlsVersion
+          resourceGroup = tostring(Parts[4]), subscriptionId = tostring(Parts[2]), MinTlsVersion, ScmMinTlsVersion
 | order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 

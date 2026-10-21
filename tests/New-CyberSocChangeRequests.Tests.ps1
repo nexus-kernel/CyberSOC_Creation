@@ -115,7 +115,9 @@ BeforeAll {
             (& $container 'starchive' 'rg-data' $s2 'legacy-exports' 'Container' $false))
         Set-PackResult $Path 'DP.2-DETAIL' @(@{ Name = 'kv-app'; ResourceId = 'kv1'; resourceGroup = 'rg-app'; subscriptionId = $s1; RetentionDays = 90 }, @{ Name = 'kv-dev'; ResourceId = 'kv2'; resourceGroup = 'rg-dev'; subscriptionId = $s2; RetentionDays = 7 })
         Set-PackResult $Path 'NB.4-DETAIL' @(@{ Name = 'app-portal'; ResourceId = 'app1'; Kind = 'app'; resourceGroup = 'rg-web'; subscriptionId = $s1; DefaultHostName = 'app-portal.azurewebsites.net' }, @{ Name = 'func-jobs'; ResourceId = 'app2'; Kind = 'functionapp'; resourceGroup = 'rg-web'; subscriptionId = $s1; DefaultHostName = 'func-jobs.azurewebsites.net' })
-        Set-PackResult $Path 'NB.5-DETAIL' @(@{ Name = 'app-portal'; ResourceId = 'app1'; resourceGroup = 'rg-web'; subscriptionId = $s1; MinTlsVersion = '1.0' }, @{ Name = 'app-blank'; ResourceId = 'app3'; resourceGroup = 'rg-web'; subscriptionId = $s1; MinTlsVersion = '' })
+        # NB.5-DETAIL as collector 1.13.0 writes it, with the SCM (Kudu) site minimum. app-portal is below 1.2 on the site
+        # only, and app-blank reads empty in both. The SCM cases are in tests/fixtures/offline-pack/app-service-tls.
+        Set-PackResult $Path 'NB.5-DETAIL' @(@{ Name = 'app-portal'; ResourceId = 'app1'; resourceGroup = 'rg-web'; subscriptionId = $s1; MinTlsVersion = '1.0'; ScmMinTlsVersion = '1.2' }, @{ Name = 'app-blank'; ResourceId = 'app3'; resourceGroup = 'rg-web'; subscriptionId = $s1; MinTlsVersion = ''; ScmMinTlsVersion = '' })
         # NB.5-FTPS-DETAIL: the sites whose FTP state is not FtpsOnly or Disabled, so AllAllowed or empty. app-portal
         # is also below TLS 1.2 in NB.5-DETAIL, and app-blank reads empty in both, as Resource Graph can return it.
         $site = { param($name, $rg, $sub) "/subscriptions/$sub/resourceGroups/$rg/providers/Microsoft.Web/sites/$name" }
@@ -668,6 +670,10 @@ Describe 'Change request generation' {
         $app = & $read 'CR-04-app-service-minimum-tls.txt'
         $app | Should -Not -Match 'app-blank' -Because 'App Service applies TLS 1.2 to an app without a minimum'
         $index | Should -Match '1 App Service app left out of CR-04 because Resource Graph returned no minimum TLS version, and App Service applies 1\.2 when none is set: app-blank\. Check it in the portal'
+        $index | Should -Match '- 1 App Service app left out of the SCM part of CR-04 because Resource Graph returned no SCM minimum TLS version, and App Service applies 1\.2 to the SCM site when none is set: app-blank \(resource group rg-web\)\.'
+        $index | Should -Match 'Deployment slots have a minimum TLS version and an SCM minimum TLS version of their own, which the pack does not read, so CR-04 does not cover them\.'
+        $app | Should -Not -Match 'SCM Minimum Inbound TLS Version' -Because 'no SCM minimum in this pack is below 1.2'
+        $app | Should -Match "- app-portal, resource group rg-web, minimum TLS 1\.0, SCM minimum TLS 1\.2\r?\n"
         $stg = & $read 'CR-03-storage-minimum-tls.txt'
         @(Get-Section $stg 'C) ROLLBACK PLAN')[-1] | Should -Match 'or to Version 1\.0 where it is recorded as not set, since an account without the setting accepts TLS 1\.0, and select Save\.$'
     }
@@ -1096,7 +1102,7 @@ Describe 'Change request generation' {
 
     It 'lists one row per resource in the CSV' {
         @($csv | Where-Object CR -eq 'CR-06').Resource | Should -Be @('kv-app', 'kv-dev')
-        ($csv | Where-Object { $_.CR -eq 'CR-04' }).CurrentSetting | Should -Be 'minimum TLS 1.0'
+        ($csv | Where-Object { $_.CR -eq 'CR-04' }).CurrentSetting | Should -Be 'minimum TLS 1.0, SCM minimum TLS 1.2' -Because 'the rollback restores both recorded values'
         ($csv | Where-Object { $_.CR -eq 'CR-14' }).CurrentSetting | Should -Be 'minimum TLS 1.0' -Because 'Cosmos DB writes TLS 1.0 as Tls'
         ($csv | Where-Object { $_.CR -eq 'CR-12' }).ResourceId | Should -Be "/subscriptions/$s1/resourceGroups/rg-msg/providers/Microsoft.ServiceBus/namespaces/sb-orders"
         @($csv | Where-Object CR -eq 'CR-13').Resource | Should -Be @('evh-telemetry', 'evh-audit')
@@ -2591,6 +2597,127 @@ Describe 'Change request variants' {
         { & $generator -EvidencePath $pack } | Should -Throw '*missing 00-parameters.json*'
     }
 }
+Describe 'App Service minimum TLS on the site and its SCM site (CR-04, collector 1.13.0)' {
+    BeforeAll {
+        # A scenario from tests/fixtures/offline-pack/app-service-tls written into a pack as NB.5-DETAIL, and the change
+        # requests built from it. The pack records the collector version given, which decides how an empty list reads.
+        function Build-Tls([string]$Name, [string]$Version = '1.13.0') {
+            $pack = Join-Path $TestDrive "tls-$Name-$Version"
+            New-ChangeFixture $pack
+            $rows = if ($Name -eq 'empty') { @() } else { @((Get-Content (Join-Path $PSScriptRoot "fixtures/offline-pack/app-service-tls/$Name.json") -Raw | ConvertFrom-Json).Rows) }
+            Set-PackResult $pack 'NB.5-DETAIL' $rows
+            Set-Content (Join-Path $pack '00-parameters.json') ((Get-Content (Join-Path $pack '00-parameters.json') -Raw) -replace '"ScriptVersion":\s*"[^"]+"', ('"ScriptVersion": "{0}"' -f $Version))
+            $null = & $generator -EvidencePath $pack
+            $out = Join-Path $pack '05-change-requests'
+            @{ Out = $out; Index = Get-Content (Join-Path $out '00-index.md') -Raw; Csv = @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-04')
+                Cr = $(if (Test-Path (Join-Path $out 'CR-04-app-service-minimum-tls.txt')) { Get-Content (Join-Path $out 'CR-04-app-service-minimum-tls.txt') -Raw })
+                Email = $(if (Test-Path (Join-Path $out 'CR-04-app-service-minimum-tls.email.txt')) { Get-Content (Join-Path $out 'CR-04-app-service-minimum-tls.email.txt') -Raw }) }
+        }
+        $mixed = Build-Tls 'mixed'
+    }
+
+    It 'changes each part only where it is below 1.2, with both recorded values in RESOURCES and the CSV' {
+        $text = $mixed.Cr
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Set the minimum inbound TLS version and the SCM (Kudu) site minimum inbound TLS version to 1.2 on the 5 App Service and Function apps listed below, each where it is below 1.2.'
+        @(Get-Section $text 'B) PURPOSE')[0] | Should -Match 'App Service stops accepting them on May 31, 2027, on the app endpoint and on the SCM \(Kudu\) endpoint used for deployments\.'
+        $resources = @(Get-Section $text 'C) RESOURCES')
+        $resources[0] | Should -Be 'The 5 apps below are listed with the minimum TLS versions each one allows today, for the site and for its SCM site.'
+        $resources | Should -Contain '- app-scm-only, resource group rg-web, minimum TLS 1.2, SCM minimum TLS 1.0'
+        $resources | Should -Contain '- app-site-only, resource group rg-web, minimum TLS 1.1, SCM minimum TLS 1.2'
+        $resources | Should -Contain '- app-both, resource group rg-api, minimum TLS 1.0, SCM minimum TLS 1.1'
+        $resources | Should -Contain '- app-scm-blank, resource group rg-api, minimum TLS 1.0, SCM minimum TLS not set'
+        $resources | Should -Contain '- app-site-blank, resource group rg-web, minimum TLS not set, SCM minimum TLS 1.0'
+        $text | Should -Not -Match 'app-both-blank' -Because 'neither value is recorded, and App Service applies 1.2 to both'
+        @(Get-Section $text 'C) DEPENDENCIES')[0] | Should -Be 'Clients and deployment tools limited to TLS 1.0 or 1.1 can no longer connect to the site or its SCM site once the change is applied.'
+        @($mixed.Csv | ForEach-Object { '{0}|{1}' -f $_.Resource, $_.CurrentSetting } | Sort-Object) | Should -Be @(
+            'app-both|minimum TLS 1.0, SCM minimum TLS 1.1'
+            'app-scm-blank|minimum TLS 1.0, SCM minimum TLS not set'
+            'app-scm-only|minimum TLS 1.2, SCM minimum TLS 1.0'
+            'app-site-blank|minimum TLS not set, SCM minimum TLS 1.0'
+            'app-site-only|minimum TLS 1.1, SCM minimum TLS 1.2')
+        $mixed.Csv[0].ResourceId | Should -Match '^/subscriptions/[0-9a-f-]+/resourceGroups/rg-[a-z]+/providers/Microsoft\.Web/sites/app-'
+    }
+
+    It 'gives an app only the step its recorded values need, checks both values in the portal and rolls each back to its recorded value' {
+        $impl = @(Get-Section $mixed.Cr 'A) IMPLEMENTATION PLAN')
+        $impl | Should -Be @(
+            '1. In the Azure portal, go to App Services and open the first app listed in the RESOURCES section.'
+            '2. Go to Settings > Configuration and select the General settings tab.'
+            '3. If the RESOURCES section lists a minimum TLS below 1.2 for the app, set Minimum Inbound TLS Version to 1.2. Otherwise leave it as it is.'
+            '4. If the RESOURCES section lists an SCM minimum TLS below 1.2 for the app, set SCM Minimum Inbound TLS Version to 1.2. Otherwise leave it as it is.'
+            '5. Select Apply and confirm.'
+            '6. Repeat steps 1 to 5 for each remaining app listed.')
+        @(Get-Section $mixed.Cr 'B) TESTING PLAN')[1] | Should -Be '2. Confirm Minimum Inbound TLS Version and SCM Minimum Inbound TLS Version both show 1.2 or later.'
+        $rollback = @(Get-Section $mixed.Cr 'C) ROLLBACK PLAN')
+        $rollback[1] | Should -Be '2. Set Minimum Inbound TLS Version and SCM Minimum Inbound TLS Version back to the versions recorded for the app in the RESOURCES section, only for the settings the change set to 1.2, then select Apply and confirm.'
+        ($rollback -join ' ') | Should -Not -Match '\b1\.0\b' -Because 'the rollback restores the recorded value, never a fixed 1.0'
+        @(Get-Section $mixed.Cr 'A) REFERENCES') | Should -Contain '- Kudu service overview: https://learn.microsoft.com/azure/app-service/resources-kudu'
+    }
+
+    It 'names in the index the empty values, the app changed on its SCM site only and the deployment slots' {
+        $mixed.Index | Should -Match '\| 04 \| Minimum TLS 1\.2 on App Service apps \| 5 \| Change request and client email \|'
+        $mixed.Index | Should -Match '- 1 App Service app left out of CR-04 because Resource Graph returned no minimum TLS version, and App Service applies 1\.2 when none is set: app-both-blank\.'
+        $mixed.Index | Should -Match '- 1 App Service app in CR-04 has no site minimum TLS version recorded, and App Service applies 1\.2 when none is set, so CR-04 changes only its SCM site minimum: app-site-blank \(resource group rg-web\)\.'
+        $mixed.Index | Should -Match '- 2 App Service apps left out of the SCM part of CR-04 because Resource Graph returned no SCM minimum TLS version, and App Service applies 1\.2 to the SCM site when none is set: app-both-blank \(resource group rg-web\), app-scm-blank \(resource group rg-api\)\. Check SCM Minimum Inbound TLS Version under Settings > Configuration > General settings'
+        $mixed.Index | Should -Match 'Deployment slots have a minimum TLS version and an SCM minimum TLS version of their own, which the pack does not read, so CR-04 does not cover them\.'
+        $mixed.Index | Should -Not -Match 'Recollect with CyberSOC collector 1\.13\.0'
+    }
+
+    It 'explains the SCM site once and asks whether a deployment tool still reaches it over TLS 1.0 or 1.1 before asking for approval' {
+        $email = $mixed.Email
+        Assert-ApprovalEmail $email 'CR-04 with the SCM site'
+        $email | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure App Service applications and their SCM sites\r?\n'
+        $email | Should -Match 'I would like your approval to set the minimum inbound TLS version to 1\.2 on 5 of your App Service and Function applications and on the SCM site of each, wherever either one allows an older version today\. TLS is the protocol'
+        $email | Should -Match 'I recommend setting this minimum now because TLS 1\.0 and 1\.1 have known weaknesses, and App Service stops accepting them on May 31, 2027, on each application and on its SCM site alike\.'
+        ([regex]::Matches($email, 'also called Kudu')).Count | Should -Be 1 -Because 'the SCM site is explained once'
+        $email | Should -Match '\r?\n\r?\nThe SCM site, also called Kudu, is the deployment and management endpoint that App Service runs beside each application, which tools such as zip deploy, Web Deploy and local Git reach to upload code, stream logs and manage these applications\.\r?\n'
+        $email | Should -Match 'A deployment tool, build agent or script that reaches the SCM site over TLS 1\.0 or 1\.1, for example one on an old operating system or runtime, would fail to deploy once the change is applied, and a client that can only use TLS 1\.0 or 1\.1 would no longer be able to connect to the application itself\.'
+        $email | Should -Match 'The applications are listed below by subscription, each with its minimum TLS versions today, for the application and for its SCM site:'
+        $email | Should -Match '- app-site-blank \(resource group rg-web, minimum TLS not set, SCM minimum TLS 1\.0\)'
+        $email | Should -Match '\r?\n\r?\nEach minimum TLS version the change sets can be set back to the version each application has today, shown above\.'
+        $request = @($email -split "`r?`n" | Where-Object { $_ -match '^Could you' })[0]
+        $request | Should -Match '^Could you let me know whether any deployment tool, build agent or script still reaches the SCM site of these applications over TLS 1\.0 or 1\.1\? With that confirmed, could you approve this change for '
+        $request | Should -Match 'If one still does, I will hold the SCM part of the change for that application until it is updated\.'
+        $email | Should -Not -Match 'app-both-blank'
+    }
+
+    It 'writes only the SCM step for an app whose site minimum is already 1.2 or later' {
+        $one = Build-Tls 'scm-only'
+        @(Get-Section $one.Cr 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Set the SCM (Kudu) site minimum inbound TLS version to 1.2 on the App Service app listed below.'
+        @(Get-Section $one.Cr 'A) IMPLEMENTATION PLAN') | Should -Be @(
+            '1. In the Azure portal, go to App Services and open the app listed in the RESOURCES section.'
+            '2. Go to Settings > Configuration and select the General settings tab.'
+            '3. Set SCM Minimum Inbound TLS Version to 1.2.'
+            '4. Select Apply and confirm.')
+        @(Get-Section $one.Cr 'C) RESOURCES') | Should -Contain '- app-deploy, resource group rg-web, minimum TLS 1.3, SCM minimum TLS 1.0'
+        $one.Csv.CurrentSetting | Should -Be 'minimum TLS 1.3, SCM minimum TLS 1.0'
+        Assert-ApprovalEmail $one.Email 'CR-04 for the SCM site of one application'
+        $one.Email | Should -Match 'I would like your approval to set the minimum inbound TLS version of the SCM site to 1\.2 on one of your App Service and Function applications\.'
+        $one.Email | Should -Match 'would fail to deploy once the change is applied, while the application itself is not affected\.'
+        $one.Email | Should -Match 'still reaches the SCM site of the application over TLS 1\.0 or 1\.1\?'
+        $one.Email | Should -Match 'The application is listed below with its minimum TLS versions today, for the application and for its SCM site:'
+    }
+
+    It 'writes the site part on a pack collected before 1.13.0 and says the SCM part needs recollection' {
+        $old = Build-Tls 'before-scm' '1.12.0'
+        $old.Cr | Should -Not -Match 'SCM' -Because 'the pack does not record the SCM minimum'
+        @(Get-Section $old.Cr 'C) RESOURCES') | Should -Contain '- app-legacy, resource group rg-web, minimum TLS 1.0'
+        @(Get-Section $old.Cr 'A) IMPLEMENTATION PLAN')[2] | Should -Be '3. Set Minimum Inbound TLS Version to 1.2, select Apply and confirm.'
+        $old.Csv.CurrentSetting | Should -Be 'minimum TLS 1.0'
+        Assert-ApprovalEmail $old.Email 'CR-04 on a pack before 1.13.0'
+        $old.Email | Should -Not -Match 'SCM|Kudu'
+        $old.Index | Should -Match '- NB\.5-DETAIL in this pack does not record the SCM \(Kudu\) site minimum TLS version, so CR-04 covers the site minimum only\. Recollect with CyberSOC collector 1\.13\.0 or later for the SCM part\.'
+        $old.Index | Should -Match 'left out of CR-04 because Resource Graph returned no minimum TLS version, and App Service applies 1\.2 when none is set: app-legacy-blank\.'
+    }
+
+    It 'reads an empty list as no gaps only on a pack that records the SCM minimum' {
+        (Build-Tls 'empty' '1.13.0').Index | Should -Match '\| 04 \| Minimum TLS 1\.2 on App Service apps \|  \| No gaps found \|  \|'
+        $old = Build-Tls 'empty' '1.12.0'
+        $old.Index | Should -Match '\| 04 \| Minimum TLS 1\.2 on App Service apps \|  \| No site gaps found, the SCM part needs recollection with CyberSOC collector 1\.13\.0 or later \|  \|' -Because 'before 1.13.0 the list left out a site at 1.2 whatever its SCM minimum'
+        $old.Index | Should -Match 'Recollect with CyberSOC collector 1\.13\.0 or later for the SCM part\.'
+    }
+}
+
 Describe 'Windows PowerShell 5.1, where ConvertFrom-Json writes a JSON array as one object' {
     It 'reads JSON as Windows PowerShell 5.1 does, so the test below cannot pass by accident' {
         (Invoke-WithWindowsPowerShellJson { , @('[{"a":1},{"a":2}]' | ConvertFrom-Json | Where-Object { $null -ne $_ }) }).Count | Should -Be 1

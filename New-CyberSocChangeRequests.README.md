@@ -46,7 +46,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 01 | Diagnostic logging initiative ATMO-MXDR-DIAG-TOSENT assigned on every subscription. When it has no policy state anywhere (DR.6-INITIATIVE is EMPTY) it is assigned once at the management group named with `-ManagementGroup`, or at each subscription. When some subscriptions already have it, it is assigned at each subscription without a state (DR.6-COVERAGE). The covered resource types are counted from P0.5 | DR.6-INITIATIVE, DR.6-COVERAGE, P0.5 | Yes, approval request |
 | 02 | Secure transfer required on storage accounts | DP.1-DETAIL | Yes, approval request |
 | 03 | Minimum TLS 1.2 on storage accounts. Azure Storage has refused TLS 1.0 and 1.1 since February 3, 2026, so this aligns the configuration | DP.1-DETAIL | Yes, approval request |
-| 04 | Minimum inbound TLS 1.2 on App Service and Function apps. App Service refuses TLS 1.0 and 1.1 from May 31, 2027 | NB.5-DETAIL | Yes, approval request |
+| 04 | Minimum inbound TLS 1.2 on App Service and Function apps, on the site (Minimum Inbound TLS Version) and on its SCM (Kudu) site (SCM Minimum Inbound TLS Version, under Settings > Configuration > General settings), each set only where it is below 1.2, so an app whose site minimum is already 1.2 gets only the SCM step. App Service refuses TLS 1.0 and 1.1 on the app endpoint and the SCM endpoint from May 31, 2027. RESOURCES and the CSV show both recorded values, the testing plan checks both in the portal, and the rollback sets each value the change made back to its recorded version, never a fixed 1.0. The email explains the SCM site once, as the deployment and management endpoint that tools such as zip deploy, Web Deploy and local Git reach, and asks before the approval whether any deployment tool, build agent or script still reaches it over TLS 1.0 or 1.1. On a pack collected before 1.13.0, which does not record the SCM value, CR-04 writes the site part only | NB.5-DETAIL | Yes, approval request |
 | 05 | Minimum TLS 1.2 on Azure SQL logical servers. Azure SQL retired TLS 1.0 and 1.1 on August 31, 2025 | NB.6-DETAIL | Yes, approval request |
 | 06 | Purge protection on key vaults, with the soft delete retention period of each vault. Purge protection cannot be disabled once enabled, so the client approves it in writing first | DP.2-DETAIL | Yes, approval request |
 | 07 | Anonymous blob access disabled on the storage accounts where it carries no risk: DP.1-CONTAINERS listed every container (`ReadStatus` OK) and none is set to Blob or Container access. RESOURCES lists the container count of each account. Before Save, the steps check under Data storage > Containers that every container's anonymous access level still reads Private, and an account where one reads Blob or Container is left unchanged for the next pack. The rollback sets Allow Blob anonymous access back to Enabled, which applies within 30 seconds and leaves the containers as they are. An account with a container set to Blob or Container waits for CR-18 | DP.1-DETAIL, DP.1-CONTAINERS | Yes, approval request |
@@ -66,7 +66,13 @@ Each change is written only when the pack shows resources still to fix. The numb
 Resources a change leaves out are named in the index notes:
 
 - CR-04 leaves out App Service apps whose minimum TLS version Resource Graph returned empty, because App Service
-  applies 1.2 when none is set. Check them in the portal if the value may be missing from Resource Graph.
+  applies 1.2 when none is set. Check them in the portal if the value may be missing from Resource Graph. An app
+  whose SCM minimum is below 1.2 is still in CR-04 for its SCM part, and the note says so. Apps whose SCM minimum
+  Resource Graph returned empty are left out of the SCM part the same way, since App Service applies 1.2 to the SCM
+  site too. The notes also say, unless NB.5 shows no App Service site, that deployment slots, which have both values
+  of their own, are not read and so not covered. On a pack collected before 1.13.0 a note says the SCM part needs
+  recollection, and an empty list reads "No site gaps found, the SCM part needs recollection with CyberSOC collector
+  1.13.0 or later", since the older list left out a site at 1.2 whatever its SCM minimum.
 - CR-17 leaves out App Service apps whose FTP state Resource Graph returned empty, or as a value Microsoft Learn does
   not list (only `AllAllowed`, `FtpsOnly` and `Disabled`). Learn documents no state App Service applies when none is
   set, so such an app may still accept plain FTP: the note names each one for a check in the portal. When only those
@@ -486,7 +492,8 @@ DP.4-ELIGIBILITY were added in 1.3.0, and the VmId column of DP.4-ELIGIBILITY an
 DP.4-VMSS-ELIGIBILITY in 1.4.0. NB.2-DETAIL, which lists the internet-exposed management port rules for CR-16
 with every property and attachment, was added in 1.6.0, and NB.5-FTPS-DETAIL, which lists the App Service apps
 that still allow plain FTP for CR-17, in 1.7.0. DP.1-CONTAINERS-DETAIL, which lists each container set to Blob or
-Container for CR-18, was added in 1.8.0 and is written by the DP.1-CONTAINERS engine. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
+Container for CR-18, was added in 1.8.0 and is written by the DP.1-CONTAINERS engine. The ScmMinTlsVersion column of
+NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, was added in 1.13.0. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
 
 ## Validation
 
