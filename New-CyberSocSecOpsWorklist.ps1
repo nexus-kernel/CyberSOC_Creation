@@ -39,7 +39,7 @@ $parameters = Get-Content -LiteralPath (Join-Path $pack '00-parameters.json') -R
 $manifest = @(Import-Csv -LiteralPath (Join-Path $pack '00-manifest.csv'))
 $inv = [cultureinfo]::InvariantCulture
 # The collector version that added each worklist source, for the needs recollection status.
-$addedIn = @{ 'OUT.1-OPEN' = '1.8'; 'DR.10-GAPS' = '1.8'; 'EW.1-DEVICES' = '1.8'; 'DP.5-STALE' = '1.8'; 'IA.8-SIGNINS' = '1.10.0'; 'P0.6-APPLIANCES' = '1.10.0'; 'DP.1-CONTAINERS' = '1.11.0'; 'EW.1-GAPS' = '1.14.0'; 'EW.10-EXCLUDED' = '1.14.0' }
+$addedIn = @{ 'OUT.1-OPEN' = '1.8'; 'DR.10-GAPS' = '1.8'; 'EW.1-DEVICES' = '1.8'; 'DP.5-STALE' = '1.8'; 'IA.8-SIGNINS' = '1.10.0'; 'P0.6-APPLIANCES' = '1.10.0'; 'DP.1-CONTAINERS' = '1.11.0'; 'EW.1-GAPS' = '1.14.0'; 'EW.10-EXCLUDED' = '1.14.0'; 'LIC.5-MATRIX' = '1.11.0'; 'LIC.5-SERVERS' = '1.11.0' }
 # Managed resource group. The collector records the pattern it excluded (1.9.0 applies it to every
 # query that names a resource). Packs from older collectors carry the default, and an explicit empty
 # value means the exclusion was turned off for the run.
@@ -205,6 +205,23 @@ $categories = @(
             $detail = if ((Get-Text $_.ReadStatus) -ne 'OK') { 'Containers not listed: {0}' -f (Get-Text $_.ReadStatus) }
             else { '{0} of {1} containers public, {2} readable anonymously today. Account setting {3}. {4}' -f (Get-Text $_.PublicContainers), (Get-Text $_.Containers), (Get-Text $_.ExposedContainers), (Get-Text $_.AccountAnonymousAccess).ToLowerInvariant(), (Get-Text $_.PublicContainerNames) }
             New-Item2 (Get-Text $_.Account) $detail ('Resource group {0}' -f (Get-Text $_.resourceGroup)) 'DP.1-CONTAINERS' } } }
+    @{ Title = 'Licensing portal checks'; Id = 'LIC'; Control = 'LIC'; Static = $true
+       Why = 'No API reads these Defender portal pages, so they are checked by hand on every collection. The Licenses page needs Security Administrator, or License Administrator with Defender for Endpoint Administrator.'
+       Map = { param($rows)
+            $reading = if ($parameters.PSObject.Properties['Licensing'] -and $parameters.Licensing) { Get-Text $parameters.Licensing.DefenderEndpointPlan } else { '' }
+            New-Item2 'Defender portal, Settings > Endpoints > Licenses' ('Record the subscription state, the available and assigned licenses and whether mixed mode is on, and compare the available figure with the seats the licensing check lists. Pass the plan as -DefenderEndpointPlan Plan1, Plan2, Business or Mixed to the collector or to New-CyberSocChangeRequests.ps1. {0}' -f $(if ($reading) { "Recorded reading: $reading." } else { 'No reading recorded for this pack.' })) 'Licenses page' 'Portal'
+            New-Item2 'Defender portal, Settings > Endpoints > Configuration management > Enforcement scope' 'Record the platforms security settings management enforces on (Windows Server, Linux, macOS) and whether it applies to all devices or to tagged devices only.' 'Enforcement scope' 'Portal' } }
+    @{ Title = 'Licensing capability matrix'; Id = 'LIC.5-MATRIX'; Control = 'LIC'
+       Why = 'The Defender for Endpoint plan, the devices and every capability a change request can depend on, as the licensing check read them: Licensed, Partly licensed, Not licensed or Unknown. A read that failed, was refused or is partial reads Unknown, never Not licensed. A change request whose capability reads Not licensed is not written, and Unknown is confirmed before its email is sent.'
+       Map = { param($rows) $rows | ForEach-Object {
+            $value = if ((Get-Text $_.Kind) -eq 'Devices') { if ((Get-Text $_.State) -eq 'Read') { Get-Text $_.Count } else { 'Unknown' } } else { Get-Text $_.State }
+            $seats = if (Get-Text $_.Seats) { ', {0} seats, {1} assigned' -f (Get-Text $_.Seats), (Get-Text $_.Assigned) } else { '' }
+            New-Item2 (Get-Text $_.Name) ('{0}{1}. {2}' -f $value, $seats, (Get-Text $_.Detail)) (Get-Text $_.Source) 'LIC.5-MATRIX' } } }
+    @{ Title = 'Onboarded servers without an established server license'; Id = 'LIC.5-SERVERS'; Control = 'LIC'
+       Why = 'Servers onboarded to Defender for Endpoint need a server license: Defender for Servers Plan 1 or Plan 2 on their subscription, Defender for Endpoint for servers, or Defender for Business servers. No means the subscription has Defender for Servers off and the tenant holds neither a server license nor Defender for Business, whose server licenses no read can identify. Unknown means the server is outside the pack subscriptions, there are fewer server seats than servers outside Defender for Servers, or the reads could not tell. Turn on Defender for Servers or assign a server license.'
+       Filter = { param($r) (Get-Text $r.Licensed) -ne 'Yes' }
+       Map = { param($rows) $rows | Sort-Object { Get-Text $_.Licensed }, { Get-Text $_.DeviceName } | ForEach-Object {
+            New-Item2 (Get-Text $_.DeviceName) ('{0}, licensed {1}. Defender for Servers on its subscription: {2}. License source: {3}' -f (Get-Text $_.OsPlatform), (Get-Text $_.Licensed).ToLowerInvariant(), (Get-Text $_.DefenderForServers), (Get-Text $_.LicenseSource)) $(if (Get-Text $_.AzureResourceId) { Get-Text $_.AzureResourceId } else { 'Not an Azure resource' }) 'LIC.5-SERVERS' } } }
     @{ Title = 'Network virtual appliances excluded from VM measures'; Id = 'P0.6-APPLIANCES'; Control = 'P0.6'
        Why = 'Machines on a marketplace firewall, router or SD-WAN image. They are left out of Trusted Launch, encryption at host, Azure Backup, endpoint detection and the agent-based Defender for Cloud recommendations because the vendor image cannot take those controls. Confirm each one really is an appliance.'
        Map = { param($rows) $rows | Sort-Object { Get-Text $_.resourceGroup }, { Get-Text $_.Name } | ForEach-Object {
@@ -270,6 +287,12 @@ $sections = foreach ($c in $categories) {
     $status = Get-Status $c.Id
     $items = @()
     $state = ''
+    # A check that reads no result, such as a portal check made on every collection.
+    if ($c.Static) {
+        $items = @(& $c.Map @())
+        [pscustomobject]@{ Title = $c.Title; Id = $c.Id; Control = $c.Control; Why = $c.Why; Status = 'OK'; State = ('{0} item{1}' -f $items.Count, $(if ($items.Count -eq 1) { '' } else { 's' })); Items = $items }
+        continue
+    }
     switch -Regex ($status) {
         '^(OK|PARTIAL|EMPTY)$' {
             # A damaged result never reads as none found.

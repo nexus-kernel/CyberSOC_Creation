@@ -1,0 +1,44 @@
+{
+  "Description": "Every read failed or was refused: everything reads Unknown, never Not licensed",
+  "Subscriptions": [
+    "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+    "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d"
+  ],
+  "Reading": "",
+  "Results": {
+    "LIC.1-SKUS": {
+      "Status": "UNAVAILABLE",
+      "Rows": [],
+      "Detail": "Not a zero: the Graph token cannot read this. Needs LicenseAssignment.Read.All."
+    },
+    "LIC.2-MACHINES": {
+      "Status": "FAILED",
+      "Rows": [],
+      "Detail": "HTTP 403: Forbidden"
+    },
+    "LIC.3-TVM": {
+      "Status": "UNAVAILABLE",
+      "Rows": [],
+      "Detail": ""
+    },
+    "LIC.4-DEVICES": {
+      "Status": "UNAVAILABLE",
+      "Rows": [],
+      "Detail": ""
+    },
+    "P0.3": {
+      "Status": "FAILED",
+      "Rows": [],
+      "Detail": ""
+    }
+  },
+  "Expect": {
+    "DefenderEndpointPlan": "Unknown",
+    "MdeVulnerabilityData": "Unknown",
+    "EntraIdP1": "Unknown",
+    "MdoP1": "Unknown",
+    "DefenderServersP2": "Unknown",
+    "MdeServers": "Unknown",
+    "MdeSecurityManagement": "Unknown"
+  }
+}

@@ -28,6 +28,7 @@ Writes `05-change-requests` into the pack. Offline only. Nothing in the pack is 
 | `-PurgeProtectionApproved` | The client approved purge protection at build kickoff. The CR-06 email refers to that approval and asks the client to confirm it still stands and to approve the proposed date, and the index notes the approval |
 | `-ChangeDate <date>` | The proposed date the client emails ask the client to approve. Every email asks for a reply by a week before it. Defaults to two weeks after the build date, and must be at least eight days after it |
 | `-AdminRuleOpen <resource ID:port>` | The virtual machines whose effective security rules show an Azure Virtual Network Manager security admin rule with Always Allow on 22, 3389, 5985 or 5986 from an internet source, each as the resource ID of the virtual machine followed by `:port`, such as `/subscriptions/<subscription>/resourceGroups/rg-web/providers/Microsoft.Compute/virtualMachines/vm-web01:3389`. The resource ID names each machine once, since a machine name is unique only within its resource group, and the email, change request and index name the machine with its resource group and subscription. CR-16 cannot close those ports, so its email says a central network policy keeps them open and asks who manages it, and the change request and the index name the machines |
+| `-DefenderEndpointPlan <plan>` | The Defender for Endpoint plan read in the Defender portal under Settings > Endpoints > Licenses: Plan1, Plan2, Business or Mixed. Replaces the reading the collection recorded (`Licensing` in `00-parameters.json`). The licensing check takes it for the plan and names any disagreement with what the API reads show. See [Licensing gate](#licensing-gate) |
 
 Run it again after a recollection, or on its own to write the files again with another contact, sender or proposed
 date, or on the day the emails are sent so their dates start from that day. The collector does not take
@@ -195,6 +196,51 @@ Resources a change leaves out are named in the index notes:
   pool created with `--enable-encryption-at-host`, its workloads moved across and the old pool removed. That needs
   capacity, disruption budgets and the pool settings agreed with the client, so the index names each cluster and
   node pool and routes them to a planned project instead of a low-impact change.
+
+## Licensing gate
+
+A change request can depend on a license. The generator derives the licensing check from the pack's own reads
+(LIC.1-SKUS, LIC.2-MACHINES, LIC.3-TVM, LIC.4-DEVICES and P0.3, collector 1.11.0) with `report/Get-CyberSocLicensing.ps1`,
+the code the collector runs for LIC.5-MATRIX, so `-DefenderEndpointPlan` given here replaces the reading the collection
+recorded. Each capability reads Licensed, Partly licensed, Not licensed or Unknown:
+
+- A change request whose capability reads Not licensed is not written. Its index status reads "Not written, needs
+  <capability>, which reads Not licensed", and its note gives the basis, such as no license in the tenant carrying the
+  service plan.
+- Unknown writes the change request, adds ", confirm the license before sending" to its status, and a note names the
+  capability and why it could not be established. A read that failed, was refused or is partial, and a pack collected
+  before 1.11.0, read Unknown, never Not licensed.
+- Partly licensed writes the change request with a note saying what is not covered, such as the servers without a
+  server license.
+
+`00-index.md` has a Licensing section on every run: the Defender for Endpoint plan and where it comes from, the device
+counts (onboarded clients and servers, the clients tagged `License MDE P1`, the servers without a server license, the
+devices security settings management manages), and a table of every capability with its reading, seats, assigned
+licenses, the change requests that need it and the basis. Without a recorded reading it asks for the Licenses page,
+which has no API. On a pack collected before 1.11.0 the section says every capability reads Unknown and asks for a
+recollection.
+
+A change request registers the capability it needs in its catalog entry in `New-CyberSocChangeRequests.ps1`:
+`Requires = @('<key>')` gates it as above, and `Uses = @('<key>')` lists it in the index without a gate, as CR-16 does
+for Defender for Servers Plan 2, which just-in-time VM access needs while Azure Bastion does not. The keys are those of
+`Get-CyberSocCapabilityCatalog` in `report/Get-CyberSocLicensing.ps1`:
+
+| Key | Capability |
+|---|---|
+| `EntraIdP1` | Microsoft Entra ID P1, for Conditional Access |
+| `EntraIdP2` | Microsoft Entra ID P2 |
+| `MdePlan1Sku`, `MdePlan2Sku`, `MdeBusinessSku`, `MdeServerSku`, `MdeUserSku` | The Defender for Endpoint licenses: Plan 1, Plan 2, Defender for Business, Defender for Endpoint for servers, and any user license |
+| `TvmPremium` | Defender Vulnerability Management premium |
+| `MdoP1`, `MdoP2` | Defender for Office 365 Plan 1 (Plan 2 includes it) and Plan 2 |
+| `Mdi`, `Mdca`, `DefenderXdr` | Defender for Identity, Defender for Cloud Apps, Microsoft Defender XDR |
+| `IntuneP1` | Microsoft Intune Plan 1 |
+| `DefenderServers`, `DefenderServersP2`, `DefenderContainers` | Defender for Servers (any plan, and Plan 2) and Defender for Containers, on every subscription in the pack (Partly licensed on some) |
+| `MdeServers` | Defender for Endpoint on servers: a server license for each onboarded server |
+| `MdeVulnerabilityData` | Defender for Endpoint Plan 2 or Defender for Servers, the vulnerability and configuration data behind EW.3, EW.4 and EW.5. Like `MdeServers`, it reads neither Licensed nor Not licensed from the API reads, which list only the devices the account's device groups allow, so a change request that requires either is always written, with a note to confirm or to say what is not covered |
+| `MdeSecurityManagement` | Defender for Endpoint security settings management, which needs a Defender for Endpoint user license even where Defender for Servers covers the servers |
+
+A new capability adds an entry to that catalog with its service plan IDs from Microsoft Learn (Product names and
+service plan identifiers for licensing), or its Defender for Cloud plan from P0.3.
 
 ## How each change request is written
 
@@ -385,11 +431,12 @@ rejects, and a file that still breaks a rule stops the run before any file is wr
 |---|---|
 | `CR-NN-<change>.txt` | One change request |
 | `CR-NN-<change>.email.txt` | The client email for that change, subject line first |
-| `00-index.md` | Every change with its status and files, and notes on the resources left out |
+| `00-index.md` | Every change with its status and files, the licensing check with the change requests that depend on each capability, and notes on the resources left out |
 | `change-requests.csv` | One row per resource, and one per container for CR-18 (`account/container`): CR, Change, Subscription, ResourceGroup, Resource, CurrentSetting, ResourceId |
 
-Each change reports one of these statuses in the index: change request and client email, no gaps found, not
-collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
+Each change reports one of these statuses in the index: change request and client email (with ", confirm the
+license before sending" when a capability it needs reads Unknown), not written because a capability it needs reads Not
+licensed, no gaps found, not collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
 later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15, 1.4.0 or later for CR-09 and CR-15 when they
 have a machine or scale set to change, 1.6.0 or later for CR-16, 1.7.0 or later for CR-17, and 1.8.0 or later for CR-18). A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
 read as no gaps. A change request that also reads a result beyond its sources (DR.6-COVERAGE and P0.5 for CR-01,

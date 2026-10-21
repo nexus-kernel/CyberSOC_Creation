@@ -287,3 +287,42 @@ Describe 'Windows PowerShell 5.1, where ConvertFrom-Json writes a JSON array as 
         $md | Should -Match '\| Azure virtual machines not onboarded to endpoint detection \| EW\.1 \| 0 \| None found \|'
     }
 }
+
+Describe 'Licensing check in the worklist (collector 1.11.0)' {
+    It 'asks for the Licenses page and the enforcement scope on every collection, and asks for a recollection without the matrix' {
+        $pack = Join-Path $TestDrive 'lic-old'
+        New-WorklistFixture $pack
+        $null = & $generator -EvidencePath $pack
+        $md = Get-Content (Join-Path $pack '04-secops-worklist.md') -Raw
+        $md | Should -Match '\| Licensing portal checks \| LIC \| 2 \| 2 items \|'
+        $md | Should -Match '\| Defender portal, Settings > Endpoints > Licenses \| Record the subscription state, the available and assigned licenses and whether mixed mode is on.*No reading recorded for this pack\. \|'
+        $md | Should -Match '\| Defender portal, Settings > Endpoints > Configuration management > Enforcement scope \|'
+        $md | Should -Match '\| Licensing capability matrix \| LIC \| 0 \| Needs recollection with collector 1\.11\.0 or later \|'
+        $md | Should -Match '\| Onboarded servers without an established server license \| LIC \| 0 \| Needs recollection with collector 1\.11\.0 or later \|'
+    }
+
+    It 'shows the matrix as the collector derived it, the recorded reading, and the servers whose license is not established' {
+        $pack = Join-Path $TestDrive 'lic-new'
+        New-WorklistFixture $pack
+        $params = Get-Content (Join-Path $pack '00-parameters.json') -Raw | ConvertFrom-Json
+        $params | Add-Member -NotePropertyName Licensing -NotePropertyValue ([pscustomobject]@{ DefenderEndpointPlan = 'Mixed' })
+        $params | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $pack '00-parameters.json')
+        . (Join-Path $PSScriptRoot '../report/Get-CyberSocLicensing.ps1')
+        $sc = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/licensing/servers-without-defender-for-servers.json') -Raw | ConvertFrom-Json
+        $read = { param($id) $r = $sc.Results.$id; @{ Status = $r.Status; Rows = @($r.Rows); Unreadable = $false; Source = '' } }.GetNewClosure()
+        $l = Get-CyberSocLicensing -Read $read -Subscriptions $sc.Subscriptions
+        Add-WorklistResult $pack 'LIC.5-MATRIX' (ConvertTo-Json -InputObject @($l.Matrix) -Depth 6)
+        Add-WorklistResult $pack 'LIC.5-SERVERS' (ConvertTo-Json -InputObject @($l.Servers) -Depth 6)
+        $null = & $generator -EvidencePath $pack
+        $md = Get-Content (Join-Path $pack '04-secops-worklist.md') -Raw
+        $md | Should -Match 'Recorded reading: Mixed\.'
+        $md | Should -Match '\| Defender for Endpoint plan \| Plan 2, 250 seats, 231 assigned\. Licenses: Plan 2 licensed'
+        $md | Should -Match '\| Onboarded servers without a server license \| 1\. Named in LIC\.5-SERVERS: vm-sql01\.'
+        $md | Should -Match '\| Defender for Office 365 Plan 1 \| Licensed, 250 seats, 231 assigned\.'
+        $md | Should -Match '\| Onboarded servers without an established server license \| LIC \| 2 \| 2 items \|'
+        $md | Should -Match '\| vm-sql01 \| WindowsServer2019, licensed no\. Defender for Servers on its subscription: Off\. License source: None found \| /subscriptions/a0b1c2d3'
+        $md | Should -Match '\| dc-onprem01 \| WindowsServer2016, licensed unknown\. Defender for Servers on its subscription: Not an Azure machine\. License source: Not established \| Not an Azure resource \|'
+        $csv = @(Import-Csv (Join-Path $pack '04-secops-worklist.csv') | Where-Object ControlId -eq 'LIC')
+        @($csv | Where-Object Source -eq 'LIC.5-MATRIX').Count | Should -Be @($l.Matrix).Count
+    }
+}

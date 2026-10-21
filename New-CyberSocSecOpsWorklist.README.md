@@ -34,6 +34,9 @@ is passed. Offline only. Nothing in the pack is changed.
 | Workload subnets without segmentation | `NB.1` | Workload subnets with no network security group and no route table |
 | High severity Defender for Cloud recommendations | `DFC.1-DETAIL` | One line per unhealthy high severity recommendation, with every affected resource and resource group |
 | Blob containers set to anonymous access | `DP.1-CONTAINERS` | A storage account holding containers whose own access level is Blob or Container, with the container names, how many are readable anonymously today and the account setting. Accounts whose containers could not be listed are shown with the error |
+| Licensing portal checks | none, on every collection | The Defender portal pages no API reads: Settings > Endpoints > Licenses (the subscription state, the available and assigned licenses and whether mixed mode is on, compared with the seats the licensing check lists, then passed as `-DefenderEndpointPlan`), with the reading the pack recorded, and Settings > Endpoints > Configuration management > Enforcement scope (the platforms security settings management enforces on) |
+| Licensing capability matrix | `LIC.5-MATRIX` | One item per row of the licensing check: the Defender for Endpoint plan, the device counts and each capability a change request can depend on, Licensed, Partly licensed, Not licensed or Unknown, with its seats and basis |
+| Onboarded servers without an established server license | `LIC.5-SERVERS` | An onboarded server whose subscription has Defender for Servers off, with neither a server license nor Defender for Business in the tenant (licensed no), or one outside the pack subscriptions, beyond the server seats, or that the reads could not tell (licensed unknown). Turn on Defender for Servers or assign a server license |
 | Network virtual appliances excluded from VM measures | `P0.6-APPLIANCES` | A machine on a marketplace firewall, router or SD-WAN image that the collector leaves out of the VM measures. Confirm each really is an appliance |
 
 Rows that name a resource in the managed resource group (`ManagedRgPattern` in `00-parameters.json`, default `aznativesol0`) are dropped before any category is built. Collector 1.9.0 already excludes them at query time. The check here covers packs collected earlier and reads the resource group, resource id, Azure resource id, source resource id and vault columns only, so an incident title is never matched.
@@ -41,7 +44,7 @@ Rows that name a resource in the managed resource group (`ManagedRgPattern` in `
 Each category reports one of five statuses: a count of items, none found, not collected with the
 manifest status, needs recollection with the collector version that added the source (1.8 for
 `OUT.1-OPEN`, `DR.10-GAPS`, `EW.1-DEVICES` and `DP.5-STALE`, 1.10.0 for `IA.8-SIGNINS` and
-`P0.6-APPLIANCES`, 1.11.0 for `DP.1-CONTAINERS`, 1.14.0 for `EW.1-GAPS` and `EW.10-EXCLUDED`) when the pack predates it,
+`P0.6-APPLIANCES`, 1.11.0 for `DP.1-CONTAINERS` and, from the CyberSOC collector, `LIC.5-MATRIX` and `LIC.5-SERVERS`, 1.14.0 for `EW.1-GAPS` and `EW.10-EXCLUDED`) when the pack predates it,
 or result file unreadable when the manifest reads the result as OK or PARTIAL but its file is missing, empty or
 malformed. A damaged pack never reads as none found. Recollect or restore the pack.
 

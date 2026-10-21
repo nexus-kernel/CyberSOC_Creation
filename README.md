@@ -37,6 +37,11 @@ missing evidence never becomes a favorable zero.
        -VulnAssessmentPath ./VULN_ASSESSMENT/2026-07, ./VULN_ASSESSMENT/2026-08, ./VULN_ASSESSMENT/2026-09, ./VULN_ASSESSMENT/2026-10
    ```
 
+   Add `-DefenderEndpointPlan Plan1`, `Plan2`, `Business` or `Mixed` with the plan the Defender portal shows under
+   Settings > Endpoints > Licenses, which no API reads. The collection runs a licensing check (LIC.5-MATRIX) of the
+   Defender for Endpoint plan and usage and of the licenses each change request needs, and a change request whose
+   license reads Not licensed is not written.
+
    The pack is `CyberSOC-Evidence_<client>_<report month>_<timestamp>/`. Runs dated inside the window, up to the
    collection date, are imported, and only for this client's subscriptions.
 3. **Add reviewed context** if you have it (optional): copy `report/context.example.json` and add the analyst
