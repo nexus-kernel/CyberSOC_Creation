@@ -1,0 +1,53 @@
+{
+  "Description": "NB.5-DETAIL from collector 1.13.0: only the SCM value low, only the site value low, both low, the SCM value empty, the site value empty with the SCM value low, and both empty",
+  "Rows": [
+    {
+      "Name": "app-scm-only",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-scm-only",
+      "resourceGroup": "rg-web",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "MinTlsVersion": "1.2",
+      "ScmMinTlsVersion": "1.0"
+    },
+    {
+      "Name": "app-site-only",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-site-only",
+      "resourceGroup": "rg-web",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "MinTlsVersion": "1.1",
+      "ScmMinTlsVersion": "1.2"
+    },
+    {
+      "Name": "app-both",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-api/providers/Microsoft.Web/sites/app-both",
+      "resourceGroup": "rg-api",
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "MinTlsVersion": "1.0",
+      "ScmMinTlsVersion": "1.1"
+    },
+    {
+      "Name": "app-scm-blank",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-api/providers/Microsoft.Web/sites/app-scm-blank",
+      "resourceGroup": "rg-api",
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "MinTlsVersion": "1.0",
+      "ScmMinTlsVersion": ""
+    },
+    {
+      "Name": "app-site-blank",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-site-blank",
+      "resourceGroup": "rg-web",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "MinTlsVersion": "",
+      "ScmMinTlsVersion": "1.0"
+    },
+    {
+      "Name": "app-both-blank",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-both-blank",
+      "resourceGroup": "rg-web",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "MinTlsVersion": "",
+      "ScmMinTlsVersion": ""
+    }
+  ]
+}

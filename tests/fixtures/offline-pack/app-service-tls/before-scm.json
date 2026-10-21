@@ -1,0 +1,19 @@
+{
+  "Description": "NB.5-DETAIL from a collector before 1.13.0, without the ScmMinTlsVersion column",
+  "Rows": [
+    {
+      "Name": "app-legacy",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-legacy",
+      "resourceGroup": "rg-web",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "MinTlsVersion": "1.0"
+    },
+    {
+      "Name": "app-legacy-blank",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Web/sites/app-legacy-blank",
+      "resourceGroup": "rg-web",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "MinTlsVersion": ""
+    }
+  ]
+}
