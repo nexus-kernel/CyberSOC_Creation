@@ -3003,7 +3003,8 @@ Describe 'MySQL flexible server audit parameters set with the diagnostic logging
         $email = $mixed.Email
         Assert-ApprovalEmail $email 'CR-10 with MySQL audit parameters'
         $email | Should -Match '^Subject: Approval requested: diagnostic logging remediation for Azure resources'
-        $email | Should -Match 'I would like your approval to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on 4 of your Azure resources and turn on the MySQL audit log on the 3 MySQL flexible servers among them\.'
+        $email | Should -Match 'I would like your approval to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on 2 of your Azure resources and turn on the MySQL audit log on the 3 MySQL flexible servers, 1 of them among those resources and 2 that need only their audit parameters\.' -Because 'only the resources DR.6-NONCOMPLIANT names get remediation tasks'
+        $email | Should -Not -Match 'on 4 of your Azure resources' -Because 'a compliant server that needs only its audit parameters gets no remediation task'
         $email | Should -Match 'The MySQL audit parameters are the exception, since they change what each server logs, as set out next\.'
         $email | Should -Match 'The MySQL audit log adds rows in step with the connections and administrative statements on each server'
         $email | Should -Match 'Azure reports both parameters as dynamic, so they apply without a restart and the databases stay available\.'
@@ -3014,6 +3015,25 @@ Describe 'MySQL flexible server audit parameters set with the diagnostic logging
         $email | Should -Match "- mysql-billing \(resource group rg-db, MySQL flexible server, audit_log_enabled OFF, audit_log_events CONNECTION,DDL, audit_log_exclude_users svc_backup\)\r?\n- mysql-general \(resource group rg-db, MySQL flexible server, audit_log_enabled OFF, audit_log_events CONNECTION_V2,GENERAL\)\r?\n- mysql-orders \(resource group rg-db, MySQL flexible server, audit_log_enabled OFF, audit_log_events CONNECTION\)"
         $email | Should -Not -Match 'ATMO-MXDR-MYSQL-TOSENT' -Because 'the client email names the resource type, not the policy'
         $email | Should -Match ('Could you approve this change for {0}\?' -f $dayPattern) -Because 'parameters that apply without a restart need no maintenance window'
+    }
+
+    It 'counts only the remediated resources in the combined email, whether the servers are among them or need only their audit parameters' {
+        $pack = (Build-MySql 'mixed' 'PARTIAL').Pack
+        $rows = @((Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/mysql-audit/mixed.json') -Raw | ConvertFrom-Json).MySqlAudit)
+        $emailPath = Join-Path $pack '05-change-requests/CR-10-diagnostic-remediation.email.txt'
+        # Only the non-compliant server: every server is among the remediated resources.
+        Set-PackResult $pack 'DR.6-MYSQLAUDIT' @($rows | Where-Object Name -eq 'mysql-orders')
+        $null = & $generator -EvidencePath $pack
+        $email = Get-Content $emailPath -Raw
+        Assert-ApprovalEmail $email 'CR-10 with the MySQL server among the remediated resources'
+        $email | Should -Match 'I would like your approval to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on 2 of your Azure resources and turn on the MySQL audit log on the MySQL flexible server among them\.'
+        # Only a compliant server: it needs its audit parameters and no remediation task.
+        Set-PackResult $pack 'DR.6-NONCOMPLIANT' @((Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/mysql-audit/mixed.json') -Raw | ConvertFrom-Json).NonCompliant | Where-Object { $_.ResourceId -match '/vaults/' })
+        Set-PackResult $pack 'DR.6-MYSQLAUDIT' @($rows | Where-Object Name -eq 'mysql-billing')
+        $null = & $generator -EvidencePath $pack
+        $email = Get-Content $emailPath -Raw
+        Assert-ApprovalEmail $email 'CR-10 with an audit-only MySQL server'
+        $email | Should -Match 'I would like your approval to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on one of your Azure resources and turn on the MySQL audit log on the MySQL flexible server, which needs only its audit parameters\.' -Because 'the key vault is the only resource remediated'
     }
 
     It 'writes CR-10 for the audit parameters alone when every resource is compliant, and asks for a window where a parameter is static or not reported' {
@@ -3030,10 +3050,11 @@ Describe 'MySQL flexible server audit parameters set with the diagnostic logging
             '- mysql-unreported, resource group rg-fin, MySQL flexible server, audit_log_enabled ON, audit_log_events CONNECTION,ADMIN, restart not reported') -Because 'audit_log_enabled ON without DDL and DCL still leaves events out'
         $text | Should -Not -Match 'Policy > Remediation' -Because 'nothing is left to remediate'
         $impl = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
-        $impl[2] | Should -Match 'On a server the RESOURCES section marks restart pending, the portal shows a saved value that waits for a restart, and the recorded value is the one in effect today, so that difference is expected\.$'
+        $impl[2] | Should -Match ' A server the RESOURCES section marks restart pending is the exception: the portal shows a saved value that waits for a restart, and the recorded value is the one in effect today, so that difference is expected and is not a change since collection\. Do not note it, and keep the recorded value as the one the rollback sets back\.$' -Because 'the saved value on mysql-pending is expected to differ, and setting it back would leave the audit state the change set'
         $impl[5] | Should -Match 'A server marked restart pending needs that restart even when nothing is left to set, since its saved value is not in effect until then\.$' -Because 'a saved value waiting for a restart is not in effect'
         @(Get-Section $text 'A) IMPLEMENTATION PLAN')[5] | Should -Match '^6\. Select Save\. A server the RESOURCES section marks restart needed, or restart not reported, may ask to be restarted, since a static parameter applies only after a restart\. Select Restart later'
         @(Get-Section $text 'A) AVAILABILITY/PERFORMANCE') | Should -Match '^No impact from the diagnostic settings, but a MySQL server that does not report both audit parameters as dynamic may need a restart, a short outage,'
+        @(Get-Section $text 'C) ROLLBACK PLAN')[0] | Should -Match 'and select Save\. On a server marked restart pending, set back the recorded values, which were in effect before the change, and not the saved value the portal showed before the change\. A server the RESOURCES section marks restart needed' -Because 'restoring the saved value on mysql-pending would never return it to the audit state it had before the change'
         @(Get-Section $text 'C) ROLLBACK PLAN')[0] | Should -Match 'keeps the changed values until it restarts, since a static parameter applies only after a restart\. If the portal asks to restart it, select Restart later and restart it within a maintenance window the client agrees, and the rollback is complete only after that restart\.$' -Because 'a static parameter set back takes effect only after a restart too'
         @(Get-Section $text 'A) REFERENCES') | Should -Contain '- Restart an Azure Database for MySQL - Flexible Server instance by using the Azure portal: https://learn.microsoft.com/azure/mysql/flexible-server/how-to-restart-server-portal'
         @(Get-Section $text 'A) REFERENCES') | Should -Not -Match 'governance/policy' -Because 'no remediation task is run'
