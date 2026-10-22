@@ -371,8 +371,8 @@ in the pack (`results/<ID>.csv`).
   (`sites/slots/config`) are not read. On an earlier pack CR-04 writes the site part only and its index note asks for
   recollection. The query is in section 6 of the CyberSOC Monthly Report Runbook.
 - CyberSOC collector 1.12.0 (October 21, 2026): `IA.16-ACCOUNTS` (engine `EMERGENCY-ACCESS`, phase P2 Identity)
-  reads the emergency access accounts every Conditional Access change excludes (decision 4 of the October 21 review),
-  with `IA.16-GROUPS` as its detail. Both are internal, since they name accounts. See section 6 of the CyberSOC Monthly
+  reads the emergency access accounts every Conditional Access change excludes and CR-19 leaves out (decision 4 of the
+  October 21 review), with `IA.16-GROUPS` as its detail. Both are internal, since they name accounts. See section 6 of the CyberSOC Monthly
   Report Runbook.
   - The accounts are every account whose UPN contains Atmosera, members and guests alike (a guest from an Atmosera
     domain carries the word in its `#EXT#` UPN), and every user in an Atmosera group, read as a group whose display

@@ -217,6 +217,9 @@ BeforeAll {
             (& $entraRole 'Helpdesk Administrator' $roleIds.Helpdesk 'Standing' $kim $opsGroup -Scope '/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9')
             (& $entraRole 'Helpdesk Administrator' $roleIds.Helpdesk 'Standing' $lee $opsNested -Scope '/administrativeUnits/4b5c6d7e-8f90-4a1b-b2c3-d4e5f6a7b8c9')
             (& $entraRole 'Global Administrator' $roleIds.Ga 'Standing' $ann))
+        # IA.16 as a current pack holds it: read in full, with no Atmosera account or group, so CR-19 leaves no one out.
+        Set-PackResult $Path 'IA.16-ACCOUNTS' @()
+        Set-PackResult $Path 'IA.16-GROUPS' @()
     }
     function Get-Section([string]$Text, [string]$Heading) {
         # The lines between a template heading and the next heading of the template.
@@ -3395,7 +3398,7 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
                 @{ Name = ''; State = 'Needs recollection with CyberSOC collector 1\.12\.0 or later' })) {
             $pack = Join-Path $TestDrive "ea-gate-$($case.Name)"
             New-ChangeFixture $pack
-            if ($case.Name) { $null = Add-EaScenario $pack $case.Name }
+            if ($case.Name) { $null = Add-EaScenario $pack $case.Name } else { foreach ($id in 'IA.16-ACCOUNTS', 'IA.16-GROUPS') { Remove-PackResult $pack $id } }
             (Read-EaPack $pack).Ready | Should -BeFalse -Because $case.Name
             Invoke-WithWindowsPowerShellJson { $null = & $script:eaGated -EvidencePath $pack }
             Test-Path (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.txt') | Should -BeFalse -Because $case.Name
@@ -3415,6 +3418,101 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
         Invoke-WithWindowsPowerShellJson { $null = & $script:eaGated -EvidencePath $pack }
         Test-Path (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.email.txt') | Should -BeTrue -Because 'a complete read with accounts lets the change through'
         (Get-EaSection (Get-Index $pack)) | Should -Match 'CR-02 is written only when the read is complete'
+    }
+
+    Context 'CR-19 leaves the emergency access accounts out' {
+        BeforeAll {
+            # The disabled accounts of the cr19-disabled scenario added to the full fixture's IA.15 results, with their roles:
+            # one matched by its UPN, a guest matched by its #EXT# UPN, one in a plain group nested in an Atmosera group, and
+            # one that matches nothing. Riley also holds roles through platform-operators, as a member of it.
+            $script:cr19 = (Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/emergency-access/cr19-disabled.json') -Raw | ConvertFrom-Json).Cr19
+            foreach ($u in @($cr19.Disabled)) { $people[$u.PrincipalId] = @($u.DisplayName, $u.UserPrincipalName, $false) }
+            function Add-Cr19Accounts([string]$Path, [string[]]$Only) {
+                $keep = { param($id) -not $Only -or $id -in $Only }
+                $groups = @{ ops = $opsGroup }
+                $old = { param($Id) @(if (-not $Only) { Get-Content (Join-Path $Path "results/$Id.json") -Raw | ConvertFrom-Json }) }
+                Set-PackResult $Path 'IA.15-DISABLED' (@(& $old 'IA.15-DISABLED') + @($cr19.Disabled | Where-Object { & $keep $_.PrincipalId }))
+                Set-PackResult $Path 'IA.15-RBAC' (@(& $old 'IA.15-RBAC') + @($cr19.Azure | Where-Object { & $keep $_.Principal } | ForEach-Object {
+                            & $azureRole ($_.Scope.Replace('{s1}', $s1).Replace('{s2}', $s2)) $_.Role $roleIds[$_.RoleKey] $_.Principal $(if ($_.Group) { $groups[$_.Group] }) }))
+                Set-PackResult $Path 'IA.15-ENTRA' (@(& $old 'IA.15-ENTRA') + @($cr19.Entra | Where-Object { & $keep $_.Principal } | ForEach-Object {
+                            & $entraRole $_.Role $roleIds[$_.RoleKey] $_.Type $_.Principal $(if ($_.Group) { $groups[$_.Group] }) }))
+            }
+            $script:cr19Files = 'CR-19-disabled-account-roles.txt', 'CR-19-disabled-account-roles.email.txt', 'CR-19-disabled-account-roles.email.csv'
+            $script:byUpn = 'breakglass-atmosera02|Emergency Access 02|sam\.rivera|Sam Rivera'
+            $script:byGroup = 'riley\.night|Riley Night'
+            $script:leftOutUpn = 'Emergency Access 02 \(breakglass-atmosera02@contoso\.onmicrosoft\.com\), Atmosera in its UPN / Sam Rivera \(Atmosera\) \(sam\.rivera_atmosera\.com#EXT#@contoso\.onmicrosoft\.com\), Atmosera in its UPN'
+        }
+
+        It 'leaves out every disabled emergency access account, matched by its UPN or through a nested Atmosera group, and still removes the roles of one that matches nothing' {
+            $pack = Join-Path $TestDrive 'cr19-ea-complete'
+            New-ChangeFixture $pack
+            $null = Add-EaScenario $pack 'cr19-disabled'
+            Add-Cr19Accounts $pack
+            Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -ClientContact 'Dana' -SenderName 'Scott Example' }
+            $out = Join-Path $pack '05-change-requests'
+            foreach ($f in $cr19Files) {
+                $t = Get-Content (Join-Path $out $f) -Raw
+                $t | Should -Not -Match "$byUpn|$byGroup" -Because "$f leaves every emergency access account out"
+                if ($f -notlike '*.email.txt') { $t | Should -Match 'casey\.former' -Because "$f still lists the disabled account that matches nothing" }
+            }
+            $rows = @(Import-Csv (Join-Path $out 'change-requests.csv') | Where-Object CR -eq 'CR-19')
+            @($rows | Where-Object { "$($_.Resource) $($_.CurrentSetting) $($_.ResourceId)" -match "$byUpn|$byGroup|$($cr19.Disabled[2].PrincipalId)" }).Count | Should -Be 0 -Because 'Riley is not removed from platform-operators either'
+            @($rows | Where-Object Resource -match 'casey\.former').Count | Should -Be 2
+            $index = Get-Index $pack
+            $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| 12 \| Change request and client email \| CR-19-disabled-account-roles\.txt, '
+            $index | Should -Match ('- CR-19 leaves out 3 disabled emergency access accounts, so none of their roles is removed and they are not removed from any group: Emergency Access 02 \(breakglass-atmosera02@contoso\.onmicrosoft\.com\), Atmosera in its UPN / Riley Night \(riley\.night@contoso\.onmicrosoft\.com\), a member of the Atmosera group Atmosera Responders / Sam Rivera \(Atmosera\) \(sam\.rivera_atmosera\.com#EXT#@contoso\.onmicrosoft\.com\), Atmosera in its UPN\. A disabled emergency access account cannot sign in when it is needed, so confirm with the client that each one is meant to be disabled\.')
+            $index | Should -Not -Match 'Confirm before sending CR-19|Global Administrator, Privileged Role Administrator' -Because 'the read is complete, and the only Global Administrator is left out'
+            $index | Should -Not -Match 'removes each one from the group it sits in: [^\r\n]*Riley'
+            $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
+            (Get-Section $text 'A) IMPLEMENTATION PLAN')[0] | Should -Match 'Microsoft Entra ID > Users and open the first account listed' -Because 'a complete read needs no Atmosera group check'
+            $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
+            Assert-ApprovalEmail $email 'CR-19 with emergency access accounts left out'
+            $email | Should -Not -Match '(?i)atmosera|emergency access account|left out of' -Because 'the client email says nothing of the accounts left out'
+            $email | Should -Match 'I would like your approval to remove the Azure and Microsoft Entra roles still held by 4 disabled accounts in your tenant'
+        }
+
+        It 'leaves out the UPN matches and asks to confirm the Atmosera groups before sending when IA.16 is missing or failed' {
+            foreach ($case in @(
+                    @{ Name = 'missing'; Why = 'the pack was collected before the emergency access read \(IA\.16-ACCOUNTS and IA\.16-GROUPS, CyberSOC collector 1\.12\.0\)' }
+                    @{ Name = 'failed-read'; Why = 'the emergency access read is not complete \(IA\.16-ACCOUNTS UNAVAILABLE, IA\.16-GROUPS FAILED\)' })) {
+                $pack = Join-Path $TestDrive "cr19-ea-$($case.Name)"
+                New-ChangeFixture $pack
+                if ($case.Name -eq 'missing') { foreach ($id in 'IA.16-ACCOUNTS', 'IA.16-GROUPS') { Remove-PackResult $pack $id } } else { $null = Add-EaScenario $pack $case.Name }
+                Add-Cr19Accounts $pack
+                Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -ClientContact 'Dana' -SenderName 'Scott Example' }
+                $out = Join-Path $pack '05-change-requests'
+                foreach ($f in $cr19Files) {
+                    $t = Get-Content (Join-Path $out $f) -Raw
+                    $t | Should -Not -Match $byUpn -Because "$f leaves out the UPN matches on any pack ($($case.Name))"
+                    if ($f -notlike '*.email.txt') { $t | Should -Match $byGroup -Because "a group match cannot be known without the read ($($case.Name))" }
+                }
+                $index = Get-Index $pack
+                $index | Should -Match '\| 19 \| Roles removed from disabled accounts \| \d+ \| Change request and client email, confirm no listed account is in an Atmosera group before sending \|' -Because $case.Name
+                $index | Should -Match ('- CR-19 leaves out 2 disabled emergency access accounts, so none of their roles is removed and they are not removed from any group: {0}\.' -f $leftOutUpn) -Because $case.Name
+                $index | Should -Match ('- Confirm before sending CR-19 that no account in it is an emergency access account: {0}, so CR-19 leaves out only the accounts with Atmosera in their UPN, and an account that sits in an Atmosera group may still be listed\. In Microsoft Entra ID > Groups > All groups, search for Atmosera and open Members on each group found, which lists the members of nested groups too\.' -f $case.Why) -Because $case.Name
+                $text = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.txt') -Raw
+                $steps = @(Get-Section $text 'A) IMPLEMENTATION PLAN')
+                $steps[0] | Should -Match '^1\. In the Azure portal, go to Microsoft Entra ID > Groups > All groups and search for Atmosera\. .*An account found there is an emergency access account, so leave every role and group membership it holds unchanged' -Because $case.Name
+                $steps[1] | Should -Match '^2\. In the Azure portal, go to Microsoft Entra ID > Users and open the first account listed'
+                $steps | Should -Contain ($steps | Where-Object { $_ -match '^\d+\. Repeat steps 2 to \d+ for each remaining account listed\.$' }) -Because 'the Atmosera group check runs once, before the steps repeated for each account'
+                $email = Get-Content (Join-Path $out 'CR-19-disabled-account-roles.email.txt') -Raw
+                Assert-ApprovalEmail $email "CR-19 without a complete emergency access read ($($case.Name))"
+                $email | Should -Not -Match '(?i)atmosera'
+            }
+        }
+
+        It 'reads as no gaps for the accounts that remain when every disabled account with roles is an emergency access account' {
+            $pack = Join-Path $TestDrive 'cr19-ea-empty'
+            New-ChangeFixture $pack
+            $null = Add-EaScenario $pack 'cr19-disabled'
+            Add-Cr19Accounts $pack -Only @($cr19.Disabled[0..2] | ForEach-Object PrincipalId)
+            Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack }
+            Test-Path (Join-Path $pack '05-change-requests/CR-19-disabled-account-roles.txt') | Should -BeFalse
+            $index = Get-Index $pack
+            $index | Should -Match '\| 19 \| Roles removed from disabled accounts \|  \| No gaps found in the disabled accounts that remain, 3 emergency access accounts left out, see the notes \|  \|'
+            $index | Should -Match '- CR-19 leaves out 3 disabled emergency access accounts'
+            @(Import-Csv (Join-Path $pack '05-change-requests/change-requests.csv') | Where-Object CR -eq 'CR-19').Count | Should -Be 0
+        }
     }
 
     It 'reads an unreadable result file as not complete' {

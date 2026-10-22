@@ -11,6 +11,9 @@
     $true. The change request is then written only when $emergencyAccess.Ready is true, and its Build reads
     $emergencyAccess: ExcludeGroups and ExcludeUsers are what every Conditional Access policy it proposes excludes,
     and Test-CyberSocEmergencyAccessId tells it which existing exclusion it must never propose to remove.
+
+    A change that removes access, such as CR-19, leaves out every account Test-CyberSocEmergencyAccessUpn or
+    Test-CyberSocEmergencyAccessId names, and relies on the group match only when $emergencyAccess.Complete is true.
 #>
 
 # The word that marks an emergency access account or group, matched anywhere in the value without regard to case.
@@ -97,6 +100,8 @@ function Get-CyberSocEmergencyAccess {
     #   Ready          true only when both reads are complete and found at least one account. A read that failed, is
     #                  partial, is unreadable or is missing, or a tenant with no Atmosera account, is never ready.
     #   Why            why it is not ready, for the index and the state of a gated change request.
+    #   Complete       true when both reads are complete (OK or EMPTY, and readable), also when they found no account, so a
+    #                  change that only leaves the accounts out, such as CR-19, can trust that nothing was missed.
     #   Accounts       every emergency access account, with how it matched (UPN, Group, or UPN and group).
     #   Groups         every Atmosera group, with its members and membership type.
     #   ExcludeGroups  the group IDs a policy excludes, so a new member is covered without a change.
@@ -109,12 +114,14 @@ function Get-CyberSocEmergencyAccess {
     $accounts = @(if ($acc.Status -in 'OK', 'PARTIAL' -and -not $acc.Unreadable) { @($acc.Rows) | Where-Object { $null -ne $_ } })
     $groups = @(if ($grp.Status -in 'OK', 'PARTIAL' -and -not $grp.Unreadable) { @($grp.Rows) | Where-Object { $null -ne $_ } })
     $why = ''
+    $complete = $false
     if ($acc.Status -eq 'MISSING' -or $grp.Status -eq 'MISSING') { $why = 'Missing' }
     else {
         $bad = @(foreach ($p in @(@{ Id = 'IA.16-ACCOUNTS'; R = $acc }, @{ Id = 'IA.16-GROUPS'; R = $grp })) {
                 if ($p.R.Unreadable) { '{0} unreadable' -f $p.Id }
                 elseif ($p.R.Status -notin 'OK', 'EMPTY') { '{0} {1}' -f $p.Id, $p.R.Status }
             })
+        $complete = -not $bad.Count
         if ($bad.Count) { $why = 'the emergency access read is not complete ({0})' -f ($bad -join ', ') }
         elseif (-not $accounts.Count) { $why = 'the emergency access read found no account with Atmosera in its UPN or in an Atmosera group' }
     }
@@ -123,6 +130,7 @@ function Get-CyberSocEmergencyAccess {
     [pscustomobject]@{
         Ready = -not $why
         Why = $why
+        Complete = $complete
         Accounts = $accounts
         Groups = $groups
         ExcludeGroups = $groupIds
