@@ -43,7 +43,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 
 | CR | Change | Evidence | Client email |
 |---|---|---|---|
-| 01 | Diagnostic logging initiative ATMO-MXDR-DIAG-TOSENT assigned on every subscription. When it has no policy state anywhere (DR.6-INITIATIVE is EMPTY) it is assigned once at the management group named with `-ManagementGroup`, or at each subscription. When some subscriptions already have it, it is assigned at each subscription without a state (DR.6-COVERAGE). The covered resource types are counted from P0.5 | DR.6-INITIATIVE, DR.6-COVERAGE, P0.5 | Yes, approval request |
+| 01 | Diagnostic logging initiative ATMO-MXDR-DIAG-TOSENT assigned on every subscription. When it has no policy state anywhere (DR.6-INITIATIVE is EMPTY) it is assigned once at the management group named with `-ManagementGroup`, or at each subscription. When some subscriptions already have it, it is assigned at each subscription without a state (DR.6-COVERAGE). The covered resource types are counted from P0.5. On the MySQL flexible servers in the subscriptions it assigns, CR-01 also sets the audit parameters, as CR-10 does below, since the diagnostic setting the initiative adds sends no MySQL audit rows until `audit_log_enabled` is ON. Those steps come after the assignments and before the remediation tasks, RESOURCES lists the servers with their values today, and the email covers them | DR.6-INITIATIVE, DR.6-COVERAGE, P0.5, DR.6-MYSQLAUDIT | Yes, approval request |
 | 02 | Secure transfer required on storage accounts | DP.1-DETAIL | Yes, approval request |
 | 03 | Minimum TLS 1.2 on storage accounts. Azure Storage has refused TLS 1.0 and 1.1 since February 3, 2026, so this aligns the configuration | DP.1-DETAIL | Yes, approval request |
 | 04 | Minimum inbound TLS 1.2 on App Service and Function apps, on the site (Minimum Inbound TLS Version) and on its SCM (Kudu) site (SCM Minimum Inbound TLS Version, under Settings > Configuration > General settings), each set only where it is below 1.2, so an app whose site minimum is already 1.2 gets only the SCM step. Before changing a value, the steps read it under Settings > Configuration > General settings, and a value that already shows 1.2 or later has changed since collection, so it is left as it is and noted, never lowered. App Service refuses TLS 1.0 and 1.1 on the app endpoint and the SCM endpoint from May 31, 2027. RESOURCES and the CSV show both recorded values, the testing plan checks both in the portal, and the rollback sets each value the change made back to its recorded version, never a fixed 1.0. The email explains the SCM site once, as the deployment and management endpoint that tools such as zip deploy, Web Deploy and local Git reach, and asks before the approval whether any deployment tool, build agent or script still reaches it over TLS 1.0 or 1.1. On a pack collected before 1.13.0, which does not record the SCM value, CR-04 writes the site part only | NB.5-DETAIL | Yes, approval request |
@@ -52,7 +52,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 07 | Anonymous blob access disabled on the storage accounts where it carries no risk: DP.1-CONTAINERS listed every container (`ReadStatus` OK) and none is set to Blob or Container access. RESOURCES lists the container count of each account. Before Save, the steps check under Data storage > Containers that every container's anonymous access level still reads Private, and an account where one reads Blob or Container is left unchanged for the next pack. The rollback sets Allow Blob anonymous access back to Enabled, which applies within 30 seconds and leaves the containers as they are. An account with a container set to Blob or Container waits for CR-18 | DP.1-DETAIL, DP.1-CONTAINERS | Yes, approval request |
 | 08 | HTTPS Only on App Service and Function apps | NB.4-DETAIL | Yes, approval request |
 | 09 | Encryption at host on the virtual machines that can take it. RESOURCES lists the VM ID of each machine, and before stopping a machine the steps check under Overview > JSON View that `properties.vmId` still reads that ID. A machine whose ID differs was deleted and created again under the same name after collection, so it is skipped and left for the next pack. Each machine changed is stopped for the change, and started again only if it was running when the change began, during the change and on rollback. The machines of a Flexible scale set that CR-15 changes are left to it | DP.4-ELIGIBILITY, DP.4-VMSS-ELIGIBILITY | Yes, approval request |
-| 10 | Diagnostic logging remediated on the resources not compliant with the initiative: one remediation task for each assignment and policy, each resource listed once | DR.6-INITIATIVE, DR.6-NONCOMPLIANT | Yes, approval request |
+| 10 | Diagnostic logging remediated on the resources not compliant with the initiative: one remediation task for each assignment and policy, each resource listed once. Since collector 1.15.0 it also sets the audit parameters of every MySQL flexible server that needs them outside the subscriptions CR-01 assigns, compliant with the initiative or not: a server with the diagnostic setting is compliant but writes no audit rows while `audit_log_enabled` is OFF. A server needs them when `audit_log_enabled` is not ON or `audit_log_events` does not cover CONNECTION, ADMIN, DDL and DCL, the events the MXDR baseline sets. CONNECTION_V2 covers CONNECTION and GENERAL covers ADMIN, DDL and DCL (Microsoft Learn), so neither is ever replaced. The steps come first, before the remediation tasks: under Settings > Server parameters, read both values and note any that changed since collection, set `audit_log_enabled` ON, add the baseline events `audit_log_events` leaves out while keeping every event already selected, leave `audit_log_include_users` and `audit_log_exclude_users` as they are, and Save. A user filter is shown with the server in RESOURCES, the CSV and the email, which asks whether every user should be audited there. A server whose parameters did not both read as dynamic is marked restart needed or restart not reported, the email then asks for a maintenance window, and the server is restarted only within it, on the change and on rollback alike, since a static parameter set back also applies only after a restart. CR-10 takes only the servers the ATMO-MXDR initiative has evaluated, each proven by its own policy state in DR.6-MYSQLAUDIT (compliant, so its diagnostic setting is in place, or not compliant, so DR.6-NONCOMPLIANT gives it a remediation task), since a subscription with policy states can still hold a server created after the last compliance scan. CR-01 takes the subscriptions it assigns. A server with no policy state outside those is named in the index until the next scan. A server whose saved audit value waits for a restart (`isConfigPendingRestart`, or a `currentValue` that differs from `value`) is marked restart pending: its values in effect are recorded, and it gets the restart in the agreed window even when nothing is left to set. A stopped server is never changed, since Azure allows no change to server parameters while a server is stopped, and the index names it for when the client starts it. A server the initiative also reports as not compliant is listed once with its policies and its audit values. The testing plan checks both values, that the ATMO-MXDR setting sends only the MySqlAuditLogs category, and that `AzureDiagnostics` rows with Category `MySqlAuditLogs` reach the workspace. The rollback sets the recorded values back. With no resource to remediate, CR-10 is written for the audit parameters alone | DR.6-INITIATIVE, DR.6-NONCOMPLIANT, DR.6-MYSQLAUDIT | Yes, approval request |
 | 11 | Minimum TLS 1.2 on Azure Cache for Redis. Every cache has refused TLS 1.0 and 1.1 since April 1, 2025, and no minimum below 1.2 can be set since March 1, 2024, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | Yes, approval request |
 | 12 | Minimum TLS 1.2 on Service Bus namespaces. Service Bus accepts only TLS 1.2 and later, and a namespace takes only 1.2 or 1.3 as its minimum, so this aligns the configuration and has no rollback | NB.6-PAAS-DETAIL | Yes, approval request |
 | 13 | Minimum TLS 1.2 on Event Hubs namespaces. Event Hubs still documents namespaces that accept TLS 1.0 and 1.1 below a minimum of 1.2, so a client on an older version would be refused. The rollback sets the recorded version back | NB.6-PAAS-DETAIL | Yes, approval request |
@@ -160,6 +160,21 @@ Resources a change leaves out are named in the index notes:
   first. When other subscriptions already have the initiative, CR-01 assigns per subscription even with
   `-ManagementGroup`, since an assignment at the group would overlap theirs. A PARTIAL DR.6-COVERAGE stops CR-01,
   since a subscription without the initiative cannot be told from one that was not read.
+- CR-01 and CR-10 leave out each MySQL flexible server DR.6-MYSQLAUDIT could not read (`ReadStatus` other than OK),
+  named for a check under Settings > Server parameters, and never read as set. A server with `audit_log_enabled` ON and
+  every event the baseline sets that also logs more, such as DML or CONNECTION_V2, is left as it is and named for
+  review, since the baseline limits the events to keep the volume at audit level. A server with
+  `audit_log_include_users` or `audit_log_exclude_users` set audits only some users: the change leaves the filter as it
+  is, since clearing it is the client's decision, and the index names the server and its filter, so it never reads as
+  every user audited. With nothing else to change, such a filter adds ", MySQL audit user filters to confirm, see the
+  notes" to the status, a server list Resource Graph flagged as truncated ", partial collection scope (DR.6-MYSQLAUDIT),
+  see the notes" whether or not some listed servers were also not read, a stopped server ", stopped MySQL servers left out, see the notes", and a server without an
+  ATMO-MXDR policy state ", MySQL servers without an ATMO-MXDR policy state left out, see the notes". When DR.6-MYSQLAUDIT is missing, failed, unreadable
+  or partial and nothing else is left to change, the status adds why ("..., the MySQL audit parameters need
+  recollection with CyberSOC collector 1.15.0 or later", "..., the MySQL audit parameters were not read, see the
+  notes", "..., the MySQL audit parameters of some servers were not read, see the notes" or "..., partial collection
+  scope (DR.6-MYSQLAUDIT), see the notes"), so it never reads as no gaps. A pack without the read whose estate
+  inventory (P0.5) counts no MySQL flexible server in scope has nothing for the MySQL part to say.
 - CR-02 leaves out storage accounts that may serve NFS (NFS 3.0 on blob, or the FileStorage kind), because NFS
   mounts are refused once secure transfer is required. Add one only after confirming it hosts no NFS share.
 - CR-09 leaves out every virtual machine that is not proven eligible: one that ever used Azure Disk Encryption, one
@@ -357,7 +372,12 @@ Each change keeps its own content inside that structure:
 
 - CR-01 and CR-10 send resource logs to the client's Sentinel workspace, so their emails say that this adds Log
   Analytics ingestion, billed by volume, and that the Activity log is ingested at no charge. CR-10 names the type of
-  each resource.
+  each resource. Where either sets the MySQL audit parameters, a paragraph says which events the audit log then
+  records, that it adds rows in step with the connections and administrative statements on each server, that
+  Microsoft recommends logging only the events an audit needs, and that Azure reports both parameters as dynamic, so
+  they apply without a restart. A server that reads a parameter as static, or does not report it, is named instead as
+  needing a restart, a short outage, and the email asks for a maintenance window. The list shows each server with its
+  values today, and the reversal says they can be set back.
 - CR-06 lists the vaults with the soft delete retention period of each, says that purge protection cannot be undone,
   and that a deleted vault, key, secret or certificate is kept for that period, cannot be purged early and keeps its
   name until the period ends. It asks for the client's written approval. With `-PurgeProtectionApproved` it refers to
@@ -495,7 +515,7 @@ license before sending" when a capability it needs reads Unknown), not written b
 licensed, no gaps found, not collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
 later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15, 1.4.0 or later for CR-09 and CR-15 when they
 have a machine or scale set to change, 1.6.0 or later for CR-16, 1.14.0 or later for CR-17 when neither of its results is in the pack, and 1.8.0 or later
-for CR-18). CR-17 reads its two results apart: on a pack collected before 1.14.0 it writes its FTP state part only,
+for CR-18). CR-01 and CR-10 read DR.6-MYSQLAUDIT apart from their sources, as the notes above describe. CR-17 reads its two results apart: on a pack collected before 1.14.0 it writes its FTP state part only,
 and with no FTP state gap reads no FTP state gaps found, the FTP basic authentication part needs recollection with
 CyberSOC collector 1.14.0 or later. When NB.5-FTPS-DETAIL failed or is unreadable but NB.5-FTPAUTH-DETAIL was read, it
 writes the FTP basic authentication part only and says so in a note, and only when neither was read does it read not
@@ -503,7 +523,7 @@ collected or result file unreadable for NB.5-FTPS-DETAIL. A partial read with no
 "No gaps found in the apps read, partial collection scope" with the partial result named, and the notes name the apps
 NB.5-FTPAUTH could not read, or say that the app list itself may be incomplete. A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
 read as no gaps. A change request that also reads a result beyond its sources (DR.6-COVERAGE and P0.5 for CR-01,
-DR.6-NONCOMPLIANT for CR-10, DP.1-CONTAINERS for CR-07 and CR-18, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack, P0.3 for
+DR.6-NONCOMPLIANT and DR.6-MYSQLAUDIT for CR-10, DR.6-MYSQLAUDIT for CR-01, DP.1-CONTAINERS for CR-07 and CR-18, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack, P0.3 for
 CR-16, NB.5-FTPAUTH-DETAIL for CR-17) reads "partial
 collection scope" when that result
 is PARTIAL, and gets a note in the index when it was not collected or is unreadable.
@@ -521,7 +541,8 @@ that still allow plain FTP for CR-17, in 1.7.0. DP.1-CONTAINERS-DETAIL, which li
 Container for CR-18, was added in 1.8.0 and is written by the DP.1-CONTAINERS engine. The ScmMinTlsVersion column of
 NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, was added in 1.13.0, and NB.5-FTPAUTH, which reads
 the FTP basic authentication setting of each App Service app, with NB.5-FTPAUTH-DETAIL, the apps where it is On for
-CR-17, in 1.14.0. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
+CR-17, in 1.14.0. DR.6-MYSQLAUDIT, which reads the audit log parameters of each MySQL flexible server for CR-01 and
+CR-10, was added in 1.15.0. Their queries are in section 6 of the CyberSOC Monthly Report Runbook.
 
 ## Validation
 

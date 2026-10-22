@@ -68,7 +68,7 @@ missing evidence never becomes a favorable zero.
    ```
 
    `05-change-requests/` holds one change request for each low-impact hardening item that still has resources to
-   fix (diagnostic logging, secure transfer, minimum TLS 1.2 on storage, App Service apps and their SCM sites, Azure SQL, Redis, Service Bus,
+   fix (diagnostic logging, with the audit parameters of MySQL flexible servers, secure transfer, minimum TLS 1.2 on storage, App Service apps and their SCM sites, Azure SQL, Redis, Service Bus,
    Event Hubs and Cosmos DB, purge protection, anonymous blob access, HTTPS only, encryption at host on virtual
    machines and on scale sets, closing internet-facing RDP, SSH and WinRM rules, turning off plain FTP and FTP basic
    authentication on App Service apps, setting the blob containers anyone can read today to private, and removing the Azure and Microsoft
@@ -114,7 +114,11 @@ missing evidence never becomes a favorable zero.
    on (collector 1.14.0), the same email says that signing in to FTP or FTPS with the publish profile's user name and
    password stops working while deployment that signs in with Microsoft Entra ID is not affected, and asks whether
    anything still uses those credentials, for FTP, FTPS or local Git, on every app where it is on, an app whose FTP
-   state is already Disabled included. AKS node pools without encryption at host get no change
+   state is already Disabled included. The diagnostic logging changes (CR-01 and CR-10, collector 1.15.0) also set
+   `audit_log_enabled` ON and add CONNECTION, ADMIN, DDL and DCL to `audit_log_events` on every MySQL flexible server that
+   needs them, compliant with the initiative or not, since a diagnostic setting sends no MySQL audit rows until the
+   audit log is on, and their emails say the audit log adds rows in step with connections and administrative
+   statements and whether the parameters apply without a restart. AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
    pool replacement with the client. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
    account the collection read as disabled, after checking that the account still shows as disabled. Its email lists

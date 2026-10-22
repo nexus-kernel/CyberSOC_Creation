@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, and 1.14.0 for NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, the FTP basic authentication setting of each App Service app that CR-17 turns off. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, 1.14.0 for NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, the FTP basic authentication setting of each App Service app that CR-17 turns off, and 1.15.0 for DR.6-MYSQLAUDIT, the audit log parameters of each MySQL flexible server that CR-01 and CR-10 set. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -965,4 +965,30 @@ policyresources
 | extend Policy = iff(isnotempty(ReferenceId), ReferenceId, DefinitionName)
 | summarize Policies = strcat_array(make_set(Policy), ", ") by ResourceId, ResourceType, AssignmentName, AssignmentId, AssignmentScope
 | order by ResourceType asc, ResourceId asc
+```
+
+### DR.6-MYSQLAUDIT MySQL flexible server audit log parameters
+
+Engine MYSQL-AUDIT. CyberSOC collector 1.15.0. Server parameters are not in Resource Graph, so DR.6-MYSQLAUDIT lists every MySQL flexible server with the query below and then reads each one with `GET <server>/configurations/<name>?api-version=2023-12-30` for `audit_log_enabled`, `audit_log_events`, `audit_log_include_users` and `audit_log_exclude_users` on the MySQL resource provider (Reader is enough). A server is read only when all four are, since the user filters decide which users it audits. Every server is read, not only the ones DR.6-NONCOMPLIANT names: the ATMO-MXDR-MYSQL-TOSENT diagnostic setting sends the MySqlAuditLogs category, but MySQL writes no audit rows until `audit_log_enabled` is ON, so a compliant server can still send nothing. The query joins the ATMO-MXDR policy state of each server (`PolicyState`: NonCompliant, Compliant, or empty when the initiative has not evaluated it). One row per server: `subscriptionId`, `resourceGroup`, `Name`, `State`, `PolicyState`, `AuditLogEnabled`, `AuditLogEvents`, `AuditLogIncludeUsers` and `AuditLogExcludeUsers` (the value in effect, `properties.currentValue` where the response carries it and `properties.value` otherwise, empty when not read), `PendingRestart` (Yes when `audit_log_enabled` or `audit_log_events` has a saved value waiting for a restart, from `isConfigPendingRestart` or a `currentValue` that differs from `value`), `Dynamic` (Yes when `audit_log_enabled` and `audit_log_events` both return `isDynamicConfig` True, No when either returns False, empty when not reported), `ReadStatus` and `ResourceId`. A server whose read fails, or whose response carries no `properties.value`, records why in `ReadStatus` and is never read as set. It reads PARTIAL when a server was not read or Resource Graph truncated the list, FAILED when no server was read, and EMPTY when no server is in scope. Feeds CR-01, which sets the parameters on the servers in the subscriptions it assigns the initiative to, and CR-10, which sets them on every other server the initiative has evaluated (a `PolicyState`) where `audit_log_enabled` is not ON or `audit_log_events` does not cover CONNECTION, ADMIN, DDL and DCL, the events the MXDR baseline sets (CONNECTION_V2 covers CONNECTION and GENERAL covers ADMIN, DDL and DCL). Both add the missing events and keep the ones already selected, and leave the user filters as they are.
+
+```kql
+resources
+| where type =~ "microsoft.dbformysql/flexibleservers"
+| where id !contains "{{MRG}}"
+| extend ResourceKey = tolower(id)
+| join kind=leftouter (
+    policyresources
+    | where type =~ "microsoft.policyinsights/policystates"
+    | extend AssignmentName = tostring(properties.policyAssignmentName),
+             InitiativeName = tostring(properties.policySetDefinitionName),
+             DefinitionName = tostring(properties.policyDefinitionName),
+             Compliance     = tostring(properties.complianceState),
+             ResourceKey    = tolower(tostring(properties.resourceId))
+    | where AssignmentName contains "ATMO-MXDR" or InitiativeName contains "ATMO-MXDR" or DefinitionName contains "ATMO-MXDR"
+    | summarize NonCompliant = countif(Compliance =~ "NonCompliant"), Compliant = countif(Compliance =~ "Compliant") by ResourceKey
+) on ResourceKey
+// The server's own ATMO-MXDR policy state: empty when the initiative has not evaluated it, so nothing proves its diagnostic setting.
+| extend PolicyState = case(coalesce(NonCompliant, 0) > 0, "NonCompliant", coalesce(Compliant, 0) > 0, "Compliant", "")
+| project Name = name, ResourceId = id, resourceGroup, subscriptionId, State = tostring(properties.state), PolicyState
+| order by subscriptionId asc, resourceGroup asc, Name asc
 ```

@@ -87,6 +87,11 @@
     CR-17 turns FTP basic authentication publishing credentials off from NB.5-FTPAUTH-DETAIL, added in 1.14.0, on every
     app where it is On whatever its FTP state, and on an earlier pack changes the FTP state only and says in the index
     that the FTP basic authentication part needs recollection.
+    CR-01 and CR-10 set the MySQL flexible server audit parameters (audit_log_enabled ON, audit_log_events CONNECTION,
+    ADMIN, DDL and DCL) from DR.6-MYSQLAUDIT, added in 1.15.0, since a diagnostic setting sends no MySQL audit rows until
+    audit_log_enabled is ON. CR-01 sets them on the servers in the subscriptions it assigns the initiative to, and CR-10
+    on every other server that needs them, compliant with the initiative or not. On an earlier pack, where MySQL flexible
+    servers may be in scope, both say in the index that the MySQL part needs recollection.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -127,6 +132,7 @@ foreach ($id in 'IA.15-DISABLED', 'IA.15-RBAC', 'IA.15-ENTRA') { $detailVersions
 foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { $detailVersions[$id] = '1.11.0' }
 foreach ($id in 'IA.16-ACCOUNTS', 'IA.16-GROUPS') { $detailVersions[$id] = '1.12.0' }
 foreach ($id in 'NB.5-FTPAUTH', 'NB.5-FTPAUTH-DETAIL') { $detailVersions[$id] = '1.14.0' }
+$detailVersions['DR.6-MYSQLAUDIT'] = '1.15.0'
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -143,6 +149,9 @@ $scmTlsVersion = '1.13.0'
 # CR-17 turns FTP basic authentication off from NB.5-FTPAUTH-DETAIL, added in 1.14.0. On an earlier pack it changes the
 # FTP state only and its index note asks for recollection.
 $ftpAuthVersion = $detailVersions['NB.5-FTPAUTH-DETAIL']
+# CR-01 and CR-10 set the MySQL flexible server audit parameters from DR.6-MYSQLAUDIT, added in 1.15.0. On an earlier
+# pack they leave the MySQL part out and their index note asks for recollection.
+$mysqlAuditVersion = $detailVersions['DR.6-MYSQLAUDIT']
 
 # Get-Text, Test-True, Get-Status, Get-Rows, Test-Unreadable and Get-UnreadableState. Each result file is
 # parsed once. A result the manifest reads as OK or PARTIAL needs a file that parses, or a damaged pack would
@@ -402,6 +411,181 @@ function Get-LoggingEffect([int]$n) {
     'I do not expect any visible effect on {0} or the people who use {1}. A diagnostic setting only sends the logs a resource already produces to the workspace, and does not change how the resource runs.' -f (Get-Pick $n 'the resource' 'these resources'), (Get-Pick $n 'it' 'them')
 }
 
+# MySQL flexible server audit parameters (DR.6-MYSQLAUDIT, collector 1.15.0). The ATMO-MXDR-MYSQL-TOSENT diagnostic
+# setting sends the MySqlAuditLogs category, but MySQL writes no audit rows until audit_log_enabled is ON, so a server
+# can be compliant with the initiative and still send nothing. The baseline sets audit_log_enabled ON and limits
+# audit_log_events to these four, which leave query-level DML out so the volume stays at audit level.
+$mysqlType = 'microsoft.dbformysql/flexibleservers'
+$mysqlAuditEvents = 'CONNECTION', 'ADMIN', 'DDL', 'DCL'
+function Get-AuditEventList($value) { @((Get-Text $value) -split ',' | ForEach-Object { $_.Trim().ToUpperInvariant() } | Where-Object { $_ }) }
+# The baseline events a list covers. Microsoft Learn says CONNECTION_V2 records connections with their error codes and
+# GENERAL holds ADMIN, DDL and DCL as well as DML, so either covers the baseline events it holds and is never replaced.
+function Get-AuditEventCoverage($value) {
+    $events = Get-AuditEventList $value
+    @($events) + @(if ('CONNECTION_V2' -in $events) { 'CONNECTION' }) + @(if ('GENERAL' -in $events) { 'ADMIN', 'DDL', 'DCL' })
+}
+# The events a server logs beyond the four, which the change keeps selected.
+function Get-ExtraAuditEvents($row) { @(Get-AuditEventList $row.AuditLogEvents | Where-Object { $_ -notin $mysqlAuditEvents }) }
+# A server needs the parameter step when audit_log_enabled is not ON or audit_log_events covers less than the baseline.
+# The step adds the missing events and keeps every event already selected, so no audit coverage is removed. A server
+# that already covers the baseline and logs more is left as it is and named in the index for review.
+function Test-MySqlAuditGap($row) {
+    # A saved value waiting for a restart is not in effect yet, so the server needs its restart whatever it shows.
+    (Get-Text $row.PendingRestart) -eq 'Yes' -or (Get-Text $row.AuditLogEnabled).ToUpperInvariant() -ne 'ON' -or @($mysqlAuditEvents | Where-Object { $_ -notin (Get-AuditEventCoverage $row.AuditLogEvents) }).Count -gt 0
+}
+# A user filter limits which users a server audits: audit_log_include_users audits only the users it names, and
+# audit_log_exclude_users leaves out the ones it names. The change leaves both as they are, since clearing one is the
+# client's decision, and names them so the SOC knows which activity it cannot see.
+function Test-MySqlUserFilter($row) { [bool]((Get-Text $row.AuditLogIncludeUsers) -or (Get-Text $row.AuditLogExcludeUsers)) }
+# The values as the server holds them, which the rollback sets back. An empty event list reads as empty.
+function Format-AuditValue($value) { $t = ConvertTo-CopyText $value; if ($t) { $t -replace '\s+', '' } else { 'empty' } }
+function Format-MySqlAudit($row) {
+    'audit_log_enabled {0}, audit_log_events {1}{2}{3}{4}' -f (Format-AuditValue $row.AuditLogEnabled), (Format-AuditValue $row.AuditLogEvents),
+    $(if (Get-Text $row.AuditLogIncludeUsers) { ', audit_log_include_users ' + (Format-AuditValue $row.AuditLogIncludeUsers) } else { '' }),
+    $(if (Get-Text $row.AuditLogExcludeUsers) { ', audit_log_exclude_users ' + (Format-AuditValue $row.AuditLogExcludeUsers) } else { '' }),
+    $(if ((Get-Text $row.PendingRestart) -eq 'Yes') { ', restart pending' } else { switch (Get-Text $row.Dynamic) { 'Yes' { '' } 'No' { ', restart needed' } default { ', restart not reported' } } })
+}
+# How a server applies the change: Yes when both parameters are dynamic, No when either is static, Pending when a saved
+# value already waits for a restart, and empty when Azure did not report it.
+function Get-MySqlRestart($row) { if ((Get-Text $row.PendingRestart) -eq 'Yes') { 'Pending' } else { Get-Text $row.Dynamic } }
+# Whether a subscription is in scope: Only names the subscriptions to take (all when null), Skip the ones to leave out.
+function Test-SubscriptionScope($subscriptionId, [string[]]$Only, [string[]]$Skip) {
+    $sub = (ConvertTo-CopyText $subscriptionId).ToLowerInvariant()
+    ($null -eq $Only -or $sub -in $Only) -and $sub -notin @($Skip)
+}
+# Whether the estate inventory (P0.5) shows no MySQL flexible server in scope, so a pack without DR.6-MYSQLAUDIT has
+# nothing for the MySQL part to say. An inventory that is partial, unread or without resource types cannot show it.
+function Test-NoMySqlServers([string[]]$Only, [string[]]$Skip) {
+    if ((Get-Status 'P0.5') -eq 'EMPTY') { return $true }
+    if ((Get-Status 'P0.5') -ne 'OK' -or (Test-Unreadable 'P0.5')) { return $false }
+    $inventory = @(Get-Rows 'P0.5')
+    if (-not $inventory.Count -or $inventory[0].PSObject.Properties.Name -notcontains 'ResourceType') { return $false }
+    -not @($inventory | Where-Object { (Get-Text $_.ResourceType).ToLowerInvariant() -eq $mysqlType -and (Get-Number $_.Resources) -gt 0 -and (-not (Get-Text $_.subscriptionId) -or (Test-SubscriptionScope $_.subscriptionId $Only $Skip)) }).Count
+}
+# The MySQL flexible servers in scope whose audit parameters CR-01 or CR-10 sets, with the notes for the index. Gaps
+# holds a resource per server, Used the result read, and Suffix what a state with nothing to change adds, so a read
+# that is missing, failed or partial never reads as no gaps. With Evaluated, only a server with its own ATMO-MXDR policy
+# state is in scope, since only that proves the initiative evaluated it and keeps its diagnostic setting in place.
+function Get-MySqlAudit([string[]]$Only, [string[]]$Skip, [int]$Number, [switch]$Evaluated) {
+    $label = 'CR-{0:00}' -f $Number
+    $audit = @{ Gaps = @(); Notes = [System.Collections.Generic.List[string]]::new(); Used = @(); Suffix = '' }
+    $status = Get-Status 'DR.6-MYSQLAUDIT'
+    if (-not (Test-ResultRead 'DR.6-MYSQLAUDIT')) {
+        if (Test-NoMySqlServers $Only $Skip) { return $audit }
+        $why = if ($status -eq 'MISSING') { 'is not in this pack' } elseif (Test-Unreadable 'DR.6-MYSQLAUDIT') { 'is unreadable' } else { "reads $status" }
+        $audit.Notes.Add(('DR.6-MYSQLAUDIT {0}, so {1} does not set the MySQL flexible server audit parameters, and a server with the diagnostic setting writes no audit rows while audit_log_enabled is OFF. {2}' -f $why, $label, $(if ($status -eq 'MISSING') { "Recollect with CyberSOC collector $mysqlAuditVersion or later." } else { 'Recollect the pack, or read audit_log_enabled and audit_log_events under Settings > Server parameters on each MySQL flexible server in the portal.' })))
+        $audit.Suffix = if ($status -eq 'MISSING') { ', the MySQL audit parameters need recollection with CyberSOC collector {0} or later' -f $mysqlAuditVersion } else { ', the MySQL audit parameters were not read, see the notes' }
+        return $audit
+    }
+    $audit.Used = @('DR.6-MYSQLAUDIT')
+    $all = @(Get-Rows 'DR.6-MYSQLAUDIT')
+    $rows = @($all | Where-Object { (Test-SubscriptionScope $_.subscriptionId $Only $Skip) -and (-not $Evaluated -or (Get-Text $_.PolicyState)) })
+    $read = @($rows | Where-Object { (Get-Text $_.ReadStatus) -eq 'OK' })
+    $name = { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) }
+    # Azure allows no change to server parameters while a server is stopped, so a stopped server is named for later
+    # instead of being changed. Starting it is the client's decision, since it affects billing and availability.
+    $stopped = @($read | Where-Object { (Test-MySqlAuditGap $_) -and (Get-Text $_.State) -in 'Stopped', 'Stopping' } | ForEach-Object $name | Sort-Object)
+    if ($stopped.Count) {
+        $audit.Notes.Add(('{0} left out of the MySQL audit parameter step of {1} because {2} stopped, and Azure allows no change to server parameters while a server is stopped: {3}. Raise the change for {4} once the client starts {5}.' -f (Get-Count $stopped.Count 'MySQL flexible server' 'MySQL flexible servers'), $label, (Get-Pick $stopped.Count 'it reads' 'they read'), ($stopped -join ', '), (Get-Pick $stopped.Count 'it' 'them'), (Get-Pick $stopped.Count 'it' 'them')))
+        $audit.Suffix += ', stopped MySQL servers left out, see the notes'
+    }
+    $audit.Gaps = @($read | Where-Object { (Test-MySqlAuditGap $_) -and (Get-Text $_.State) -notin 'Stopped', 'Stopping' } | ForEach-Object {
+            $r = New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('MySQL flexible server, ' + (Format-MySqlAudit $_)) $_.ResourceId
+            $r | Add-Member -NotePropertyName Label -NotePropertyValue 'MySQL flexible server'
+            $r | Add-Member -NotePropertyName Audit -NotePropertyValue (Format-MySqlAudit $_)
+            $r | Add-Member -NotePropertyName Dynamic -NotePropertyValue (Get-MySqlRestart $_)
+            $r | Add-Member -NotePropertyName Extra -NotePropertyValue (Get-ExtraAuditEvents $_)
+            $r | Add-Member -NotePropertyName Filtered -NotePropertyValue (Test-MySqlUserFilter $_)
+            $r })
+    $unread = @($rows | Where-Object { (Get-Text $_.ReadStatus) -ne 'OK' } | ForEach-Object $name | Sort-Object)
+    if ($unread.Count) {
+        $audit.Notes.Add(('{0} left out of the MySQL audit parameter step of {1} because the collector could not read {2} audit parameters: {3}. Read audit_log_enabled and audit_log_events under Settings > Server parameters in the portal, and raise the change for any server where audit_log_enabled is OFF or audit_log_events leaves out CONNECTION, ADMIN, DDL or DCL.' -f (Get-Count $unread.Count 'MySQL flexible server' 'MySQL flexible servers'), $label, (Get-Pick $unread.Count 'its' 'their'), ($unread -join ', ')))
+        $audit.Suffix += ', the MySQL audit parameters of some servers were not read, see the notes'
+    }
+    # A truncated server list leaves servers out that no row names, whether or not some listed servers were also not
+    # read, so the collector's truncation detail is checked on its own. A partial result that names no unread server
+    # can only have lost servers to the list.
+    $truncated = (Get-ResultDetail 'DR.6-MYSQLAUDIT') -match 'truncated'
+    if ($status -eq 'PARTIAL' -and ($truncated -or -not @($all | Where-Object { (Get-Text $_.ReadStatus) -ne 'OK' }).Count)) {
+        $audit.Notes.Add(('DR.6-MYSQLAUDIT is partial {0}, so Resource Graph may have returned only part of the server list, and a MySQL flexible server with audit_log_enabled OFF may be missing from {1}. Recollect the pack.' -f $(if ($truncated) { 'because Resource Graph flagged the server list as truncated' } else { 'although it names no server it could not read' }), $label))
+        $audit.Suffix += ', partial collection scope (DR.6-MYSQLAUDIT), see the notes'
+    }
+    $extra = @($read | Where-Object { -not (Test-MySqlAuditGap $_) -and @(Get-ExtraAuditEvents $_).Count } | ForEach-Object { '{0}, audit_log_events {1}' -f (& $name), (Format-AuditValue $_.AuditLogEvents) } | Sort-Object)
+    if ($extra.Count) {
+        $audit.Notes.Add(('{0} already {1} audit_log_enabled ON with every event the baseline sets, and also {2} more: {3}. {4} leaves {5} as {6}. Review the extra events with the client, since the baseline limits audit_log_events to CONNECTION, ADMIN, DDL and DCL so the volume stays at audit level.' -f (Get-Count $extra.Count 'MySQL flexible server' 'MySQL flexible servers'), (Get-Pick $extra.Count 'has' 'have'), (Get-Pick $extra.Count 'logs' 'log'), ($extra -join ' / '), $label, (Get-Pick $extra.Count 'it' 'them'), (Get-Pick $extra.Count 'it is' 'they are')))
+    }
+    $filtered = @($read | Where-Object { Test-MySqlUserFilter $_ } | ForEach-Object {
+            '{0}{1}{2}' -f (& $name), $(if (Get-Text $_.AuditLogIncludeUsers) { ', audit_log_include_users ' + (Format-AuditValue $_.AuditLogIncludeUsers) } else { '' }), $(if (Get-Text $_.AuditLogExcludeUsers) { ', audit_log_exclude_users ' + (Format-AuditValue $_.AuditLogExcludeUsers) } else { '' }) } | Sort-Object)
+    if ($filtered.Count) {
+        $audit.Notes.Add(('{0} {1} only some MySQL users, through audit_log_include_users or audit_log_exclude_users: {2}. {3} leaves the filters as they are, since clearing one is the client''s decision. Confirm with the client that each filter is intended, since the SOC sees no audit rows for a user it leaves out.' -f (Get-Count $filtered.Count 'MySQL flexible server' 'MySQL flexible servers'), (Get-Pick $filtered.Count 'audits' 'audit'), ($filtered -join ' / '), $label))
+        $audit.Suffix += ', MySQL audit user filters to confirm, see the notes'
+    }
+    $static = @($audit.Gaps | Where-Object { $_.Dynamic -ne 'Yes' } | ForEach-Object { '{0} (resource group {1})' -f $_.Name, $_.ResourceGroup } | Sort-Object)
+    if ($static.Count) {
+        $audit.Notes.Add(('{0} in {1} {2} not report both audit parameters as dynamic: {3}. A static parameter applies only after a restart, so the client email asks for a maintenance window and the change restarts {4} only within it.{5}' -f (Get-Count $static.Count 'MySQL flexible server' 'MySQL flexible servers'), $label, (Get-Pick $static.Count 'does' 'do'), ($static -join ', '), (Get-Pick $static.Count 'that server' 'those servers'),
+                $(if (@($audit.Gaps | Where-Object { $_.Dynamic -eq 'Pending' }).Count) { ' A server marked restart pending already holds a saved audit value that waits for a restart, so it needs that restart even when nothing is left to set.' } else { '' })))
+    }
+    $audit
+}
+# The steps that set the audit parameters, added to the plans given. Each server is read first, and a value that has
+# changed since collection is noted so the rollback sets back what the server had before the change.
+function Add-MySqlAuditSteps($Impl, $Testing, $Rollback, $Servers, [bool]$Shared) {
+    $m = @($Servers).Count
+    $from = $Impl.Count + 1
+    $listed = if ($Shared) { 'listed with its audit parameters in the RESOURCES section' } else { 'listed in the RESOURCES section' }
+    $Impl.Add(('In the Azure portal, go to Azure Database for MySQL flexible servers and open the {0}MySQL flexible server {1}.' -f $(if ($m -gt 1) { 'first ' } else { '' }), $listed))
+    $Impl.Add('Go to Settings > Server parameters and search for audit_log.')
+    $Impl.Add('Read audit_log_enabled and audit_log_events. If either no longer shows the value recorded for the server in the RESOURCES section, the server has changed since collection, so note the value it shows in the change record, and set that value back instead of the recorded one if the change is rolled back.{0}' -f $(if (@($Servers | Where-Object { $_.Dynamic -eq 'Pending' }).Count) { ' On a server the RESOURCES section marks restart pending, the portal shows a saved value that waits for a restart, and the recorded value is the one in effect today, so that difference is expected.' } else { '' }))
+    $Impl.Add('Set audit_log_enabled to ON, and add to audit_log_events each of CONNECTION, ADMIN, DDL and DCL it leaves out, keeping every event already selected so no audit coverage is removed. CONNECTION_V2 already covers CONNECTION, and GENERAL already covers ADMIN, DDL and DCL.')
+    $Impl.Add('Leave audit_log_include_users and audit_log_exclude_users as they are. Where the RESOURCES section shows either for the server, it audits only some users, and the filter stays until the client decides otherwise.')
+    if (@($Servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) {
+        $Impl.Add(('Select Save. A server the RESOURCES section marks restart needed, or restart not reported, may ask to be restarted, since a static parameter applies only after a restart. Select Restart later, note it in the change record and restart the server only within the maintenance window the client agreed.{0}' -f $(if (@($Servers | Where-Object { $_.Dynamic -eq 'Pending' }).Count) { ' A server marked restart pending needs that restart even when nothing is left to set, since its saved value is not in effect until then.' } else { '' })))
+    }
+    else { $Impl.Add('Select Save. Azure reported both parameters as dynamic on the server, so they apply without a restart. If the portal still asks to restart the server, select Restart later, note it in the change record and agree a restart with the client.') }
+    if ($m -gt 1) { $Impl.Add(('Repeat steps {0} to {1} for each remaining MySQL flexible server {2}.' -f $from, $Impl.Count, $(if ($Shared) { 'listed with its audit parameters' } else { 'listed' }))) }
+    $Testing.Add(('On {0}MySQL flexible server {1}, go to Settings > Server parameters and confirm audit_log_enabled shows ON and audit_log_events includes CONNECTION, ADMIN, DDL and DCL, or CONNECTION_V2 or GENERAL where they cover them.' -f $(if ($m -gt 1) { 'each ' } else { 'the ' }), $listed))
+    $Testing.Add(('On the same {0}, go to Monitoring > Diagnostic settings and confirm the ATMO-MXDR setting sends the MySqlAuditLogs category to {1}, with no slow query logs and no metrics.' -f (Get-Pick $m 'server' 'servers'), $workspace))
+    $Testing.Add(@(('About 10 minutes after the change, once someone has connected to {0}, run this query in {1} and confirm {2} rows. Resource is the server name in upper case.' -f (Get-Pick $m 'the server' 'each server'), $workspace, (Get-Pick $m 'the server shows' 'each server shows')), 'AzureDiagnostics | where Category == "MySqlAuditLogs" | summarize count() by Resource'))
+    $Rollback.Add(('On {0}MySQL flexible server the change set, go to Settings > Server parameters, set audit_log_enabled and audit_log_events back to the values recorded for the server in the RESOURCES section, or noted in the change record, and select Save.{1}' -f $(if ($m -gt 1) { 'each ' } else { 'the ' }),
+            $(if (@($Servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) { ' A server the RESOURCES section marks restart needed, restart not reported or restart pending keeps the changed values until it restarts, since a static parameter applies only after a restart. If the portal asks to restart it, select Restart later and restart it within a maintenance window the client agrees, and the rollback is complete only after that restart.' } else { '' })))
+}
+# What the MySQL audit parameters mean for the client, one paragraph of the email.
+function Get-MySqlAuditEffect($Servers) {
+    $m = @($Servers).Count
+    $static = @($Servers | Where-Object { $_.Dynamic -eq 'No' } | ForEach-Object Name | Sort-Object)
+    $pending = @($Servers | Where-Object { $_.Dynamic -eq 'Pending' } | ForEach-Object Name | Sort-Object)
+    $unknown = @($Servers | Where-Object { $_.Dynamic -notin 'Yes', 'No', 'Pending' } | ForEach-Object Name | Sort-Object)
+    $restart = if (-not ($static.Count + $unknown.Count + $pending.Count)) { 'Azure reports both parameters as dynamic, so they apply without a restart and the databases stay available.' }
+    else {
+        @(if ($static.Count) { 'Azure reports a parameter as static on {0}, so {1} a restart, which causes a short outage, before the audit log starts.' -f (Join-Words $static), (Get-Pick $static.Count 'that server needs' 'those servers need') }
+            if ($pending.Count) { '{0} already {1} an audit setting saved earlier that waits for a restart, so {2} a restart, which causes a short outage, before the audit log starts.' -f (Join-Words $pending), (Get-Pick $pending.Count 'has' 'have'), (Get-Pick $pending.Count 'that server needs' 'those servers need') }
+            if ($unknown.Count) { 'Azure did not report whether the parameters are dynamic on {0}, so {1} may need a restart, which causes a short outage, before the audit log starts.' -f (Join-Words $unknown), (Get-Pick $unknown.Count 'that server' 'those servers') }
+            'I would restart only within a maintenance window you agree.') -join ' '
+    }
+    $extra = @($Servers | Where-Object { @($_.Extra | Where-Object { $_ }).Count } | Sort-Object Name | ForEach-Object { '{0} on {1}' -f (Join-Words @($_.Extra | Where-Object { $_ })), $_.Name })
+    $kept = if ($extra.Count) { '. The events a server already has selected stay selected, so the audit log also records {0}' -f (Join-Words $extra) } else { ', while the reads and writes of everyday queries stay out' }
+    $filtered = @($Servers | Where-Object Filtered | ForEach-Object Name | Sort-Object)
+    $filter = if ($filtered.Count) { ' {0} {1} only some MySQL users today, through the user filter shown below, which the change leaves as it is, so please let me know if every user should be audited there.' -f (Join-Words $filtered), (Get-Pick $filtered.Count 'audits' 'audit') } else { '' }
+    'On the MySQL {0}, the change sets audit_log_enabled to ON and makes sure audit_log_events includes CONNECTION, ADMIN, DDL and DCL, so the audit log records sign-ins and disconnections, administrative statements such as SHOW STATUS, and statements that change database objects or permissions, such as DROP DATABASE or GRANT{1}. The MySQL audit log adds rows in step with the connections and administrative statements on each server, and Microsoft recommends logging only the event types an audit needs so the server''s performance is not heavily affected.{2} {3}' -f (Get-Pick $m 'flexible server below' 'flexible servers below'), $kept, $filter, $restart
+}
+# CR-01 and CR-10: diagnostic settings apply without touching the workloads, and so do the MySQL audit parameters where
+# Azure reports both as dynamic.
+function Get-DiagnosticAvailability($Servers) {
+    if (@($Servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) { return 'No impact from the diagnostic settings, but a MySQL server that does not report both audit parameters as dynamic may need a restart, a short outage, before its audit log starts, which is done only within the maintenance window the client agrees.' }
+    'No impact, since the Azure platform applies diagnostic settings without touching the running workloads{0}.' -f $(if (@($Servers).Count) { ' and both MySQL audit parameters apply without a restart' } else { '' })
+}
+$mysqlReferences = @(
+    , @('Monitor Azure Database for MySQL - Flexible Server, track database activity with audit logs', 'https://learn.microsoft.com/azure/mysql/flexible-server/concepts-monitor-mysql#track-database-activity-with-audit-logs')
+    , @('Tutorial: Configure audit logs by using Azure Database for MySQL - Flexible Server', 'https://learn.microsoft.com/azure/mysql/flexible-server/tutorial-configure-audit')
+    , @('Configure server parameters in Azure Database for MySQL - Flexible Server using the Azure portal', 'https://learn.microsoft.com/azure/mysql/flexible-server/how-to-configure-server-parameters-portal')
+    , @('Server parameters in Azure Database for MySQL - Flexible Server', 'https://learn.microsoft.com/azure/mysql/flexible-server/concepts-server-parameters')
+)
+function Get-MySqlReferences($Servers) {
+    $mysqlReferences + @(if (@($Servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) { , @('Restart an Azure Database for MySQL - Flexible Server instance by using the Azure portal', 'https://learn.microsoft.com/azure/mysql/flexible-server/how-to-restart-server-portal') })
+}
+# The subscriptions CR-01 assigns the initiative to, whose MySQL flexible servers it sets, so CR-10 leaves them out.
+$mysqlCr01Subscriptions = @()
+
 #region Change requests
 # Each Build returns the change request, or a State when there is nothing to change, plus Notes for
 # the index about resources it left out.
@@ -455,6 +639,15 @@ function New-DiagnosticAssignment([string[]]$Subscriptions, [bool]$Covered) {
     }
     $lines.Add('- Subscription Activity Log: ' + $n)
     $lines.Add(''); $lines.Add("Destination: $workspace")
+    # The MySQL flexible servers in these subscriptions whose audit parameters CR-01 sets, so the diagnostic setting the
+    # initiative adds has audit rows to send. CR-10 leaves these subscriptions to CR-01.
+    $audit = Get-MySqlAudit $subscriptions @() 1
+    $servers = @($audit.Gaps)
+    $script:mysqlCr01Subscriptions = $subscriptions
+    if ($servers.Count) {
+        $lines.Add(''); $lines.Add(('MySQL flexible servers whose audit parameters this change sets, with their values today:'))
+        foreach ($line in @(Format-ResourceList $servers)) { $lines.Add($line) }
+    }
     $countWords = if ($counted) { ' with their current counts' } else { '' }
     # An assignment has one scope: the management group when one is named, otherwise each subscription.
     $impl = [System.Collections.Generic.List[object]]::new()
@@ -473,6 +666,16 @@ function New-DiagnosticAssignment([string[]]$Subscriptions, [bool]$Covered) {
     $impl.Add('Select Review + create > Create.')
     if (-not $atGroup) { Add-RepeatStep $impl $n 1 'subscription' }
     $each = if ($atGroup -or $n -eq 1) { 'the ATMO-MXDR-DIAG-TOSENT assignment' } else { 'each ATMO-MXDR-DIAG-TOSENT assignment' }
+    $testing = [System.Collections.Generic.List[object]]::new()
+    $testing.Add("In the Azure portal, go to Policy > Compliance and open $each created by this change.")
+    $testing.Add('Confirm the resources in scope show as Compliant.')
+    $testing.Add("Open one resource of each type listed in the RESOURCES section, go to Monitoring > Diagnostic settings and confirm the ATMO-MXDR setting sends to $workspace.")
+    $rollback = [System.Collections.Generic.List[object]]::new()
+    $rollback.Add("In the Azure portal, go to Policy > Authoring > Assignments, open $each created by this change and select Delete assignment.")
+    $rollback.Add('On each resource the remediation tasks updated, go to Monitoring > Diagnostic settings, select Edit setting on the ATMO-MXDR setting and select Delete.')
+    $rollback.Add('For the Subscription Activity Log, go to Monitor > Activity log > Export Activity Logs, select each subscription listed in the RESOURCES section, select Edit setting on the ATMO-MXDR setting and select Delete.')
+    # The audit parameters go on before the remediation tasks, so each server has audit rows once its setting is added.
+    if ($servers.Count) { Add-MySqlAuditSteps $impl $testing $rollback $servers $true }
     $impl.Add("Once the first compliance scan completes, go to Policy > Remediation, select the Policies to remediate tab, and for $each create a remediation task for each policy in the initiative.")
     $listed = [System.Collections.Generic.List[object]]::new()
     foreach ($s in @($subscriptions | Sort-Object { Format-Subscription $_ })) {
@@ -481,34 +684,29 @@ function New-DiagnosticAssignment([string[]]$Subscriptions, [bool]$Covered) {
                 if (-not $counted) { $diagnosticTypes[$type][1] }
                 elseif ($bySubscription[$s] -and $bySubscription[$s][$type]) { '{0}: {1}' -f $diagnosticTypes[$type][1], $bySubscription[$s][$type] }
             })
-        $listed.Add([string[]]@($types + 'Subscription Activity Log'))
+        $named = @($servers | Where-Object SubscriptionId -eq $s | Sort-Object ResourceGroup, Name | ForEach-Object { 'MySQL flexible server {0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, ($_.Audit -replace ', restart (needed|not reported|pending)$', '') })
+        $listed.Add([string[]]@($types + 'Subscription Activity Log' + $named))
     }
-    $email = New-ApprovalEmail -Subject 'diagnostic logging for Azure resources' `
+    $email = New-ApprovalEmail -Subject 'diagnostic logging for Azure resources' -Window:([bool]@($servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) `
         -Change @(('I would like to turn on diagnostic logging for your Azure resources by assigning the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative {0}.' -f $(if ($atGroup) { "once at the management group $managementGroup, which holds the subscriptions below" } else { Get-Pick $n 'on the subscription below' 'on each subscription below' }), $emailWorkspace), ('An Azure Policy initiative is a set of rules that Azure keeps applied, and this one adds diagnostic settings that send the audit logs of the supported resources to {1}, including resources created later.' -f $(if ($atGroup) { "once at the management group $managementGroup, which holds the subscriptions below" } else { Get-Pick $n 'on the subscription below' 'on each subscription below' }), $emailWorkspace)) `
         -Why 'I recommend turning on this logging because, without these audit logs, the SOC cannot detect or investigate activity on these resources, such as an unexpected change to a key vault or an automation account. The initiative keeps the logging in place on every supported resource, including resources created later, so no resource is missed as your environment grows.' `
-        -Effect @((Get-LoggingEffect 2), (Get-IngestionCost $true)) `
-        -Reversal 'The initiative assignment can be removed and the diagnostic settings it added can be deleted at any time, which stops the logs and the ingestion they add.' `
-        -Listed ('{0} with the resources the initiative covers{1}:' -f (Get-Pick $n 'The subscription is listed below' 'Each subscription is listed below'), $(if ($counted) { (Get-Pick $n ' and how many it holds today' ' and how many each holds today') } else { '' })) `
+        -Effect @(@((Get-LoggingEffect 2), $(if ($servers.Count) { Get-MySqlAuditEffect $servers }), (Get-IngestionCost $true)) | Where-Object { $_ }) `
+        -Reversal ('The initiative assignment can be removed and the diagnostic settings it added can be deleted at any time, which stops the logs and the ingestion they add.{0}' -f $(if ($servers.Count) { ' The MySQL audit parameters can be set back to the values shown above at any time as well.' } else { '' })) `
+        -Listed ('{0} with the resources the initiative covers{1}{2}:' -f (Get-Pick $n 'The subscription is listed below' 'Each subscription is listed below'), $(if ($counted) { (Get-Pick $n ' and how many it holds today' ' and how many each holds today') } else { '' }), $(if ($servers.Count) { ', and each MySQL flexible server with its audit parameters today' } else { '' })) `
         -Resources $listed.ToArray()
-    @{ Used = @('P0.5'); Cr = New-ChangeRequest @{
+    @{ Used = @('P0.5') + $audit.Used; Notes = $audit.Notes.ToArray(); Cr = New-ChangeRequest @{
             Number = 1; Key = 'diagnostic-logging'; Title = 'Deploy the ATMO-MXDR diagnostic logging initiative'
-            Description = "Assign the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative and run its remediation tasks, so the audit logs of supported Azure resources are sent to $workspace."
+            Description = "Assign the ATMO-MXDR-DIAG-TOSENT Azure Policy initiative and run its remediation tasks, so the audit logs of supported Azure resources are sent to $workspace." + $(if ($servers.Count) { ' Set audit_log_enabled to ON and make audit_log_events include CONNECTION, ADMIN, DDL and DCL on the MySQL flexible {0} listed below, so {1} audit rows to send.' -f (Get-Pick $servers.Count 'server' 'servers'), (Get-Pick $servers.Count 'its diagnostic setting has' 'their diagnostic settings have') } else { '' })
             Purpose = 'The initiative keeps audit logging in place on every supported resource, including resources created later. Sending these logs to Sentinel gives the SOC the telemetry it needs to detect and investigate activity on them.'
             ResourceIntro = $intro; ResourceLines = $lines.ToArray()
-            Availability = 'No impact, since the Azure platform applies diagnostic settings without touching the running workloads.'
+            Availability = Get-DiagnosticAvailability $servers
             UserExperience = 'No change for users or applications.'
             Dependencies = 'Relies on the ATMO-MXDR-DIAG-MI managed identity and adds a small amount of audit log ingestion to the Sentinel workspace.'
             Implementation = $impl.ToArray()
-            Testing = @(
-                "In the Azure portal, go to Policy > Compliance and open $each created by this change."
-                'Confirm the resources in scope show as Compliant.'
-                "Open one resource of each type listed in the RESOURCES section, go to Monitoring > Diagnostic settings and confirm the ATMO-MXDR setting sends to $workspace.")
-            Rollback = @(
-                "In the Azure portal, go to Policy > Authoring > Assignments, open $each created by this change and select Delete assignment."
-                'On each resource the remediation tasks updated, go to Monitoring > Diagnostic settings, select Edit setting on the ATMO-MXDR setting and select Delete.'
-                'For the Subscription Activity Log, go to Monitor > Activity log > Export Activity Logs, select each subscription listed in the RESOURCES section, select Edit setting on the ATMO-MXDR setting and select Delete.')
-            References = @(, @('Assign a policy in the Azure portal', 'https://learn.microsoft.com/azure/governance/policy/assign-policy-portal')) + $diagnosticReferences
-            Csv = @($subscriptions | ForEach-Object { New-Resource $_ '' $_ $(if ($atGroup) { "Under the management group $managementGroup" } else { 'Initiative assignment scope' }) "/subscriptions/$_" })
+            Testing = $testing.ToArray()
+            Rollback = $rollback.ToArray()
+            References = @(, @('Assign a policy in the Azure portal', 'https://learn.microsoft.com/azure/governance/policy/assign-policy-portal')) + $diagnosticReferences + @(if ($servers.Count) { Get-MySqlReferences $servers })
+            Csv = @($subscriptions | ForEach-Object { New-Resource $_ '' $_ $(if ($atGroup) { "Under the management group $managementGroup" } else { 'Initiative assignment scope' }) "/subscriptions/$_" }) + @($servers | ForEach-Object { New-Resource $_.Name $_.ResourceGroup $_.SubscriptionId $_.Setting $_.ResourceId })
             Email = $email
         } }
 }
@@ -522,7 +720,7 @@ function Format-AssignmentScope([string]$AssignmentId) {
     ''
 }
 
-function New-DiagnosticRemediation($rows) {
+function New-DiagnosticRemediation($rows, $audit) {
     # DR.6-NONCOMPLIANT has a row per resource and assignment. A resource that fails under two assignments
     # is listed once, with the policies of both.
     $resources = foreach ($g in @($rows | Group-Object { (Get-Text $_.ResourceId).ToLowerInvariant() })) {
@@ -543,51 +741,111 @@ function New-DiagnosticRemediation($rows) {
         $r
     }
     $resources = @($resources)
-    # A remediation task belongs to one assignment and one policy. The initiative may be assigned once
-    # per subscription under the same name, so each assignment, told apart by its ID, gets its own tasks.
-    $pairs = foreach ($g in @($rows | Group-Object { $id = Get-Text $_.AssignmentId; if ($id) { $id } else { Get-Text $_.AssignmentName } } | Sort-Object Name)) {
-        $first = $g.Group[0]
-        $name = ConvertTo-CopyText $first.AssignmentName
-        if (-not $name) { $name = 'ATMO-MXDR' }
-        $scope = Format-AssignmentScope $(if (Get-Text $first.AssignmentScope) { (Get-Text $first.AssignmentScope) + '/' } else { $first.AssignmentId })
-        $policies = @($g.Group | ForEach-Object { (Get-Text $_.Policies) -split ',\s*' } | Where-Object { $_ } | ForEach-Object { ConvertTo-CopyText $_ } | Sort-Object -Unique)
-        '- Assignment {0}{1}: {2}' -f $name, $(if ($scope) { " at $scope" } else { '' }), ($policies -join ', ')
+    $pending = @($resources | Where-Object { $_ })
+    # The MySQL flexible servers whose audit parameters CR-10 sets. A server the initiative also reports as not compliant
+    # is listed once, with its policies and its audit parameters.
+    $servers = @($audit.Gaps)
+    foreach ($server in $servers) {
+        $match = @($resources | Where-Object { $_.ResourceId.ToLowerInvariant() -eq $server.ResourceId.ToLowerInvariant() }) | Select-Object -First 1
+        if ($match) {
+            $match.Setting += ', ' + $server.Audit
+            $match | Add-Member -NotePropertyName Audit -NotePropertyValue $server.Audit
+        }
+        else { $resources += $server }
     }
-    $activity = @($resources | Where-Object { $_.ResourceId -match '^/subscriptions/[^/]+$' }).Count
+    $p = $pending.Count
+    $m = $servers.Count
     $impl = [System.Collections.Generic.List[object]]::new()
-    $impl.Add('In the Azure portal, go to Policy > Remediation and select the Policies to remediate tab.')
-    $impl.Add(@('Create one remediation task for each assignment and policy below. Select the assignment, select New remediation task, choose the policy, keep the scope at the assignment scope and select Remediate:') + @($pairs))
     $testing = [System.Collections.Generic.List[object]]::new()
-    $testing.Add('In the Azure portal, go to Policy > Remediation and select the Remediation tasks tab.')
-    $testing.Add('Confirm each remediation task created for this change finished with no failed resources.')
-    $testing.Add("Open each resource listed in the RESOURCES section, go to Monitoring > Diagnostic settings and confirm the ATMO-MXDR setting sends to $workspace.")
     $rollback = [System.Collections.Generic.List[object]]::new()
-    $rollback.Add('In the Azure portal, open each resource to revert, go to Monitoring > Diagnostic settings, select Edit setting on the ATMO-MXDR setting created by this change and select Delete.')
+    # The audit parameters go on before the remediation tasks, so each server has audit rows once its setting is added.
+    if ($m) { Add-MySqlAuditSteps $impl $testing $rollback $servers ([bool]$p) }
+    $activity = @($resources | Where-Object { $_.ResourceId -match '^/subscriptions/[^/]+$' }).Count
+    if ($p) {
+        # A remediation task belongs to one assignment and one policy. The initiative may be assigned once
+        # per subscription under the same name, so each assignment, told apart by its ID, gets its own tasks.
+        $pairs = foreach ($g in @($rows | Group-Object { $id = Get-Text $_.AssignmentId; if ($id) { $id } else { Get-Text $_.AssignmentName } } | Sort-Object Name)) {
+            $first = $g.Group[0]
+            $name = ConvertTo-CopyText $first.AssignmentName
+            if (-not $name) { $name = 'ATMO-MXDR' }
+            $scope = Format-AssignmentScope $(if (Get-Text $first.AssignmentScope) { (Get-Text $first.AssignmentScope) + '/' } else { $first.AssignmentId })
+            $policies = @($g.Group | ForEach-Object { (Get-Text $_.Policies) -split ',\s*' } | Where-Object { $_ } | ForEach-Object { ConvertTo-CopyText $_ } | Sort-Object -Unique)
+            '- Assignment {0}{1}: {2}' -f $name, $(if ($scope) { " at $scope" } else { '' }), ($policies -join ', ')
+        }
+        $impl.Add('In the Azure portal, go to Policy > Remediation and select the Policies to remediate tab.')
+        $impl.Add(@('Create one remediation task for each assignment and policy below. Select the assignment, select New remediation task, choose the policy, keep the scope at the assignment scope and select Remediate:') + @($pairs))
+        $testing.Add('In the Azure portal, go to Policy > Remediation and select the Remediation tasks tab.')
+        $testing.Add('Confirm each remediation task created for this change finished with no failed resources.')
+        $testing.Add("Open each resource listed in the RESOURCES section, go to Monitoring > Diagnostic settings and confirm the ATMO-MXDR setting sends to $workspace.")
+        $rollback.Add('In the Azure portal, open each resource to revert, go to Monitoring > Diagnostic settings, select Edit setting on the ATMO-MXDR setting created by this change and select Delete.')
+    }
     if ($activity) {
         $testing.Add("For the Subscription Activity Log, go to Monitor > Activity log > Export Activity Logs, select the subscription and confirm the ATMO-MXDR setting sends to $workspace.")
         $rollback.Add('For the Subscription Activity Log, go to Monitor > Activity log > Export Activity Logs, select the subscription, select Edit setting on the ATMO-MXDR setting and select Delete.')
     }
     $n = $resources.Count
-    $email = New-ApprovalEmail -Subject 'diagnostic logging remediation for Azure resources' `
-        -Change @(('I would like to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on {0}.' -f (Get-Yours $n 'Azure resources'), (Get-Pick $n 'the resource sends' 'the resources send'), (Get-Pick $n 'its' 'their'), $emailWorkspace), ('A remediation task adds the diagnostic settings the initiative expects, so {1} {2} audit logs to {3}.' -f (Get-Yours $n 'Azure resources'), (Get-Pick $n 'the resource sends' 'the resources send'), (Get-Pick $n 'its' 'their'), $emailWorkspace)) `
-        -Why ('I recommend running the remediation because {0} not send {1} audit logs to {2} today, so the SOC cannot detect or investigate activity on {3}. The remediation brings {3} in line with the rest of your environment.' -f (Get-Pick $n 'the resource below does' 'the resources below do'), (Get-Pick $n 'its' 'their'), $emailWorkspace, (Get-Pick $n 'it' 'them')) `
-        -Effect @((Get-LoggingEffect $n), (Get-IngestionCost ([bool]$activity))) `
-        -Listed (Get-Pick $n 'The resource is listed below with its type:' 'The resources are listed below by subscription, each with its type:') `
-        -Resources (Get-EmailResourceList $resources { if ($_.ResourceGroup) { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $_.Label } else { $_.Name } }) `
-        -Reversal 'The diagnostic settings the remediation adds can be deleted at any time, which stops the logs and the ingestion they add.'
-    @{ Used = @('DR.6-NONCOMPLIANT'); Cr = New-ChangeRequest @{
-            Number = 10; Key = 'diagnostic-remediation'; Title = 'Remediate resources missing ATMO-MXDR diagnostic logging'
-            Description = ('Run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on {0}, so their audit logs reach {1}.' -f (Get-Listed $n 'resource' 'resources'), $workspace)
-            Purpose = 'These resources are not compliant with the diagnostic logging initiative, so their audit activity does not reach Sentinel. Remediation deploys the missing diagnostic settings and returns them to compliance.'
-            ResourceIntro = ('{0} not compliant with the initiative, with the policies each one fails.' -f $(if ($n -eq 1) { 'The resource below is' } else { "The $n resources below are" }))
-            ResourceLines = Format-ResourceList $resources
-            Availability = 'No impact, since the Azure platform applies diagnostic settings without touching the running workloads.'
-            UserExperience = 'No change for users or applications.'
-            Dependencies = 'Relies on the managed identity of the initiative assignment and adds a small amount of audit log ingestion to the Sentinel workspace.'
-            Implementation = $impl.ToArray(); Testing = $testing.ToArray(); Rollback = $rollback.ToArray()
-            References = $diagnosticReferences; Csv = $resources
-            Email = $email
-        } }
+    $restart = [bool]@($servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count
+    $serverWords = Get-Pick $m 'the MySQL flexible server' "the $m MySQL flexible servers"
+    $emailLabel = { '{0} (resource group {1}, {2}{3})' -f $_.Name, $_.ResourceGroup, $_.Label, $(if ($_.Audit) { ', ' + ($_.Audit -replace ', restart (needed|not reported|pending)$', '') } else { '' }) }
+    if (-not $m) {
+        $email = New-ApprovalEmail -Subject 'diagnostic logging remediation for Azure resources' `
+            -Change @(('I would like to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on {0}.' -f (Get-Yours $n 'Azure resources')), ('A remediation task adds the diagnostic settings the initiative expects, so {0} {1} audit logs to {2}.' -f (Get-Pick $n 'the resource sends' 'the resources send'), (Get-Pick $n 'its' 'their'), $emailWorkspace)) `
+            -Why ('I recommend running the remediation because {0} not send {1} audit logs to {2} today, so the SOC cannot detect or investigate activity on {3}. The remediation brings {3} in line with the rest of your environment.' -f (Get-Pick $n 'the resource below does' 'the resources below do'), (Get-Pick $n 'its' 'their'), $emailWorkspace, (Get-Pick $n 'it' 'them')) `
+            -Effect @((Get-LoggingEffect $n), (Get-IngestionCost ([bool]$activity))) `
+            -Listed (Get-Pick $n 'The resource is listed below with its type:' 'The resources are listed below by subscription, each with its type:') `
+            -Resources (Get-EmailResourceList $resources { if ($_.ResourceGroup) { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $_.Label } else { $_.Name } }) `
+            -Reversal 'The diagnostic settings the remediation adds can be deleted at any time, which stops the logs and the ingestion they add.'
+    }
+    elseif (-not $p) {
+        $email = New-ApprovalEmail -Subject 'turning on the MySQL audit log for Azure diagnostic logging' -Window:$restart `
+            -Change @(('I would like to turn on the audit log of {0}, with the events the MXDR baseline sets, by setting {1} audit_log_enabled server parameter to ON and making sure its audit_log_events parameter includes those events.' -f (Get-Yours $m 'MySQL flexible servers'), (Get-Pick $m 'its' 'each server''s')), ('A diagnostic setting sends the audit log of a MySQL server to {0}, but MySQL writes no audit rows to send until audit_log_enabled is ON, and only the events audit_log_events names.' -f $emailWorkspace)) `
+            -Why ('I recommend this change because the audit log of {0} is off, or leaves out events the baseline sets, so the SOC cannot fully see who connects to {1} or which administrative and permission changes are made there.' -f (Get-Pick $m 'the server below' 'each server below'), (Get-Pick $m 'it' 'them')) `
+            -Effect @((Get-MySqlAuditEffect $servers), ('This change adds Log Analytics ingestion to {0}, billed as data ingested into the workspace.' -f $emailWorkspace)) `
+            -Listed (Get-Pick $m 'The server is listed below with its audit parameters today:' 'The servers are listed below by subscription, each with its audit parameters today:') `
+            -Resources (Get-EmailResourceList $resources { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, ($_.Audit -replace ', restart (needed|not reported|pending)$', '') }) `
+            -Reversal ('The audit parameters can be set back to the values {0} today, shown above, at any time, which returns {1} to the audit log it writes today.' -f (Get-Pick $m 'the server has' 'each server has'), (Get-Pick $m 'the server' 'each server'))
+    }
+    else {
+        $email = New-ApprovalEmail -Subject 'diagnostic logging remediation for Azure resources' -Window:$restart `
+            -Change @(('I would like to run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on {0} and turn on the MySQL audit log on {1} among them.' -f (Get-Yours $n 'Azure resources'), $serverWords), ('A remediation task adds the diagnostic settings the initiative expects, so the resources send their audit logs to {0}, and a MySQL server has audit rows to send only once its audit_log_enabled server parameter is ON.' -f $emailWorkspace)) `
+            -Why ('I recommend this change because the resources below do not send their audit logs to {0} today, so the SOC cannot detect or investigate activity on them. The change brings them in line with the rest of your environment.' -f $emailWorkspace) `
+            -Effect @(((Get-LoggingEffect $n) + ' The MySQL audit parameters are the exception, since they change what each server logs, as set out next.'), (Get-MySqlAuditEffect $servers), (Get-IngestionCost ([bool]$activity))) `
+            -Listed ('The resources are listed below by subscription, each with its type, and each MySQL server with its audit parameters today:') `
+            -Resources (Get-EmailResourceList $resources { if ($_.ResourceGroup) { & $emailLabel } else { $_.Name } }) `
+            -Reversal 'The diagnostic settings the remediation adds can be deleted, and the audit parameters set back to the values shown above, at any time, which stops the logs and the ingestion they add.'
+    }
+    $spec = @{
+        Number = 10; Key = 'diagnostic-remediation'
+        UserExperience = 'No change for users or applications.'
+        Implementation = $impl.ToArray(); Testing = $testing.ToArray(); Rollback = $rollback.ToArray()
+        References = $(if ($p) { $diagnosticReferences } else { @() }) + @(if ($m) { Get-MySqlReferences $servers })
+        Csv = $resources; Email = $email
+        ResourceLines = Format-ResourceList $resources
+    }
+    $availability = Get-DiagnosticAvailability $servers
+    if (-not $m) {
+        $spec.Title = 'Remediate resources missing ATMO-MXDR diagnostic logging'
+        $spec.Description = 'Run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on {0}, so their audit logs reach {1}.' -f (Get-Listed $n 'resource' 'resources'), $workspace
+        $spec.Purpose = 'These resources are not compliant with the diagnostic logging initiative, so their audit activity does not reach Sentinel. Remediation deploys the missing diagnostic settings and returns them to compliance.'
+        $spec.ResourceIntro = '{0} not compliant with the initiative, with the policies each one fails.' -f $(if ($n -eq 1) { 'The resource below is' } else { "The $n resources below are" })
+        $spec.Dependencies = 'Relies on the managed identity of the initiative assignment and adds a small amount of audit log ingestion to the Sentinel workspace.'
+    }
+    elseif (-not $p) {
+        $spec.Title = 'Turn on the audit log of MySQL flexible servers for ATMO-MXDR diagnostic logging'
+        $spec.Description = 'Set audit_log_enabled to ON and make audit_log_events include CONNECTION, ADMIN, DDL and DCL on {0}, so the diagnostic setting has audit rows to send to {1}.' -f (Get-Listed $m 'MySQL flexible server' 'MySQL flexible servers'), $workspace
+        $spec.Purpose = 'A diagnostic setting sends no MySQL audit rows until audit_log_enabled is ON, and only the events audit_log_events names, so {0} less than the MXDR baseline expects to Sentinel today, or nothing, even where the initiative reports {1} compliant. The events added are the ones the baseline sets, which leave query-level DML out so the volume stays at audit level, and events already selected stay.' -f (Get-Pick $m 'this server sends' 'these servers send'), (Get-Pick $m 'it' 'them')
+        $spec.ResourceIntro = '{0} with {1} audit parameters today.' -f $(if ($m -eq 1) { 'The MySQL flexible server below is listed' } else { "The $m MySQL flexible servers below are listed" }), (Get-Pick $m 'its' 'their')
+        $spec.Dependencies = 'Adds MySQL audit rows to the Sentinel workspace in step with the connections and administrative statements on each server.'
+    }
+    else {
+        $spec.Title = 'Remediate resources missing ATMO-MXDR diagnostic logging and turn on the MySQL audit log'
+        $spec.Description = 'Run Azure Policy remediation tasks for the ATMO-MXDR-DIAG-TOSENT initiative on the resources listed below with their policies, so their audit logs reach {0}. Set audit_log_enabled to ON and make audit_log_events include CONNECTION, ADMIN, DDL and DCL on the MySQL flexible {1} listed with audit parameters.' -f $workspace, (Get-Pick $m 'server' 'servers')
+        $spec.Purpose = 'These resources are not compliant with the diagnostic logging initiative, or are MySQL servers that write no audit rows while audit_log_enabled is OFF, so their audit activity does not reach Sentinel. Remediation deploys the missing diagnostic settings, and the server parameters turn the MySQL audit log on.'
+        $spec.ResourceIntro = 'The {0} resources below are not compliant with the initiative, with the policies each one fails, or are MySQL flexible servers listed with their audit parameters today.' -f $n
+        $spec.Dependencies = 'Relies on the managed identity of the initiative assignment and adds audit log ingestion, MySQL audit rows included, to the Sentinel workspace.'
+    }
+    $spec.Availability = $availability
+    @{ Used = @(if ($p) { 'DR.6-NONCOMPLIANT' }) + $audit.Used; Notes = $audit.Notes.ToArray(); Cr = New-ChangeRequest $spec }
 }
 
 # NB.6-PAAS-DETAIL lists the Redis caches, Service Bus and Event Hubs namespaces and Cosmos DB accounts
@@ -739,7 +997,7 @@ $catalog = @(
             $fresh = 'CR-01 assigns the initiative where no ATMO-MXDR policy state was found. An assignment made shortly before collection shows no state until its first compliance scan, so confirm under Policy > Assignments that it is not already there before raising CR-01.'
             if ((Get-Status 'DR.6-INITIATIVE') -eq 'EMPTY' -or @(Get-Rows 'DR.6-INITIATIVE').Count -eq 0) {
                 $built = New-DiagnosticAssignment $all $false
-                $built.Notes = @($fresh)
+                $built.Notes = @($fresh) + @($built.Notes)
                 return $built
             }
             # The initiative has policy states somewhere. A subscription without any is still to be assigned.
@@ -755,8 +1013,7 @@ $catalog = @(
             if (-not $uncovered.Count) { return @{ State = 'No gaps found, every subscription has the initiative' } }
             $covered = $uncovered.Count -lt $all.Count
             $built = New-DiagnosticAssignment $uncovered $covered
-            $built.Used = @('P0.5')
-            $built.Notes = @($fresh) + @(if ($managementGroup -and $covered) { 'CR-01 assigns the initiative per subscription, not at the management group {0}, because other subscriptions already have it and an assignment at the group would overlap theirs.' -f $managementGroup })
+            $built.Notes = @($fresh) + @($built.Notes) + @(if ($managementGroup -and $covered) { 'CR-01 assigns the initiative per subscription, not at the management group {0}, because other subscriptions already have it and an assignment at the group would overlap theirs.' -f $managementGroup })
             $built } }
 
     @{ Number = 2; Key = 'storage-secure-transfer'; Change = 'Secure transfer required on storage accounts'; Sources = @('DP.1-DETAIL')
@@ -1274,17 +1531,38 @@ $catalog = @(
     @{ Number = 10; Key = 'diagnostic-remediation'; Change = 'Diagnostic logging remediated on non-compliant resources'; Sources = @('DR.6-INITIATIVE')
        Build = {
             $initiative = @(Get-Rows 'DR.6-INITIATIVE')
+            # CR-01 assigns the initiative, and sets the MySQL audit parameters, wherever it is not assigned yet.
             if ((Get-Status 'DR.6-INITIATIVE') -eq 'EMPTY' -or $initiative.Count -eq 0) { return @{ State = 'Nothing to remediate until the initiative is assigned (CR-01)' } }
             $nonCompliant = 0
             foreach ($r in $initiative) { $nonCompliant += Get-Number $r.NonCompliant }
-            if ($nonCompliant -eq 0) { return @{ State = 'No gaps found, every resource is compliant with the initiative' } }
-            $status = Get-Status 'DR.6-NONCOMPLIANT'
-            if ($status -eq 'MISSING') { return @{ State = $needsRecollection } }
-            if ($status -notin 'OK', 'PARTIAL', 'EMPTY') { return @{ State = "Not collected (DR.6-NONCOMPLIANT $status)" } }
-            if (Test-Unreadable 'DR.6-NONCOMPLIANT') { return @{ State = Get-UnreadableState 'DR.6-NONCOMPLIANT' } }
-            $rows = @(Get-Rows 'DR.6-NONCOMPLIANT')
-            if (-not $rows.Count) { return @{ State = 'No gaps found in DR.6-NONCOMPLIANT' } }
-            New-DiagnosticRemediation $rows } }
+            $rows = @()
+            if ($nonCompliant -gt 0) {
+                $status = Get-Status 'DR.6-NONCOMPLIANT'
+                if ($status -eq 'MISSING') { return @{ State = $needsRecollection } }
+                if ($status -notin 'OK', 'PARTIAL', 'EMPTY') { return @{ State = "Not collected (DR.6-NONCOMPLIANT $status)" } }
+                if (Test-Unreadable 'DR.6-NONCOMPLIANT') { return @{ State = Get-UnreadableState 'DR.6-NONCOMPLIANT' } }
+                $rows = @(Get-Rows 'DR.6-NONCOMPLIANT')
+            }
+            # A server compliant with the initiative still writes no audit rows while audit_log_enabled is OFF, so CR-10
+            # reads every MySQL flexible server, except those in the subscriptions CR-01 assigns, which CR-01 sets.
+            # CR-10 takes only the servers the ATMO-MXDR initiative has evaluated, each proven by its own policy state in
+            # DR.6-MYSQLAUDIT: compliant, so its diagnostic setting is in place, or not compliant, so DR.6-NONCOMPLIANT gives
+            # it a remediation task. A subscription with policy states can still hold a server the initiative has not
+            # evaluated yet, so subscription coverage proves nothing for one server. CR-01 takes the subscriptions it assigns.
+            $audit = Get-MySqlAudit $null $mysqlCr01Subscriptions 10 -Evaluated
+            if (Test-ResultRead 'DR.6-MYSQLAUDIT') {
+                $outside = @(Get-Rows 'DR.6-MYSQLAUDIT' | Where-Object { (Test-SubscriptionScope $_.subscriptionId $null $mysqlCr01Subscriptions) -and -not (Get-Text $_.PolicyState) -and ((Get-Text $_.ReadStatus) -ne 'OK' -or (Test-MySqlAuditGap $_)) } |
+                        ForEach-Object { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) } | Sort-Object)
+                if ($outside.Count) {
+                    $audit.Notes.Add(('{0} left out of the MySQL audit parameter step of CR-10 because the ATMO-MXDR initiative has no policy state for {1} yet, so nothing proves {2} diagnostic setting: {3}. A server created after the last compliance scan shows no state until the next one. Recollect after that scan, and CR-10 sets {1} then.' -f (Get-Count $outside.Count 'MySQL flexible server' 'MySQL flexible servers'), (Get-Pick $outside.Count 'it' 'them'), (Get-Pick $outside.Count 'its' 'their'), ($outside -join ', ')))
+                    $audit.Suffix += ', MySQL servers without an ATMO-MXDR policy state left out, see the notes'
+                }
+            }
+            if (-not $rows.Count -and -not @($audit.Gaps).Count) {
+                $state = if ($nonCompliant -eq 0) { 'No gaps found, every resource is compliant with the initiative' } else { 'No gaps found in DR.6-NONCOMPLIANT' }
+                return @{ State = $state + $audit.Suffix; Notes = $audit.Notes.ToArray() }
+            }
+            New-DiagnosticRemediation $rows $audit } }
 
     @{ Number = 11; Key = 'redis-minimum-tls'; Change = 'Minimum TLS 1.2 on Azure Cache for Redis'; Sources = @('NB.6-PAAS-DETAIL')
        Build = {
