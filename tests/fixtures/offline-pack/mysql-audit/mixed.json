@@ -1,5 +1,5 @@
 {
-  "Description": "DR.6-MYSQLAUDIT from collector 1.15.0 with a server not compliant with the initiative and audit OFF, a compliant server with audit OFF and an exclude filter, one with audit OFF whose CONNECTION_V2 and GENERAL already cover the baseline events, a compliant server with audit ON, one with CONNECTION_V2 and an include filter, one that also logs DML and one the collector could not read, beside a key vault DR.6-NONCOMPLIANT names",
+  "Description": "DR.6-MYSQLAUDIT from collector 1.15.0 with a server not compliant with the initiative and audit OFF, a compliant server with audit OFF and an exclude filter, a stopped server with audit OFF, one with audit OFF whose CONNECTION_V2 and GENERAL already cover the baseline events, a compliant server with audit ON, one with CONNECTION_V2 and an include filter, one that also logs DML and one the collector could not read, beside a key vault DR.6-NONCOMPLIANT names",
   "MySqlAudit": [
     {
       "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
@@ -39,6 +39,19 @@
       "Dynamic": "Yes",
       "ReadStatus": "OK",
       "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/mysql-general"
+    },
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-db",
+      "Name": "mysql-paused",
+      "State": "Stopped",
+      "AuditLogEnabled": "OFF",
+      "AuditLogEvents": "CONNECTION",
+      "AuditLogIncludeUsers": "",
+      "AuditLogExcludeUsers": "",
+      "Dynamic": "Yes",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-db/providers/Microsoft.DBforMySQL/flexibleServers/mysql-paused"
     },
     {
       "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",

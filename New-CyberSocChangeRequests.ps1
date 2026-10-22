@@ -477,7 +477,14 @@ function Get-MySqlAudit([string[]]$Only, [string[]]$Skip, [int]$Number) {
     $rows = @($all | Where-Object { Test-SubscriptionScope $_.subscriptionId $Only $Skip })
     $read = @($rows | Where-Object { (Get-Text $_.ReadStatus) -eq 'OK' })
     $name = { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) }
-    $audit.Gaps = @($read | Where-Object { Test-MySqlAuditGap $_ } | ForEach-Object {
+    # Azure allows no change to server parameters while a server is stopped, so a stopped server is named for later
+    # instead of being changed. Starting it is the client's decision, since it affects billing and availability.
+    $stopped = @($read | Where-Object { (Test-MySqlAuditGap $_) -and (Get-Text $_.State) -in 'Stopped', 'Stopping' } | ForEach-Object $name | Sort-Object)
+    if ($stopped.Count) {
+        $audit.Notes.Add(('{0} left out of the MySQL audit parameter step of {1} because {2} stopped, and Azure allows no change to server parameters while a server is stopped: {3}. Raise the change for {4} once the client starts {5}.' -f (Get-Count $stopped.Count 'MySQL flexible server' 'MySQL flexible servers'), $label, (Get-Pick $stopped.Count 'it reads' 'they read'), ($stopped -join ', '), (Get-Pick $stopped.Count 'it' 'them'), (Get-Pick $stopped.Count 'it' 'them')))
+        $audit.Suffix += ', stopped MySQL servers left out, see the notes'
+    }
+    $audit.Gaps = @($read | Where-Object { (Test-MySqlAuditGap $_) -and (Get-Text $_.State) -notin 'Stopped', 'Stopping' } | ForEach-Object {
             $r = New-Resource $_.Name $_.resourceGroup $_.subscriptionId ('MySQL flexible server, ' + (Format-MySqlAudit $_)) $_.ResourceId
             $r | Add-Member -NotePropertyName Label -NotePropertyValue 'MySQL flexible server'
             $r | Add-Member -NotePropertyName Audit -NotePropertyValue (Format-MySqlAudit $_)
@@ -529,7 +536,8 @@ function Add-MySqlAuditSteps($Impl, $Testing, $Rollback, $Servers, [bool]$Shared
     $Testing.Add(('On {0}MySQL flexible server {1}, go to Settings > Server parameters and confirm audit_log_enabled shows ON and audit_log_events includes CONNECTION, ADMIN, DDL and DCL, or CONNECTION_V2 or GENERAL where they cover them.' -f $(if ($m -gt 1) { 'each ' } else { 'the ' }), $listed))
     $Testing.Add(('On the same {0}, go to Monitoring > Diagnostic settings and confirm the ATMO-MXDR setting sends the MySqlAuditLogs category to {1}, with no slow query logs and no metrics.' -f (Get-Pick $m 'server' 'servers'), $workspace))
     $Testing.Add(@(('About 10 minutes after the change, once someone has connected to {0}, run this query in {1} and confirm {2} rows. Resource is the server name in upper case.' -f (Get-Pick $m 'the server' 'each server'), $workspace, (Get-Pick $m 'the server shows' 'each server shows')), 'AzureDiagnostics | where Category == "MySqlAuditLogs" | summarize count() by Resource'))
-    $Rollback.Add(('On {0}MySQL flexible server the change set, go to Settings > Server parameters, set audit_log_enabled and audit_log_events back to the values recorded for the server in the RESOURCES section, or noted in the change record, and select Save.' -f $(if ($m -gt 1) { 'each ' } else { 'the ' })))
+    $Rollback.Add(('On {0}MySQL flexible server the change set, go to Settings > Server parameters, set audit_log_enabled and audit_log_events back to the values recorded for the server in the RESOURCES section, or noted in the change record, and select Save.{1}' -f $(if ($m -gt 1) { 'each ' } else { 'the ' }),
+            $(if (@($Servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) { ' A server the RESOURCES section marks restart needed, or restart not reported, keeps the changed values until it restarts, since a static parameter applies only after a restart. If the portal asks to restart it, select Restart later and restart it within a maintenance window the client agrees, and the rollback is complete only after that restart.' } else { '' })))
 }
 # What the MySQL audit parameters mean for the client, one paragraph of the email.
 function Get-MySqlAuditEffect($Servers) {
@@ -1525,7 +1533,20 @@ $catalog = @(
             }
             # A server compliant with the initiative still writes no audit rows while audit_log_enabled is OFF, so CR-10
             # reads every MySQL flexible server, except those in the subscriptions CR-01 assigns, which CR-01 sets.
-            $audit = Get-MySqlAudit $null $mysqlCr01Subscriptions 10
+            # CR-10 takes only the servers of subscriptions where DR.6-COVERAGE proves the initiative is assigned, since
+            # elsewhere no ATMO-MXDR diagnostic setting may send their audit rows. CR-01 takes the subscriptions it
+            # assigns, and a server in neither is named in the index until the coverage is read.
+            $proven = @(if (Test-ResultRead 'DR.6-COVERAGE') { Get-Rows 'DR.6-COVERAGE' | ForEach-Object { (ConvertTo-CopyText $_.subscriptionId).ToLowerInvariant() } | Where-Object { $_ -notin $mysqlCr01Subscriptions } })
+            $audit = Get-MySqlAudit $proven $mysqlCr01Subscriptions 10
+            if (Test-ResultRead 'DR.6-MYSQLAUDIT') {
+                $outside = @(Get-Rows 'DR.6-MYSQLAUDIT' | Where-Object { -not (Test-SubscriptionScope $_.subscriptionId $proven $mysqlCr01Subscriptions) -and ((Get-Text $_.ReadStatus) -ne 'OK' -or (Test-MySqlAuditGap $_)) } |
+                        ForEach-Object { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) } | Sort-Object)
+                if ($outside.Count) {
+                    $why = if ((Get-Status 'DR.6-COVERAGE') -eq 'PARTIAL') { 'DR.6-COVERAGE is partial and does not list their subscription' } elseif (Test-ResultRead 'DR.6-COVERAGE') { 'DR.6-COVERAGE does not list their subscription and CR-01 does not assign it' } elseif ((Get-Status 'DR.6-COVERAGE') -eq 'MISSING') { 'DR.6-COVERAGE is not in this pack' } elseif (Test-Unreadable 'DR.6-COVERAGE') { 'DR.6-COVERAGE is unreadable' } else { 'DR.6-COVERAGE reads ' + (Get-Status 'DR.6-COVERAGE') }
+                    $audit.Notes.Add(('{0} left out of the MySQL audit parameter step of CR-10 because {1}, so the ATMO-MXDR initiative is not proven there and no diagnostic setting may send {2} audit rows: {3}. Recollect the pack, and CR-01 or CR-10 sets {4} once the coverage is read.' -f (Get-Count $outside.Count 'MySQL flexible server' 'MySQL flexible servers'), $why, (Get-Pick $outside.Count 'its' 'their'), ($outside -join ', '), (Get-Pick $outside.Count 'it' 'them')))
+                    $audit.Suffix += ', MySQL servers without proven initiative coverage left out, see the notes'
+                }
+            }
             if (-not $rows.Count -and -not @($audit.Gaps).Count) {
                 $state = if ($nonCompliant -eq 0) { 'No gaps found, every resource is compliant with the initiative' } else { 'No gaps found in DR.6-NONCOMPLIANT' }
                 return @{ State = $state + $audit.Suffix; Notes = $audit.Notes.ToArray() }
