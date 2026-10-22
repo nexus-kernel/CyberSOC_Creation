@@ -537,10 +537,18 @@ function Add-MySqlAuditSteps($Impl, $Testing, $Rollback, $Servers, [bool]$Shared
     $listed = if ($Shared) { 'listed with its audit parameters in the RESOURCES section' } else { 'listed in the RESOURCES section' }
     $Impl.Add(('In the Azure portal, go to Azure Database for MySQL flexible servers and open the {0}MySQL flexible server {1}.' -f $(if ($m -gt 1) { 'first ' } else { '' }), $listed))
     $Impl.Add('Go to Settings > Server parameters and search for audit_log.')
-    # On a restart-pending server the portal shows the saved value, and the collector recorded the one in effect, so a
-    # difference there is no change since collection and the rollback still sets back the value in effect.
-    $pending = [bool]@($Servers | Where-Object { $_.Dynamic -eq 'Pending' }).Count
-    $Impl.Add('Read audit_log_enabled and audit_log_events. If either no longer shows the value recorded for the server in the RESOURCES section, the server has changed since collection, so note the value it shows in the change record, and set that value back instead of the recorded one if the change is rolled back.{0}' -f $(if ($pending) { ' A server the RESOURCES section marks restart pending is the exception: the portal shows a saved value that waits for a restart, and the recorded value is the one in effect today, so that difference is expected and is not a change since collection. Do not note it, and keep the recorded value as the one the rollback sets back.' } else { '' }))
+    # On a restart-pending server the portal shows the saved value, and the collector recorded the one in effect. A
+    # restart since collection may have put the saved value in effect, so neither the portal nor the recorded value is
+    # the rollback target: the value in effect is read again before the change, and a server where it cannot be read
+    # is held for recollection.
+    $pendingServers = @($Servers | Where-Object { $_.Dynamic -eq 'Pending' } | Sort-Object SubscriptionId, ResourceGroup, Name)
+    $pending = [bool]$pendingServers.Count
+    $Impl.Add('Read audit_log_enabled and audit_log_events. If either no longer shows the value recorded for the server in the RESOURCES section, the server has changed since collection, so note the value it shows in the change record, and set that value back instead of the recorded one if the change is rolled back.{0}' -f $(if ($pending) { ' A server the RESOURCES section marks restart pending is the exception, since the portal shows its saved value, which waits for a restart, and not the value in effect, so read that server as the next step sets out instead.' } else { '' }))
+    if ($pending) {
+        $Impl.Add(@('On a server the RESOURCES section marks restart pending, open Cloud Shell in Bash and read both parameters as Azure holds them, with the commands for that server below. currentValue is the value in effect and isConfigPendingRestart shows whether a saved value still waits for a restart. Note the currentValue of each parameter in the change record as the value the rollback sets back, whether or not it matches the recorded one, since a restart since collection puts the saved value in effect. If the output shows no currentValue, the value in effect cannot be told apart from the saved one, so skip the remaining steps for that server, note it in the change record and recollect the pack before changing it.') + @(foreach ($r in $pendingServers) {
+                    foreach ($parameter in 'audit_log_enabled', 'audit_log_events') { 'az mysql flexible-server parameter show --subscription {0} --resource-group {1} --server-name {2} --name {3}' -f (Format-ShellArgument $r.SubscriptionId), (Format-ShellArgument $r.ResourceGroup), (Format-ShellArgument $r.Name), $parameter }
+                }))
+    }
     $Impl.Add('Set audit_log_enabled to ON, and add to audit_log_events each of CONNECTION, ADMIN, DDL and DCL it leaves out, keeping every event already selected so no audit coverage is removed. CONNECTION_V2 already covers CONNECTION, and GENERAL already covers ADMIN, DDL and DCL.')
     $Impl.Add('Leave audit_log_include_users and audit_log_exclude_users as they are. Where the RESOURCES section shows either for the server, it audits only some users, and the filter stays until the client decides otherwise.')
     if (@($Servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) {
@@ -552,7 +560,7 @@ function Add-MySqlAuditSteps($Impl, $Testing, $Rollback, $Servers, [bool]$Shared
     $Testing.Add(('On the same {0}, go to Monitoring > Diagnostic settings and confirm the ATMO-MXDR setting sends the MySqlAuditLogs category to {1}, with no slow query logs and no metrics.' -f (Get-Pick $m 'server' 'servers'), $workspace))
     $Testing.Add(@(('About 10 minutes after the change, once someone has connected to {0}, run this query in {1} and confirm {2} rows. Resource is the server name in upper case.' -f (Get-Pick $m 'the server' 'each server'), $workspace, (Get-Pick $m 'the server shows' 'each server shows')), 'AzureDiagnostics | where Category == "MySqlAuditLogs" | summarize count() by Resource'))
     $Rollback.Add(('On {0}MySQL flexible server the change set, go to Settings > Server parameters, set audit_log_enabled and audit_log_events back to the values recorded for the server in the RESOURCES section, or noted in the change record, and select Save.{1}{2}' -f $(if ($m -gt 1) { 'each ' } else { 'the ' }),
-            $(if ($pending) { ' On a server marked restart pending, set back the recorded values, which were in effect before the change, and not the saved value the portal showed before the change.' } else { '' }),
+            $(if ($pending) { ' On a server marked restart pending, set back the currentValue noted in the change record, which was in effect before the change, and not the saved value the portal showed before the change.' } else { '' }),
             $(if (@($Servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) { ' A server the RESOURCES section marks restart needed, restart not reported or restart pending keeps the changed values until it restarts, since a static parameter applies only after a restart. If the portal asks to restart it, select Restart later and restart it within a maintenance window the client agrees, and the rollback is complete only after that restart.' } else { '' })))
 }
 # What the MySQL audit parameters mean for the client, one paragraph of the email.
@@ -587,7 +595,8 @@ $mysqlReferences = @(
     , @('Server parameters in Azure Database for MySQL - Flexible Server', 'https://learn.microsoft.com/azure/mysql/flexible-server/concepts-server-parameters')
 )
 function Get-MySqlReferences($Servers) {
-    $mysqlReferences + @(if (@($Servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) { , @('Restart an Azure Database for MySQL - Flexible Server instance by using the Azure portal', 'https://learn.microsoft.com/azure/mysql/flexible-server/how-to-restart-server-portal') })
+    $mysqlReferences + @(if (@($Servers | Where-Object { $_.Dynamic -ne 'Yes' }).Count) { , @('Restart an Azure Database for MySQL - Flexible Server instance by using the Azure portal', 'https://learn.microsoft.com/azure/mysql/flexible-server/how-to-restart-server-portal') }) +
+    @(if (@($Servers | Where-Object { $_.Dynamic -eq 'Pending' }).Count) { , @('Configure server parameters in Azure Database for MySQL - Flexible Server using the Azure CLI', 'https://learn.microsoft.com/azure/mysql/flexible-server/how-to-configure-server-parameters-cli') })
 }
 # The subscriptions CR-01 assigns the initiative to, whose MySQL flexible servers it sets, so CR-10 leaves them out.
 $mysqlCr01Subscriptions = @()
