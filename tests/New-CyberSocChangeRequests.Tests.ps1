@@ -3089,6 +3089,32 @@ Describe 'MySQL flexible server audit parameters set with the diagnostic logging
         $index | Should -Match 'left out of the MySQL audit parameter step of CR-10 because DR\.6-COVERAGE is not in this pack, '
     }
 
+    It 'sets the parameters on a server proven by its own non-compliant policy state, even without subscription coverage' {
+        # An assignment at resource group scope is not counted in DR.6-COVERAGE, so the first subscription is not
+        # listed, but DR.6-NONCOMPLIANT names mysql-orders there, which proves the initiative applies to it.
+        $rg = Build-MySql 'mixed' 'PARTIAL' $null @(@{ subscriptionId = $s2; Resources = 3; Assignments = 1 })
+        Set-PackResult $rg.Pack 'DR.6-COVERAGE' @(@{ subscriptionId = $s2; Resources = 3; Assignments = 1 }) 'PARTIAL'
+        $null = & $generator -EvidencePath $rg.Pack
+        $text = Get-Content (Join-Path $rg.Out 'CR-10-diagnostic-remediation.txt') -Raw
+        $text | Should -Match '- mysql-orders, resource group rg-db, MySQL flexible server, policies ATMO-MXDR-MYSQL-TOSENT, audit_log_enabled OFF, audit_log_events CONNECTION' -Because 'its remediation task and its parameters go together'
+        $text | Should -Not -Match 'mysql-billing|mysql-general' -Because 'nothing proves the initiative on the other servers of that subscription'
+        Get-Content (Join-Path $rg.Out '00-index.md') -Raw | Should -Match 'left out of the MySQL audit parameter step of CR-10 because DR\.6-COVERAGE is partial and does not list their subscription, .*: mysql-billing \(resource group rg-db\), mysql-general \(resource group rg-db\), mysql-paused \(resource group rg-db\)\.'
+    }
+
+    It 'keeps the truncation warning beside the servers it could not read' {
+        $pack = Join-Path $TestDrive 'mysql-truncated'
+        New-ChangeFixture $pack
+        Set-PackResult $pack 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 6; Compliant = 6; NonCompliant = 0 })
+        Set-PackResult $pack 'DR.6-COVERAGE' @(@{ subscriptionId = $s1; Resources = 5; Assignments = 1 }, @{ subscriptionId = $s2; Resources = 1; Assignments = 1 })
+        $denied = @{ subscriptionId = $s2; resourceGroup = 'rg-fin'; Name = 'mysql-denied'; State = 'Ready'; AuditLogEnabled = ''; AuditLogEvents = ''; AuditLogIncludeUsers = ''; AuditLogExcludeUsers = ''; Dynamic = ''; ReadStatus = 'audit_log_enabled: HTTP 403: Forbidden'; ResourceId = "/subscriptions/$s2/resourceGroups/rg-fin/providers/Microsoft.DBforMySQL/flexibleServers/mysql-denied" }
+        Set-PackResult $pack 'DR.6-MYSQLAUDIT' @($denied) 'PARTIAL' '0 of 1 MySQL flexible servers read: audit_log_enabled ON in 0, not ON in 0. Not read: mysql-denied: audit_log_enabled: HTTP 403: Forbidden Resource Graph flagged the result as truncated.'
+        $null = & $generator -EvidencePath $pack
+        $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+        $index | Should -Match 'could not read its audit parameters: mysql-denied \(resource group rg-fin\)\.'
+        $index | Should -Match '- DR\.6-MYSQLAUDIT is partial because Resource Graph flagged the server list as truncated, so Resource Graph may have returned only part of the server list' -Because 'servers the truncated list left out are named by no row'
+        $index | Should -Match '\| 10 \| .* \| No gaps found, every resource is compliant with the initiative, the MySQL audit parameters of some servers were not read, see the notes, partial collection scope \(DR\.6-MYSQLAUDIT\), see the notes \|'
+    }
+
     It 'never reads a MySQL read that is missing, failed or partial as no gaps' {
         # The base fixture counts no MySQL server in P0.5, so a pack without the read has nothing to say about MySQL.
         $none = Join-Path $TestDrive 'mysql-none'

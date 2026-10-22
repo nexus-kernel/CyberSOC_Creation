@@ -460,8 +460,9 @@ function Test-NoMySqlServers([string[]]$Only, [string[]]$Skip) {
 }
 # The MySQL flexible servers in scope whose audit parameters CR-01 or CR-10 sets, with the notes for the index. Gaps
 # holds a resource per server, Used the result read, and Suffix what a state with nothing to change adds, so a read
-# that is missing, failed or partial never reads as no gaps.
-function Get-MySqlAudit([string[]]$Only, [string[]]$Skip, [int]$Number) {
+# that is missing, failed or partial never reads as no gaps. A server is in scope by its subscription, or by its
+# lowercase resource ID in Also, for a server whose own policy state proves the initiative applies to it.
+function Get-MySqlAudit([string[]]$Only, [string[]]$Skip, [int]$Number, [string[]]$Also = @()) {
     $label = 'CR-{0:00}' -f $Number
     $audit = @{ Gaps = @(); Notes = [System.Collections.Generic.List[string]]::new(); Used = @(); Suffix = '' }
     $status = Get-Status 'DR.6-MYSQLAUDIT'
@@ -474,7 +475,7 @@ function Get-MySqlAudit([string[]]$Only, [string[]]$Skip, [int]$Number) {
     }
     $audit.Used = @('DR.6-MYSQLAUDIT')
     $all = @(Get-Rows 'DR.6-MYSQLAUDIT')
-    $rows = @($all | Where-Object { Test-SubscriptionScope $_.subscriptionId $Only $Skip })
+    $rows = @($all | Where-Object { (Test-SubscriptionScope $_.subscriptionId $Only $Skip) -or (Get-Text $_.ResourceId).ToLowerInvariant() -in $Also })
     $read = @($rows | Where-Object { (Get-Text $_.ReadStatus) -eq 'OK' })
     $name = { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) }
     # Azure allows no change to server parameters while a server is stopped, so a stopped server is named for later
@@ -495,11 +496,15 @@ function Get-MySqlAudit([string[]]$Only, [string[]]$Skip, [int]$Number) {
     $unread = @($rows | Where-Object { (Get-Text $_.ReadStatus) -ne 'OK' } | ForEach-Object $name | Sort-Object)
     if ($unread.Count) {
         $audit.Notes.Add(('{0} left out of the MySQL audit parameter step of {1} because the collector could not read {2} audit parameters: {3}. Read audit_log_enabled and audit_log_events under Settings > Server parameters in the portal, and raise the change for any server where audit_log_enabled is OFF or audit_log_events leaves out CONNECTION, ADMIN, DDL or DCL.' -f (Get-Count $unread.Count 'MySQL flexible server' 'MySQL flexible servers'), $label, (Get-Pick $unread.Count 'its' 'their'), ($unread -join ', ')))
-        $audit.Suffix = ', the MySQL audit parameters of some servers were not read, see the notes'
+        $audit.Suffix += ', the MySQL audit parameters of some servers were not read, see the notes'
     }
-    elseif ($status -eq 'PARTIAL' -and -not @($all | Where-Object { (Get-Text $_.ReadStatus) -ne 'OK' }).Count) {
-        $audit.Notes.Add(('DR.6-MYSQLAUDIT is partial although it names no server it could not read, so Resource Graph may have returned only part of the server list, and a MySQL flexible server with audit_log_enabled OFF may be missing from {0}. Recollect the pack.' -f $label))
-        $audit.Suffix = ', partial collection scope (DR.6-MYSQLAUDIT), see the notes'
+    # A truncated server list leaves servers out that no row names, whether or not some listed servers were also not
+    # read, so the collector's truncation detail is checked on its own. A partial result that names no unread server
+    # can only have lost servers to the list.
+    $truncated = (Get-ResultDetail 'DR.6-MYSQLAUDIT') -match 'truncated'
+    if ($status -eq 'PARTIAL' -and ($truncated -or -not @($all | Where-Object { (Get-Text $_.ReadStatus) -ne 'OK' }).Count)) {
+        $audit.Notes.Add(('DR.6-MYSQLAUDIT is partial {0}, so Resource Graph may have returned only part of the server list, and a MySQL flexible server with audit_log_enabled OFF may be missing from {1}. Recollect the pack.' -f $(if ($truncated) { 'because Resource Graph flagged the server list as truncated' } else { 'although it names no server it could not read' }), $label))
+        $audit.Suffix += ', partial collection scope (DR.6-MYSQLAUDIT), see the notes'
     }
     $extra = @($read | Where-Object { -not (Test-MySqlAuditGap $_) -and @(Get-ExtraAuditEvents $_).Count } | ForEach-Object { '{0}, audit_log_events {1}' -f (& $name), (Format-AuditValue $_.AuditLogEvents) } | Sort-Object)
     if ($extra.Count) {
@@ -1537,9 +1542,12 @@ $catalog = @(
             # elsewhere no ATMO-MXDR diagnostic setting may send their audit rows. CR-01 takes the subscriptions it
             # assigns, and a server in neither is named in the index until the coverage is read.
             $proven = @(if (Test-ResultRead 'DR.6-COVERAGE') { Get-Rows 'DR.6-COVERAGE' | ForEach-Object { (ConvertTo-CopyText $_.subscriptionId).ToLowerInvariant() } | Where-Object { $_ -notin $mysqlCr01Subscriptions } })
-            $audit = Get-MySqlAudit $proven $mysqlCr01Subscriptions 10
+            # A server DR.6-NONCOMPLIANT names is proven by its own policy state, even under an assignment at resource
+            # group scope, which DR.6-COVERAGE does not count, so its remediation task and its parameters go together.
+            $named = @($rows | Where-Object { (Get-Text $_.ResourceType).ToLowerInvariant() -eq $mysqlType } | ForEach-Object { (Get-Text $_.ResourceId).ToLowerInvariant() })
+            $audit = Get-MySqlAudit $proven $mysqlCr01Subscriptions 10 $named
             if (Test-ResultRead 'DR.6-MYSQLAUDIT') {
-                $outside = @(Get-Rows 'DR.6-MYSQLAUDIT' | Where-Object { -not (Test-SubscriptionScope $_.subscriptionId $proven $mysqlCr01Subscriptions) -and ((Get-Text $_.ReadStatus) -ne 'OK' -or (Test-MySqlAuditGap $_)) } |
+                $outside = @(Get-Rows 'DR.6-MYSQLAUDIT' | Where-Object { -not (Test-SubscriptionScope $_.subscriptionId $proven $mysqlCr01Subscriptions) -and (Get-Text $_.ResourceId).ToLowerInvariant() -notin $named -and ((Get-Text $_.ReadStatus) -ne 'OK' -or (Test-MySqlAuditGap $_)) } |
                         ForEach-Object { '{0} (resource group {1})' -f (ConvertTo-CopyText $_.Name), (ConvertTo-CopyText $_.resourceGroup) } | Sort-Object)
                 if ($outside.Count) {
                     $why = if ((Get-Status 'DR.6-COVERAGE') -eq 'PARTIAL') { 'DR.6-COVERAGE is partial and does not list their subscription' } elseif (Test-ResultRead 'DR.6-COVERAGE') { 'DR.6-COVERAGE does not list their subscription and CR-01 does not assign it' } elseif ((Get-Status 'DR.6-COVERAGE') -eq 'MISSING') { 'DR.6-COVERAGE is not in this pack' } elseif (Test-Unreadable 'DR.6-COVERAGE') { 'DR.6-COVERAGE is unreadable' } else { 'DR.6-COVERAGE reads ' + (Get-Status 'DR.6-COVERAGE') }
