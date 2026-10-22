@@ -82,8 +82,8 @@
     written with a note to confirm the license. The emergency access accounts every Conditional Access change excludes are
     read from IA.16-ACCOUNTS and IA.16-GROUPS, added in 1.12.0, and on an earlier pack, or when that read failed, is
     partial or found no account, no Conditional Access change is written and the index says why. CR-19 leaves the
-    disabled emergency access accounts out, and on an earlier pack, or when that read failed or is partial, leaves out
-    those with Atmosera in their UPN and is written with a status to confirm the Atmosera groups before sending. CR-04 sets the SCM
+    disabled emergency access accounts out, and on an earlier pack, or when that read failed or is partial, is not
+    written. CR-04 sets the SCM
     (Kudu) site minimum TLS version from the ScmMinTlsVersion column of NB.5-DETAIL, added in 1.13.0, and on an earlier
     pack sets the site minimum only and says in the index that the SCM part needs recollection.
     CR-17 turns FTP basic authentication publishing credentials off from NB.5-FTPAUTH-DETAIL, added in 1.14.0, on every
@@ -2457,13 +2457,20 @@ $catalog = @(
                 $id = (Get-Text $u.PrincipalId).ToLowerInvariant()
                 if ($id) { $accounts[$id] = $u }
             }
+            # CR-19 is written only when the emergency access read is complete (OK or EMPTY), so that every account in an
+            # Atmosera group is known and left out. Without it an account whose UPN does not match cannot be told apart,
+            # and the portal search for groups matches words rather than any part of a name, so it is no safe check. A pack
+            # with no disabled account has nothing to leave out.
+            if ($accounts.Count -and -not $emergencyAccess.Complete) {
+                $missingEa = $emergencyAccess.Why -eq 'Missing'
+                return @{ State = $(if ($missingEa) { Get-RecollectionState 'IA.16-ACCOUNTS', 'IA.16-GROUPS' } else { 'Not written, {0}' -f $emergencyAccess.Why })
+                    Notes = @('CR-19 is not written because {0}. CR-19 leaves out every disabled emergency access account, and without a complete read an account that sits in an Atmosera group cannot be told apart from the others. Collect again with CyberSOC collector 1.12.0 or later, so that IA.16-ACCOUNTS and IA.16-GROUPS read in full.' -f $(if ($missingEa) { 'the pack was collected before the emergency access read' } else { $emergencyAccess.Why })) }
+            }
             $sides = @(@{ Id = 'IA.15-RBAC'; Name = 'Azure' }, @{ Id = 'IA.15-ENTRA'; Name = 'Microsoft Entra' })
             $notes = [System.Collections.Generic.List[string]]::new()
             # No change removes the access of an emergency access account (decision 4 of the Oct 21 review), so a
             # disabled account with Atmosera in its UPN, or one IA.16-ACCOUNTS lists, is left out before any role is
-            # read: none of its roles is removed and it is not removed from any group. Its own UPN needs no group read,
-            # so it is left out on every pack. Without a complete emergency access read the group match is unknown, so
-            # CR-19 is still written, with a status and a first step that check the Atmosera groups before anything goes.
+            # read: none of its roles is removed and it is not removed from any group.
             $eaWho = { param($u)
                 $upn = ConvertTo-CopyText $u.UserPrincipalName; $name = ConvertTo-CopyText $u.DisplayName
                 if ($upn -and $name) { '{0} ({1})' -f $name, $upn } elseif ($upn) { $upn } elseif ($name) { $name } else { 'object ID ' + (Get-Text $u.PrincipalId) } }
@@ -2483,8 +2490,6 @@ $catalog = @(
             if ($leftOut.Count) {
                 $notes.Add(('CR-19 leaves out {0}, so none of {1} roles is removed and {2} not removed from any group: {3}. A disabled emergency access account cannot sign in when it is needed, so confirm with the client that {4} meant to be disabled.' -f (Get-Count $leftOut.Count 'disabled emergency access account' 'disabled emergency access accounts'), (Get-Pick $leftOut.Count 'its' 'their'), (Get-Pick $leftOut.Count 'it is' 'they are'), (@($leftOut | ForEach-Object Text) -join ' / '), (Get-Pick $leftOut.Count 'it is' 'each one is')))
             }
-            $eaUnsure = -not $emergencyAccess.Complete
-            $eaWhy = if ($emergencyAccess.Why -eq 'Missing') { 'the pack was collected before the emergency access read (IA.16-ACCOUNTS and IA.16-GROUPS, CyberSOC collector 1.12.0)' } else { $emergencyAccess.Why }
             $read = @{}
             foreach ($side in $sides) {
                 $read[$side.Id] = Test-ResultRead $side.Id
@@ -2725,11 +2730,6 @@ $catalog = @(
             $conditioned = @($azure | Where-Object { Get-Text $_.Condition })
             # Each account is read again first. One turned back on since collection keeps every role, and is noted.
             $impl = [System.Collections.Generic.List[object]]::new()
-            if ($eaUnsure) {
-                $notes.Add(('Confirm before sending CR-19 that no account in it is an emergency access account: {0}, so CR-19 leaves out only the accounts with Atmosera in their UPN{1}, and an account that sits in an Atmosera group may still be listed. In Microsoft Entra ID > Groups > All groups, search for Atmosera and open Members on each group found, which lists the members of nested groups too. Take any account listed in CR-19 that is a member out of the change and its email, or collect again with CyberSOC collector 1.12.0 or later. Step 1 of the implementation checks this again.' -f $eaWhy, $(if (@($emergencyAccess.Accounts).Count) { ' or listed in IA.16-ACCOUNTS' } else { '' })))
-                $impl.Add('In the Azure portal, go to Microsoft Entra ID > Groups > All groups and search for Atmosera. For each group found, open Members, which lists the members of nested groups too, and look for each account listed in the RESOURCES section. An account found there is an emergency access account, so leave every role and group membership it holds unchanged, note it in the change record and skip the remaining steps for it.')
-            }
-            $first = $impl.Count + 1
             $impl.Add((Get-OpenStep $m 'Microsoft Entra ID > Users' 'account'))
             $impl.Add('On the Overview page, read Account status, shown as Account enabled under Settings on the Properties tab. If it shows the account as enabled, the account has been turned back on since collection, so leave every role it holds unchanged, note it in the change record for the next pack and skip the remaining steps for it. Leave out too any account the client asked to keep out of the change.')
             $azureRemoveStep = 0
@@ -2769,7 +2769,7 @@ $catalog = @(
                 # a role on its line is removed, however many of the others are gone.
                 $impl.Add('For each group membership listed for the account, first confirm that it still gives the account a role on its line: go to Microsoft Entra ID > Groups > All groups, open each group the line says holds a role and check under Azure role assignments or Assigned roles that it still holds the roles listed, then, where the line says the account sits in a group nested in it, open that nested group and each group named between them and confirm under Group memberships that each is still a member of the one above it. Where the membership still carries at least one of the roles listed, remove it as follows, and note in the change record any role on the line that was already gone. Only where every role on the line is gone, or the chain to every group holding one is broken, does the membership no longer give the account a role, so leave it unchanged and note it in the change record. To remove it, open the group the account is removed from, the first group named on its line, which is the group that holds the role or a group nested in it. Select Members, find the account, select it, select Remove and then Yes. If Membership type on the group reads Dynamic User or Dynamic Device, or Source reads Windows server AD, a member cannot be removed here, so leave the membership unchanged and note it in the change record for a review with the group owner.')
             }
-            Add-RepeatStep $impl $m $first 'account'
+            Add-RepeatStep $impl $m 1 'account'
             $testing = [System.Collections.Generic.List[object]]::new()
             $testing.Add(('In the Azure portal, go to Microsoft Entra ID > Users and open {0}.' -f (Get-EachStep $m 'account')))
             if ($azure.Count - $rootAzure.Count) { $testing.Add('Select Azure role assignments, choose each subscription listed for the account in turn, and confirm that none of the Azure role assignments recorded for it remains, apart from any left unchanged and noted in the change record. For an assignment at a management group, open Access control (IAM) on the management group and search for the account on the Role assignments tab.') }
@@ -2905,7 +2905,7 @@ $catalog = @(
             else { $intro += ' Each role listed reaches the account through the group it is removed from.' }
             if ($fixed.Count -or ($viaGroup.Count -and -not $pathKnown)) { $intro += ' Roles held through a group the change cannot alter are left out and named in the index.' }
             $intro += ' The CSV carries every assignment{0} in full for the rollback.' -f $(if ($memberships.Count) { ' and membership' } else { '' })
-            @{ Used = @($sides | Where-Object { $read[$_.Id] } | ForEach-Object Id); Notes = $notes.ToArray(); Confirm = $(if ($eaUnsure) { 'confirm no listed account is in an Atmosera group before sending' } else { '' }); Cr = New-ChangeRequest @{
+            @{ Used = @($sides | Where-Object { $read[$_.Id] } | ForEach-Object Id); Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
                     Number = 19; Key = 'disabled-account-roles'; Title = 'Remove the role assignments held by disabled accounts'
                     Description = $description
                     Purpose = 'A disabled account cannot sign in but keeps every role it holds, so turning it back on, by mistake or by someone with directory write access, restores all of that access at once. Removing the roles{0} closes that path, and each one can be assigned again from the record.' -f $(if ($memberships.Count) { ', and the group memberships that carry them,' } else { '' })
@@ -2978,8 +2978,6 @@ $results = foreach ($item in $catalog) {
             foreach ($g in @($gate.Unknown)) { $notes += 'Confirm {0} before sending CR-{1:00}: the licensing check could not establish it. {2}' -f (ConvertTo-CopyText $g.Name), $item.Number, (ConvertTo-PathText $g.Detail) }
             foreach ($g in @($gate.Partly)) { $notes += 'CR-{0:00} needs {1}, which covers only part of the estate. {2}' -f $item.Number, (ConvertTo-CopyText $g.Name), (ConvertTo-PathText $g.Detail) }
             if (@($gate.Unknown).Count) { $state += ', confirm the license before sending' }
-            # A change request that could not establish something it relies on says what to confirm before sending.
-            if ($built.Confirm) { $state += ', ' + $built.Confirm }
         }
     }
     [pscustomobject]@{ Item = $item; State = $state; Cr = $cr; Notes = $notes }

@@ -13,7 +13,7 @@
     and Test-CyberSocEmergencyAccessId tells it which existing exclusion it must never propose to remove.
 
     A change that removes access, such as CR-19, leaves out every account Test-CyberSocEmergencyAccessUpn or
-    Test-CyberSocEmergencyAccessId names, and relies on the group match only when $emergencyAccess.Complete is true.
+    Test-CyberSocEmergencyAccessId names, and is written only when $emergencyAccess.Complete is true.
 #>
 
 # The word that marks an emergency access account or group, matched anywhere in the value without regard to case.

@@ -1,5 +1,5 @@
 {
-  "Description": "CR-19 and the emergency access accounts: a disabled member matched by its UPN, a disabled guest matched by its #EXT# UPN, a disabled member of SOC Night Shift, a plain group nested in the Atmosera group Atmosera Responders, and a disabled account that matches nothing, each holding roles CR-19 would remove",
+  "Description": "CR-19 and the emergency access accounts: a disabled member matched by its UPN, a disabled guest matched by its #EXT# UPN, a disabled member of SOC Night Shift, a plain group nested in the Atmosera group Atmosera Responders, a disabled member of prodAtmoseraOps, whose name holds the word inside another word, and a disabled account that matches nothing, each holding roles CR-19 would remove",
   "Graph": {
     "Users": [
       {
@@ -20,6 +20,13 @@
         "id": "12c2ca84-514b-56b5-b770-19ecb54c6de2",
         "userPrincipalName": "riley.night@contoso.onmicrosoft.com",
         "displayName": "Riley Night",
+        "userType": "Member",
+        "accountEnabled": false
+      },
+      {
+        "id": "d199dc5f-50aa-50c8-842b-f24cb0522cad",
+        "userPrincipalName": "jamie.ops@contoso.onmicrosoft.com",
+        "displayName": "Jamie Ops",
         "userType": "Member",
         "accountEnabled": false
       },
@@ -45,6 +52,13 @@
         "groupTypes": [],
         "onPremisesSyncEnabled": null,
         "membershipRule": null
+      },
+      {
+        "id": "93428392-8325-5292-bddb-326afd15bbf3",
+        "displayName": "prodAtmoseraOps",
+        "groupTypes": [],
+        "onPremisesSyncEnabled": null,
+        "membershipRule": null
       }
     ],
     "Members": {
@@ -53,6 +67,15 @@
           "id": "12c2ca84-514b-56b5-b770-19ecb54c6de2",
           "userPrincipalName": "riley.night@contoso.onmicrosoft.com",
           "displayName": "Riley Night",
+          "userType": "Member",
+          "accountEnabled": false
+        }
+      ],
+      "93428392-8325-5292-bddb-326afd15bbf3": [
+        {
+          "id": "d199dc5f-50aa-50c8-842b-f24cb0522cad",
+          "userPrincipalName": "jamie.ops@contoso.onmicrosoft.com",
+          "displayName": "Jamie Ops",
           "userType": "Member",
           "accountEnabled": false
         }
@@ -94,6 +117,14 @@
         "OnPremisesSyncEnabled": false
       },
       {
+        "PrincipalId": "d199dc5f-50aa-50c8-842b-f24cb0522cad",
+        "PrincipalType": "User",
+        "DisplayName": "Jamie Ops",
+        "UserPrincipalName": "jamie.ops@contoso.onmicrosoft.com",
+        "AccountEnabled": false,
+        "OnPremisesSyncEnabled": false
+      },
+      {
         "PrincipalId": "53c64b42-5b2a-526d-92bf-8670c11598b5",
         "PrincipalType": "User",
         "DisplayName": "Casey Former",
@@ -121,6 +152,12 @@
         "RoleKey": "Contributor",
         "Principal": "12c2ca84-514b-56b5-b770-19ecb54c6de2",
         "Group": "ops"
+      },
+      {
+        "Scope": "/subscriptions/{s2}",
+        "Role": "Reader",
+        "RoleKey": "Reader",
+        "Principal": "d199dc5f-50aa-50c8-842b-f24cb0522cad"
       },
       {
         "Scope": "/subscriptions/{s1}/resourceGroups/rg-app",
@@ -161,7 +198,8 @@
       "sam.rivera_atmosera.com#EXT#@contoso.onmicrosoft.com"
     ],
     "LeftOutByGroup": [
-      "riley.night@contoso.onmicrosoft.com"
+      "riley.night@contoso.onmicrosoft.com",
+      "jamie.ops@contoso.onmicrosoft.com"
     ],
     "Kept": [
       "casey.former@contoso.onmicrosoft.com"
