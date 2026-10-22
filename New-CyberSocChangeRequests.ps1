@@ -81,7 +81,9 @@
     added in 1.11.0, and on an earlier pack reads every capability as Unknown, so a change request that requires one is
     written with a note to confirm the license. The emergency access accounts every Conditional Access change excludes are
     read from IA.16-ACCOUNTS and IA.16-GROUPS, added in 1.12.0, and on an earlier pack, or when that read failed, is
-    partial or found no account, no Conditional Access change is written and the index says why. CR-04 sets the SCM
+    partial or found no account, no Conditional Access change is written and the index says why. CR-19 leaves the
+    disabled emergency access accounts out, and on an earlier pack, or when that read failed or is partial, is not
+    written. CR-04 sets the SCM
     (Kudu) site minimum TLS version from the ScmMinTlsVersion column of NB.5-DETAIL, added in 1.13.0, and on an earlier
     pack sets the site minimum only and says in the index that the SCM part needs recollection.
     CR-17 turns FTP basic authentication publishing credentials off from NB.5-FTPAUTH-DETAIL, added in 1.14.0, on every
@@ -2455,8 +2457,39 @@ $catalog = @(
                 $id = (Get-Text $u.PrincipalId).ToLowerInvariant()
                 if ($id) { $accounts[$id] = $u }
             }
+            # CR-19 is written only when the emergency access read is complete (OK or EMPTY), so that every account in an
+            # Atmosera group is known and left out. Without it an account whose UPN does not match cannot be told apart,
+            # and the portal search for groups matches words rather than any part of a name, so it is no safe check. A pack
+            # with no disabled account has nothing to leave out.
+            if ($accounts.Count -and -not $emergencyAccess.Complete) {
+                $missingEa = $emergencyAccess.Why -eq 'Missing'
+                return @{ State = $(if ($missingEa) { Get-RecollectionState 'IA.16-ACCOUNTS', 'IA.16-GROUPS' } else { 'Not written, {0}' -f $emergencyAccess.Why })
+                    Notes = @('CR-19 is not written because {0}. CR-19 leaves out every disabled emergency access account, and without a complete read an account that sits in an Atmosera group cannot be told apart from the others. Collect again with CyberSOC collector 1.12.0 or later, so that IA.16-ACCOUNTS and IA.16-GROUPS read in full.' -f $(if ($missingEa) { 'the pack was collected before the emergency access read' } else { $emergencyAccess.Why })) }
+            }
             $sides = @(@{ Id = 'IA.15-RBAC'; Name = 'Azure' }, @{ Id = 'IA.15-ENTRA'; Name = 'Microsoft Entra' })
             $notes = [System.Collections.Generic.List[string]]::new()
+            # No change removes the access of an emergency access account (decision 4 of the Oct 21 review), so a
+            # disabled account with Atmosera in its UPN, or one IA.16-ACCOUNTS lists, is left out before any role is
+            # read: none of its roles is removed and it is not removed from any group.
+            $eaWho = { param($u)
+                $upn = ConvertTo-CopyText $u.UserPrincipalName; $name = ConvertTo-CopyText $u.DisplayName
+                if ($upn -and $name) { '{0} ({1})' -f $name, $upn } elseif ($upn) { $upn } elseif ($name) { $name } else { 'object ID ' + (Get-Text $u.PrincipalId) } }
+            $leftOut = @(foreach ($id in @($accounts.Keys | Sort-Object { & $eaWho $accounts[$_] })) {
+                    $u = $accounts[$id]
+                    $byUpn = Test-CyberSocEmergencyAccessUpn (Get-Text $u.UserPrincipalName)
+                    if (-not $byUpn -and -not (Test-CyberSocEmergencyAccessId $emergencyAccess $id)) { continue }
+                    $row = @($emergencyAccess.Accounts | Where-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() -eq $id }) | Select-Object -First 1
+                    $inGroups = @(if ($row) { @($row.Groups) | ForEach-Object { ConvertTo-CopyText $_ } | Where-Object { $_ } })
+                    $why = @(
+                        if ($byUpn) { 'Atmosera in its UPN' }
+                        if ($inGroups.Count) { '{0} {1}' -f (Get-Pick $inGroups.Count 'a member of the Atmosera group' 'a member of the Atmosera groups'), (Join-Words $inGroups) })
+                    if (-not $why.Count) { $why = @('listed in IA.16-ACCOUNTS') }
+                    [pscustomobject]@{ Id = $id; Text = '{0}, {1}' -f (& $eaWho $u), ($why -join ' and ') }
+                })
+            foreach ($x in $leftOut) { $accounts.Remove($x.Id) }
+            if ($leftOut.Count) {
+                $notes.Add(('CR-19 leaves out {0}, so none of {1} roles is removed and {2} not removed from any group: {3}. A disabled emergency access account cannot sign in when it is needed, so confirm with the client that {4} meant to be disabled.' -f (Get-Count $leftOut.Count 'disabled emergency access account' 'disabled emergency access accounts'), (Get-Pick $leftOut.Count 'its' 'their'), (Get-Pick $leftOut.Count 'it is' 'they are'), (@($leftOut | ForEach-Object Text) -join ' / '), (Get-Pick $leftOut.Count 'it is' 'each one is')))
+            }
             $read = @{}
             foreach ($side in $sides) {
                 $read[$side.Id] = Test-ResultRead $side.Id
@@ -2626,6 +2659,7 @@ $catalog = @(
                 elseif ($missing.Count) { 'No gaps found in the {0} roles' -f (@($sides | Where-Object { $read[$_.Id] })[0].Name) }
                 else { 'No gaps found' }
                 if ($missing.Count) { $state += ', {0} roles not collected ({1} {2})' -f $missing[0].Name, $missing[0].Id, (Get-Status $missing[0].Id) }
+                if ($leftOut.Count) { $state = $(if ($state -eq 'No gaps found') { 'No gaps found in the disabled accounts that remain' } else { $state }) + (', {0} left out' -f (Get-Count $leftOut.Count 'emergency access account' 'emergency access accounts')) }
                 if ($state -ne 'No gaps found') { $state += ', see the notes' }
                 return @{ State = $state; Notes = $notes.ToArray() }
             }

@@ -1,0 +1,208 @@
+{
+  "Description": "CR-19 and the emergency access accounts: a disabled member matched by its UPN, a disabled guest matched by its #EXT# UPN, a disabled member of SOC Night Shift, a plain group nested in the Atmosera group Atmosera Responders, a disabled member of prodAtmoseraOps, whose name holds the word inside another word, and a disabled account that matches nothing, each holding roles CR-19 would remove",
+  "Graph": {
+    "Users": [
+      {
+        "id": "517e877b-8326-5e47-b815-29afb18abb30",
+        "userPrincipalName": "breakglass-atmosera02@contoso.onmicrosoft.com",
+        "displayName": "Emergency Access 02",
+        "userType": "Member",
+        "accountEnabled": false
+      },
+      {
+        "id": "82dd53c5-af8b-5a18-926e-d7d2bcec8976",
+        "userPrincipalName": "sam.rivera_atmosera.com#EXT#@contoso.onmicrosoft.com",
+        "displayName": "Sam Rivera (Atmosera)",
+        "userType": "Guest",
+        "accountEnabled": false
+      },
+      {
+        "id": "12c2ca84-514b-56b5-b770-19ecb54c6de2",
+        "userPrincipalName": "riley.night@contoso.onmicrosoft.com",
+        "displayName": "Riley Night",
+        "userType": "Member",
+        "accountEnabled": false
+      },
+      {
+        "id": "d199dc5f-50aa-50c8-842b-f24cb0522cad",
+        "userPrincipalName": "jamie.ops@contoso.onmicrosoft.com",
+        "displayName": "Jamie Ops",
+        "userType": "Member",
+        "accountEnabled": false
+      },
+      {
+        "id": "53c64b42-5b2a-526d-92bf-8670c11598b5",
+        "userPrincipalName": "casey.former@contoso.onmicrosoft.com",
+        "displayName": "Casey Former",
+        "userType": "Member",
+        "accountEnabled": false
+      }
+    ],
+    "Groups": [
+      {
+        "id": "85beaab7-7cb8-583e-96f7-3bdc8df5e801",
+        "displayName": "Atmosera Responders",
+        "groupTypes": [],
+        "onPremisesSyncEnabled": null,
+        "membershipRule": null
+      },
+      {
+        "id": "493048b1-b25a-5ff9-b1ef-37fc66d17a20",
+        "displayName": "SOC Night Shift",
+        "groupTypes": [],
+        "onPremisesSyncEnabled": null,
+        "membershipRule": null
+      },
+      {
+        "id": "93428392-8325-5292-bddb-326afd15bbf3",
+        "displayName": "prodAtmoseraOps",
+        "groupTypes": [],
+        "onPremisesSyncEnabled": null,
+        "membershipRule": null
+      }
+    ],
+    "Members": {
+      "85beaab7-7cb8-583e-96f7-3bdc8df5e801": [
+        {
+          "id": "12c2ca84-514b-56b5-b770-19ecb54c6de2",
+          "userPrincipalName": "riley.night@contoso.onmicrosoft.com",
+          "displayName": "Riley Night",
+          "userType": "Member",
+          "accountEnabled": false
+        }
+      ],
+      "93428392-8325-5292-bddb-326afd15bbf3": [
+        {
+          "id": "d199dc5f-50aa-50c8-842b-f24cb0522cad",
+          "userPrincipalName": "jamie.ops@contoso.onmicrosoft.com",
+          "displayName": "Jamie Ops",
+          "userType": "Member",
+          "accountEnabled": false
+        }
+      ]
+    }
+  },
+  "Expect": {
+    "IA.16-ACCOUNTS": {
+      "Status": "OK"
+    },
+    "IA.16-GROUPS": {
+      "Status": "OK"
+    }
+  },
+  "Cr19": {
+    "Disabled": [
+      {
+        "PrincipalId": "517e877b-8326-5e47-b815-29afb18abb30",
+        "PrincipalType": "User",
+        "DisplayName": "Emergency Access 02",
+        "UserPrincipalName": "breakglass-atmosera02@contoso.onmicrosoft.com",
+        "AccountEnabled": false,
+        "OnPremisesSyncEnabled": false
+      },
+      {
+        "PrincipalId": "82dd53c5-af8b-5a18-926e-d7d2bcec8976",
+        "PrincipalType": "User",
+        "DisplayName": "Sam Rivera (Atmosera)",
+        "UserPrincipalName": "sam.rivera_atmosera.com#EXT#@contoso.onmicrosoft.com",
+        "AccountEnabled": false,
+        "OnPremisesSyncEnabled": false
+      },
+      {
+        "PrincipalId": "12c2ca84-514b-56b5-b770-19ecb54c6de2",
+        "PrincipalType": "User",
+        "DisplayName": "Riley Night",
+        "UserPrincipalName": "riley.night@contoso.onmicrosoft.com",
+        "AccountEnabled": false,
+        "OnPremisesSyncEnabled": false
+      },
+      {
+        "PrincipalId": "d199dc5f-50aa-50c8-842b-f24cb0522cad",
+        "PrincipalType": "User",
+        "DisplayName": "Jamie Ops",
+        "UserPrincipalName": "jamie.ops@contoso.onmicrosoft.com",
+        "AccountEnabled": false,
+        "OnPremisesSyncEnabled": false
+      },
+      {
+        "PrincipalId": "53c64b42-5b2a-526d-92bf-8670c11598b5",
+        "PrincipalType": "User",
+        "DisplayName": "Casey Former",
+        "UserPrincipalName": "casey.former@contoso.onmicrosoft.com",
+        "AccountEnabled": false,
+        "OnPremisesSyncEnabled": false
+      }
+    ],
+    "Azure": [
+      {
+        "Scope": "/subscriptions/{s1}",
+        "Role": "Owner",
+        "RoleKey": "Owner",
+        "Principal": "517e877b-8326-5e47-b815-29afb18abb30"
+      },
+      {
+        "Scope": "/subscriptions/{s1}",
+        "Role": "Reader",
+        "RoleKey": "Reader",
+        "Principal": "82dd53c5-af8b-5a18-926e-d7d2bcec8976"
+      },
+      {
+        "Scope": "/subscriptions/{s2}/resourceGroups/rg-ops",
+        "Role": "Contributor",
+        "RoleKey": "Contributor",
+        "Principal": "12c2ca84-514b-56b5-b770-19ecb54c6de2",
+        "Group": "ops"
+      },
+      {
+        "Scope": "/subscriptions/{s2}",
+        "Role": "Reader",
+        "RoleKey": "Reader",
+        "Principal": "d199dc5f-50aa-50c8-842b-f24cb0522cad"
+      },
+      {
+        "Scope": "/subscriptions/{s1}/resourceGroups/rg-app",
+        "Role": "Contributor",
+        "RoleKey": "Contributor",
+        "Principal": "53c64b42-5b2a-526d-92bf-8670c11598b5"
+      }
+    ],
+    "Entra": [
+      {
+        "Role": "Global Administrator",
+        "RoleKey": "Ga",
+        "Type": "Standing",
+        "Principal": "517e877b-8326-5e47-b815-29afb18abb30"
+      },
+      {
+        "Role": "Security Reader",
+        "RoleKey": "SecReader",
+        "Type": "Standing",
+        "Principal": "12c2ca84-514b-56b5-b770-19ecb54c6de2"
+      },
+      {
+        "Role": "Helpdesk Administrator",
+        "RoleKey": "Helpdesk",
+        "Type": "Standing",
+        "Principal": "12c2ca84-514b-56b5-b770-19ecb54c6de2",
+        "Group": "ops"
+      },
+      {
+        "Role": "User Administrator",
+        "RoleKey": "UserAdmin",
+        "Type": "Standing",
+        "Principal": "53c64b42-5b2a-526d-92bf-8670c11598b5"
+      }
+    ],
+    "LeftOutByUpn": [
+      "breakglass-atmosera02@contoso.onmicrosoft.com",
+      "sam.rivera_atmosera.com#EXT#@contoso.onmicrosoft.com"
+    ],
+    "LeftOutByGroup": [
+      "riley.night@contoso.onmicrosoft.com",
+      "jamie.ops@contoso.onmicrosoft.com"
+    ],
+    "Kept": [
+      "casey.former@contoso.onmicrosoft.com"
+    ]
+  }
+}
