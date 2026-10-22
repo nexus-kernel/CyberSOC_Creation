@@ -2828,11 +2828,25 @@ policyresources
 | order by ResourceType asc, ResourceId asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'DR.6-MYSQLAUDIT' -Phase 'P2 Detection and response' -Engine 'MYSQL-AUDIT' -Title 'MySQL flexible server audit log parameters' -Notes 'Added in CyberSOC 1.15.0. Server parameters are not in Resource Graph, so the collector lists every MySQL flexible server with the query below and then reads each one with a GET on its configurations/audit_log_enabled, audit_log_events, audit_log_include_users and audit_log_exclude_users paths (Reader is enough). Every server is read, not only the ones DR.6-NONCOMPLIANT names, since a server with the diagnostic setting is compliant with the initiative but writes no audit rows while audit_log_enabled is OFF, and the user filters limit which users it audits. One row per server: its state, AuditLogEnabled, AuditLogEvents, AuditLogIncludeUsers and AuditLogExcludeUsers as the server returns them (empty when not read), Dynamic (Yes when audit_log_enabled and audit_log_events both read as dynamic, so a change applies without a restart, No when either reads static, empty when not reported) and ReadStatus, so a server that could not be read is named and never read as set. Feeds change requests CR-01 and CR-10. Internal: names servers, the report embeds counts only.' -Query @'
+    $q.Add((New-EbrQuery -Id 'DR.6-MYSQLAUDIT' -Phase 'P2 Detection and response' -Engine 'MYSQL-AUDIT' -Title 'MySQL flexible server audit log parameters' -Notes 'Added in CyberSOC 1.15.0. Server parameters are not in Resource Graph, so the collector lists every MySQL flexible server with the query below and then reads each one with a GET on its configurations/audit_log_enabled, audit_log_events, audit_log_include_users and audit_log_exclude_users paths (Reader is enough). Every server is read, not only the ones DR.6-NONCOMPLIANT names, since a server with the diagnostic setting is compliant with the initiative but writes no audit rows while audit_log_enabled is OFF, and the user filters limit which users it audits. The query joins the ATMO-MXDR policy state of each server (PolicyState: NonCompliant, Compliant, or empty when the initiative has not evaluated it), so a change request sets the parameters only where the initiative has evaluated the server. One row per server: its state, PolicyState, AuditLogEnabled, AuditLogEvents, AuditLogIncludeUsers and AuditLogExcludeUsers as the server applies them, from properties.currentValue where the response carries it and properties.value otherwise (empty when not read), PendingRestart (Yes when audit_log_enabled or audit_log_events has a saved value waiting for a restart), Dynamic (Yes when audit_log_enabled and audit_log_events both read as dynamic, so a change applies without a restart, No when either reads static, empty when not reported) and ReadStatus, so a server that could not be read is named and never read as set. Feeds change requests CR-01 and CR-10. Internal: names servers, the report embeds counts only.' -Query @'
 resources
 | where type =~ "microsoft.dbformysql/flexibleservers"
 | where id !contains "{{MRG}}"
-| project Name = name, ResourceId = id, resourceGroup, subscriptionId, State = tostring(properties.state)
+| extend ResourceKey = tolower(id)
+| join kind=leftouter (
+    policyresources
+    | where type =~ "microsoft.policyinsights/policystates"
+    | extend AssignmentName = tostring(properties.policyAssignmentName),
+             InitiativeName = tostring(properties.policySetDefinitionName),
+             DefinitionName = tostring(properties.policyDefinitionName),
+             Compliance     = tostring(properties.complianceState),
+             ResourceKey    = tolower(tostring(properties.resourceId))
+    | where AssignmentName contains "ATMO-MXDR" or InitiativeName contains "ATMO-MXDR" or DefinitionName contains "ATMO-MXDR"
+    | summarize NonCompliant = countif(Compliance =~ "NonCompliant"), Compliant = countif(Compliance =~ "Compliant") by ResourceKey
+) on ResourceKey
+// The server's own ATMO-MXDR policy state: empty when the initiative has not evaluated it, so nothing proves its diagnostic setting.
+| extend PolicyState = case(coalesce(NonCompliant, 0) > 0, "NonCompliant", coalesce(Compliant, 0) > 0, "Compliant", "")
+| project Name = name, ResourceId = id, resourceGroup, subscriptionId, State = tostring(properties.state), PolicyState
 | order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
     #endregion
@@ -4231,11 +4245,12 @@ function Get-EbrMySqlAuditRow {
     # ReadStatus, so the server is never read as set.
     param($Server, [string]$Tenant)
     $row = [ordered]@{
-        subscriptionId = [string]$Server.subscriptionId; resourceGroup = [string]$Server.resourceGroup; Name = [string]$Server.Name; State = [string]$Server.State
-        AuditLogEnabled = ''; AuditLogEvents = ''; AuditLogIncludeUsers = ''; AuditLogExcludeUsers = ''; Dynamic = ''; ReadStatus = 'OK'; ResourceId = [string]$Server.ResourceId
+        subscriptionId = [string]$Server.subscriptionId; resourceGroup = [string]$Server.resourceGroup; Name = [string]$Server.Name; State = [string]$Server.State; PolicyState = [string]$Server.PolicyState
+        AuditLogEnabled = ''; AuditLogEvents = ''; AuditLogIncludeUsers = ''; AuditLogExcludeUsers = ''; PendingRestart = ''; Dynamic = ''; ReadStatus = 'OK'; ResourceId = [string]$Server.ResourceId
     }
     $values = @{}
     $dynamic = @()
+    $pending = @()
     # The user filters decide which users are audited, so a server is read only when all four parameters are.
     foreach ($name in 'audit_log_enabled', 'audit_log_events', 'audit_log_include_users', 'audit_log_exclude_users') {
         try {
@@ -4243,9 +4258,16 @@ function Get-EbrMySqlAuditRow {
             $props = Get-EbrProp (Invoke-EbrRest -Method GET -Uri $uri -Resource 'https://management.azure.com/' -Tenant $Tenant) 'properties'
             $value = Get-EbrProp $props 'value'
             if ($null -eq $value) { $row.ReadStatus = "The $name response carried no properties.value."; break }
-            $values[$name] = [string]$value
+            # properties.value is the saved setting and properties.currentValue the one in effect. A static parameter
+            # saved with Restart later keeps its old currentValue until the restart, so the value in effect is recorded.
+            $current = Get-EbrProp $props 'currentValue'
+            $values[$name] = if ($null -ne $current) { [string]$current } else { [string]$value }
             # Only the two parameters CR-01 and CR-10 set decide whether the change needs a restart.
-            if ($name -in 'audit_log_enabled', 'audit_log_events') { $dynamic += ([string](Get-EbrProp $props 'isDynamicConfig')).ToLowerInvariant() }
+            if ($name -in 'audit_log_enabled', 'audit_log_events') {
+                $dynamic += ([string](Get-EbrProp $props 'isDynamicConfig')).ToLowerInvariant()
+                $flag = ([string](Get-EbrProp $props 'isConfigPendingRestart')).ToLowerInvariant()
+                $pending += $(if ($flag -eq 'true' -or ($null -ne $current -and [string]$current -ne [string]$value)) { 'true' } else { $flag })
+            }
         }
         catch { $row.ReadStatus = '{0}: {1}' -f $name, $_.Exception.Message; break }
     }
@@ -4255,6 +4277,7 @@ function Get-EbrMySqlAuditRow {
         $row.AuditLogIncludeUsers = $values['audit_log_include_users']
         $row.AuditLogExcludeUsers = $values['audit_log_exclude_users']
         $row.Dynamic = if ($dynamic -contains 'false') { 'No' } elseif (@($dynamic | Where-Object { $_ -eq 'true' }).Count -eq 2) { 'Yes' } else { '' }
+        $row.PendingRestart = if ($pending -contains 'true') { 'Yes' } elseif (@($pending | Where-Object { $_ -eq 'false' }).Count -eq 2) { 'No' } else { '' }
     }
     [pscustomobject]$row
 }
@@ -6207,7 +6230,7 @@ function Invoke-EbrCatalogItem {
         }
         'MYSQL-AUDIT' {
             Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the configurations/audit_log_enabled, audit_log_events, audit_log_include_users and audit_log_exclude_users paths of each server, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
-            $columns = @('subscriptionId', 'resourceGroup', 'Name', 'State', 'AuditLogEnabled', 'AuditLogEvents', 'AuditLogIncludeUsers', 'AuditLogExcludeUsers', 'Dynamic', 'ReadStatus', 'ResourceId')
+            $columns = @('subscriptionId', 'resourceGroup', 'Name', 'State', 'PolicyState', 'AuditLogEnabled', 'AuditLogEvents', 'AuditLogIncludeUsers', 'AuditLogExcludeUsers', 'PendingRestart', 'Dynamic', 'ReadStatus', 'ResourceId')
             try { $arg = Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant }
             catch { return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed) }
             $servers = @($arg.Rows)

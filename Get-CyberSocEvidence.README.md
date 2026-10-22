@@ -344,8 +344,11 @@ in the pack (`results/<ID>.csv`).
   `<server>/configurations/audit_log_enabled`, `audit_log_events`, `audit_log_include_users` and
   `audit_log_exclude_users` (Reader is enough), since the user filters decide which users are audited. Every
   server is read, not only the ones `DR.6-NONCOMPLIANT` names, since a server with the diagnostic setting is compliant
-  with the initiative but writes no audit rows while `audit_log_enabled` is OFF. One row per server with its state,
-  `AuditLogEnabled`, `AuditLogEvents`, `AuditLogIncludeUsers` and `AuditLogExcludeUsers` as the server returns them, `Dynamic` (Yes when `audit_log_enabled` and
+  with the initiative but writes no audit rows while `audit_log_enabled` is OFF. The query joins the ATMO-MXDR policy
+  state of each server (`PolicyState`), so a server the initiative has not evaluated yet is told apart. One row per
+  server with its state,
+  `AuditLogEnabled`, `AuditLogEvents`, `AuditLogIncludeUsers` and `AuditLogExcludeUsers` as in effect (`currentValue`
+  where the response carries it), `PendingRestart` (Yes when a saved value waits for a restart), `Dynamic` (Yes when `audit_log_enabled` and
   `audit_log_events` both read as dynamic, No when either reads static, empty when not reported) and `ReadStatus`, so a server that could not be read is
   named and never read as set. Internal, since it names servers. Change requests CR-01 and CR-10 set the parameters
   from it, and on an earlier pack that may hold MySQL servers their index notes ask for recollection. The query is in
