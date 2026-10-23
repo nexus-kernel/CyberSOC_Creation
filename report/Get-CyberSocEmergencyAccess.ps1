@@ -25,8 +25,8 @@ function Test-CyberSocEmergencyAccessUpn([string]$UserPrincipalName) {
     [bool]$UserPrincipalName -and $UserPrincipalName.IndexOf($script:CyberSocEmergencyAccessWord, [StringComparison]::OrdinalIgnoreCase) -ge 0
 }
 
-# An Atmosera group: a group whose display name holds the word. This is the one place the rule lives. The owner is
-# still to confirm that it matches the naming in use, so change it here and both the collector and the generator follow.
+# An Atmosera group: a group whose display name holds the word anywhere, as the owner confirmed on Oct 21. This is the
+# one place the rule lives, so change it here and both the collector and the generator follow.
 function Test-CyberSocEmergencyAccessGroup([string]$DisplayName) {
     [bool]$DisplayName -and $DisplayName.IndexOf($script:CyberSocEmergencyAccessWord, [StringComparison]::OrdinalIgnoreCase) -ge 0
 }

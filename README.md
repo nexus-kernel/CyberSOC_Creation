@@ -73,7 +73,8 @@ missing evidence never becomes a favorable zero.
    machines and on scale sets, closing internet-facing RDP, SSH and WinRM rules, turning off plain FTP and FTP basic
    authentication on App Service apps, setting the blob containers anyone can read today to private, and removing the Azure and Microsoft
    Entra roles that disabled accounts still hold, assigned to the account or reached through a group, from which the
-   account is then removed), and a ready-to-send client email for every change request. The CR-19 email names the
+   account is then removed, and blocking device code flow with the Conditional Access policy ATMO-MXDR-CA-BLOCK-DEVICECODE,
+   CR-20), and a ready-to-send client email for every change request. The CR-19 email names the
    accounts and their roles in a CSV written beside it, to attach, since the list can be long. Every email asks for the
    client's approval and reads as a letter, with no titles and each paragraph opening in its own words, in one order:
    what is to change, why, what it means for the client, the resources
@@ -120,7 +121,13 @@ missing evidence never becomes a favorable zero.
    audit log is on, and their emails say the audit log adds rows in step with connections and administrative
    statements and whether the parameters apply without a restart. AKS node pools without encryption at host get no change
    request: a pool takes it only when it is created, so the index names each cluster and node pool for a planned node
-   pool replacement with the client. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
+   pool replacement with the client. CR-20 blocks device code flow for all users and all resources when no enabled
+   Conditional Access policy does (or brings a report-only, scoped or over-excluded one to the baseline rather than
+   adding a duplicate), On, excluding the emergency access accounts and a group for the accounts the client confirms,
+   with a report-only companion that watches that group, and sets a Microsoft-managed device code policy Off. Its email
+   explains device code sign-in once, lists the accounts that used it in the last 30 days with their applications and
+   counts, and asks which still need it, and why, before the approval. It needs Microsoft Entra ID P1, and waits while
+   security defaults are on. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
    account the collection read as disabled, after checking that the account still shows as disabled. Its email lists
    each account with its roles, the Azure roles by subscription and the Entra roles on their own, says nobody loses
    access today, since the accounts cannot sign in, offers to restore any role from the record, and asks whether any

@@ -12,7 +12,9 @@
     rules on network security groups, turning off plain FTP on App Service apps, setting the blob containers
     that anyone can read today to private access, and removing the Azure and Microsoft Entra roles that disabled
     accounts still hold, by removing a role assigned to the account itself and by removing the account from the
-    group that gives it a role, the role group or one nested in it. Every change request
+    group that gives it a role, the role group or one nested in it, and blocking device code flow with the
+    Conditional Access policy ATMO-MXDR-CA-BLOCK-DEVICECODE where no enabled policy blocks it for all users and all
+    resources (CR-20). Every change request
     also gets a client email, drafted and ready to send, that asks for the client's approval. The CR-19 email names
     the accounts and their roles in a CSV written beside it (CR-19-disabled-account-roles.email.csv), to attach,
     since the list can be long. Every email has the same parts in the
@@ -94,6 +96,9 @@
     audit_log_enabled is ON. CR-01 sets them on the servers in the subscriptions it assigns the initiative to, and CR-10
     on every other server that needs them, compliant with the initiative or not. On an earlier pack, where MySQL flexible
     servers may be in scope, both say in the index that the MySQL part needs recollection.
+    CR-20 reads the raw Conditional Access policies (IA.8-POLICIES) and the device code sign-ins (IA.8-SIGNINS), added in
+    1.10.0, with security defaults (IA.8-DEFAULTS), and on an earlier pack says "needs recollection". It needs Microsoft
+    Entra ID P1 and the emergency access accounts, and is not written while security defaults are on.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -128,6 +133,7 @@ foreach ($id in 'P0.7', 'NB.4-DETAIL', 'NB.5-DETAIL', 'NB.6-DETAIL', 'DP.1-DETAI
 $detailVersions['NB.6-PAAS-DETAIL'] = '1.2.0'
 $detailVersions['DP.4-VMSS-ELIGIBILITY'] = '1.3.0'
 $detailVersions['NB.2-DETAIL'] = '1.6.0'
+foreach ($id in 'IA.8-POLICIES', 'IA.8-SIGNINS') { $detailVersions[$id] = '1.10.0' }
 $detailVersions['NB.5-FTPS-DETAIL'] = '1.7.0'
 $detailVersions['DP.1-CONTAINERS-DETAIL'] = '1.8.0'
 foreach ($id in 'IA.15-DISABLED', 'IA.15-RBAC', 'IA.15-ENTRA') { $detailVersions[$id] = '1.9.0' }
@@ -268,6 +274,9 @@ $licensing = Get-CyberSocLicensing -Read $readPack -Subscriptions @($parameters.
 # $emergencyAccess.ExcludeUsers. Test-CyberSocEmergencyAccessId names an existing exclusion it must never remove.
 . (Join-Path $PSScriptRoot 'report/Get-CyberSocEmergencyAccess.ps1')
 $emergencyAccess = Get-CyberSocEmergencyAccess -Read $readPack
+# The Conditional Access changes (CR-20, and CR-21 next) share the policy gap check, the exclusion list and the report-only
+# companion in report/Get-CyberSocCaChange.ps1, which also loads the policy facts of report/Get-EbrCaEvaluation.ps1.
+. (Join-Path $PSScriptRoot 'report/Get-CyberSocCaChange.ps1')
 # Copy text that keeps a portal path such as Settings > Endpoints > Licenses, which the copy rules allow in the index.
 function ConvertTo-PathText($value) { (ConvertTo-CopyText ((Get-Text $value) -replace ' > ', ' NAVSTEP ')) -replace ' NAVSTEP ', ' > ' }
 
@@ -370,8 +379,9 @@ $groupLabel = { '{0} (resource group {1})' -f $_.Name, $_.ResourceGroup }
 $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $_.Setting }
 # The lines that head each group of resources in a client email. Azure resources sit under their subscription, and
 # CR-19 adds the management groups and root scope above the subscriptions and the Microsoft Entra directory roles,
-# which belong to no subscription.
-$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles):$'
+# which belong to no subscription, and CR-20 the Conditional Access policies and the accounts that signed in with device
+# code flow, which belong to the tenant.
+$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days):$'
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
 $proposedDay = Format-Day $proposedDate
 $replyDay = Format-Day $replyDate
@@ -1012,6 +1022,21 @@ function Get-ServersPlan2 {
         $plan[(ConvertTo-CopyText $p.subscriptionId).ToLowerInvariant()] = $(if ((Get-Text $p.Tier) -ieq 'Standard' -and (Get-Text $p.SubPlan) -ieq 'P2') { 'On' } else { 'Off' })
     }
     $plan
+}
+
+# CR-20 blocks device code flow with Conditional Access under the names of the MXDR baseline: the block policy, its
+# report-only companion, which targets the exception group so each pack shows whether an exception is still used, and the
+# group that holds the accounts the client confirms still need device code flow.
+$dcPolicy = 'ATMO-MXDR-CA-BLOCK-DEVICECODE'
+$dcCompanion = 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS'
+$dcGroup = 'ATMO-MXDR-DEVICECODE-APPROVED'
+# Security defaults on or off (IA.8-DEFAULTS), or $null when not read. Security defaults and Conditional Access policies
+# do not run together, so a Conditional Access change waits while they are on.
+function Get-SecurityDefaults {
+    if (-not (Test-ResultRead 'IA.8-DEFAULTS')) { return $null }
+    $row = @(Get-Rows 'IA.8-DEFAULTS') | Select-Object -First 1
+    if ($null -eq $row -or (Get-Text $row.SecurityDefaults) -eq '') { return $null }
+    Test-True $row.SecurityDefaults
 }
 
 $catalog = @(
@@ -2958,6 +2983,222 @@ $catalog = @(
                     Csv = $csv
                     Email = $email
                 } } } }
+    @{ Number = 20; Key = 'device-code-flow'; Change = 'Device code flow blocked by Conditional Access'; Sources = @('IA.8-POLICIES', 'IA.8-SIGNINS'); Requires = @('EntraIdP1'); EmergencyAccess = $true
+       # Without Entra ID P1 there is no Conditional Access, so the index points to security defaults instead.
+       Unlicensed = {
+            $sd = Get-SecurityDefaults
+            'Without Microsoft Entra ID P1 for the users in scope, security defaults stand in for CR-20: Microsoft Learn lists blocking device code flow among the protections they enforce (Security defaults in Microsoft Entra ID). {0}' -f $(switch ($sd) { $true { 'IA.8-DEFAULTS reads them on.' } $false { 'IA.8-DEFAULTS reads them off, so raise turning them on, or licensing Microsoft Entra ID P1, with the client.' } default { 'IA.8-DEFAULTS was not read, so confirm under Entra ID > Overview > Properties > Manage security defaults.' } })
+        }
+       Build = {
+            # IA.8-POLICIES holds the policies as Graph returned them. The gap is that no enabled policy blocks device code
+            # flow for all users and all resources (Get-CyberSocCaGap). A policy in report-only or Off, scoped to some users
+            # or resources, narrowed by a condition, or with exclusions beyond the emergency access accounts and the
+            # exception group is a gap too: CR-20 edits it rather than adding a duplicate, and names it when it cannot tell
+            # which one to edit. IA.8-SIGNINS names the accounts whose device code sign-ins succeeded in the last 30 days,
+            # the review the baseline makes before it creates the policy On.
+            $notes = [System.Collections.Generic.List[string]]::new()
+            # The policy is created On straight away, so a partial read never lets it through: a partial policy read can miss
+            # the baseline policy and add a duplicate, and a partial sign-in read can miss an account the email must ask about.
+            $partialReads = @('IA.8-POLICIES', 'IA.8-SIGNINS' | Where-Object { (Get-Status $_) -eq 'PARTIAL' })
+            if ($partialReads.Count) {
+                $why = @($partialReads | ForEach-Object { ('{0} {1}' -f $_, (Get-ResultDetail $_)).Trim().TrimEnd('.') })
+                $note = 'CR-20 is not written because {0} read in part.' -f (Join-Words $why)
+                if ($partialReads -contains 'IA.8-POLICIES') { $note += ' A policy left out of the read could be the baseline policy, which CR-20 would then add again beside it.' }
+                if ($partialReads -contains 'IA.8-SIGNINS') { $note += ' An account left out of the sign-ins would not be asked about before the block is turned On.' }
+                $note += ' Recollect the pack so every policy and every device code sign-in of the last 30 days is read.'
+                return @{ State = 'Not written, partial collection scope ({0}), see the notes' -f ($partialReads -join ', '); Notes = @($note) }
+            }
+            $sd = Get-SecurityDefaults
+            if ($sd -eq $true) {
+                # Conditional Access replaces security defaults only once they are turned off, which changes more than
+                # device code flow, so CR-20 waits for that move.
+                return @{ State = 'Not written, security defaults are on, see the notes'; Notes = @('CR-20 is not written because security defaults are on (IA.8-DEFAULTS). Microsoft Learn lists blocking device code flow among the protections security defaults enforce, and says an organization moving to Conditional Access must turn security defaults off first (Security defaults in Microsoft Entra ID). That move also replaces their MFA and legacy authentication protections, so plan it with the client, with the ATMO-MXDR identity policies, before CR-20.') }
+            }
+            if ($null -eq $sd) { $notes.Add('The security defaults state was not read (IA.8-DEFAULTS), so step 1 of CR-20 checks it in the Microsoft Entra admin center before anything changes.') }
+            $gap = Get-CyberSocCaGap -Policies @(Get-Rows 'IA.8-POLICIES') -Match { param($f) $f.Block -and $f.DeviceCode } -Baseline $dcPolicy -Companion $dcCompanion -Access $emergencyAccess -AllowedExcludeApps @($script:CyberSocDeviceRegistrationAppId)
+            $named = { param($p) '{0} ({1})' -f (ConvertTo-CopyText $p.Name), (ConvertTo-CopyText $p.Id) }
+            # A companion already in the tenant is brought to its settings rather than created again. One that is On blocks
+            # the approved accounts it should only watch.
+            $companion = @($gap.Companions) | Select-Object -First 1
+            foreach ($cp in @($gap.Companions | Where-Object { $_.State -eq 'enabled' })) { $notes.Add(('The companion {0} reads On, so it blocks the approved device code accounts it should only watch. Set it to Report-only, as the steps of CR-20 do when it is written.' -f (& $named $cp))) }
+            # A policy CR-20 brings to the baseline gets the exclusions in its steps, so only the others are noted.
+            $edited = if (-not $gap.Covering.Count -and -not $gap.Ambiguous) { $gap.Target } else { $null }
+            foreach ($p in @($gap.Policies | Where-Object { @($_.MissingAccess).Count -and $_.State -ne 'disabled' -and $_ -ne $edited })) {
+                $notes.Add(('The policy {0} blocks device code flow but does not exclude {1}: {2}. Microsoft Learn recommends excluding the emergency access accounts from every policy that blocks or restricts sign-in, so add them to its exclusions.' -f (& $named $p), (Get-Count (@($p.MissingAccess).Count) 'emergency access group or account' 'emergency access groups or accounts'), (@($p.MissingAccess) -join ', ')))
+            }
+            # The successful device code sign-ins by account, the applications used and the count. The emergency access
+            # accounts stay excluded whatever they did, so they are named in the index and never in the email.
+            $accounts = @(@(foreach ($g in @(Get-Rows 'IA.8-SIGNINS' | Where-Object { (Get-Text $_.Flow) -eq 'Device code' } | Group-Object { (Get-Text $_.UserId).ToLowerInvariant() })) {
+                    $first = $g.Group[0]
+                    $upn = ConvertTo-CopyText $first.UserPrincipalName
+                    $apps = @($g.Group | ForEach-Object { (Get-Text $_.Apps) -split ',' } | ForEach-Object { ConvertTo-CopyText $_ } | Where-Object { $_ } | Sort-Object -Unique)
+                    # PowerShell 7 parses the timestamp into a date, Windows PowerShell 5.1 keeps the text.
+                    $last = @($g.Group | ForEach-Object { if ($_.LastSignIn -is [datetime]) { $_.LastSignIn.ToUniversalTime().ToString('yyyy-MM-dd', $inv) } else { Get-Text $_.LastSignIn } } | Where-Object { $_ -match '^\d{4}-\d{2}-\d{2}' } | ForEach-Object { $_.Substring(0, 10) } | Sort-Object)
+                    [pscustomobject]@{
+                        Id = $g.Name; Upn = $(if ($upn) { $upn } else { $g.Name }); Type = ConvertTo-CopyText $first.UserType
+                        SignIns = [int](@($g.Group | ForEach-Object { Get-Number $_.SignIns }) | Measure-Object -Sum).Sum
+                        Apps = $apps; Last = $(if ($last.Count) { $last[-1] } else { '' })
+                        Access = (Test-CyberSocEmergencyAccessUpn $upn) -or (Test-CyberSocEmergencyAccessId $emergencyAccess $g.Name)
+                    } }) | Sort-Object @{ e = 'SignIns'; Descending = $true }, Upn)
+            $atmosera = @($accounts | Where-Object Access)
+            $users = @($accounts | Where-Object { -not $_.Access })
+            if ($atmosera.Count) { $notes.Add(('{0} with device code sign-ins in the last 30 days {1} an emergency access {2}, which every Conditional Access change excludes, so CR-20 leaves {3} out of its email: {4}. Confirm with Atmosera that the use was expected.' -f (Get-Count $atmosera.Count 'account' 'accounts'), (Get-Pick $atmosera.Count 'is' 'are'), (Get-Pick $atmosera.Count 'account' 'accounts'), (Get-Pick $atmosera.Count 'it' 'them'), (@($atmosera | ForEach-Object { '{0} ({1})' -f $_.Upn, (Get-Count $_.SignIns 'sign-in' 'sign-ins') }) -join ', '))) }
+            $managed = @($gap.Managed | Where-Object { $_.State -ne 'disabled' })
+            if ($gap.Covering.Count) {
+                $by = @($gap.Covering | ForEach-Object { & $named $_ })
+                $notes.Insert(0, ('CR-20 found device code flow blocked for all users and all resources by {0}.' -f (Join-Words $by)))
+                if (@($gap.Covering | Where-Object { -not $_.Managed }).Count -and $managed.Count) {
+                    $notes.Add(('The Microsoft-managed {0} {1} still {2} beside it. The baseline sets {3} Off once the ATMO-MXDR policy is On, so the two do not overlap and every exception sits in one place.' -f (Get-Pick $managed.Count 'policy' 'policies'), (Join-Words @($managed | ForEach-Object { & $named $_ })), (Get-Pick $managed.Count 'reads On or Report-only' 'read On or Report-only'), (Get-Pick $managed.Count 'it' 'them')))
+                }
+                elseif (-not @($gap.Covering | Where-Object { -not $_.Managed }).Count) { $notes.Add(('Only the Microsoft-managed policy blocks device code flow today. The baseline moves the block to {0}, with the exception group and its report-only companion, and sets the managed policy Off at the next identity change with the client.' -f $dcPolicy)) }
+                return @{ State = 'No gaps found'; Notes = $notes.ToArray() }
+            }
+            if ($gap.Review.Count) {
+                # The baseline policy is On for everyone but the groups it excludes. The raw policy holds their IDs only,
+                # so neither the exception group nor any other group is taken as approved: each is named for review.
+                $r = $gap.Review[0]
+                $k = @($r.Extra.Groups).Count
+                $notes.Insert(0, ('{0} is On and blocks device code flow for all users and all resources except the emergency access accounts and {1} it also excludes: {2}. CR-20 is not written, but the policy is not read as in force for everyone: confirm under Entra ID > Groups that {3} {4}, the exception group, and that its members are the accounts the client approved. Remove any other group from the exclusions, since a group such as one for all staff leaves device code flow open to its members.' -f (& $named $r), (Get-Count $k 'group' 'groups'), (@($r.Extra.Groups) -join ', '), (Get-Pick $k 'it is' 'one of them is'), $dcGroup))
+                return @{ State = 'Not written, {0} excludes {1} to confirm, see the notes' -f $dcPolicy, (Get-Count $k 'group' 'groups'); Notes = $notes.ToArray() }
+            }
+            $describe = { param($p) '{0}, which {1}' -f (& $named $p), (Format-CyberSocCaGapReason $p) }
+            if ($gap.Ambiguous) {
+                $candidates = @($gap.Policies | Where-Object { -not $_.Managed })
+                $notes.Insert(0, ('CR-20 is not written because {0} policies already block device code flow in part, and none is named {1}: {2}. Agree with the client which one becomes the baseline, rename it {1}, and run again, so CR-20 brings it to the baseline rather than adding a duplicate.' -f $candidates.Count, $dcPolicy, (@($candidates | ForEach-Object { & $describe $_ }) -join ' / ')))
+                return @{ State = 'Not written, {0} policies block device code flow in part, see the notes' -f $candidates.Count; Notes = $notes.ToArray() }
+            }
+            $t = $gap.Target
+            foreach ($o in @($gap.Others)) { $notes.Add(('CR-20 brings {0} to the baseline and leaves {1} unchanged. Review it with the client, since its exclusions can keep device code flow open to some accounts.' -f $dcPolicy, (& $describe $o))) }
+            if ($t -and @($t.Reasons) -contains 'Exclusions') {
+                $extra = @(
+                    if (@($t.Extra.Users).Count) { 'accounts ' + (@($t.Extra.Users) -join ', ') }
+                    if (@($t.Extra.Groups).Count) { 'groups ' + (@($t.Extra.Groups) -join ', ') }
+                    if (@($t.Extra.Roles).Count) { 'directory roles ' + (@($t.Extra.Roles) -join ', ') }
+                    if ($t.Extra.Guests) { 'guests or external users' })
+                $notes.Add(('{0} excludes {1} beyond the baseline: {2}. Look each one up by its object ID under Entra ID > Users or Groups before sending CR-20, and add any account the client confirms to {3}.' -f (& $named $t), (Format-CyberSocCaExtra $t.Extra), ($extra -join ', '), $dcGroup))
+            }
+
+            $exclusions = Get-CyberSocCaExclusions -Access $emergencyAccess -ExceptionGroup $dcGroup
+            $stateWord = { param($s) switch ($s) { 'enabled' { 'On' } 'enabledForReportingButNotEnforced' { 'Report-only' } 'disabled' { 'Off' } default { ConvertTo-CopyText $s } } }
+            $tenant = ConvertTo-CopyText $parameters.TenantId
+            $lines = [System.Collections.Generic.List[string]]::new()
+            if ($tenant) { $lines.Add("Tenant: $tenant"); $lines.Add('') }
+            if ($t) { $lines.Add(('Policy {0}, {1} today, which {2}. It is brought to the baseline below{3}:' -f (& $named $t), (& $stateWord $t.State), (Format-CyberSocCaGapReason $t), $(if ($t.Baseline) { '' } else { " and renamed $dcPolicy" }))) }
+            else { $lines.Add(('Policy {0}, to create, On:' -f $dcPolicy)) }
+            $lines.Add('- Users: All users')
+            foreach ($x in @($exclusions.Lines)) { $lines.Add("- Excluded: $x") }
+            $lines.Add('- Target resources: All resources, excluding Device Registration Service only where the client confirms that devices register with device code flow')
+            $lines.Add('- Conditions: Authentication flows set to Device code flow')
+            $lines.Add('- Grant: Block access')
+            if ($t -and @($t.Reasons) -contains 'Exclusions') {
+                $lines.Add(('- Excluded today beyond the baseline, removed once the accounts the client confirms are in {0}: {1}' -f $dcGroup, (@(
+                                if (@($t.Extra.Users).Count) { 'accounts ' + (@($t.Extra.Users) -join ', ') }
+                                if (@($t.Extra.Groups).Count) { 'groups ' + (@($t.Extra.Groups) -join ', ') }
+                                if (@($t.Extra.Roles).Count) { 'directory roles ' + (@($t.Extra.Roles) -join ', ') }
+                                if ($t.Extra.Guests) { 'guests or external users' }) -join ', ')))
+            }
+            $lines.Add('')
+            if ($companion) { $lines.Add(('Policy {0}, {1} today, brought to these settings, Report-only:' -f (& $named $companion), (& $stateWord $companion.State))) }
+            else { $lines.Add(('Policy {0}, to create, Report-only:' -f $dcCompanion)) }
+            $lines.Add(('- Users: group {0} only, with the same Atmosera groups and emergency access accounts excluded' -f $dcGroup))
+            $lines.Add('- Target resources, conditions and grant as above')
+            $lines.Add('')
+            $lines.Add(('Group {0}, to create: a security group with assigned membership that holds the accounts the client confirms still need device code flow, with the reason for each recorded in the change record.' -f $dcGroup))
+            foreach ($m in $managed) { $lines.Add(''); $lines.Add(('Microsoft-managed policy {0}, {1} today, set to Off once {2} is On.' -f (& $named $m), (& $stateWord $m.State), $dcPolicy)) }
+            foreach ($o in @($gap.Others)) { $lines.Add(''); $lines.Add(('Policy {0}, {1} today, left unchanged and named in the index.' -f (& $named $o), (& $stateWord $o.State))) }
+            $lines.Add('')
+            if ($accounts.Count) {
+                $lines.Add('Device code sign-ins that succeeded in the last 30 days (IA.8-SIGNINS), by account:')
+                foreach ($a in $accounts) { $lines.Add(('- {0}{1}, {2}, applications {3}{4}{5}' -f $a.Upn, $(if ($a.Type) { " ($($a.Type))" } else { '' }), (Get-Count $a.SignIns 'sign-in' 'sign-ins'), $(if ($a.Apps.Count) { $a.Apps -join ', ' } else { 'not recorded' }), $(if ($a.Last) { ", last $($a.Last)" } else { '' }), $(if ($a.Access) { ', emergency access account, stays excluded' } else { '' }))) }
+            }
+            else { $lines.Add('No device code sign-in succeeded in the last 30 days (IA.8-SIGNINS).') }
+
+            $csv = @(
+                New-Resource $dcPolicy '' '' $(if ($t) { 'today {0} as {1}, brought to the baseline and On' -f (& $stateWord $t.State), (ConvertTo-CopyText $t.Name) } else { 'to create, On' }) $(if ($t) { $t.Id } else { '' })
+                New-Resource $dcCompanion '' '' $(if ($companion) { 'today {0}, set to the companion settings and Report-only' -f (& $stateWord $companion.State) } else { 'to create, Report-only' }) $(if ($companion) { $companion.Id } else { '' })
+                New-Resource $dcGroup '' '' 'security group to create, assigned membership' ''
+                foreach ($m in $managed) { New-Resource $m.Name '' '' ('today {0}, set to Off' -f (& $stateWord $m.State)) $m.Id })
+
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add('Sign in to the Microsoft Entra admin center as at least a Conditional Access Administrator, go to Entra ID > Overview > Properties and select Manage security defaults. Confirm Security defaults reads Disabled. If it reads Enabled, stop: Conditional Access replaces security defaults only once they are turned off, which is a separate change with the client.')
+            # The group may exist from an earlier run of the change, and a second group of the same name would leave the
+            # policy pointing at an empty one, so it is searched for and reused first.
+            $impl.Add(('Go to Entra ID > Groups > All groups and search for {0}. If it exists, use that group, record its members in the change record and keep them, and create no second group of the same name. Otherwise select New group and create it: Group type Security, Membership type Assigned. Add each account the client confirmed still needs device code flow, and record the reason the client gave for each in the change record. Leave the group empty if the client confirmed none.' -f $dcGroup))
+            $impl.Add(('Go to Entra ID > Conditional Access > Policies.{0}' -f $(if ($t -or $managed.Count -or $companion) { ' Record in the change record the state, users, exclusions, target resources, conditions and grant of each existing policy listed in the RESOURCES section, for the rollback.' } else { '' })))
+            $policySteps = Get-CyberSocCaPolicySteps -Target $t -Baseline $dcPolicy -Companion $dcCompanion -ExceptionGroup $dcGroup -ExistingCompanion $companion -First ($impl.Count + 1) `
+                -Resources ('Under Target resources, select Resources. Under Include, select All resources. Under Exclude, select Device Registration Service only if the client confirmed that devices register with device code flow, and otherwise leave Exclude empty.{0}' -f $(if ($t) { ' Remove any other excluded resource.' } else { '' })) `
+                -Condition 'Under Conditions, select Authentication flows, set Configure to Yes, select Device code flow and select Done.'
+            foreach ($s in $policySteps) { $impl.Add($s) }
+            if ($managed.Count) { $impl.Add(('Once {0} shows On, open each policy that shows Microsoft in the Created by column and blocks device code flow ({1}), set Enable policy to Off and select Save. A Microsoft-managed policy can be turned off, but not renamed or deleted.' -f $dcPolicy, (Join-Words @($managed | ForEach-Object { ConvertTo-CopyText $_.Name })))) }
+            else { $impl.Add(('Once {0} shows On, check the policy list for a policy that shows Microsoft in the Created by column and blocks device code flow, which Microsoft may have added since collection. If one shows On or Report-only, record its state, set Enable policy to Off and select Save.' -f $dcPolicy)) }
+            $impl.Add(('Open {0} again and read its exclusions under Users or workload identities: each Atmosera group, each emergency access account listed in the RESOURCES section and the group {1}, and nothing else. Read the exclusions of {2} the same way.' -f $dcPolicy, $dcGroup, $dcCompanion))
+
+            $testing = @(
+                ('In the Microsoft Entra admin center, go to Entra ID > Conditional Access > Policies and confirm {0} reads On, {1} reads Report-only and any Microsoft-managed policy that blocks device code flow reads Off.' -f $dcPolicy, $dcCompanion)
+                ('Open {0} and confirm the exclusions match the RESOURCES section, with the emergency access accounts and the group {1} excluded.' -f $dcPolicy, $dcGroup)
+                ('From a workstation with the Azure CLI, run az login --use-device-code as a test account outside the group {0}, and enter the code on another device. Confirm the sign-in is refused, and that Entra ID > Monitoring & health > Sign-in logs shows it blocked by {1}.' -f $dcGroup, $dcPolicy))
+            $rollback = [System.Collections.Generic.List[string]]::new()
+            if ($t) { $rollback.Add(('In the Microsoft Entra admin center, go to Entra ID > Conditional Access > Policies, open {0} and set its name, state, users, exclusions, target resources, conditions and grant back to those recorded in step 3, then select Save.' -f $dcPolicy)) }
+            else { $rollback.Add(('In the Microsoft Entra admin center, go to Entra ID > Conditional Access > Policies, open {0}, set Enable policy to Off and select Save.' -f $dcPolicy)) }
+            if ($companion) { $rollback.Add(('Open {0} and set its state, users, exclusions, target resources, conditions and grant back to those recorded in step 3, then select Save.' -f $dcCompanion)) }
+            else { $rollback.Add(('Open {0}, set Enable policy to Off and select Save.' -f $dcCompanion)) }
+            $rollback.Add('Set each Microsoft-managed policy the change turned Off back to the state recorded for it, and select Save.')
+            $rollback.Add('A device or tool that the policy signed out may need to sign in again for a fresh token once the policy is Off or Report-only, as Microsoft Learn notes.')
+
+            # The client email.
+            $n = $users.Count
+            $edits = [bool]$t
+            $change = @(
+                'I would like to block device code sign-in for everyone in your organization, except the accounts you confirm still need it and the emergency access accounts Atmosera keeps for your tenant.'
+                'Device code sign-in lets a device without a keyboard or browser, such as a meeting room device, a sign or a command-line tool, sign in by showing a short code that a person then enters on another device.')
+            $effect = [System.Collections.Generic.List[string]]::new()
+            $effect.Add('Once the change is made, a device code sign-in is refused for everyone outside the exception group, and a session that began with one can be signed out. Every other way of signing in keeps working as it does today.')
+            $effect.Add('Atmosera''s emergency access accounts stay excluded, so they can still reach your tenant if every other way in fails.')
+            $effect.Add('The accounts you confirm go into a group that the block leaves out, so the group membership records each exception. A second policy in report-only mode, which records what it would do without blocking anything, watches that group, so each monthly review shows whether an exception is still used.')
+            if ($edits) { $effect.Add(('Your tenant already has the Conditional Access policy {0}, which {1}. I would bring it to this standard rather than add a second policy beside it.' -f (ConvertTo-CopyText $t.Name), (Format-CyberSocCaGapReason $t))) }
+            if ($managed.Count) { $effect.Add(('Microsoft has also added its own device code {0} to your tenant. I would turn {1} off once the new policy is on, so the two do not overlap and every exception sits in one place.' -f (Get-Pick $managed.Count 'policy' 'policies'), (Get-Pick $managed.Count 'it' 'them'))) }
+            if (-not $n) { $effect.Add('No account in your organization completed a device code sign-in in the last 30 days, so I expect no one to notice the change.') }
+            $policyItems = @(
+                $(if ($edits) { '{0}, renamed {1} where its name differs, set to block device code sign-in for all users and turned on' -f (ConvertTo-CopyText $t.Name), $dcPolicy } else { '{0}, a new policy that blocks device code sign-in for all users, turned on' -f $dcPolicy })
+                $(if ($companion) { '{0}, the existing policy that watches the exception group, kept in report-only mode' -f $dcCompanion } else { '{0}, a new report-only policy that watches the exception group' -f $dcCompanion })
+                foreach ($m in $managed) { '{0}, the Microsoft policy, turned off' -f (ConvertTo-CopyText $m.Name) })
+            $resources = @('Conditional Access policies:', [string[]]$policyItems)
+            if ($n) { $resources += @('Device code sign-ins in the last 30 days:', [string[]]@($users | ForEach-Object { '{0}, {1} with {2}' -f $_.Upn, (Get-Count $_.SignIns 'sign-in' 'sign-ins'), $(if ($_.Apps.Count) { Join-Words @($_.Apps) } else { 'an application the sign-in log did not name' }) })) }
+            $email = New-ApprovalEmail -Subject 'blocking device code sign-in' `
+                -Change $change `
+                -Why 'I recommend this change because device code sign-in is a common phishing route: an attacker starts a sign-in, sends someone the code with a convincing message, and gets into their account once the code is entered on a genuine Microsoft page. Microsoft recommends blocking device code sign-in wherever it is not needed.' `
+                -Effect $effect.ToArray() `
+                -Listed $(if ($n) { 'The change touches the Conditional Access policies below, and the {0} that completed a device code sign-in in the last 30 days follow{1}, with the applications used and the number of sign-ins:' -f (Get-Pick $n 'account' "$n accounts"), (Get-Pick $n 's' '') } else { 'The change touches these Conditional Access policies in your tenant:' }) `
+                -Resources $resources `
+                -Reversal ('The new policy can be turned off at any time, which ends the block straight away{0}, and a device that was signed out can then sign in again.' -f $(if ($edits) { ' and returns the existing policy to the settings it has today' } elseif ($managed.Count) { ' and lets me set the Microsoft policy back as it was' } else { '' })) `
+                -Ask $(if ($n) { 'Before I schedule the change, could you tell me which of the accounts listed above still need device code sign-in, for example for the Azure CLI, a Teams Rooms device, digital signage or an automated task, and why each one needs it? I will add only those accounts to the exception group. Could you also tell me whether any of your devices register with device code sign-in, so I can leave device registration out of the block? With that confirmed, could you approve this change for {0}?' -f $proposedDay } else { 'Before I schedule the change, could you tell me whether anything in your organization still needs device code sign-in, for example the Azure CLI, a Teams Rooms device, digital signage or an automated task, and why? I will add only the accounts you name to the exception group. Could you also tell me whether any of your devices register with device code sign-in, so I can leave device registration out of the block? With that confirmed, could you approve this change for {0}?' -f $proposedDay })
+            @{ Used = @('IA.8-DEFAULTS'); Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
+                    Number = 20; Key = 'device-code-flow'; Title = 'Block device code flow with Conditional Access'
+                    Description = $(if ($edits) { 'Bring the existing Conditional Access policy named in the RESOURCES section to the baseline {0}, which blocks device code flow for all users and all resources and is On, excluding the emergency access accounts and the group {1} for approved device code accounts. {4} report-only companion {2} for that group{3}.' -f $dcPolicy, $dcGroup, $dcCompanion, $(if ($managed.Count) { ', and set the Microsoft-managed device code policy Off' } else { '' }), $(if ($companion) { 'Correct the existing' } else { 'Add the' }) }
+                        else { 'Create the Conditional Access policy {0}, On, which blocks device code flow for all users and all resources, excluding the emergency access accounts and the group {1} for approved device code accounts. {4} report-only companion {2} for that group{3}.' -f $dcPolicy, $dcGroup, $dcCompanion, $(if ($managed.Count) { ', and set the Microsoft-managed device code policy Off' } else { '' }), $(if ($companion) { 'Correct the existing' } else { 'Add the' }) })
+                    Purpose = 'Device code flow lets an attacker send a user a code to enter on a genuine Microsoft sign-in page and receive that user''s tokens, and Microsoft recommends blocking it wherever possible. The block leaves device code flow to the accounts the client approves, which the report-only companion keeps measured from pack to pack.'
+                    ResourceIntro = '{0} The emergency access accounts are excluded every time (IA.16), and the device code sign-ins of the last 30 days are the review the baseline makes before it creates the policy On.' -f $(if ($edits) { 'No enabled policy blocks device code flow for all users and all resources, and the existing policy below is brought to the baseline rather than duplicated.' } else { 'No enabled policy blocks device code flow for all users and all resources, so the baseline policy below is created.' })
+                    ResourceLines = $lines.ToArray()
+                    Availability = 'No impact on any service, since only sign-ins that use device code flow are refused and every other sign-in method keeps working.'
+                    UserExperience = 'A device code sign-in by anyone outside the exception group and the emergency access accounts is refused, and a session that began with device code flow can be signed out.'
+                    Dependencies = 'Needs the client to confirm which accounts still need device code flow, such as for the Azure CLI, Teams Rooms, signage or automation, and why, and whether devices register with device code flow.'
+                    Implementation = $impl.ToArray()
+                    Testing = $testing
+                    Rollback = $rollback.ToArray()
+                    References = @(
+                        , @('Authentication flows in Conditional Access', 'https://learn.microsoft.com/entra/identity/conditional-access/concept-authentication-flows')
+                        , @('Block authentication flows with Conditional Access policy', 'https://learn.microsoft.com/entra/identity/conditional-access/policy-block-authentication-flows')
+                        , @('Restrict device code flow for Microsoft Teams devices with Conditional Access', 'https://learn.microsoft.com/entra/identity/conditional-access/policy-teams-devices-device-code-flow')
+                        , @('Manage emergency access accounts in Microsoft Entra ID', 'https://learn.microsoft.com/entra/identity/role-based-access-control/security-emergency-access')
+                        , @('What is Conditional Access?, license requirements', 'https://learn.microsoft.com/entra/identity/conditional-access/overview#license-requirements')
+                        , @('Analyze Conditional Access policy impact, report-only mode', 'https://learn.microsoft.com/entra/identity/conditional-access/concept-conditional-access-report-only')
+                        , @('Microsoft-managed Conditional Access policies', 'https://learn.microsoft.com/entra/identity/conditional-access/managed-policies')
+                        , @('Security defaults in Microsoft Entra ID, disabling security defaults', 'https://learn.microsoft.com/entra/fundamentals/security-defaults#disabling-security-defaults')
+                        , @('Manage Microsoft Entra groups and group membership, create a basic group and add members', 'https://learn.microsoft.com/entra/fundamentals/how-to-manage-groups#create-a-basic-group-and-add-members')
+                        , @('Sign into Azure interactively using the Azure CLI, sign in with a browser', 'https://learn.microsoft.com/cli/azure/authenticate-azure-cli-interactively#sign-in-with-a-browser'))
+                    Csv = $csv
+                    Email = $email
+                } } } }
 )
 #endregion
 
@@ -2974,6 +3215,8 @@ $results = foreach ($item in $catalog) {
         # A license the change needs is not in the tenant, so no change request is written.
         $state = 'Not written, needs {0}, which reads Not licensed' -f (Join-Words @($gate.Blocked | ForEach-Object { ConvertTo-CopyText $_.Name }))
         $notes = @($gate.Blocked | ForEach-Object { 'CR-{0:00} is not written because {1} reads Not licensed. {2}' -f $item.Number, (ConvertTo-CopyText $_.Name), (ConvertTo-PathText $_.Detail) })
+        # What stands in without the license, such as security defaults for a Conditional Access change.
+        if ($item.Unlicensed) { $notes += @(& $item.Unlicensed | Where-Object { $_ }) }
     }
     elseif ($item.EmergencyAccess -and -not $emergencyAccess.Ready) {
         # A Conditional Access change is never written without the emergency access exclusions.
