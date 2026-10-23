@@ -3703,7 +3703,7 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         $text = Get-Cr20 $r.Out
         @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match 'Correct the existing report-only companion ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS for that group\.'
         $text | Should -Match "Policy ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS \($id\), On today, brought to these settings, Report-only:"
-        $text | Should -Match "11\. Open the policy ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS \($id\), which already exists\. Under Users or workload identities, set Include to the group ATMO-MXDR-DEVICECODE-APPROVED only"
+        $text | Should -Match "11\. Open the policy ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS \($id\), which already exists\. Under Users or workload identities, set Include to the group ATMO-MXDR-DEVICECODE-APPROVED only\. Under Exclude, remove every exclusion it has, the group ATMO-MXDR-DEVICECODE-APPROVED and any of its members included, so the companion watches every excepted account"
         $text | Should -Match '12\. Set Enable policy to Report-only and select Save\.'
         $text | Should -Not -Match 'Select New policy and name it ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS' -Because 'the companion is never duplicated'
         $text | Should -Match '3\. Go to Entra ID > Conditional Access > Policies\. Record in the change record'
@@ -3803,6 +3803,12 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         $legacy = Get-CyberSocCaGap -Policies @($browser) -Match { param($f) $f.Block } -Baseline 'ATMO-MXDR-CA-BLOCK-DEVICECODE' -Access $ea -ClientAppCondition
         $legacy.Covering.Count | Should -Be 1 -Because 'for legacy authentication (CR-21) the client app types are the condition itself'
         @((& $gap (& $base -State 'disabled')).Policies[0].Reasons) | Should -Be @('Off')
+        $drifted = & $base; $drifted.grantControls = [pscustomobject]@{ builtInControls = @('mfa') }
+        $d = & $gap $drifted
+        @($d.Policies[0].Reasons) | Should -Be @('Control') -Because 'the baseline policy is recognised by its name even when its grant has drifted'
+        $d.Target.Name | Should -Be 'ATMO-MXDR-CA-BLOCK-DEVICECODE' -Because 'it is brought back to the baseline, never duplicated under the same name'
+        $noFlow = & $base -Name 'Client MFA'; $noFlow.grantControls = [pscustomobject]@{ builtInControls = @('mfa') }
+        (& $gap $noFlow).Policies.Count | Should -Be 0 -Because 'any other policy that does not block device code flow is not part of the change'
         (& $gap (& $base -State 'enabledForReportingButNotEnforced' -Name 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS')).Policies.Count | Should -Be 0 -Because 'the report-only companion is never a gap'
         @((& $gap (& $base -Users @{ excludeUsers = @(); excludeGroups = @() })).Policies[0].MissingAccess).Count | Should -Be 6
     }

@@ -76,7 +76,10 @@ function Get-CyberSocCaGap {
         $f = Get-EbrCaPolicyFacts $p
         $name = Get-CyberSocCaText $f.Name
         if ($Companion -and $name -ieq $Companion) { $companions.Add([pscustomobject]@{ Id = Get-CyberSocCaText $f.Id; Name = $name; State = Get-CyberSocCaText $f.State }); continue }
-        if (-not (& $Match $f)) { continue }
+        # A policy with the baseline name is the change's own policy even when its condition or grant has drifted, so it is
+        # brought back to the baseline rather than duplicated under the same name.
+        $matched = & $Match $f
+        if (-not $matched -and $name -ine $Baseline) { continue }
         $c = Get-EbrCaValue $p 'conditions'
         $users = Get-EbrCaValue $c 'users'
         $apps = Get-EbrCaValue $c 'applications'
@@ -96,6 +99,7 @@ function Get-CyberSocCaGap {
         $someClientApps = -not $ClientAppCondition -and $clientApps.Count -and $clientApps -notcontains 'all'
         $state = Get-CyberSocCaText $f.State
         $reasons = @(
+            if (-not $matched) { 'Control' }
             if ($state -eq 'enabledForReportingButNotEnforced') { 'Report-only' }
             elseif ($state -ne 'enabled') { 'Off' }
             if (-not $f.AllUsers) { 'Users' }
@@ -132,6 +136,7 @@ function Get-CyberSocCaGap {
 function Format-CyberSocCaGapReason($Row) {
     $parts = @(foreach ($r in @($Row.Reasons)) {
             switch ($r) {
+                'Control' { 'no longer has the condition and the Block grant of the baseline' }
                 'Report-only' { 'is in report-only mode, so it records what it would do without blocking anything' }
                 'Off' { 'is Off' }
                 'Users' { 'applies to selected users only' }
@@ -202,7 +207,7 @@ function Get-CyberSocCaPolicySteps {
     if ($ExistingCompanion) {
         # A companion already in the tenant, from an earlier change or one that drifted, is brought to its settings rather
         # than duplicated, since one left On would block the approved accounts.
-        $steps.Add(('Open the policy {0} ({1}), which already exists. Under Users or workload identities, set Include to the group {2} only, and exclude each Atmosera group and each emergency access account as in step {3}. Set the target resources, the condition and the grant as in steps {4} to {5}, and every other condition to Not configured.' -f $Companion, $ExistingCompanion.Id, $ExceptionGroup, ($First + 2), ($First + 3), ($First + 5)))
+        $steps.Add(('Open the policy {0} ({1}), which already exists. Under Users or workload identities, set Include to the group {2} only. Under Exclude, remove every exclusion it has, the group {2} and any of its members included, so the companion watches every excepted account, then exclude each Atmosera group and each emergency access account as in step {3}. Set the target resources, the condition and the grant as in steps {4} to {5}, and every other condition to Not configured.' -f $Companion, $ExistingCompanion.Id, $ExceptionGroup, ($First + 2), ($First + 3), ($First + 5)))
         $steps.Add('Set Enable policy to Report-only and select Save. It blocks nothing and records each sign-in by an excepted account that the block would refuse.')
     }
     else {
