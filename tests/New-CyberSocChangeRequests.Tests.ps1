@@ -3608,7 +3608,7 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         $res | Should -Not -Match 'dana\.finance' -Because 'a legacy sign-in is not a device code sign-in'
         $impl = Get-Section $text 'A) IMPLEMENTATION PLAN'
         $impl[0] | Should -Match '^1\. Sign in to the Microsoft Entra admin center as at least a Conditional Access Administrator, go to Entra ID > Overview > Properties and select Manage security defaults\. Confirm Security defaults reads Disabled\.'
-        $impl[1] | Should -Match 'create the group ATMO-MXDR-DEVICECODE-APPROVED: Group type Security, Membership type Assigned\. Add each account the client confirmed still needs device code flow, and record the reason'
+        $impl[1] | Should -Match 'search for ATMO-MXDR-DEVICECODE-APPROVED\. If it exists, use that group, record its members in the change record and keep them, and create no second group of the same name\. Otherwise select New group and create it: Group type Security, Membership type Assigned\. Add each account the client confirmed still needs device code flow, and record the reason' -Because 'an exception group left by an earlier run is reused, never duplicated'
         $impl[2] | Should -Be '3. Go to Entra ID > Conditional Access > Policies.'
         $impl[3] | Should -Be '4. Select New policy and name it ATMO-MXDR-CA-BLOCK-DEVICECODE.'
         ($impl -join "`n") | Should -Match '6\. Under Exclude, select Users and groups and add each Atmosera group and each emergency access account listed in the RESOURCES section, and the group ATMO-MXDR-DEVICECODE-APPROVED\.\n'
@@ -3662,7 +3662,7 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         $text | Should -Not -Match 'Select New policy and name it ATMO-MXDR-CA-BLOCK-DEVICECODE\.'
         $text | Should -Match '10\. Set Enable policy to On and select Save\.'
         $text | Should -Match '13\. Once ATMO-MXDR-CA-BLOCK-DEVICECODE shows On, open each policy that shows Microsoft in the Created by column and blocks device code flow \(Microsoft-managed: Block device code flow\), set Enable policy to Off and select Save\.'
-        $text | Should -Match 'set its name, state, users, exclusions, target resources and conditions back to those recorded in step 3'
+        $text | Should -Match 'set its name, state, users, exclusions, target resources, conditions and grant back to those recorded in step 3'
         $text | Should -Match 'Microsoft-managed Conditional Access policies: https://learn\.microsoft\.com/entra/identity/conditional-access/managed-policies'
         @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-20').Count | Should -Be 4
         $email = Get-Cr20 $r.Out '.email.txt'
@@ -3707,7 +3707,8 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         $text | Should -Match '12\. Set Enable policy to Report-only and select Save\.'
         $text | Should -Not -Match 'Select New policy and name it ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS' -Because 'the companion is never duplicated'
         $text | Should -Match '3\. Go to Entra ID > Conditional Access > Policies\. Record in the change record'
-        $text | Should -Match 'Open ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS and set its state, users, exclusions, target resources and conditions back to those recorded in step 3'
+        $text | Should -Match 'Record in the change record the state, users, exclusions, target resources, conditions and grant of each existing policy'
+        $text | Should -Match 'Open ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS and set its state, users, exclusions, target resources, conditions and grant back to those recorded in step 3' -Because 'the grant the change sets to Block is restored too'
         $text | Should -Match 'Select New policy and name it ATMO-MXDR-CA-BLOCK-DEVICECODE\.' -Because 'the companion is not a block for everyone, so the baseline policy is still created'
         @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object { $_.CR -eq 'CR-20' -and $_.ResourceId -eq $id }).CurrentSetting | Should -Be 'today On, set to the companion settings and Report-only'
         $r.Index | Should -Match "The companion ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS \($id\) reads On, so it blocks the approved device code accounts it should only watch\."
