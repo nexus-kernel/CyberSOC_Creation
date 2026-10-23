@@ -3742,6 +3742,21 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         foreach ($r in $sd, $ea, $lic, $amb) { @(Get-ChildItem $r.Out -Filter 'CR-20-*').Count | Should -Be 0 }
     }
 
+    It 'writes no CR-20 on a partial policy or sign-in read, since the policy is created On straight away' {
+        foreach ($id in 'IA.8-POLICIES', 'IA.8-SIGNINS') {
+            $pack = Join-Path $TestDrive "dc-partial-$id"
+            New-ChangeFixture $pack
+            $sc = Add-DcScenario $pack 'no-policy'
+            $rows = @(Get-Content (Join-Path $pack "results/$id.json") -Raw | ConvertFrom-Json)
+            Set-PackResult $pack $id $rows -Status 'PARTIAL' -Detail 'The read stopped after the first page.'
+            $null = & $generator -EvidencePath $pack
+            $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+            $index | Should -Match ('\| 20 \| Device code flow blocked by Conditional Access \|  \| Not written, partial collection scope \({0}\), see the notes \|  \|' -f [regex]::Escape($id)) -Because $id
+            $index | Should -Match ('CR-20 is not written because {0} The read stopped after the first page read in part\.' -f [regex]::Escape($id))
+            @(Get-ChildItem (Join-Path $pack '05-change-requests') -Filter 'CR-20-*').Count | Should -Be 0 -Because $id
+        }
+    }
+
     It 'asks for recollection on a pack without the raw policies, and confirms the license when it is unknown' {
         $old = Join-Path $TestDrive 'dc-old'
         New-ChangeFixture $old

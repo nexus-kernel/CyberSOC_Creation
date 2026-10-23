@@ -2997,6 +2997,17 @@ $catalog = @(
             # which one to edit. IA.8-SIGNINS names the accounts whose device code sign-ins succeeded in the last 30 days,
             # the review the baseline makes before it creates the policy On.
             $notes = [System.Collections.Generic.List[string]]::new()
+            # The policy is created On straight away, so a partial read never lets it through: a partial policy read can miss
+            # the baseline policy and add a duplicate, and a partial sign-in read can miss an account the email must ask about.
+            $partialReads = @('IA.8-POLICIES', 'IA.8-SIGNINS' | Where-Object { (Get-Status $_) -eq 'PARTIAL' })
+            if ($partialReads.Count) {
+                $why = @($partialReads | ForEach-Object { ('{0} {1}' -f $_, (Get-ResultDetail $_)).Trim().TrimEnd('.') })
+                $note = 'CR-20 is not written because {0} read in part.' -f (Join-Words $why)
+                if ($partialReads -contains 'IA.8-POLICIES') { $note += ' A policy left out of the read could be the baseline policy, which CR-20 would then add again beside it.' }
+                if ($partialReads -contains 'IA.8-SIGNINS') { $note += ' An account left out of the sign-ins would not be asked about before the block is turned On.' }
+                $note += ' Recollect the pack so every policy and every device code sign-in of the last 30 days is read.'
+                return @{ State = 'Not written, partial collection scope ({0}), see the notes' -f ($partialReads -join ', '); Notes = @($note) }
+            }
             $sd = Get-SecurityDefaults
             if ($sd -eq $true) {
                 # Conditional Access replaces security defaults only once they are turned off, which changes more than
