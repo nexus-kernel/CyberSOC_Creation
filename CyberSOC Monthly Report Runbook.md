@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, 1.14.0 for NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, the FTP basic authentication setting of each App Service app that CR-17 turns off, 1.15.0 for DR.6-MYSQLAUDIT, the audit log parameters of each MySQL flexible server that CR-01 and CR-10 set, and 1.16.0 for IA.8-SIGNINS-NONINTERACTIVE, the non-interactive legacy sign-ins CR-21 needs before it removes an exclusion or blocks legacy authentication. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, 1.14.0 for NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, the FTP basic authentication setting of each App Service app that CR-17 turns off, 1.15.0 for DR.6-MYSQLAUDIT, the audit log parameters of each MySQL flexible server that CR-01 and CR-10 set, 1.16.0 for IA.8-SIGNINS-NONINTERACTIVE, the non-interactive legacy sign-ins CR-21 needs before it removes an exclusion or blocks legacy authentication, and 1.17.0 for EW.4-SERVERS and EW.4-AVMODE, the Windows servers with their attack surface reduction rules and the Microsoft Defender Antivirus mode CR-22 needs. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -659,6 +659,77 @@ union Coverage, Legacy
 | project Kind, Table, Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults, SignIns, FirstSignIn, LastSignIn, FullWindow, Apps
 | order by Kind asc, Table asc, SignIns desc
 ```
+
+### EW.4-SERVERS Windows servers with their attack surface reduction rules and antivirus prerequisites
+
+Engine AH. CyberSOC collector 1.17.0. Names machines and stays internal. Feeds CR-22, which sets the attack surface reduction (ASR) rules to Audit on the Windows servers through one endpoint security policy and security settings management. One row per Windows Server Azure virtual machine Defender for Endpoint saw in the last 7 days, in any onboarding status, so a server seen but not onboarded is named rather than missed, with the `{{MRG}}` exclusion. The configuration assessment is joined leftouter, so a server without one stays listed with `AsrApplicable` 0, which is not a reading that no rule is set. The ASR checks are matched by the rule names of Microsoft Learn (ASR rules overview) that Windows Server supports, so Block Win32 API calls from Office macros, which does not apply to Windows Server (ASR rules reference, operating system support), is left out. A rule read as compliant is configured on the server, in Audit, Block or Warn, and CR-22 leaves it Not configured in its policy, since a policy overwrites local settings and Audit could lower a rule in Block (Configure ASR rules and exclusions, how policy conflicts are handled). Real-time protection and cloud-delivered protection come from the checks in the Antivirus subcategory (DeviceTvmSecureConfigurationAssessmentKB) and read On, Off, or empty when not assessed. `AadDeviceId` is the Microsoft Entra device ID (DeviceInfo), which LIC.4-DEVICES matches for the management type MicrosoftSense that marks a device security settings management manages. `DomainController` reads the Domain Controller role from `DeviceRoles`, the role the device inventory shows (Device inventory field reference), and CR-22 lists those servers on their own.
+
+```kusto
+let AsrRules = dynamic([
+    "Block abuse of exploited vulnerable signed drivers",
+    "Block credential stealing from the Windows local security authority subsystem",
+    "Block persistence through WMI event subscription",
+    "Block Adobe Reader from creating child processes",
+    "Block all Office applications from creating child processes",
+    "Block executable content from email client and webmail",
+    "Block executable files from running unless they meet a prevalence, age, or trusted list criterion",
+    "Block execution of potentially obfuscated scripts",
+    "Block JavaScript or VBScript from launching downloaded executable content",
+    "Block Office applications from creating executable content",
+    "Block Office applications from injecting code into other processes",
+    "Block Office communication application from creating child processes",
+    "Block process creations originating from PSExec and WMI commands",
+    "Block rebooting machine in Safe Mode",
+    "Block untrusted and unsigned processes that run from USB",
+    "Block use of copied or impersonated system tools",
+    "Block Webshell creation for Servers",
+    "Use advanced protection against ransomware"
+  ]);
+DeviceInfo
+| where Timestamp between (ago(7d) .. now())
+| where OSPlatform startswith "WindowsServer"
+| summarize arg_max(Timestamp, DeviceName, OSPlatform, OSVersion, OnboardingStatus, MachineGroup, AadDeviceId, AzureResourceId, DeviceRoles)
+          by DeviceId
+| where isnotempty(AzureResourceId)   // Azure virtual machines only
+| where AzureResourceId !contains "{{MRG}}"
+| join kind=leftouter (
+    DeviceTvmSecureConfigurationAssessment
+    | summarize arg_max(Timestamp, *) by DeviceId, ConfigurationId
+    | where tobool(IsApplicable)
+    | join kind=inner DeviceTvmSecureConfigurationAssessmentKB on ConfigurationId
+    | extend Asr   = ConfigurationName in~ (AsrRules),
+             Rtp   = ConfigurationSubcategory =~ "Antivirus" and ConfigurationName has "real-time protection",
+             Cloud = ConfigurationSubcategory =~ "Antivirus" and ConfigurationName has "cloud-delivered protection"
+    | where Asr or Rtp or Cloud
+    | summarize AsrApplicable   = countif(Asr),
+                AsrConfigured   = countif(Asr and tobool(IsCompliant)),
+                ConfiguredRules = make_set_if(ConfigurationName, Asr and tobool(IsCompliant)),
+                MissingRules    = make_set_if(ConfigurationName, Asr and not(tobool(IsCompliant))),
+                RtpChecks = countif(Rtp), RtpOn = countif(Rtp and tobool(IsCompliant)),
+                CloudChecks = countif(Cloud), CloudOn = countif(Cloud and tobool(IsCompliant))
+              by DeviceId
+  ) on DeviceId
+| extend RealTimeProtection = case(isnull(RtpChecks) or RtpChecks == 0, "", RtpOn == RtpChecks, "On", "Off"),
+         CloudProtection    = case(isnull(CloudChecks) or CloudChecks == 0, "", CloudOn == CloudChecks, "On", "Off"),
+         DomainController   = tostring(DeviceRoles) has_any ("DomainController", "Domain Controller"),
+         subscriptionId     = tolower(tostring(split(AzureResourceId, "/")[2])),
+         ResourceGroup      = tostring(split(AzureResourceId, "/")[4]),
+         VmName             = tostring(split(AzureResourceId, "/")[8])
+| project DeviceId, DeviceName, VmName, ResourceGroup, subscriptionId, AzureResourceId, OSPlatform, OSVersion,
+          OnboardingStatus, MachineGroup, AadDeviceId, DomainController, RealTimeProtection, CloudProtection,
+          AsrApplicable = coalesce(AsrApplicable, 0), AsrConfigured = coalesce(AsrConfigured, 0), ConfiguredRules, MissingRules
+| order by subscriptionId asc, ResourceGroup asc, DeviceName asc
+```
+
+### EW.4-AVMODE Microsoft Defender Antivirus mode per Windows device
+
+Engine DEFENDER-AVINFO. CyberSOC collector 1.17.0. Names devices and stays internal. Feeds CR-22 with EW.4-SERVERS, matched on the device ID. ASR rules run only when Microsoft Defender Antivirus is in Active mode, never Passive, Passive with EDR in block mode, limited periodic scanning or Off (ASR rules overview), and Microsoft Learn documents the mode for the antivirus health export as a string typed integer: 0 Active, 1 Passive, 2 Disabled, 3 or empty Other, 4 EDRBlocked, 5 PassiveAudit (Export device antivirus health details API methods and properties). CR-22 leaves out every server in another mode, or whose mode is not reported, for the Defender Antivirus server baseline first. Windows Server 2012 R2 and 2016 report here only when onboarded with the modern unified solution. Paged with `$top` 10,000 and `$skip`, as LIC.2-MACHINES is. Needs Machine.Read (delegated) or Machine.Read.All (application) and the View Data role. A 403 is UNAVAILABLE, a 404 no device, any other failure FAILED, never a zero. Devices that are not Windows (`osKind`) are left out.
+
+```http
+GET https://api.security.microsoft.com/api/deviceavinfo?$top=10000&$skip=0
+```
+
+One row per Windows device: `MachineId` (lower case, as Advanced Hunting gives `DeviceId`), `ComputerDnsName`, `OsPlatform`, `AvMode`, `AvModeName`, `DataRefreshTimestamp` and `LastSeenTime`.
 
 ### NB.2-DETAIL Internet-exposed management port rules with their properties and attachments
 

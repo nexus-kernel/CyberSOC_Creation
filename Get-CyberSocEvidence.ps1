@@ -54,6 +54,7 @@
       - POST https://api.security.microsoft.com/api/advancedqueries/run (query)
       - GET  https://api.security.microsoft.com/api/configurationScore and /api/exposureScore
       - GET  https://api.security.microsoft.com/api/machines (the Defender for Endpoint devices, LIC.2-MACHINES)
+      - GET  https://api.security.microsoft.com/api/deviceavinfo (the Microsoft Defender Antivirus mode of each device, EW.4-AVMODE)
       - GET  <workspace>/providers/Microsoft.SecurityInsights/alertRules
       - GET  <storage account>/blobServices/default/containers (container access levels, DP.1-CONTAINERS and DP.1-CONTAINERS-DETAIL)
       - GET  <App Service app>/basicPublishingCredentialsPolicies/ftp (FTP basic authentication, NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL)
@@ -243,7 +244,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.16.0, based on the EBR collector 1.14.0
+    Version: 1.17.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -293,7 +294,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.16.0'
+$script:EbrVersion = '1.17.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -1894,6 +1895,69 @@ DeviceTvmSecureConfigurationAssessment
           Configured, Applicable, MissingRules
 | order by Configured asc, DeviceName asc
 '@))
+
+    $q.Add((New-EbrQuery -Id 'EW.4-SERVERS' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'Windows servers with their attack surface reduction rules and antivirus prerequisites' -Notes 'Added in CyberSOC 1.17.0. One row per Windows Server Azure virtual machine Defender for Endpoint saw in the last 7 days, in any onboarding status: the attack surface reduction (ASR) rules the configuration assessment reads as configured and as not configured (ConfiguredRules, MissingRules, by the rule names of Microsoft Learn, ASR rules overview), real-time protection and cloud-delivered protection (On, Off, or empty when not assessed), the Microsoft Entra device ID (AadDeviceId, which LIC.4-DEVICES matches for security settings management) and whether the device role reads Domain Controller. A rule read as configured is in Audit, Block or Warn, and CR-22 leaves it as it is. No configuration assessment (AsrApplicable 0) is not a reading that no rule is set. EW.4-AVMODE adds the Microsoft Defender Antivirus mode. Feeds CR-22. Internal: names machines.' -Query @'
+let AsrRules = dynamic([
+    "Block abuse of exploited vulnerable signed drivers",
+    "Block credential stealing from the Windows local security authority subsystem",
+    "Block persistence through WMI event subscription",
+    "Block Adobe Reader from creating child processes",
+    "Block all Office applications from creating child processes",
+    "Block executable content from email client and webmail",
+    "Block executable files from running unless they meet a prevalence, age, or trusted list criterion",
+    "Block execution of potentially obfuscated scripts",
+    "Block JavaScript or VBScript from launching downloaded executable content",
+    "Block Office applications from creating executable content",
+    "Block Office applications from injecting code into other processes",
+    "Block Office communication application from creating child processes",
+    "Block process creations originating from PSExec and WMI commands",
+    "Block rebooting machine in Safe Mode",
+    "Block untrusted and unsigned processes that run from USB",
+    "Block use of copied or impersonated system tools",
+    "Block Webshell creation for Servers",
+    "Use advanced protection against ransomware"
+  ]);
+DeviceInfo
+| where Timestamp between (ago(7d) .. now())
+| where OSPlatform startswith "WindowsServer"
+| summarize arg_max(Timestamp, DeviceName, OSPlatform, OSVersion, OnboardingStatus, MachineGroup, AadDeviceId, AzureResourceId, DeviceRoles)
+          by DeviceId
+| where isnotempty(AzureResourceId)   // Azure virtual machines only
+| where AzureResourceId !contains "{{MRG}}"
+| join kind=leftouter (
+    DeviceTvmSecureConfigurationAssessment
+    | summarize arg_max(Timestamp, *) by DeviceId, ConfigurationId
+    | where tobool(IsApplicable)
+    | join kind=inner DeviceTvmSecureConfigurationAssessmentKB on ConfigurationId
+    | extend Asr   = ConfigurationName in~ (AsrRules),
+             Rtp   = ConfigurationSubcategory =~ "Antivirus" and ConfigurationName has "real-time protection",
+             Cloud = ConfigurationSubcategory =~ "Antivirus" and ConfigurationName has "cloud-delivered protection"
+    | where Asr or Rtp or Cloud
+    | summarize AsrApplicable   = countif(Asr),
+                AsrConfigured   = countif(Asr and tobool(IsCompliant)),
+                ConfiguredRules = make_set_if(ConfigurationName, Asr and tobool(IsCompliant)),
+                MissingRules    = make_set_if(ConfigurationName, Asr and not(tobool(IsCompliant))),
+                RtpChecks = countif(Rtp), RtpOn = countif(Rtp and tobool(IsCompliant)),
+                CloudChecks = countif(Cloud), CloudOn = countif(Cloud and tobool(IsCompliant))
+              by DeviceId
+  ) on DeviceId
+| extend RealTimeProtection = case(isnull(RtpChecks) or RtpChecks == 0, "", RtpOn == RtpChecks, "On", "Off"),
+         CloudProtection    = case(isnull(CloudChecks) or CloudChecks == 0, "", CloudOn == CloudChecks, "On", "Off"),
+         DomainController   = tostring(DeviceRoles) has_any ("DomainController", "Domain Controller"),
+         subscriptionId     = tolower(tostring(split(AzureResourceId, "/")[2])),
+         ResourceGroup      = tostring(split(AzureResourceId, "/")[4]),
+         VmName             = tostring(split(AzureResourceId, "/")[8])
+| project DeviceId, DeviceName, VmName, ResourceGroup, subscriptionId, AzureResourceId, OSPlatform, OSVersion,
+          OnboardingStatus, MachineGroup, AadDeviceId, DomainController, RealTimeProtection, CloudProtection,
+          AsrApplicable = coalesce(AsrApplicable, 0), AsrConfigured = coalesce(AsrConfigured, 0), ConfiguredRules, MissingRules
+| order by subscriptionId asc, ResourceGroup asc, DeviceName asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'EW.4-AVMODE' -Phase 'P2 Endpoint' -Engine 'DEFENDER-AVINFO' -Title 'Microsoft Defender Antivirus mode per Windows device' -Query @'
+GET https://api.security.microsoft.com/api/deviceavinfo?$top=10000&$skip=<n>
+Permission: Machine.Read (delegated), Machine.Read.All (application), and the View Data role
+One row per Windows device: machineId, computerDnsName, osPlatform, avMode, dataRefreshTimestamp and lastSeenTime.
+'@ -Notes 'Added in CyberSOC 1.17.0. The antivirus mode Microsoft Learn documents for the device antivirus health export (Export device antivirus health details API methods and properties): 0 Active, 1 Passive, 2 Disabled, 3 or empty Other, 4 EDR in block mode, 5 Passive audit. ASR rules run only when Microsoft Defender Antivirus is in Active mode (ASR rules overview), so CR-22 leaves out every server in another mode. Windows Server 2012 R2 and 2016 report here only when onboarded with the modern unified solution. Internal: names devices.'))
 
     $q.Add((New-EbrQuery -Id 'EW.5' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'ASR activity, audit versus block' -Notes 'Evidence that audit-mode rules are deployed and generating signal before they move to block.' -Query @'
 DeviceEvents
@@ -4739,6 +4803,39 @@ function Get-EbrDefenderMachines {
     $rows.ToArray()
 }
 
+function Get-EbrDefenderAvInfo {
+    # EW.4-AVMODE (CyberSOC 1.17.0): the Microsoft Defender Antivirus mode of every Windows device, paged with $top and
+    # $skip (at most 10,000 a page, Learn Export device antivirus health report). The API answers 404 when it holds no
+    # recent device, which is an empty list. avMode is a string typed integer, kept as the API gives it.
+    param([string]$Tenant)
+    $names = @{ '0' = 'Active'; '1' = 'Passive'; '2' = 'Disabled'; '3' = 'Other'; '4' = 'EDRBlocked'; '5' = 'PassiveAudit' }
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $top = 10000
+    $skip = 0
+    for ($page = 1; $page -le 100; $page++) {
+        $gap = ((Get-Date) - $script:EbrLastDefenderCall).TotalMilliseconds
+        if ($gap -lt 1500) { Start-Sleep -Milliseconds ([int](1500 - $gap)) }
+        $script:EbrLastDefenderCall = Get-Date
+        try { $resp = Invoke-EbrRest -Method GET -Uri ('https://api.security.microsoft.com/api/deviceavinfo?$top={0}&$skip={1}' -f $top, $skip) -Resource 'https://api.securitycenter.microsoft.com/' -Tenant $Tenant -TimeoutSec 300 }
+        catch { if ($_.Exception.Message -match '^HTTP 404\b') { break } throw }
+        $items = @($resp.value | Where-Object { $null -ne $_ })
+        foreach ($d in $items) {
+            # Only Windows runs Microsoft Defender Antivirus with ASR rules.
+            $kind = [string](Get-EbrProp $d 'osKind')
+            if ($kind -and $kind -ine 'windows') { continue }
+            $mode = ([string](Get-EbrProp $d 'avMode')).Trim()
+            $rows.Add([pscustomobject][ordered]@{
+                    MachineId = ([string](Get-EbrProp $d 'machineId')).ToLowerInvariant(); ComputerDnsName = [string](Get-EbrProp $d 'computerDnsName')
+                    OsPlatform = [string](Get-EbrProp $d 'osPlatform'); AvMode = $mode; AvModeName = $(if ($names.ContainsKey($mode)) { $names[$mode] } else { 'Other' })
+                    DataRefreshTimestamp = Format-EbrUtc (Get-EbrProp $d 'dataRefreshTimestamp'); LastSeenTime = Format-EbrUtc (Get-EbrProp $d 'lastSeenTime')
+                })
+        }
+        if ($items.Count -lt $top) { break }
+        $skip += $top
+    }
+    $rows.ToArray()
+}
+
 function Find-EbrWorkspaces {
     param([string[]]$Subscriptions, [string]$Tenant)
     $query = @'
@@ -6336,6 +6433,23 @@ function Invoke-EbrCatalogItem {
                 # A 403 is a token without Machine.Read or an account without the View Data role, so the devices are unknown.
                 $status = if ($m -match '^HTTP 40[13]\b') { 'UNAVAILABLE' } else { 'FAILED' }
                 return New-EbrResult -ResultId $Item.Id -Status $status -Source 'Defender for Endpoint API' -Detail ('Not a zero: the Defender for Endpoint devices could not be read. Needs Machine.Read and the View Data role. ' + $m) -DurationSec (& $elapsed)
+            }
+        }
+        'DEFENDER-AVINFO' {
+            # EW.4-AVMODE (CyberSOC 1.17.0). Without the Defender API the antivirus mode is unknown, never a zero.
+            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $Item.Query -Target 'Defender for Endpoint API'
+            if (-not $Ctx.DefenderAvailable) { return New-EbrResult -ResultId $Item.Id -Status 'UNAVAILABLE' -Source 'Defender for Endpoint API' -Detail ('Not a zero: the Microsoft Defender Antivirus mode was not read. ' + $Ctx.DefenderReason).Trim() -DurationSec (& $elapsed) }
+            try {
+                $rows = @(Get-EbrDefenderAvInfo -Tenant $Ctx.TenantGuid)
+                $n = @($rows).Count
+                $detail = '{0} listed, {1} in Active mode, {2} in another mode.' -f $(if ($n -eq 1) { '1 Windows device' } else { "$n Windows devices" }), @($rows | Where-Object AvMode -eq '0').Count, @($rows | Where-Object AvMode -ne '0').Count
+                return New-EbrResult -ResultId $Item.Id -Status $(if (@($rows).Count) { 'OK' } else { 'EMPTY' }) -Rows $rows -Columns @('MachineId', 'ComputerDnsName', 'OsPlatform', 'AvMode', 'AvModeName', 'DataRefreshTimestamp', 'LastSeenTime') -Source 'Defender for Endpoint API' -Detail $detail -DurationSec (& $elapsed)
+            }
+            catch {
+                $m = $_.Exception.Message -replace '\s+', ' '
+                # A 403 is a token without Machine.Read or an account without the View Data role, so the mode is unknown.
+                $status = if ($m -match '^HTTP 40[13]\b') { 'UNAVAILABLE' } else { 'FAILED' }
+                return New-EbrResult -ResultId $Item.Id -Status $status -Source 'Defender for Endpoint API' -Detail ('Not a zero: the Microsoft Defender Antivirus mode could not be read. Needs Machine.Read and the View Data role. ' + $m) -DurationSec (& $elapsed)
             }
         }
         'DEFENDER-SCORES' {

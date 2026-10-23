@@ -15,7 +15,9 @@
     group that gives it a role, the role group or one nested in it, and blocking device code flow with the
     Conditional Access policy ATMO-MXDR-CA-BLOCK-DEVICECODE where no enabled policy blocks it for all users and all
     resources (CR-20), and blocking legacy authentication with ATMO-MXDR-CA-BLOCK-LEGACY, or removing from the policy in
-    force the excluded accounts with no legacy sign-in in the last 30 days (CR-21). Every change request
+    force the excluded accounts with no legacy sign-in in the last 30 days (CR-21), and setting the attack surface reduction
+    rules to Audit on the Windows servers through one endpoint security policy and security settings management (CR-22),
+    leaving every rule already configured on a server as it is. Every change request
     also gets a client email, drafted and ready to send, that asks for the client's approval. The CR-19 email names
     the accounts and their roles in a CSV written beside it (CR-19-disabled-account-roles.email.csv), to attach,
     since the list can be long. Every email has the same parts in the
@@ -103,6 +105,11 @@
     CR-21 reads the same results for legacy authentication, with the legacy sign-ins of IA.8-SIGNINS and of
     IA.8-SIGNINS-NONINTERACTIVE, added in 1.16.0, under the same gates, and is written only when the non-interactive read
     shows the workspace receives those sign-ins. It names an excluded account from IA.8-SIGNINS or IA.15-DISABLED where the pack can, and by object ID otherwise.
+    CR-22 reads the Windows Server Azure virtual machines with their attack surface reduction rules, real-time and
+    cloud-delivered protection (EW.4-SERVERS) and the Microsoft Defender Antivirus mode of each (EW.4-AVMODE), added in
+    1.17.0, and on an earlier pack says "needs recollection". It needs a server license for each server and security
+    settings management (MdeServers and MdeSecurityManagement), and leaves out every server whose antivirus is not in
+    Active mode or whose real-time or cloud-delivered protection reads Off.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -147,6 +154,9 @@ foreach ($id in 'NB.5-FTPAUTH', 'NB.5-FTPAUTH-DETAIL') { $detailVersions[$id] = 
 $detailVersions['DR.6-MYSQLAUDIT'] = '1.15.0'
 # CR-21 reads the non-interactive legacy sign-ins too, added in 1.16.0, since IA.8-SIGNINS holds the interactive ones only.
 $detailVersions['IA.8-SIGNINS-NONINTERACTIVE'] = '1.16.0'
+# CR-22 reads the Windows servers with their ASR rules (EW.4-SERVERS) and the Microsoft Defender Antivirus mode of each
+# (EW.4-AVMODE), added in 1.17.0.
+foreach ($id in 'EW.4-SERVERS', 'EW.4-AVMODE') { $detailVersions[$id] = '1.17.0' }
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -386,8 +396,9 @@ $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, 
 # The lines that head each group of resources in a client email. Azure resources sit under their subscription, and
 # CR-19 adds the management groups and root scope above the subscriptions and the Microsoft Entra directory roles,
 # which belong to no subscription, and CR-20 and CR-21 the Conditional Access policies, the accounts that signed in with
-# device code flow or legacy authentication and the exclusions removed, which belong to the tenant.
-$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days):$'
+# device code flow or legacy authentication and the exclusions removed, which belong to the tenant. CR-22 lists the
+# domain controllers on their own, since the client confirms them apart from the other servers.
+$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm):$'
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
 $proposedDay = Format-Day $proposedDate
 $replyDay = Format-Day $replyDate
@@ -1041,6 +1052,36 @@ $dcGroup = 'ATMO-MXDR-DEVICECODE-APPROVED'
 # one, so each pack's legacy sign-ins show when an exclusion is no longer used.
 $laPolicy = 'ATMO-MXDR-CA-BLOCK-LEGACY'
 $laClientApps = @('exchangeActiveSync', 'other')
+# CR-22 sets the attack surface reduction (ASR) rules to Audit on the Windows servers through one endpoint security policy,
+# assigned to a dynamic device group of the Windows Server devices, so a new server joins on its own, with an assigned
+# group for the servers left out. Each name is used once here and everywhere else from these variables.
+$asrPolicy = 'ATMO-MXDR-ASR-AUDIT-SERVERS'
+$asrGroup = 'ATMO-MXDR-ASR-SERVERS'
+$asrExcluded = 'ATMO-MXDR-ASR-SERVERS-EXCLUDED'
+$asrGroupRule = '(device.deviceOSType -eq "Windows Server")'
+# The rules Windows Server supports, by their names in Microsoft Learn (ASR rules overview, the standard protection rules
+# first). Block Win32 API calls from Office macros does not apply to Windows Server (ASR rules reference, operating system
+# support), so it stays Not configured.
+$asrStandardRules = @(
+    'Block abuse of exploited vulnerable signed drivers'
+    'Block credential stealing from the Windows local security authority subsystem'
+    'Block persistence through WMI event subscription')
+$asrRules = $asrStandardRules + @(
+    'Block Adobe Reader from creating child processes'
+    'Block all Office applications from creating child processes'
+    'Block executable content from email client and webmail'
+    'Block executable files from running unless they meet a prevalence, age, or trusted list criterion'
+    'Block execution of potentially obfuscated scripts'
+    'Block JavaScript or VBScript from launching downloaded executable content'
+    'Block Office applications from creating executable content'
+    'Block Office applications from injecting code into other processes'
+    'Block Office communication application from creating child processes'
+    'Block process creations originating from PSExec and WMI commands'
+    'Block rebooting machine in Safe Mode'
+    'Block untrusted and unsigned processes that run from USB'
+    'Block use of copied or impersonated system tools'
+    'Block Webshell creation for Servers'
+    'Use advanced protection against ransomware')
 # Security defaults on or off (IA.8-DEFAULTS), or $null when not read. Security defaults and Conditional Access policies
 # do not run together, so a Conditional Access change waits while they are on.
 function Get-SecurityDefaults {
@@ -3462,6 +3503,186 @@ $catalog = @(
                         , @('What is Conditional Access?, license requirements', 'https://learn.microsoft.com/entra/identity/conditional-access/overview#license-requirements')
                         , @('Security defaults in Microsoft Entra ID, disabling security defaults', 'https://learn.microsoft.com/entra/fundamentals/security-defaults#disabling-security-defaults')
                         , @('Troubleshoot Conditional Access policies with the What If tool', 'https://learn.microsoft.com/entra/identity/conditional-access/what-if-tool'))
+                    Csv = $csv
+                    Email = $email
+                } } } }
+
+    @{ Number = 22; Key = 'asr-audit-servers'; Change = 'Attack surface reduction rules in audit mode on Windows servers'; Sources = @('EW.4-SERVERS', 'EW.4-AVMODE'); Requires = @('MdeServers', 'MdeSecurityManagement')
+       Build = {
+            # EW.4-SERVERS lists each Windows Server Azure virtual machine Defender for Endpoint saw, with the ASR rules the
+            # configuration assessment reads as configured, and EW.4-AVMODE the Microsoft Defender Antivirus mode. ASR rules
+            # need the antivirus in Active mode with real-time protection on and cloud-delivered protection (Microsoft Learn,
+            # ASR rules overview), so a server without them is left out and goes in the exclusion group, for the antivirus
+            # server baseline first. A rule read as configured on any server in scope is in Audit, Block or Warn, and a policy
+            # overwrites local settings (Configure ASR rules, how policy conflicts are handled), so the policy leaves that
+            # rule Not configured: setting it to Audit could lower a rule in Block. The rest are set to Audit.
+            $notes = [System.Collections.Generic.List[string]]::new()
+            $partial = (Get-Status 'EW.4-SERVERS') -eq 'PARTIAL'
+            $av = @{}
+            foreach ($a in @(Get-Rows 'EW.4-AVMODE')) { $id = (Get-Text $a.MachineId).ToLowerInvariant(); if ($id) { $av[$id] = $a } }
+            # Security settings management marks the Microsoft Entra device it manages with management type MicrosoftSense
+            # (LIC.4-DEVICES). A device enrolled in Intune takes the same endpoint security policy through Intune.
+            $entraRead = Test-ResultRead 'LIC.4-DEVICES'
+            $entra = @{}
+            if ($entraRead) { foreach ($d in @(Get-Rows 'LIC.4-DEVICES')) { $id = (Get-Text $d.DeviceId).ToLowerInvariant(); if ($id) { $entra[$id] = Get-Text $d.ManagementType } } }
+            $ruleKey = { param($r) (ConvertTo-CopyText $r).ToLowerInvariant() }
+            $known = @{}; foreach ($r in $asrRules) { $known[(& $ruleKey $r)] = $r }
+            $servers = @(foreach ($row in @(Get-Rows 'EW.4-SERVERS')) {
+                    $deviceId = (Get-Text $row.DeviceId).ToLowerInvariant()
+                    $a = $av[$deviceId]
+                    $aad = (Get-Text $row.AadDeviceId).ToLowerInvariant()
+                    $managed = if (-not $entraRead -or -not $aad) { 'not read' } else { switch ($entra[$aad]) { 'MicrosoftSense' { 'security settings management' } 'MDM' { 'Intune' } default { 'not enrolled' } } }
+                    $vm = ConvertTo-CopyText $row.VmName
+                    [pscustomobject]@{
+                        Name = $(if ($vm) { $vm } else { ConvertTo-CopyText $row.DeviceName }); DeviceId = $deviceId; ResourceGroup = ConvertTo-CopyText $row.ResourceGroup
+                        SubscriptionId = (ConvertTo-CopyText $row.subscriptionId).ToLowerInvariant(); ResourceId = Get-Text $row.AzureResourceId; Os = ConvertTo-CopyText $row.OSPlatform
+                        Onboarded = (Get-Text $row.OnboardingStatus) -ieq 'Onboarded'; Onboarding = ConvertTo-CopyText $row.OnboardingStatus; Dc = Test-True $row.DomainController
+                        Mode = $(if ($a) { ConvertTo-CopyText $a.AvModeName } else { '' }); Rtp = Get-Text $row.RealTimeProtection; Cloud = Get-Text $row.CloudProtection
+                        Applicable = Get-Number $row.AsrApplicable; Configured = @(Get-List $row.ConfiguredRules | ForEach-Object { $known[(& $ruleKey $_)] } | Where-Object { $_ })
+                        Managed = $managed
+                    } })
+            $where = { param($s) '{0} (resource group {1}, subscription {2})' -f $s.Name, $s.ResourceGroup, (Format-Subscription $s.SubscriptionId) }
+            $notOnboarded = @($servers | Where-Object { -not $_.Onboarded })
+            $onboarded = @($servers | Where-Object Onboarded)
+            # Microsoft Learn lists Passive, EDR in block mode and Off among the modes in which ASR rules do not run, and the
+            # antivirus health export adds Passive audit and Other. A mode not reported is not taken as Active.
+            $modeOut = @($onboarded | Where-Object { $_.Mode -ne 'Active' })
+            $protectionOff = @($onboarded | Where-Object { $_.Mode -eq 'Active' -and ($_.Rtp -eq 'Off' -or $_.Cloud -eq 'Off') })
+            $left = @($modeOut) + @($protectionOff)
+            $inScope = @($onboarded | Where-Object { $_.Mode -eq 'Active' -and $_.Rtp -ne 'Off' -and $_.Cloud -ne 'Off' })
+            $describeMode = { param($s) if ($s.Mode) { 'Microsoft Defender Antivirus reads {0}' -f $s.Mode } else { 'its Microsoft Defender Antivirus mode was not reported' } }
+            if ($modeOut.Count) { $notes.Add(('CR-22 leaves out {0} whose Microsoft Defender Antivirus is not in Active mode (EW.4-AVMODE): {1}. ASR rules run only when Microsoft Defender Antivirus is in Active mode, never Passive, EDR in block mode or Off (ASR rules overview), so the Defender Antivirus server baseline brings {2} to Active mode first, and a later pack picks {2} up. CR-22 adds {2} to {3}, so the policy does not reach {2} before then. A server whose mode was not reported is checked under Reports > Endpoints > Device health > Microsoft Defender Antivirus health, and Windows Server 2012 R2 and 2016 report there only when onboarded with the modern unified solution.' -f (Get-Count $modeOut.Count 'server' 'servers'), (@($modeOut | ForEach-Object { '{0}, {1}' -f (& $where $_), (& $describeMode $_) }) -join ' / '), (Get-Pick $modeOut.Count 'it' 'them'), $asrExcluded)) }
+            if ($protectionOff.Count) { $notes.Add(('CR-22 leaves out {0} in Active mode whose configuration assessment reads real-time or cloud-delivered protection Off (EW.4-SERVERS): {1}. ASR rules need real-time protection on, and cloud-delivered protection is critical to them (ASR rules overview), so the Defender Antivirus server baseline turns both on first. CR-22 adds {2} to {3}.' -f (Get-Count $protectionOff.Count 'server' 'servers'), (@($protectionOff | ForEach-Object { '{0}, real-time protection {1}, cloud-delivered protection {2}' -f (& $where $_), $(if ($_.Rtp) { $_.Rtp } else { 'not assessed' }), $(if ($_.Cloud) { $_.Cloud } else { 'not assessed' }) }) -join ' / '), (Get-Pick $protectionOff.Count 'it' 'them'), $asrExcluded)) }
+            if ($notOnboarded.Count) { $notes.Add(('{0} Defender for Endpoint has seen but not onboarded {1} out of CR-22: {2}. A server not onboarded takes no endpoint security policy, so onboard it first (EW.1-GAPS gives the reason for each Azure virtual machine), and a later pack picks it up.' -f (Get-Count $notOnboarded.Count 'Windows server' 'Windows servers'), (Get-Pick $notOnboarded.Count 'is left' 'are left'), (@($notOnboarded | ForEach-Object { '{0}, {1}' -f (& $where $_), $(if ($_.Onboarding) { $_.Onboarding } else { 'onboarding status not recorded' }) }) -join ' / '))) }
+            # The rules a server in scope already has, which the policy leaves Not configured, and the servers still missing one.
+            $configured = [ordered]@{}
+            foreach ($r in $asrRules) { $on = @($inScope | Where-Object { $_.Configured -contains $r }); if ($on.Count) { $configured[$r] = $on } }
+            $audit = @($asrRules | Where-Object { -not $configured.Contains($_) })
+            $unassessed = @($inScope | Where-Object { $_.Applicable -eq 0 })
+            $gaps = @($inScope | Where-Object { $s = $_; $_.Applicable -eq 0 -or @($asrRules | Where-Object { $s.Configured -notcontains $_ }).Count })
+            if (-not $gaps.Count) {
+                if ($inScope.Count) { $notes.Insert(0, ('Every Windows server in scope already has every ASR rule configured, in Audit, Block or Warn: {0}.' -f (Join-Words @($inScope | ForEach-Object { & $where $_ })))) }
+                $state = if ($inScope.Count -or -not $left.Count) { 'No gaps found' } else { 'Not written, no server meets the ASR prerequisites, see the notes' }
+                if ($partial -and $state -eq 'No gaps found') { $state = 'No gaps found in the servers read, partial collection scope'; $notes.Add(('EW.4-SERVERS read in part ({0}), so a Windows server left out of the read may still have ASR rules not configured. Recollect the pack.' -f (Get-ResultDetail 'EW.4-SERVERS').TrimEnd('.'))) }
+                return @{ State = $state; Notes = $notes.ToArray() }
+            }
+            if (-not $audit.Count) {
+                return @{ State = 'Not written, every ASR rule is configured on a server in scope, see the notes'; Notes = @(@('CR-22 is not written because every ASR rule Windows Server supports is already configured on at least one server in scope, and the policy leaves a configured rule Not configured so it never lowers a rule in Block. Bring the servers still missing a rule to it with the rule owner, or in the block mode change that follows.') + $notes.ToArray()) }
+            }
+            $dcs = @($inScope | Where-Object Dc)
+            $members = @($inScope | Where-Object { -not $_.Dc })
+            $notEnrolled = @($inScope | Where-Object { $_.Managed -eq 'not enrolled' })
+            if ($dcs.Count) { $notes.Add(('{0} in scope {1} the Domain Controller device role (EW.4-SERVERS): {2}. Microsoft Learn supports security settings management on domain controllers once they are turned on in the enforcement scope, after Windows Server, and cautions against targeting them by mistake, so the email lists them on their own and asks the client to confirm them. Without that confirmation, step 2 leaves domain controllers off in the enforcement scope and step 6 adds them to {3}.' -f (Get-Count $dcs.Count 'server' 'servers'), (Get-Pick $dcs.Count 'reads' 'read'), (Join-Words @($dcs | ForEach-Object { & $where $_ })), $asrExcluded)) }
+            if ($configured.Count) { $notes.Add(('CR-22 leaves {0} Not configured in {1}, since the configuration assessment reads {2} already configured on a server in scope, in Audit, Block or Warn, and setting it to Audit could lower a rule in Block: {3}. Until the block mode change that follows decides {4}, the other servers record no audit events from {5}.' -f (Get-Count $configured.Count 'rule' 'rules'), $asrPolicy, (Get-Pick $configured.Count 'it' 'each'), (@($configured.Keys | ForEach-Object { '{0} ({1})' -f $_, (Join-Words @($configured[$_] | ForEach-Object Name)) }) -join ' / '), (Get-Pick $configured.Count 'that rule' 'those rules'), (Get-Pick $configured.Count 'it' 'them'))) }
+            if ($unassessed.Count) { $notes.Add(('The configuration assessment read no ASR rule on {0} (EW.4-SERVERS): {1}. This is not a reading that no rule is set, so step 4 checks {2} in the attack surface reduction rules report before the policy is saved. Defender Vulnerability Management needs Defender for Endpoint Plan 2 or Defender for Servers on the server.' -f (Get-Count $unassessed.Count 'server' 'servers'), (Join-Words @($unassessed | ForEach-Object Name)), (Get-Pick $unassessed.Count 'it' 'them'))) }
+            if ($notEnrolled.Count) { $notes.Add(('{0} in scope {1} not managed by security settings management or Intune (LIC.4-DEVICES): {2}. A device takes the policy only once security settings management manages it, so step 3 checks Managed by and MDE Enrollment status on each server, and the testing plan names any server the policy does not reach.' -f (Get-Count $notEnrolled.Count 'server' 'servers'), (Get-Pick $notEnrolled.Count 'reads as' 'read as'), (Join-Words @($notEnrolled | ForEach-Object Name)))) }
+            if (-not $entraRead) { $notes.Add('The Microsoft Entra devices were not read (LIC.4-DEVICES), so the pack cannot tell which servers security settings management manages. Step 3 checks Managed by and MDE Enrollment status on each server.') }
+            if (Test-ResultRead 'EW.5') {
+                $events = @(Get-Rows 'EW.5')
+                $count = { param($m) [int](@($events | Where-Object { (Get-Text $_.Mode) -eq $m } | ForEach-Object { Get-Number $_.Events }) | Measure-Object -Sum).Sum }
+                $notes.Add(('Verify CR-22 with the next pack: EW.5 counts the ASR audit and block events of the last 30 days on the Azure virtual machines, {0} audit and {1} block today, and should show audit events from the servers in scope. The block mode change that follows is a separate change request, rule by rule, with the exclusions taken from those audit events.' -f (& $count 'Audit'), (& $count 'Block'))) }
+            else { $notes.Add('Verify CR-22 with the next pack: EW.5 counts the ASR audit and block events of the last 30 days and should show audit events from the servers in scope. The block mode change that follows is a separate change request, rule by rule, with the exclusions taken from those audit events.') }
+            if ($partial) { $notes.Add(('EW.4-SERVERS read in part ({0}), so step 7 compares the members of {1} with the RESOURCES section and leaves any server it does not list to the next pack.' -f (Get-ResultDetail 'EW.4-SERVERS').TrimEnd('.'), $asrGroup)) }
+
+            $stateText = { param($s) '{0}, antivirus {1}, real-time protection {2}, cloud-delivered protection {3}, {4} of {5} rules configured today{6}, {7}' -f $s.Os, $(if ($s.Mode) { $s.Mode } else { 'mode not reported' }), $(if ($s.Rtp) { $s.Rtp } else { 'not assessed' }), $(if ($s.Cloud) { $s.Cloud } else { 'not assessed' }), $s.Configured.Count, $asrRules.Count, $(if ($s.Applicable -eq 0) { ', not assessed' } else { '' }), $(switch ($s.Managed) { 'not read' { 'management not read' } 'not enrolled' { 'not yet managed by security settings management' } default { "managed by $($s.Managed)" } }) }
+            $serverLines = { param($list)
+                foreach ($g in @($list | Group-Object SubscriptionId | Sort-Object { Format-Subscription $_.Name })) {
+                    ('Subscription: {0}' -f (Format-Subscription $g.Name))
+                    foreach ($s in @($g.Group | Sort-Object ResourceGroup, Name)) { '- {0}, resource group {1}, {2}' -f $s.Name, $s.ResourceGroup, (& $stateText $s) }
+                } }
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add(('Policy {0}, to create in the Microsoft Defender portal, platform Windows, template Attack Surface Reduction Rules:' -f $asrPolicy))
+            $lines.Add(('- Included group: {0}, a security group with dynamic device membership, rule {1}' -f $asrGroup, $asrGroupRule))
+            $held = @(if ($left.Count) { 'the servers left out below' }; if ($dcs.Count) { 'the domain controllers unless the client confirms them' })
+            $lines.Add(('- Excluded group: {0}, a security group with assigned membership, {1}' -f $asrExcluded, $(if ($held.Count) { 'holding ' + ($held -join ', and ') } else { 'for any server the client leaves out, empty today' })))
+            foreach ($r in $audit) { $lines.Add(('- Set to Audit: {0}{1}' -f $r, $(if ($r -eq 'Block Webshell creation for Servers') { ', which applies to Exchange servers only' } else { '' }))) }
+            foreach ($r in $configured.Keys) { $lines.Add(('- Left Not configured, already configured on {0}: {1}' -f (Join-Words @($configured[$r] | ForEach-Object Name)), $r)) }
+            $lines.Add('- Left Not configured: Block Win32 API calls from Office macros, which does not apply to Windows Server, and every other setting of the template, controlled folder access included')
+            if ($members.Count) { $lines.Add(''); $lines.Add('Windows servers in scope (EW.4-SERVERS and EW.4-AVMODE):'); foreach ($l in @(& $serverLines $members)) { $lines.Add($l) } }
+            if ($dcs.Count) { $lines.Add(''); $lines.Add('Domain controllers in scope, listed on their own, included only if the client confirms them:'); foreach ($l in @(& $serverLines $dcs)) { $lines.Add($l) } }
+            if ($left.Count) {
+                $lines.Add(''); $lines.Add(('Windows servers left out and added to {0}, for the Defender Antivirus server baseline first:' -f $asrExcluded))
+                foreach ($s in @($left | Sort-Object SubscriptionId, ResourceGroup, Name)) { $lines.Add(('- {0}, {1}' -f (& $where $s), (& $stateText $s))) }
+            }
+            if ($notOnboarded.Count) {
+                $lines.Add(''); $lines.Add('Windows servers not onboarded to Defender for Endpoint, left out:')
+                foreach ($s in $notOnboarded) { $lines.Add(('- {0}, {1}' -f (& $where $s), $(if ($s.Onboarding) { $s.Onboarding } else { 'onboarding status not recorded' }))) }
+            }
+
+            $csv = @(
+                New-Resource $asrPolicy '' '' ('to create, {0} set to Audit' -f (Get-Count $audit.Count 'rule' 'rules')) ''
+                New-Resource $asrGroup '' '' ('to create, dynamic device membership {0}' -f $asrGroupRule) ''
+                New-Resource $asrExcluded '' '' ('to create, assigned membership, {0}' -f (Get-Count $left.Count 'server' 'servers')) ''
+                foreach ($s in $inScope) { New-Resource $s.Name $s.ResourceGroup $s.SubscriptionId ('{0}{1}' -f $(if ($s.Dc) { 'domain controller, ' } else { '' }), (& $stateText $s)) $s.ResourceId }
+                foreach ($s in $left) { New-Resource $s.Name $s.ResourceGroup $s.SubscriptionId ('left out, added to {0}, {1}' -f $asrExcluded, (& $stateText $s)) $s.ResourceId })
+
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add('Make the change only through the endpoint security policy in these steps. Do not set ASR rules with Run Command, Set-MpPreference, Add-MpPreference or Group Policy, since any policy overwrites local settings and Group Policy takes precedence over the policy, and setting a rule to Audit there would lower a rule in Block. Security settings management needs no AADLoginForWindows extension, which joins a machine to Microsoft Entra ID and so cannot run on a domain controller.')
+            $impl.Add(('Sign in to the Microsoft Defender portal as at least a Security Administrator, go to Settings > Endpoints > Configuration Management > Enforcement Scope and confirm that security settings management is on for Windows Server{0}. If it is off, stop: turning it on brings every Windows server in its scope under security settings management, which is a separate change with the client. If it reads On tagged devices, confirm each server listed in the RESOURCES section carries the MDE-Management tag.' -f $(if ($dcs.Count) { ', and turn on domain controllers only if the client confirmed the domain controllers listed' } else { ', and leave domain controllers off' })))
+            $impl.Add('Go to Assets > Devices and open each server listed in the RESOURCES section. Confirm Managed by reads MDE or Intune and MDE Enrollment status reads Success, then go to Reports > Endpoints > Device health > Microsoft Defender Antivirus health and confirm the server still reads Active as its antivirus mode. A server in another mode goes in the excluded group in step 6, and a server not yet managed is noted in the change record for the next pack.')
+            $impl.Add(('Go to Reports > Endpoints > Attack surface reduction rules, select the Configuration tab and set Rules to All. Export the device configuration of the servers listed into the change record, for the rollback. A rule listed in the RESOURCES section to set to Audit that now shows Block or Warn on any listed server is left Not configured instead, and noted in the change record.'))
+            $impl.Add(('Sign in to the Microsoft Entra admin center as at least a Groups Administrator and go to Entra ID > Groups > All groups. If {0} exists, record its membership rule and reuse it when the rule is {1}, otherwise stop and agree the group with the client. If it does not exist, select New group, set Group type to Security, name it {0}, set Membership type to Dynamic Device, select Add dynamic query, enter {1} in the rule syntax text box, select Save, then Create.' -f $asrGroup, $asrGroupRule))
+            $impl.Add(('Select New group again, set Group type to Security, name it {0}, set Membership type to Assigned and {1}. Select Create. If the group already exists, add the members to it instead.' -f $asrExcluded, $(if ($held.Count) { 'add as members the devices of ' + (@($(if ($left.Count) { 'the servers listed in the RESOURCES section as left out' }), $(if ($dcs.Count) { 'the domain controllers unless the client confirmed them' })) -join ', and ') } else { 'leave it empty, for any server step 3 or step 7 leaves out' })))
+            $impl.Add(('Once membership processing is complete, open {0} > Members and compare it with the RESOURCES section. Add to {1} any member the client did not approve, such as a Windows server outside Azure or one added since collection, and note it in the change record.' -f $asrGroup, $asrExcluded))
+            $impl.Add(('In the Microsoft Defender portal, go to Endpoints > Configuration management > Endpoint security policies and select Create new policy. Set Select platform to Windows and Select template to Attack Surface Reduction Rules, select Create policy and name it {0}.' -f $asrPolicy))
+            $impl.Add('On the Configuration settings page, set each rule listed in the RESOURCES section to Audit, except a rule step 4 left Not configured. Leave every other setting Not configured, controlled folder access included, and select Next.')
+            $impl.Add(('On the Assignments page, add {0} with Target type Include and {1} with Target type Exclude, select Next, then Save on the Review + create page.' -f $asrGroup, $asrExcluded))
+
+            $testing = @(
+                ('In the Microsoft Defender portal, go to Endpoints > Configuration management > Endpoint security policies and open {0}. Confirm the assigned groups read {1} included and {2} excluded, never 0 groups.' -f $asrPolicy, $asrGroup, $asrExcluded)
+                'Devices check in every 90 minutes. On the policy page, confirm Applied devices lists each server in scope in the RESOURCES section, and Policy settings status shows each rule set to Audit applied with no error or conflict. Select Policy sync on a server page under Assets > Devices to check it sooner, and name in the change record any server the policy does not reach.'
+                'On one server in each subscription, open its page under Assets > Devices, then Configuration management, and confirm Security policies lists the policy and Effective settings shows each rule set to Audit.'
+                'Go to Reports > Endpoints > Attack surface reduction rules, select the Configuration tab with Rules set to All, and confirm the servers in scope show their rules in audit mode and no rule recorded in step 4 as Block now reads Audit.')
+            $rollback = @(
+                ('In the Microsoft Defender portal, go to Endpoints > Configuration management > Endpoint security policies, open {0} and select Edit. Microsoft Learn says removing an assignment may leave a setting as it was, so first set each rule the change set to Audit to Off, select Save and wait until Policy settings status shows the change applied on the servers.' -f $asrPolicy)
+                ('Edit the policy again, remove {0} and {1} on the Assignments page and select Save, then delete the policy.' -f $asrGroup, $asrExcluded)
+                ('In the Microsoft Entra admin center, delete {0} and {1} if the change created them.' -f $asrGroup, $asrExcluded)
+                'Confirm in the attack surface reduction rules report that the rules the change set read Off or Not configured, and that every rule recorded in step 4 as Block still reads Block.')
+
+            # The client email.
+            $n = $inScope.Count
+            $effect = [System.Collections.Generic.List[string]]::new()
+            $effect.Add('Audit mode blocks nothing. Each rule only records what it would have blocked, so the applications and people using these servers see no change, and the servers apply the setting without a restart.')
+            $effect.Add('This starts a review period. Each month I will review the audit records, and a later request will ask you which rules move to block mode, one rule at a time, with any exception an application turns out to need.')
+            if ($configured.Count) { $effect.Add('Where a rule is already set on one of your servers, in audit or block mode, I would leave that rule as it is, so this change never weakens a rule that already blocks.') }
+            if ($dcs.Count) { $effect.Add(('The list includes {0}, shown on {1} own. Microsoft supports managing domain controllers this way, but it has to be turned on for them separately, so I would include {2} only if you confirm.' -f $(if ($dcs.Count -eq 1) { 'a domain controller' } else { "$($dcs.Count) domain controllers" }), (Get-Pick $dcs.Count 'its' 'their'), (Get-Pick $dcs.Count 'it' 'them'))) }
+            if ($left.Count) { $effect.Add(('Some of your servers are not part of this change, since the rules work only when Microsoft Defender Antivirus is the active antivirus with its real-time and cloud-delivered protection on, and on {0} it is not today.' -f $(if ($left.Count -eq 1) { 'one of them' } else { "$($left.Count) of them" }))) }
+            $resources = [System.Collections.Generic.List[object]]::new()
+            if ($members.Count) { foreach ($p in (Get-EmailResourceList $members { '{0} (resource group {1})' -f $_.Name, $_.ResourceGroup })) { $resources.Add($p) } }
+            if ($dcs.Count) { $resources.Add('Domain controllers, included only if you confirm:'); $resources.Add([string[]]@($dcs | Sort-Object Name | ForEach-Object { '{0} (resource group {1}) in subscription {2}' -f $_.Name, $_.ResourceGroup, (Format-Subscription $_.SubscriptionId) })) }
+            $email = New-ApprovalEmail -Subject 'attack surface reduction rules in audit mode on your Windows servers' `
+                -Change @(('I would like to turn on Microsoft Defender attack surface reduction (ASR) rules in audit mode on {0} in Azure, and on each Windows server that joins later.' -f $(if ($n -eq 1) { 'one of your Windows servers' } else { "$n of your Windows servers" })), 'Attack surface reduction rules are part of Microsoft Defender Antivirus and watch for behavior that attackers commonly use malware for, such as scripts that download and run files, obfuscated scripts, and Office applications that start other programs or inject code into other processes.') `
+                -Why 'I recommend this change because these are behaviors attackers commonly rely on once malware reaches a server, and Microsoft recommends audit mode as the first step for most of these rules: it shows what each rule would block on your servers before any rule blocks anything.' `
+                -Effect $effect.ToArray() `
+                -Listed ('The change covers {0}:' -f $(if ($members.Count -and $dcs.Count) { 'the servers below, by subscription, and the domain controllers after them' } elseif ($dcs.Count) { Get-Pick $dcs.Count 'the domain controller below' 'the domain controllers below' } else { Get-Pick $members.Count 'the server below' 'the servers below, by subscription' })) `
+                -Resources $resources.ToArray() `
+                -Reversal 'The rules can be turned off again at any time through the same policy, and since audit mode blocks nothing, turning them off changes nothing for the applications on these servers.' `
+                -Ask $(if ($dcs.Count) { 'Could you confirm whether the domain controllers listed should be included, and approve this change for the servers listed above on {0}?' -f $proposedDay } else { 'Could you approve this change for the servers listed above on {0}?' -f $proposedDay })
+            @{ Used = @('LIC.4-DEVICES'); Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
+                    Number = 22; Key = 'asr-audit-servers'; Title = 'Deploy attack surface reduction rules in audit mode on Windows servers'
+                    Description = 'Create the endpoint security policy {0} in the Microsoft Defender portal, which sets the attack surface reduction (ASR) rules listed in the RESOURCES section to Audit through security settings management, assigned to the dynamic device group {1} of the Windows servers and excluding {2}. A rule already configured on a server in scope is left Not configured, so no rule in Block is set to Audit.' -f $asrPolicy, $asrGroup, $asrExcluded
+                    Purpose = 'ASR rules stop behavior attackers commonly use malware for, such as scripts that download and run files and Office applications that start other programs. Audit mode records what each rule would block without blocking it, so the block mode change that follows can be decided rule by rule from the audit events.'
+                    ResourceIntro = 'The Windows servers below have ASR rules not configured and meet the ASR prerequisites: Microsoft Defender Antivirus in Active mode, with real-time protection and cloud-delivered protection on where the configuration assessment reads them. The policy below sets the rules no server has yet to Audit.'
+                    ResourceLines = $lines.ToArray()
+                    Availability = 'No impact, since a rule in audit mode blocks nothing and the servers apply the policy without a restart.'
+                    UserExperience = 'None, since a rule in audit mode only records what it would have blocked.'
+                    Dependencies = 'Needs security settings management on for Windows Server in the enforcement scope, and the client confirmation of the servers and of any domain controller listed.'
+                    Implementation = $impl.ToArray()
+                    Testing = $testing
+                    Rollback = $rollback
+                    References = @(
+                        , @('Attack surface reduction (ASR) rules overview', 'https://learn.microsoft.com/defender-endpoint/attack-surface-reduction-rules-overview')
+                        , @('Attack surface reduction (ASR) rules reference', 'https://learn.microsoft.com/defender-endpoint/attack-surface-reduction-rules-reference')
+                        , @('Plan your attack surface reduction (ASR) rules deployment', 'https://learn.microsoft.com/defender-endpoint/attack-surface-reduction-rules-deployment-plan')
+                        , @('Manage Microsoft Defender for Endpoint on devices with security settings management', 'https://learn.microsoft.com/defender-endpoint/mde-security-settings-management')
+                        , @('Configure ASR rules and exclusions, how policy conflicts are handled', 'https://learn.microsoft.com/defender-endpoint/attack-surface-reduction-rules-configure#how-policy-conflicts-are-handled')
+                        , @('Manage endpoint security policies in Microsoft Defender for Endpoint', 'https://learn.microsoft.com/defender-endpoint/manage-security-policies')
+                        , @('Attack surface reduction (ASR) rules report in the Microsoft Defender portal', 'https://learn.microsoft.com/defender-endpoint/attack-surface-reduction-rules-report')
+                        , @('Device health, Microsoft Defender Antivirus health report', 'https://learn.microsoft.com/defender-endpoint/device-health-microsoft-defender-antivirus-health')
+                        , @('Troubleshoot ASR rules, verify the active rules on devices', 'https://learn.microsoft.com/defender-endpoint/troubleshoot-asr#verify-the-active-asr-rules-and-actions-on-devices')
+                        , @('Manage rules for dynamic membership groups in Microsoft Entra ID, rules for devices', 'https://learn.microsoft.com/entra/identity/users/groups-dynamic-membership#rules-for-devices')
+                        , @('Assign policies in Microsoft Intune, user groups vs. device groups', 'https://learn.microsoft.com/intune/device-configuration/assign-device-profile#user-groups-vs-device-groups')
+                        , @('Sign in to a Windows virtual machine in Azure using Microsoft Entra ID', 'https://learn.microsoft.com/entra/identity/devices/howto-vm-sign-in-azure-ad-windows'))
                     Csv = $csv
                     Email = $email
                 } } } }

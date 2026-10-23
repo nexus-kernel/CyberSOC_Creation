@@ -237,8 +237,8 @@ BeforeAll {
     $oldEmailTitles = 'What I am asking to change', 'Why I recommend it', 'What it means for you', 'The resources', 'How it can be reversed', 'Your approval', 'Your approval and a maintenance window'
     # The lines that head each group of resources: a subscription, for CR-19 a management group, the root scope and the
     # Microsoft Entra directory roles, and for CR-20 and CR-21 the policies, sign-ins and exclusions, which belong to no
-    # subscription.
-    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days):$'
+    # subscription, and for CR-22 the domain controllers, which the client confirms apart from the other servers.
+    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm):$'
     $dayPattern = '(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}'
     # Checks one client email against the shared structure and the copy rules. Every generated email goes through it.
     # The parts are found by what each paragraph says: the ask, why, what it means for the client, the resources by
@@ -1224,7 +1224,7 @@ Describe 'Change request variants' {
         $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
     }
 
-    It 'writes a client email for every change request, CR-01 to CR-21' {
+    It 'writes a client email for every change request, CR-01 to CR-22' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
         # written at least once. A change request written without its email, or with an email that does not
@@ -1241,6 +1241,13 @@ Describe 'Change request variants' {
         # No policy blocks device code flow or legacy authentication, the emergency access read is complete and Entra ID P1
         # is licensed, so CR-20 and CR-21 are written.
         $null = Add-DcScenario $more 'no-policy'
+        # Windows servers with ASR rules not configured, and a license read that carries Defender for Endpoint Plan 2 beside
+        # Microsoft Entra ID P1, so security settings management is licensed and CR-22 is written too.
+        Set-PackResult $more 'LIC.1-SKUS' @(@{ SkuId = '06ebc4ee-1bb5-47dd-8120-11324bc54e06'; SkuPartNumber = 'SPE_E5'; AppliesTo = 'User'; CapabilityStatus = 'Enabled'; Enabled = 50; Suspended = 0; Warning = 0; LockedOut = 0; Consumed = 41
+                ServicePlans = @(@{ ServicePlanId = '41781fb2-bc02-4b7c-bd55-b576c07bb09d'; ServicePlanName = 'AAD_PREMIUM'; ProvisioningStatus = 'Success'; AppliesTo = 'User' }, @{ ServicePlanId = '871d91ec-ec1a-452b-a83f-bd76c7d770ef'; ServicePlanName = 'WINDEFATP'; ProvisioningStatus = 'Success'; AppliesTo = 'User' }) })
+        $asrFixture = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/asr-audit/scenarios.json') -Raw | ConvertFrom-Json
+        Set-PackResult $more 'EW.4-SERVERS' @($asrFixture.Servers)
+        Set-PackResult $more 'EW.4-AVMODE' @($asrFixture.AvMode)
         $null = & $generator -EvidencePath $more -PurgeProtectionApproved
         $written = @()
         foreach ($pack in $full, $more) {
@@ -1254,12 +1261,12 @@ Describe 'Change request variants' {
                 $text = Get-Content $email -Raw
                 Assert-ApprovalEmail $text $cr.Name
                 # An email that attaches a CSV lists it after the email, under the same base name.
-                $index | Should -Match ('\| {0} \| [^|]+ \| \d+ \| Change request and client email(, partial collection scope)? \| {1}, {2}(, {3})? \|' -f $number, [regex]::Escape($cr.Name), [regex]::Escape($cr.BaseName + '.email.txt'), [regex]::Escape($cr.BaseName + '.email.csv')) -Because $cr.Name
+                $index | Should -Match ('\| {0} \| [^|]+ \| \d+ \| Change request and client email(, partial collection scope)?(, confirm the license before sending)? \| {1}, {2}(, {3})? \|' -f $number, [regex]::Escape($cr.Name), [regex]::Escape($cr.BaseName + '.email.txt'), [regex]::Escape($cr.BaseName + '.email.csv')) -Because $cr.Name
                 foreach ($attached in @(Get-ChildItem $out -Filter ($cr.BaseName + '.email.csv'))) { Get-Content $attached.FullName -Raw | Should -Not -Match ';|>|<' -Because "$($attached.Name) goes to the client with the email" }
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
-        @($written | Sort-Object -Unique) | Should -Be @(1..21) -Because 'the two packs between them write every change request'
+        @($written | Sort-Object -Unique) | Should -Be @(1..22) -Because 'the two packs between them write every change request'
         $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
@@ -4107,5 +4114,158 @@ Describe 'Legacy authentication blocked by Conditional Access (CR-21)' {
         $steps = Get-CyberSocCaPolicySteps -Target $null -Baseline 'ATMO-MXDR-CA-BLOCK-LEGACY' -Resources 'R.' -Condition 'C.' -Keep 'K.'
         $steps.Count | Should -Be 7 -Because 'without a companion no companion step is written'
         $steps[2] | Should -Be 'Under Exclude, select Users and groups and add each Atmosera group and each emergency access account listed in the RESOURCES section. K.'
+    }
+}
+
+Describe 'Attack surface reduction rules in audit mode on Windows servers (CR-22, collector 1.17.0)' {
+    BeforeAll {
+        $script:asr = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/asr-audit/scenarios.json') -Raw | ConvertFrom-Json
+        # A CR-22 scenario written into a pack as collector 1.17.0 writes it: EW.4-SERVERS, EW.4-AVMODE, LIC.4-DEVICES and EW.5,
+        # after a licensing scenario when one is named.
+        function New-AsrPack([string]$Name, [string]$Scenario, [string]$Licensing = '', [scriptblock]$Before = $null, [string]$Contact = 'Dana') {
+            $pack = Join-Path $TestDrive "asr-$Name"
+            New-ChangeFixture $pack
+            if ($Licensing) {
+                $lic = Get-Content (Join-Path $PSScriptRoot "fixtures/offline-pack/licensing/$Licensing.json") -Raw | ConvertFrom-Json
+                foreach ($p in $lic.Results.PSObject.Properties) { Set-PackResult $pack $p.Name @($p.Value.Rows) -Status $p.Value.Status -Detail $p.Value.Detail }
+            }
+            $sc = $asr.Scenarios.$Scenario
+            Set-PackResult $pack 'EW.4-SERVERS' $(if ($sc.PSObject.Properties['Servers']) { @($sc.Servers) } else { @($asr.Servers) })
+            Set-PackResult $pack 'EW.4-AVMODE' @($asr.AvMode)
+            Set-PackResult $pack 'LIC.4-DEVICES' @($asr.Devices)
+            Set-PackResult $pack 'EW.5' @($asr.Events)
+            if ($Before) { & $Before $pack }
+            Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -ClientContact $Contact -SenderName 'Scott Example' }
+            $out = Join-Path $pack '05-change-requests'
+            [pscustomobject]@{ Pack = $pack; Out = $out; Index = Get-Content (Join-Path $out '00-index.md') -Raw }
+        }
+        function Get-Cr22([string]$Out, [string]$Suffix = '.txt') { Get-Content (Join-Path $Out "CR-22-asr-audit-servers$Suffix") -Raw }
+        $script:mixed = New-AsrPack 'mixed' 'mixed'
+    }
+
+    It 'writes one policy that sets to Audit the rules no server has, assigned to a dynamic device group, with the servers left out excluded' {
+        $r = $mixed
+        $r.Index | Should -Match '\| 22 \| Attack surface reduction rules in audit mode on Windows servers \| 9 \| Change request and client email, confirm the license before sending \| CR-22-asr-audit-servers\.txt, CR-22-asr-audit-servers\.email\.txt \|' -Because 'the server license never reads Licensed from the API reads'
+        $text = Get-Cr22 $r.Out
+        $text | Should -Match '^Title: Deploy attack surface reduction rules in audit mode on Windows servers'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match '^Create the endpoint security policy ATMO-MXDR-ASR-AUDIT-SERVERS in the Microsoft Defender portal, which sets the attack surface reduction \(ASR\) rules listed in the RESOURCES section to Audit through security settings management, assigned to the dynamic device group ATMO-MXDR-ASR-SERVERS of the Windows servers and excluding ATMO-MXDR-ASR-SERVERS-EXCLUDED\. A rule already configured on a server in scope is left Not configured, so no rule in Block is set to Audit\.$'
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match '- Included group: ATMO-MXDR-ASR-SERVERS, a security group with dynamic device membership, rule \(device\.deviceOSType -eq "Windows Server"\)'
+        $res | Should -Match '- Excluded group: ATMO-MXDR-ASR-SERVERS-EXCLUDED, a security group with assigned membership, holding the servers left out below, and the domain controllers unless the client confirms them'
+        @([regex]::Matches($res, '(?m)^- Set to Audit: ')).Count | Should -Be 16 -Because 'the 18 rules Windows Server supports, less the two srv-sql01 already has'
+        $res | Should -Match '- Set to Audit: Block abuse of exploited vulnerable signed drivers'
+        $res | Should -Match '- Set to Audit: Block Webshell creation for Servers, which applies to Exchange servers only'
+        $res | Should -Not -Match 'Set to Audit: Block credential stealing' -Because 'a rule already configured on a server may be in Block, and Audit would lower it'
+        $res | Should -Match '- Left Not configured, already configured on srv-sql01: Block credential stealing from the Windows local security authority subsystem'
+        $res | Should -Match '- Left Not configured, already configured on srv-sql01: Use advanced protection against ransomware'
+        $res | Should -Match '- Left Not configured: Block Win32 API calls from Office macros, which does not apply to Windows Server, and every other setting of the template, controlled folder access included' -Because 'the change keeps to the rules it lists'
+        $res | Should -Match ("Windows servers in scope \(EW\.4-SERVERS and EW\.4-AVMODE\):\nSubscription: Example Production \($s1\)\n- srv-app01, resource group rg-app, WindowsServer2022, antivirus Active, real-time protection On, cloud-delivered protection On, 0 of 18 rules configured today, managed by security settings management\n- srv-sql01, resource group rg-data, WindowsServer2019, antivirus Active, real-time protection On, cloud-delivered protection On, 2 of 18 rules configured today, managed by security settings management")
+        $res | Should -Match '- srv-web01, resource group rg-web, WindowsServer2022, antivirus Active, real-time protection not assessed, cloud-delivered protection not assessed, 0 of 18 rules configured today, not assessed, not yet managed by security settings management'
+        $res | Should -Match ("Domain controllers in scope, listed on their own, included only if the client confirms them:\nSubscription: Example Production \($s1\)\n- dc01, resource group rg-identity, ") -Because 'the domain controllers are listed on their own'
+        $res | Should -Match ("Windows servers left out and added to ATMO-MXDR-ASR-SERVERS-EXCLUDED, for the Defender Antivirus server baseline first:\n- srv-files01 \(resource group rg-files, subscription Example, Dev Test \($s2\)\), WindowsServer2019, antivirus Active, real-time protection On, cloud-delivered protection Off")
+        $res | Should -Match '- srv-legacy01 \(resource group rg-ops, subscription [^)]+\)\), WindowsServer2016, antivirus Passive,' -Because 'ASR rules do not run in passive mode'
+        $res | Should -Match "Windows servers not onboarded to Defender for Endpoint, left out:\n- srv-new01 \(resource group rg-app, subscription [^)]+\)\), Can be onboarded"
+        $impl = (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n"
+        $impl | Should -Match '^1\. Make the change only through the endpoint security policy in these steps\. Do not set ASR rules with Run Command, Set-MpPreference, Add-MpPreference or Group Policy'
+        $impl | Should -Match 'Security settings management needs no AADLoginForWindows extension, which joins a machine to Microsoft Entra ID and so cannot run on a domain controller\.'
+        $impl | Should -Match '\n2\. Sign in to the Microsoft Defender portal as at least a Security Administrator, go to Settings > Endpoints > Configuration Management > Enforcement Scope and confirm that security settings management is on for Windows Server, and turn on domain controllers only if the client confirmed the domain controllers listed\.'
+        $impl | Should -Match '\n4\. Go to Reports > Endpoints > Attack surface reduction rules, select the Configuration tab and set Rules to All\. Export the device configuration of the servers listed into the change record, for the rollback\. A rule listed in the RESOURCES section to set to Audit that now shows Block or Warn on any listed server is left Not configured instead'
+        $impl | Should -Match 'set Membership type to Dynamic Device, select Add dynamic query, enter \(device\.deviceOSType -eq "Windows Server"\) in the rule syntax text box'
+        $impl | Should -Match 'open ATMO-MXDR-ASR-SERVERS > Members and compare it with the RESOURCES section\. Add to ATMO-MXDR-ASR-SERVERS-EXCLUDED any member the client did not approve, such as a Windows server outside Azure'
+        $impl | Should -Match 'go to Endpoints > Configuration management > Endpoint security policies and select Create new policy\. Set Select platform to Windows and Select template to Attack Surface Reduction Rules'
+        $impl | Should -Match 'add ATMO-MXDR-ASR-SERVERS with Target type Include and ATMO-MXDR-ASR-SERVERS-EXCLUDED with Target type Exclude'
+        $testing = (Get-Section $text 'B) TESTING PLAN') -join "`n"
+        $testing | Should -Match 'Confirm the assigned groups read ATMO-MXDR-ASR-SERVERS included and ATMO-MXDR-ASR-SERVERS-EXCLUDED excluded, never 0 groups\.' -Because 'a policy with 0 groups assigned reaches no device'
+        $testing | Should -Match 'confirm Applied devices lists each server in scope'
+        $rollback = (Get-Section $text 'C) ROLLBACK PLAN') -join "`n"
+        $rollback | Should -Match 'Microsoft Learn says removing an assignment may leave a setting as it was, so first set each rule the change set to Audit to Off' -Because 'unassigning alone may leave the rules in Audit'
+        $rollback | Should -Match 'every rule recorded in step 4 as Block still reads Block'
+        foreach ($ref in @(Get-Section $text 'A) REFERENCES')) { $ref | Should -Match ': https://learn\.microsoft\.com/' -Because 'References list Microsoft Learn pages only' }
+        $text | Should -Match 'Attack surface reduction \(ASR\) rules overview: https://learn\.microsoft\.com/defender-endpoint/attack-surface-reduction-rules-overview'
+        $text | Should -Match 'Manage Microsoft Defender for Endpoint on devices with security settings management: https://learn\.microsoft\.com/defender-endpoint/mde-security-settings-management'
+        $text | Should -Not -Match 'Azure Site Recovery' -Because 'ASR here is attack surface reduction, spelled out at first use'
+        $csv = @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-22')
+        $csv.Count | Should -Be 9
+        ($csv | Where-Object Resource -eq 'srv-legacy01').CurrentSetting | Should -Match '^left out, added to ATMO-MXDR-ASR-SERVERS-EXCLUDED, WindowsServer2016, antivirus Passive'
+        ($csv | Where-Object Resource -eq 'dc01').CurrentSetting | Should -Match '^domain controller, '
+        ($csv | Where-Object Resource -eq 'srv-app01').ResourceId | Should -Match '/virtualmachines/srv-app01$'
+    }
+
+    It 'writes an email that explains ASR rules once, asks for the device scope and the domain controllers, and says audit mode blocks nothing' {
+        $email = Get-Cr22 $mixed.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-22'
+        $email | Should -Match '^Subject: Approval requested: attack surface reduction rules in audit mode on your Windows servers\r?\n\r?\nHello Dana,'
+        $email | Should -Match 'I would like your approval to turn on Microsoft Defender attack surface reduction \(ASR\) rules in audit mode on 4 of your Windows servers in Azure, and on each Windows server that joins later\.'
+        @([regex]::Matches($email, 'Attack surface reduction rules are part of Microsoft Defender Antivirus')).Count | Should -Be 1 -Because 'ASR rules are explained once'
+        $email | Should -Match 'Audit mode blocks nothing\. Each rule only records what it would have blocked'
+        $email | Should -Match 'This starts a review period\. Each month I will review the audit records, and a later request will ask you which rules move to block mode, one rule at a time'
+        $email | Should -Match 'Where a rule is already set on one of your servers, in audit or block mode, I would leave that rule as it is, so this change never weakens a rule that already blocks\.'
+        $email | Should -Match 'The list includes a domain controller, shown on its own\. Microsoft supports managing domain controllers this way, but it has to be turned on for them separately, so I would include it only if you confirm\.'
+        $email | Should -Match 'Some of your servers are not part of this change, since the rules work only when Microsoft Defender Antivirus is the active antivirus with its real-time and cloud-delivered protection on, and on 2 of them it is not today\.'
+        $email | Should -Match ("The change covers the servers below, by subscription, and the domain controllers after them:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- srv-app01 \(resource group rg-app\)\r?\n- srv-sql01 \(resource group rg-data\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- srv-web01 \(resource group rg-web\)\r?\n\r?\nDomain controllers, included only if you confirm:\r?\n\r?\n- dc01 \(resource group rg-identity\) in subscription Example Production \($s1\)")
+        $email | Should -Not -Match 'srv-legacy01|srv-files01|srv-new01' -Because 'the servers left out are named in the index, not in the email'
+        $email | Should -Match 'Could you confirm whether the domain controllers listed should be included, and approve this change for the servers listed above on \w+day, '
+        $email | Should -Not -Match 'Azure Site Recovery'
+    }
+
+    It 'names in the index each server left out and why, the rules left Not configured, the domain controllers and how to verify with the next pack' {
+        $index = $mixed.Index
+        $index | Should -Match '- CR-22 leaves out 1 server whose Microsoft Defender Antivirus is not in Active mode \(EW\.4-AVMODE\): srv-legacy01 \(resource group rg-ops, subscription [^)]+\)\), Microsoft Defender Antivirus reads Passive\. ASR rules run only when Microsoft Defender Antivirus is in Active mode, never Passive, EDR in block mode or Off \(ASR rules overview\), so the Defender Antivirus server baseline brings it to Active mode first'
+        $index | Should -Match '- CR-22 leaves out 1 server in Active mode whose configuration assessment reads real-time or cloud-delivered protection Off \(EW\.4-SERVERS\): srv-files01 '
+        $index | Should -Match '- 1 Windows server Defender for Endpoint has seen but not onboarded is left out of CR-22: srv-new01 '
+        $index | Should -Match '- 1 server in scope reads the Domain Controller device role \(EW\.4-SERVERS\): dc01 '
+        $index | Should -Match '- CR-22 leaves 2 rules Not configured in ATMO-MXDR-ASR-AUDIT-SERVERS, since the configuration assessment reads each already configured on a server in scope, in Audit, Block or Warn, and setting it to Audit could lower a rule in Block: Block credential stealing from the Windows local security authority subsystem \(srv-sql01\) / Use advanced protection against ransomware \(srv-sql01\)\.'
+        $index | Should -Match '- The configuration assessment read no ASR rule on 1 server \(EW\.4-SERVERS\): srv-web01\. This is not a reading that no rule is set'
+        $index | Should -Match '- 1 server in scope reads as not managed by security settings management or Intune \(LIC\.4-DEVICES\): srv-web01\.'
+        $index | Should -Match '- Verify CR-22 with the next pack: EW\.5 counts the ASR audit and block events of the last 30 days on the Azure virtual machines, 12 audit and 3 block today'
+        $index | Should -Match 'The block mode change that follows is a separate change request, rule by rule'
+        $index | Should -Match '\| Defender for Endpoint on servers, a server license for each onboarded server \| [^|]+ \| [^|]* \| [^|]* \| CR-22 \|'
+        $index | Should -Match '\| Defender for Endpoint security settings management \| [^|]+ \| [^|]* \| [^|]* \| CR-22 \|'
+        $index | Should -Match '- Confirm Defender for Endpoint on servers, a server license for each onboarded server before sending CR-22'
+    }
+
+    It 'leaves out the domain controller paragraph and question when no domain controller is in scope' {
+        $r = New-AsrPack 'no-dc' 'no-dc'
+        $email = Get-Cr22 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-22 without a domain controller'
+        $email | Should -Match 'on one of your Windows servers in Azure'
+        $email | Should -Not -Match 'domain controller' -Because 'nothing asks about domain controllers that are not there'
+        $email | Should -Match 'Could you approve this change for the servers listed above on \w+day, '
+        $email | Should -Not -Match 'Where a rule is already set' -Because 'no rule is configured on a server'
+        $text = Get-Cr22 $r.Out
+        $text | Should -Match 'confirm that security settings management is on for Windows Server, and leave domain controllers off\.'
+        (Get-Section $text 'C) RESOURCES') | Should -Contain '- Excluded group: ATMO-MXDR-ASR-SERVERS-EXCLUDED, a security group with assigned membership, for any server the client leaves out, empty today' -Because 'no server is left out'
+        @([regex]::Matches($text, '(?m)^- Set to Audit: ')).Count | Should -Be 18
+    }
+
+    It 'reads no gaps when every server in scope has every rule, and writes nothing when no rule is left to set or no server meets the prerequisites' {
+        $r = New-AsrPack 'all' 'all-configured'
+        $r.Index | Should -Match '\| 22 \| Attack surface reduction rules in audit mode on Windows servers \|  \| No gaps found \|  \|'
+        $r.Index | Should -Match '- Every Windows server in scope already has every ASR rule configured, in Audit, Block or Warn: srv-app01 '
+        Test-Path (Join-Path $r.Out 'CR-22-asr-audit-servers.txt') | Should -BeFalse
+        $r = New-AsrPack 'somewhere' 'every-rule-somewhere'
+        $r.Index | Should -Match '\| 22 \| [^|]+ \|  \| Not written, every ASR rule is configured on a server in scope, see the notes \|'
+        $r.Index | Should -Match '- CR-22 is not written because every ASR rule Windows Server supports is already configured on at least one server in scope'
+        $r = New-AsrPack 'left' 'only-left-out'
+        $r.Index | Should -Match '\| 22 \| [^|]+ \|  \| Not written, no server meets the ASR prerequisites, see the notes \|'
+        $r.Index | Should -Match '- CR-22 leaves out 1 server whose Microsoft Defender Antivirus is not in Active mode'
+    }
+
+    It 'needs recollection on a pack before 1.17.0, never reads a failed antivirus mode read as Active, and says when the server read is partial' {
+        $r = New-AsrPack 'old' 'mixed' -Before { param($p) Remove-PackResult $p 'EW.4-SERVERS'; Remove-PackResult $p 'EW.4-AVMODE' }
+        $r.Index | Should -Match '\| 22 \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.17\.0 or later \|'
+        $r = New-AsrPack 'avfail' 'mixed' -Before { param($p) Set-PackResult $p 'EW.4-AVMODE' @() -Status 'UNAVAILABLE' -Detail 'Not a zero: the Microsoft Defender Antivirus mode could not be read. Needs Machine.Read and the View Data role.' }
+        $r.Index | Should -Match '\| 22 \| [^|]+ \|  \| Not collected \(EW\.4-AVMODE UNAVAILABLE\) \|'
+        $r = New-AsrPack 'partial' 'mixed' -Before { param($p) Set-PackResult $p 'EW.4-SERVERS' @($asr.Servers) -Status 'PARTIAL' -Detail 'Advanced Hunting returned 10000 rows, the limit.' }
+        $r.Index | Should -Match '\| 22 \| [^|]+ \| 9 \| Change request and client email, partial collection scope, confirm the license before sending \|'
+        $r.Index | Should -Match '- EW\.4-SERVERS read in part \(Advanced Hunting returned 10000 rows, the limit\), so step 7 compares the members of ATMO-MXDR-ASR-SERVERS'
+        $r = New-AsrPack 'partial-none' 'all-configured' -Before { param($p) Set-PackResult $p 'EW.4-SERVERS' @($asr.Scenarios.'all-configured'.Servers) -Status 'PARTIAL' -Detail 'Advanced Hunting returned 10000 rows, the limit.' }
+        $r.Index | Should -Match '\| 22 \| [^|]+ \|  \| No gaps found in the servers read, partial collection scope \|' -Because 'a partial read never reads as no gaps'
+    }
+
+    It 'is not written when security settings management reads Not licensed, and names the license' {
+        $r = New-AsrPack 'unlicensed' 'mixed' -Before { param($p) Set-EntraP1 $p $false }
+        $r.Index | Should -Match '\| 22 \| [^|]+ \|  \| Not written, needs [^|]*Defender for Endpoint security settings management[^|]*, which reads Not licensed \|'
+        Test-Path (Join-Path $r.Out 'CR-22-asr-audit-servers.txt') | Should -BeFalse
     }
 }

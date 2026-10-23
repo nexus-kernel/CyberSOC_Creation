@@ -22,7 +22,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
   (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
 - **Emergency access accounts.** Every account with Atmosera in its UPN or in an Atmosera group (IA.16-ACCOUNTS and
   IA.16-GROUPS), which every Conditional Access change excludes. See the collector 1.12.0 notes below.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.16.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.17.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -157,7 +157,7 @@ and the SecOps worklist shows it with the Licenses page and enforcement scope po
 | Vulnerability assessment runs | None. Phase 5 then reads the Defender current state (VA.1 to VA.3) only | `-VulnAssessmentPath` (the tool's output folder, a folder of run folders, run folders, per_client folders or run CSVs) |
 | Posture read date | The run date | n/a |
 | Service start date | Not available from any API. The worksheet marks it MANUAL | n/a |
-| Device scope | Every Defender device query (EW.1, EW.1-DEVICES, EW.1-VMS, EW.3, EW.4, EW.5, EW.12, EW.14, EW.15, EW.16, NB.8, NB.10, NB.11, DR.5, DR.12, BKL.1) reads Azure virtual machines only, `isnotempty(AzureResourceId)`. Workstations, laptops and other endpoints that are not Azure resources are never counted (1.14.0). The licensing check (LIC.2-MACHINES, LIC.3-TVM) is the exception: a license covers every device, so it counts them all (CyberSOC 1.11.0) | n/a |
+| Device scope | Every Defender device query (EW.1, EW.1-DEVICES, EW.1-VMS, EW.3, EW.4, EW.4-SERVERS, EW.5, EW.12, EW.14, EW.15, EW.16, NB.8, NB.10, NB.11, DR.5, DR.12, BKL.1) reads Azure virtual machines only, `isnotempty(AzureResourceId)`. Workstations, laptops and other endpoints that are not Azure resources are never counted (1.14.0). The licensing check (LIC.2-MACHINES, LIC.3-TVM) is the exception: a license covers every device, so it counts them all (CyberSOC 1.11.0) | n/a |
 | Third-party endpoint detection | `crowdstrike|falcon|sentinelone|carbon ?black|cortex ?xdr|cybereason|tanium|trellix|cylance`, matched against virtual machine extension publishers and types (`EW.1-EDR`) and against the Sentinel tables and vendors carrying the product's telemetry (`EW.1-EDR-HOSTS`). An Azure virtual machine that is not onboarded to Defender for Endpoint but carries a matching product is covered, not a gap (`EW.1-GAPS`). Recorded as `EdrVendorPattern` in `00-parameters.json` | `-EdrVendorPattern` (RE2, no double quotes) |
 | Patching waived or client owned | A regular expression against the lowercased JSON of each machine's tags. The default matches a tag whose key or value names patching together with waived or client owned (`Patching=Waived`, `PatchPolicy=Client Owned`, `Maintenance=Patching waived`). Matching machines leave `EW.6` and `EW.10` and are listed in `EW.10-EXCLUDED`. Recorded as `PatchExclusionTagPattern` in `00-parameters.json` | `-PatchExclusionTagPattern` (RE2, `''` turns the exclusion off) |
 
@@ -189,6 +189,7 @@ ATMOSERA_SCRIPT_REQUIREMENTS.md 1.4 still forbids Graph; that standard has not b
 | Resource Graph | `management.azure.com/.../Microsoft.ResourceGraph/resources` (paged) | `az account get-access-token`, the subscription's access tenant |
 | Log Analytics | `api.loganalytics.io/v1/workspaces/{id}/query`. A combined query adds the other workspaces in the `workspaces` body field | same |
 | Advanced Hunting | `api.security.microsoft.com/api/advancedqueries/run` | resource `api.securitycenter.microsoft.com`, client tenant |
+| Microsoft Defender Antivirus mode (EW.4-AVMODE) | `api.security.microsoft.com/api/deviceavinfo`, GET, `$top` 10,000 and `$skip` paging | same as Advanced Hunting. Needs Machine.Read and the View Data role, as LIC.2-MACHINES does. A 403 marks EW.4-AVMODE UNAVAILABLE |
 | Defender for Endpoint devices (LIC.2-MACHINES) | `api.security.microsoft.com/api/machines`, GET, `$top` 10,000 and `$skip` paging | same as Advanced Hunting. Needs Machine.Read and the View Data role. Not yet confirmed on a live run that the Azure CLI token carries Machine.Read: a 403 marks LIC.2-MACHINES UNAVAILABLE |
 | Sentinel rules (DR.9) | `{workspace}/providers/Microsoft.SecurityInsights/alertRules` | ARM |
 | Microsoft Graph (IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, IA.16-ACCOUNTS, POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS, LIC.4-DEVICES) | `graph.microsoft.com/v1.0`, GET only, `@odata.nextLink` paging | resource `https://graph.microsoft.com/`, client tenant, same reauth prompt as Defender |
@@ -338,6 +339,20 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.17.0 (October 23, 2026): two results for change request CR-22, which sets the attack surface
+  reduction (ASR) rules to Audit on the Windows servers. `EW.4-SERVERS` (engine AH, phase P2 Endpoint) lists each
+  Windows Server Azure virtual machine Defender for Endpoint saw in the last 7 days, in any onboarding status, with the
+  `{{MRG}}` exclusion: the ASR rules the configuration assessment reads as configured and as not configured, by the rule
+  names of Microsoft Learn (ASR rules overview), real-time protection and cloud-delivered protection (On, Off, or empty
+  when not assessed, never read as either), the Microsoft Entra device ID, which `LIC.4-DEVICES` matches to tell the
+  servers security settings management manages, and whether the device role reads Domain Controller. A server with no
+  configuration assessment is listed with `AsrApplicable` 0, which is not a reading that no rule is set. `EW.4-AVMODE`
+  (engine DEFENDER-AVINFO, `GET api/deviceavinfo`, paged with `$top` and `$skip`) reads the Microsoft Defender Antivirus
+  mode of each Windows device, as Microsoft Learn documents it for the antivirus health export (0 Active, 1 Passive,
+  2 Disabled, 3 or empty Other, 4 EDR in block mode, 5 Passive audit), since ASR rules run only in Active mode. Needs
+  Machine.Read and the View Data role, as `LIC.2-MACHINES` does, and reads UNAVAILABLE, never a zero, without them.
+  CR-22 asks for recollection on an earlier pack. Both are internal, since they name machines. The queries are in
+  section 6 of the CyberSOC Monthly Report Runbook.
 - CyberSOC collector 1.16.0 (October 23, 2026): `IA.8-SIGNINS-NONINTERACTIVE` (engine LA, phase P2 Identity, read from the
   workspace that holds the tenant-wide `SigninLogs`) reads the successful legacy authentication sign-ins of the last 30
   days from `AADNonInteractiveUserSignInLogs`, the way `IA.8-SIGNINS` reads them from `SigninLogs`, which holds the
@@ -613,6 +628,7 @@ example the NB.2 association verdicts.
 | Resource Graph, Defender for Cloud | Reader (or Security Reader) on the subscriptions |
 | Log Analytics, Sentinel rules | Microsoft Sentinel Reader or Log Analytics Reader on the workspace |
 | Advanced Hunting, Defender scores | Security Reader (Defender XDR) in the client tenant |
+| Microsoft Defender Antivirus mode (EW.4-AVMODE) | The View Data role in Defender for Endpoint, and the Machine.Read permission on the token, as for LIC.2-MACHINES |
 | Defender for Endpoint devices (LIC.2-MACHINES) | The View Data role in Defender for Endpoint, and the Machine.Read permission on the token. The devices returned are those the account's device groups allow |
 | Microsoft Graph | Global Reader in the client tenant, plus the delegated permissions in the Graph items table consented to the Azure CLI application. Missing ones are named in the notes |
 | Exchange Online, Purview DLP | Global Reader, or Security Reader plus View-Only Organization Management |
