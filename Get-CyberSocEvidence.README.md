@@ -22,7 +22,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
   (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
 - **Emergency access accounts.** Every account with Atmosera in its UPN or in an Atmosera group (IA.16-ACCOUNTS and
   IA.16-GROUPS), which every Conditional Access change excludes. See the collector 1.12.0 notes below.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.15.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.16.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -309,7 +309,7 @@ in the pack (`results/<ID>.csv`).
 - `IA.9-RULES`, `IA.9-ATP`, `IA.9-SAFELINKS`, `IA.9-SAFEATTACH`: the remaining IA.9 output, plus Safe Links and Safe Attachments policies for DP-F3.
 - `OUT.1-OPEN`, `DR.10-GAPS`, `EW.1-DEVICES`, `DP.5-STALE` (collector 1.8.0): the row-level lists behind OUT.1 open alerts, DR.10 undocumented closures, EW.1 devices not onboarded or with an inactive sensor, and DP.5 stale backup items. They feed the internal SecOps worklist and are never embedded in the client report. `EW.1-VMS`, `EW.1-EDR`, `EW.1-EDR-HOSTS`, `EW.1-GAPS` and `EW.10-EXCLUDED` (collector 1.14.0) are the same kind of list: the report embeds counts only.
 - Collector 1.10.0:
-  - `IA.8-POLICIES` keeps the Conditional Access policies exactly as Graph returned them (with the excluded user, group and role IDs), and `IA.8-DEFAULTS` records whether security defaults are on. `IA.8-SIGNINS` lists every successful device code and legacy protocol sign-in in 30 days per account, with the policyId=result pairs from the sign-in record. The report builder and the SecOps worklist match the two, so a sign-in by an account the block policy excludes is an exclusion to review with the client rather than a failure. New-CyberSocChangeRequests.ps1 reads the same three results for CR-20, the device code block, with no new read. `IA.3` no longer counts the Unknown client app as legacy authentication.
+  - `IA.8-POLICIES` keeps the Conditional Access policies exactly as Graph returned them (with the excluded user, group and role IDs), and `IA.8-DEFAULTS` records whether security defaults are on. `IA.8-SIGNINS` lists every successful device code and legacy protocol sign-in in 30 days per account, with the policyId=result pairs from the sign-in record. The report builder and the SecOps worklist match the two, so a sign-in by an account the block policy excludes is an exclusion to review with the client rather than a failure. New-CyberSocChangeRequests.ps1 reads the same three results for CR-20 (device code) and CR-21 (legacy authentication), the device code block, with no new read. `IA.3` no longer counts the Unknown client app as legacy authentication.
   - `P0.6-APPLIANCES` lists machines on a marketplace firewall, router or SD-WAN image (plan or image publisher matching `$script:EbrAppliancePattern`, recorded as `AppliancePattern` in `00-parameters.json`). They are left out of `EW.7`, `EW.7-DETAIL`, `EW.8`, `DP.4`, `DP.4-DETAIL`, `DP.5b` and the agent, disk, platform integrity and backup rows of `DFC.1` and `DFC.1-DETAIL`. Network recommendations such as management ports still apply to them.
   - `EW.1-DEVICES` covers Azure virtual machines only, in any onboarding status other than Onboarded.
   - `DP.5-STALE` carries a `Finding` per item (Superseded, Source deleted, Protection stopped, Not protected, Backup stale). Superseded means a current healthy item protects the same machine, either the same resource in another vault or a machine of the same name whose old resource is gone. `DP.5b` counts a machine as protected when any of its items is Protected.
@@ -338,6 +338,17 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.16.0 (October 23, 2026): `IA.8-SIGNINS-NONINTERACTIVE` (engine LA, phase P2 Identity, read from the
+  workspace that holds the tenant-wide `SigninLogs`) reads the successful legacy authentication sign-ins of the last 30
+  days from `AADNonInteractiveUserSignInLogs`, the way `IA.8-SIGNINS` reads them from `SigninLogs`, which holds the
+  interactive sign-ins only. A service account sending mail with SMTP AUTH or reading it with POP or IMAP can sign in
+  non-interactively only, and Microsoft Learn has legacy use checked on both tabs of the sign-in logs. One `Account` row
+  per account, client app and set of policy results, and one `Coverage` row per sign-in table (`AADNonInteractiveUserSignInLogs`
+  and `SigninLogs`) with its sign-ins of the 30 days, the first and the last, and `FullWindow`, true only when the first is
+  more than 29 days old. A log the workspace does not receive (no table, read as EMPTY, or no row), or began receiving
+  within the 30 days, never reads as no legacy sign-in. Change request CR-21 removes an exclusion, or creates its policy
+  On, only when both logs cover the whole window, and on an earlier pack asks for recollection. Internal, since it names accounts. The query is in section 6
+  of the CyberSOC Monthly Report Runbook.
 - CyberSOC collector 1.15.0 (October 21, 2026): `DR.6-MYSQLAUDIT` (engine `MYSQL-AUDIT`, phase P2 Detection and
   response) reads the audit log parameters of every MySQL flexible server. Server parameters are not in Resource Graph,
   so it lists the servers from `resources` with the `{{MRG}}` exclusion and reads each one with a GET on

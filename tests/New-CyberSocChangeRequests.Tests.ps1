@@ -235,9 +235,10 @@ BeforeAll {
     # The titles a client email no longer carries (#33). An email reads as a letter: each part is a plain paragraph
     # that opens in its own words.
     $oldEmailTitles = 'What I am asking to change', 'Why I recommend it', 'What it means for you', 'The resources', 'How it can be reversed', 'Your approval', 'Your approval and a maintenance window'
-    # The lines that head each group of resources: a subscription, and for CR-19 a management group, the root scope and
-    # the Microsoft Entra directory roles, which belong to no subscription.
-    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days):$'
+    # The lines that head each group of resources: a subscription, for CR-19 a management group, the root scope and the
+    # Microsoft Entra directory roles, and for CR-20 and CR-21 the policies, sign-ins and exclusions, which belong to no
+    # subscription.
+    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days):$'
     $dayPattern = '(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}'
     # Checks one client email against the shared structure and the copy rules. Every generated email goes through it.
     # The parts are found by what each paragraph says: the ask, why, what it means for the client, the resources by
@@ -304,14 +305,29 @@ BeforeAll {
             else { @{ ServicePlanId = '57ff2da0-773e-42df-b2af-ffb7a2317929'; ServicePlanName = 'TEAMS1'; ProvisioningStatus = 'Success'; AppliesTo = 'User' } })
         Set-PackResult $Path 'LIC.1-SKUS' @(@{ SkuId = 'f245ecc8-75af-4f8e-b61f-27d8114de5f3'; SkuPartNumber = $(if ($Licensed) { 'SPB' } else { 'O365_BUSINESS_ESSENTIALS' }); AppliesTo = 'User'; CapabilityStatus = 'Enabled'; Enabled = 50; Suspended = 0; Warning = 0; LockedOut = 0; Consumed = 41; ServicePlans = $plans })
     }
-    # A scenario written into a pack as collector 1.15.0 writes it: IA.8-POLICIES raw, IA.8-DEFAULTS, IA.8-SIGNINS, the
-    # emergency access read and a licence read.
+    # A scenario written into a pack as collector 1.16.0 writes it: IA.8-POLICIES raw, IA.8-DEFAULTS, IA.8-SIGNINS, the
+    # Coverage row of IA.8-SIGNINS-NONINTERACTIVE, the emergency access read and a licence read.
     function Add-DcScenario([string]$Path, [string]$Name, [bool]$Licensed = $true) {
         $dc = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/device-code/scenarios.json') -Raw | ConvertFrom-Json
         $sc = $dc.Scenarios.$Name
         Set-PackResult $Path 'IA.8-POLICIES' @($sc.Policies)
         Set-PackResult $Path 'IA.8-DEFAULTS' @(@{ SecurityDefaults = [bool]$sc.SecurityDefaults })
         Set-PackResult $Path 'IA.8-SIGNINS' @($dc.SignIns)
+        Set-PackResult $Path 'IA.8-SIGNINS-NONINTERACTIVE' @(foreach ($table in 'AADNonInteractiveUserSignInLogs', 'SigninLogs') { @{ Kind = 'Coverage'; Table = $table; Flow = ''; ClientAppUsed = ''; UserId = ''; UserPrincipalName = ''; UserType = ''; PolicyResults = ''; SignIns = 1200; FirstSignIn = '2026-09-12T06:30:00Z'; LastSignIn = '2026-10-12T06:00:00Z'; FullWindow = $true; Apps = '' } })
+        $null = Add-EaScenario $Path $sc.EmergencyAccess
+        Set-EntraP1 $Path $Licensed
+        $sc
+    }
+    # A CR-21 scenario written the same way, from the legacy authentication fixtures.
+    function Add-LaScenario([string]$Path, [string]$Name, [bool]$Licensed = $true) {
+        $la = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/legacy-auth/scenarios.json') -Raw | ConvertFrom-Json
+        $sc = $la.Scenarios.$Name
+        Set-PackResult $Path 'IA.8-POLICIES' @($sc.Policies)
+        Set-PackResult $Path 'IA.8-DEFAULTS' @(@{ SecurityDefaults = [bool]$sc.SecurityDefaults })
+        Set-PackResult $Path 'IA.8-SIGNINS' @($la.SignIns)
+        # A scenario's own NonInteractive (empty: the workspace has no non-interactive sign-in table) replaces the shared one.
+        $ni = if ($sc.PSObject.Properties['NonInteractive']) { @($sc.NonInteractive) } else { @($la.NonInteractive) }
+        Set-PackResult $Path 'IA.8-SIGNINS-NONINTERACTIVE' $ni -Detail $(if ($ni.Count) { '' } else { "Failed to resolve table or column expression named 'AADNonInteractiveUserSignInLogs'." })
         $null = Add-EaScenario $Path $sc.EmergencyAccess
         Set-EntraP1 $Path $Licensed
         $sc
@@ -1208,7 +1224,7 @@ Describe 'Change request variants' {
         $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
     }
 
-    It 'writes a client email for every change request, CR-01 to CR-20' {
+    It 'writes a client email for every change request, CR-01 to CR-21' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
         # written at least once. A change request written without its email, or with an email that does not
@@ -1222,7 +1238,8 @@ Describe 'Change request variants' {
         Set-PackResult $more 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 6; Compliant = 5; NonCompliant = 1 })
         Set-PackResult $more 'DR.6-COVERAGE' @(@{ subscriptionId = $s1; Resources = 5; Assignments = 1 })
         Set-PackResult $more 'DR.6-NONCOMPLIANT' @(@{ ResourceId = "/subscriptions/$s1/resourcegroups/rg-app/providers/microsoft.keyvault/vaults/kv-app"; ResourceType = 'microsoft.keyvault/vaults'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; AssignmentId = "/subscriptions/$s1/providers/microsoft.authorization/policyassignments/a1"; Policies = 'ATMO-MXDR-KV-TOSENT' })
-        # No policy blocks device code flow, the emergency access read is complete and Entra ID P1 is licensed, so CR-20 is written.
+        # No policy blocks device code flow or legacy authentication, the emergency access read is complete and Entra ID P1
+        # is licensed, so CR-20 and CR-21 are written.
         $null = Add-DcScenario $more 'no-policy'
         $null = & $generator -EvidencePath $more -PurgeProtectionApproved
         $written = @()
@@ -1242,7 +1259,7 @@ Describe 'Change request variants' {
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
-        @($written | Sort-Object -Unique) | Should -Be @(1..20) -Because 'the two packs between them write every change request'
+        @($written | Sort-Object -Unique) | Should -Be @(1..21) -Because 'the two packs between them write every change request'
         $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
@@ -3304,7 +3321,7 @@ Describe 'Licensing check and capability gate (collector 1.11.0)' {
         $section | Should -Match 'Defender for Endpoint plan: Plan 2, from the API reads\. Licenses: Plan 2 licensed'
         $section | Should -Match '- Onboarded servers without a server license: 1\. Named in LIC\.5-SERVERS: vm-sql01\.'
         $section | Should -Match '- Client devices tagged License MDE P1: 0\.'
-        $section | Should -Match '\| Microsoft Entra ID P1, for Conditional Access \| Licensed \| 250 \| 231 \| CR-20 \| In SPE_E5'
+        $section | Should -Match '\| Microsoft Entra ID P1, for Conditional Access \| Licensed \| 250 \| 231 \| CR-20, CR-21 \| In SPE_E5'
         $section | Should -Match '\| Defender for Servers Plan 2 \| Partly licensed \|  \|  \| CR-16 \(no gate\) \| On in 1 of 2 subscriptions\. Off in a0b1c2d3'
         $section | Should -Match '\| Defender for Endpoint Plan 2 or Defender for Servers, the vulnerability and configuration data behind EW\.3, EW\.4 and EW\.5 \| Partly licensed \|  \|  \| EW\.3, EW\.4 and EW\.5 evidence \|'
         $section | Should -Match '\| Defender for Endpoint on servers, a server license for each onboarded server \| Partly licensed \|'
@@ -3426,7 +3443,7 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
         $section = Get-EaSection (Get-Index $pack)
         $section | Should -Match 'every account with Atmosera in its UPN and every member of an Atmosera group, a group whose display name contains Atmosera'
         $section | Should -Match 'no change removes an existing exclusion of any of them'
-        $section | Should -Match 'CR-20 is written only when the read is complete and found at least one account\.'
+        $section | Should -Match 'CR-20 and CR-21 are written only when the read is complete and found at least one account\.'
         $section | Should -Match ('\| Atmosera Emergency Access \| 3 \| Assigned \| {0} \|' -f @($sc.Graph.Groups)[0].id)
         $section | Should -Match '\| SOC-atmosera-Tier0 \| 1 \| Dynamic \|'
         $section | Should -Match '\| breakglass-atmosera01@contoso\.onmicrosoft\.com \| Emergency Access 01 \| Member \| Yes \| UPN \|  \| the account \|'
@@ -3459,7 +3476,7 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
             Test-Path (Join-Path $pack '05-change-requests/CR-03-storage-minimum-tls.txt') | Should -BeTrue -Because 'a change request that is not a Conditional Access change is unaffected'
             $section = Get-EaSection $index
             if ($case.Name) { $section | Should -Match 'No Conditional Access change can be written: ' -Because $case.Name }
-            else { $section | Should -Match 'The pack was collected before the emergency access read, so no Conditional Access change can be written\. Recollect with CyberSOC collector 1\.12\.0 or later\. CR-02 and CR-20 are written only with the emergency access accounts\.' }
+            else { $section | Should -Match 'The pack was collected before the emergency access read, so no Conditional Access change can be written\. Recollect with CyberSOC collector 1\.12\.0 or later\. CR-02, CR-20 and CR-21 are written only with the emergency access accounts\.' }
         }
         $index | Should -Not -Match '\| Atmosera group \|'
         $pack = Join-Path $TestDrive 'ea-gate-ok'
@@ -3467,7 +3484,7 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
         $null = Add-EaScenario $pack 'complete'
         Invoke-WithWindowsPowerShellJson { $null = & $script:eaGated -EvidencePath $pack }
         Test-Path (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.email.txt') | Should -BeTrue -Because 'a complete read with accounts lets the change through'
-        (Get-EaSection (Get-Index $pack)) | Should -Match 'CR-02 and CR-20 are written only when the read is complete'
+        (Get-EaSection (Get-Index $pack)) | Should -Match 'CR-02, CR-20 and CR-21 are written only when the read is complete'
     }
 
     Context 'CR-19 leaves the emergency access accounts out' {
@@ -3631,7 +3648,7 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         $csv = @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-20')
         @($csv.Resource) | Should -Be @('ATMO-MXDR-CA-BLOCK-DEVICECODE', 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS', 'ATMO-MXDR-DEVICECODE-APPROVED')
         $r.Index | Should -Match '- 1 account with device code sign-ins in the last 30 days is an emergency access account, which every Conditional Access change excludes, so CR-20 leaves it out of its email: breakglass-atmosera01@contoso\.onmicrosoft\.com \(1 sign-in\)\.'
-        $r.Index | Should -Match '\| Microsoft Entra ID P1, for Conditional Access \| Licensed \|[^\n]*\| CR-20 \|'
+        $r.Index | Should -Match '\| Microsoft Entra ID P1, for Conditional Access \| Licensed \|[^\n]*\| CR-20, CR-21 \|'
     }
 
     It 'writes a client email that explains device code once, lists the accounts and asks which still need it before the approval' {
@@ -3811,5 +3828,284 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         (& $gap $noFlow).Policies.Count | Should -Be 0 -Because 'any other policy that does not block device code flow is not part of the change'
         (& $gap (& $base -State 'enabledForReportingButNotEnforced' -Name 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS')).Policies.Count | Should -Be 0 -Because 'the report-only companion is never a gap'
         @((& $gap (& $base -Users @{ excludeUsers = @(); excludeGroups = @() })).Policies[0].MissingAccess).Count | Should -Be 6
+    }
+}
+
+Describe 'Legacy authentication blocked by Conditional Access (CR-21)' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '../report/Get-CyberSocCaChange.ps1')
+        . (Join-Path $PSScriptRoot '../report/Get-CyberSocEmergencyAccess.ps1')
+        $script:la = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/legacy-auth/scenarios.json') -Raw | ConvertFrom-Json
+        function New-LaPack([string]$Name, [string]$Scenario, [bool]$Licensed = $true) {
+            $pack = Join-Path $TestDrive "la-$Name"
+            New-ChangeFixture $pack
+            $sc = Add-LaScenario $pack $Scenario $Licensed
+            Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -ClientContact 'Dana' -SenderName 'Scott Example' }
+            [pscustomobject]@{ Pack = $pack; Out = Join-Path $pack '05-change-requests'; Scenario = $sc; Index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw }
+        }
+        function Get-Cr21([string]$Out, [string]$Suffix = '.txt') { Get-Content (Join-Path $Out "CR-21-legacy-authentication$Suffix") -Raw }
+        function Get-PolicyId($Scenario, [string]$Name) { @($Scenario.Policies | Where-Object displayName -eq $Name)[0].id }
+        $script:eaGroups = '60cc37ba-dee8-5330-bd03-51890d7c6baa', '0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32', '8609bd57-3931-50b5-8dbd-1a14d439760d'
+        $script:eaUsers = 'ce843e0d-f976-5bcd-87e9-8dd7714bb782', '6ed69dbd-f1b1-5207-9f50-41d3c37d461b', 'b598e961-2bb3-539e-8bf3-b7b38ab7b94d'
+    }
+
+    It 'creates the baseline policy On when no policy blocks legacy authentication, with the emergency access accounts and the Directory Synchronization Accounts role excluded' {
+        $r = New-LaPack 'none' 'no-policy'
+        $r.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \| 1 \| Change request and client email \| CR-21-legacy-authentication\.txt, CR-21-legacy-authentication\.email\.txt \|'
+        $text = Get-Cr21 $r.Out
+        $text | Should -Match '^Title: Block legacy authentication with Conditional Access'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match '^Create the Conditional Access policy ATMO-MXDR-CA-BLOCK-LEGACY, On, which blocks legacy authentication for all users and all resources, excluding the emergency access accounts, the Directory Synchronization Accounts role and the accounts the client confirms still need legacy authentication\.$'
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match 'Policy ATMO-MXDR-CA-BLOCK-LEGACY, to create, On:\n- Users: All users'
+        foreach ($g in $eaGroups) { $res | Should -Match "- Excluded: Atmosera group [^\n]+ \($g\)" -Because 'every Atmosera group is excluded' }
+        foreach ($u in $eaUsers) { $res | Should -Match "- Excluded: emergency access account [^\n]+ \($u\)" -Because 'every account matched by its UPN is excluded on its own' }
+        $res | Should -Match '- Excluded: directory role Directory Synchronization Accounts \(d29b2b05-8046-44ba-8758-1e26182fcf32\)'
+        $res | Should -Match ("- To exclude only if the client confirms it still needs legacy authentication: scanner-smtp@contoso\.onmicrosoft\.com \({0}\), 422 legacy sign-ins in the last 30 days with Authenticated SMTP" -f $la.Ids.Scanner) -Because 'the two rows of one account are added up'
+        $res | Should -Match '- Target resources: All resources\n- Conditions: Client apps set to Exchange ActiveSync clients and Other clients\n- Grant: Block access'
+        $res | Should -Match '- breakglass-atmosera01@contoso\.onmicrosoft\.com \(Member\), 2 sign-ins with Exchange ActiveSync, applications Office 365 Exchange Online, last 2026-09-30, emergency access account, stays excluded'
+        $res | Should -Not -Match 'old\.contractor' -Because 'a device code sign-in is not a legacy sign-in'
+        $res | Should -Not -Match 'EXCEPTIONS|APPROVED' -Because 'CR-21 has no companion policy or exception group'
+        $impl = (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n"
+        $impl | Should -Match '^1\. Sign in to the Microsoft Entra admin center as at least a Conditional Access Administrator, go to Entra ID > Overview > Properties and select Manage security defaults\. Confirm Security defaults reads Disabled\.'
+        $impl | Should -Match '\n2\. Go to Entra ID > Conditional Access > Policies\.\n3\. Select New policy and name it ATMO-MXDR-CA-BLOCK-LEGACY\.\n'
+        $impl | Should -Match '5\. Under Exclude, select Users and groups and add each Atmosera group and each emergency access account listed in the RESOURCES section\. Select Directory roles and add Directory Synchronization Accounts\. Add each account the RESOURCES section lists to exclude only if the client confirmed it still needs legacy authentication\.\n' -Because 'the emergency access exclusion is mandatory'
+        $impl | Should -Match '7\. Under Conditions, select Client apps, set Configure to Yes, select only Exchange ActiveSync clients and Other clients, and select Done\. Leave every other condition not configured\.'
+        $impl | Should -Match '9\. Set Enable policy to On and select Create\.' -Because 'the 30 days of legacy sign-ins in the pack are the review, so the policy is created On'
+        $impl | Should -Match '10\. Once ATMO-MXDR-CA-BLOCK-LEGACY shows On, check the policy list for a policy that shows Microsoft in the Created by column and blocks legacy authentication[^\n]+Baseline security mode'
+        $impl | Should -Match '11\. Open ATMO-MXDR-CA-BLOCK-LEGACY again and read its exclusions' -Because 'the exclusions are read again after saving'
+        $impl | Should -Not -Match 'Before removing an exclusion' -Because 'a new policy removes nothing'
+        $testing = (Get-Section $text 'B) TESTING PLAN') -join "`n"
+        $testing | Should -Match 'confirm ATMO-MXDR-CA-BLOCK-LEGACY reads On'
+        $testing | Should -Match 'confirm its exclusions match the list approved for the change'
+        $testing | Should -Match 'select What If\. Set the user to a test account the policy does not exclude, the target resource to Office 365 Exchange Online, the device platform to Windows and the client app to Other clients'
+        @(Get-Section $text 'C) ROLLBACK PLAN')[0] | Should -Match 'open ATMO-MXDR-CA-BLOCK-LEGACY, set Enable policy to Off and select Save\.'
+        foreach ($ref in @(Get-Section $text 'A) REFERENCES')) { $ref | Should -Match ': https://learn\.microsoft\.com/' -Because 'References are Microsoft Learn pages only' }
+        foreach ($title in 'Block legacy authentication with Conditional Access', 'Deprecation of Basic authentication in Exchange Online', 'Manage emergency access accounts in Microsoft Entra ID', 'Microsoft-managed Conditional Access policies') { $text | Should -Match ([regex]::Escape($title) + ': https://learn\.microsoft\.com/') }
+        @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-21').Resource | Should -Be 'ATMO-MXDR-CA-BLOCK-LEGACY'
+        $r.Index | Should -Match '- 1 account with legacy sign-ins in the last 30 days is an emergency access account, which every Conditional Access change excludes, so CR-21 leaves it out of its email: breakglass-atmosera01@contoso\.onmicrosoft\.com \(2 sign-ins\)\.'
+        $r.Index | Should -Match '\| Microsoft Entra ID P1, for Conditional Access \| Licensed \|[^\n]*\| CR-20, CR-21 \|'
+    }
+
+    It 'writes a client email that explains legacy authentication once and asks about the service accounts still using it before the approval' {
+        $r = New-LaPack 'email' 'no-policy'
+        $email = Get-Cr21 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-21'
+        $email | Should -Match '^Subject: Approval requested: blocking legacy authentication\r?\n\r?\nHello Dana,'
+        $email | Should -Match 'I would like your approval to block legacy authentication for everyone in your organization, except the accounts you confirm still need it and the emergency access accounts Atmosera keeps for your tenant\.'
+        ([regex]::Matches($email, 'Legacy authentication is the older way')).Count | Should -Be 1 -Because 'legacy authentication is explained once'
+        $email | Should -Match 'I recommend this change because legacy authentication cannot ask for multifactor authentication'
+        $email | Should -Match 'more than 99 percent of password spray attacks use legacy authentication protocols'
+        $email | Should -Match 'Atmosera''s emergency access accounts stay excluded'
+        $email | Should -Match 'which holds the Directory Synchronization Accounts role, stays excluded too'
+        $email | Should -Match 'Exchange Online has already turned off basic authentication for POP, IMAP, Exchange ActiveSync and its other protocols except SMTP AUTH'
+        $email | Should -Match "These accounts completed a legacy authentication sign-in in the last 30 days:\r?\n\r?\n- scanner-smtp@contoso\.onmicrosoft\.com, 422 sign-ins with Authenticated SMTP, not excluded today\r?\n- dana\.finance@contoso\.onmicrosoft\.com, 220 sign-ins with IMAP4, not excluded today\r?\n"
+        $email | Should -Not -Match 'breakglass' -Because 'the emergency access accounts stay excluded and are never listed'
+        $email | Should -Match 'Before I schedule the change, could you confirm which of the accounts listed above are service accounts, devices or applications that still send mail with SMTP AUTH or read it with POP or IMAP, and whether each one should move to modern authentication\? I will keep excluded only the accounts you confirm still need legacy authentication for now\. With that confirmed, could you approve this change for ' -Because 'the email asks before it asks for approval'
+        $email | Should -Not -Match 'Removing an exclusion' -Because 'a new policy removes no exclusion'
+        # Only the emergency access account, a device code sign-in and the non-interactive coverage in the pack: nobody else
+        # used legacy authentication.
+        $quiet = Join-Path $TestDrive 'la-quiet'
+        New-ChangeFixture $quiet
+        $null = Add-LaScenario $quiet 'no-policy'
+        Set-PackResult $quiet 'IA.8-SIGNINS' @($la.SignIns | Where-Object { $_.UserPrincipalName -notmatch 'scanner|dana' })
+        Set-PackResult $quiet 'IA.8-SIGNINS-NONINTERACTIVE' @($la.NonInteractive | Where-Object Kind -eq 'Coverage')
+        $null = & $generator -EvidencePath $quiet
+        $text = Get-Content (Join-Path $quiet '05-change-requests/CR-21-legacy-authentication.email.txt') -Raw
+        Assert-ApprovalEmail $text 'CR-21 with no legacy sign-in'
+        $text | Should -Match 'No account in your organization, other than the emergency access accounts, completed a legacy authentication sign-in in the last 30 days, so I expect no one to notice the change\.'
+        $text | Should -Match 'could you tell me whether any service account, device or application in your organization, such as a printer or scanner that sends mail, still uses SMTP AUTH, POP or IMAP with a username and password\?'
+        $text | Should -Not -Match 'These accounts completed a legacy authentication sign-in'
+    }
+
+    It 'removes only the exclusions with no legacy sign-in from an enforced policy, and keeps the emergency access accounts, the directory sync role and the accounts still in use' {
+        $r = New-LaPack 'stale' 'stale-exclusions'
+        $id = Get-PolicyId $r.Scenario 'ATMO-MXDR-CA-BLOCK-LEGACY'
+        $r.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \| 3 \| Change request and client email \|'
+        $text = Get-Cr21 $r.Out
+        $text | Should -Match '^Title: Remove exclusions no longer needed from the legacy authentication block'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match '^Remove from the Conditional Access policy ATMO-MXDR-CA-BLOCK-LEGACY the exclusions of the accounts listed in the RESOURCES section, which had no legacy sign-in in the last 30 days'
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match "Policy ATMO-MXDR-CA-BLOCK-LEGACY \($id\), On today, which leaves out 2 accounts beyond the exclusions the baseline keeps\. Its exclusions no longer used are removed:"
+        $res | Should -Match ("- Excluded today, to remove, no legacy sign-in in the last 30 days: account old\.contractor@contoso\.onmicrosoft\.com \({0}\)" -f $la.Ids.Stale) -Because 'an account the raw policy names by ID is named from the sign-ins where the pack can'
+        $res | Should -Match ("- Excluded today, to remove, no legacy sign-in in the last 30 days: account pat\.moreno@contoso\.com, disabled \({0}\)" -f $la.Ids.StaleDisabled)
+        $res | Should -Match ("- Excluded today and kept, for the client to confirm: scanner-smtp@contoso\.onmicrosoft\.com \({0}\), 422 legacy sign-ins" -f $la.Ids.Scanner) -Because 'an account with legacy sign-ins in the last 30 days stays excluded'
+        $res | Should -Match ("- Excluded today and kept, emergency access account through an Atmosera group: tier0\.admin@contoso\.onmicrosoft\.com \({0}\)" -f $la.Ids.Tier0) -Because 'an emergency access account is never removed, even with no legacy sign-in'
+        $res | Should -Match ("- Excluded today and kept, for the client to confirm: mfp-scan@contoso\.onmicrosoft\.com \({0}\), 96 legacy sign-ins in the last 30 days with Authenticated SMTP" -f $la.Ids.Printer) -Because 'an account whose legacy sign-ins are all non-interactive still uses legacy authentication'
+        $res | Should -Not -Match "to remove[^\n]+$($la.Ids.Printer)"
+        $res | Should -Not -Match "to remove[^\n]+$($la.Ids.Tier0)"
+        foreach ($u in $eaUsers) { $res | Should -Not -Match "to remove[^\n]+$u" }
+        $impl = (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n"
+        $impl | Should -Match '3\. Before removing an exclusion, go to Entra ID > Monitoring & health > Sign-in logs, add the Client app column, select Add filters > Client app and choose every legacy authentication protocol[^\n]+User sign-ins \(non-interactive\)' -Because 'each account is checked for a legacy sign-in again before its exclusion goes'
+        $impl | Should -Match "4\. Open the policy ATMO-MXDR-CA-BLOCK-LEGACY \($id\)\.\n" -Because 'the baseline policy is edited, not renamed or duplicated'
+        $impl | Should -Match 'Remove each exclusion the RESOURCES section lists to remove, and leave every other exclusion as it is\. Never remove an Atmosera group or an emergency access account\.'
+        $impl | Should -Match '12\. Open ATMO-MXDR-CA-BLOCK-LEGACY again and read its exclusions[^\n]+No account the RESOURCES section lists to remove is still excluded, unless step 3 kept it\.'
+        $rollback = (Get-Section $text 'C) ROLLBACK PLAN') -join "`n"
+        $rollback | Should -Match 'set its name, state, users, exclusions, target resources, conditions and grant back to those recorded in step 2, then select Save\. This restores every exclusion the change removed\.'
+        $csv = @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-21')
+        $csv.Count | Should -Be 3
+        @($csv | Where-Object ResourceId -eq $la.Ids.Stale).CurrentSetting | Should -Be 'excluded from ATMO-MXDR-CA-BLOCK-LEGACY, exclusion removed'
+        $r.Index | Should -Match ("ATMO-MXDR-CA-BLOCK-LEGACY \($id\) excludes 2 accounts with no legacy sign-in in the last 30 days, which CR-21 removes: account old\.contractor@contoso\.onmicrosoft\.com \({0}\), account pat\.moreno@contoso\.com, disabled \({1}\)\." -f $la.Ids.Stale, $la.Ids.StaleDisabled)
+        $email = Get-Cr21 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-21 stale exclusions'
+        $email | Should -Match '^Subject: Approval requested: removing exclusions no longer needed from the legacy authentication block'
+        $email | Should -Match 'I would like your approval to remove 2 accounts from the exclusions of ATMO-MXDR-CA-BLOCK-LEGACY, the Conditional Access policy that blocks legacy authentication in your tenant, since none of them signed in with legacy authentication in the last 30 days\.'
+        $email | Should -Match 'Removing an exclusion affects only an account that signs in with legacy authentication, and the sign-in records show none in the last 30 days for the 2 accounts listed below\.'
+        $email | Should -Match "It removes the exclusions of these accounts:\r?\n\r?\n- old\.contractor@contoso\.onmicrosoft\.com, object ID $($la.Ids.Stale)\r?\n- pat\.moreno@contoso\.com, disabled, object ID $($la.Ids.StaleDisabled)\r?\n"
+        $email | Should -Match '- scanner-smtp@contoso\.onmicrosoft\.com, 422 sign-ins with Authenticated SMTP, excluded today'
+        $email | Should -Match '- mfp-scan@contoso\.onmicrosoft\.com, 96 sign-ins with Authenticated SMTP, excluded today'
+        $email | Should -Match 'Atmosera''s emergency access accounts stay excluded'
+        $email | Should -Not -Match 'tier0' -Because 'the emergency access accounts are never listed in the email'
+    }
+
+    It 'reads No gaps found when every exclusion beyond the emergency access accounts is the directory sync role or an account still using legacy authentication, and names those accounts' {
+        $r = New-LaPack 'in-use' 'exclusions-in-use'
+        Test-Path (Join-Path $r.Out 'CR-21-legacy-authentication.txt') | Should -BeFalse
+        $r.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| No gaps found \|  \|'
+        $r.Index | Should -Match '- CR-21 found legacy authentication blocked for all users and all resources by ATMO-MXDR-CA-BLOCK-LEGACY \([^)]+\), with no exclusion that can be removed\.'
+        $r.Index | Should -Match 'keeps excluded 2 accounts that still signed in with legacy authentication in the last 30 days: scanner-smtp@contoso\.onmicrosoft\.com [^\n]+dana\.finance@contoso\.onmicrosoft\.com [^\n]+Confirm with the client that each still needs it, and whether it should move to modern authentication'
+    }
+
+    It 'turns a report-only baseline policy On, adds the missing emergency access accounts and sets the Microsoft-managed policy Off' {
+        $r = New-LaPack 'report-only' 'report-only-managed'
+        $id = Get-PolicyId $r.Scenario 'ATMO-MXDR-CA-BLOCK-LEGACY'
+        $managedId = Get-PolicyId $r.Scenario 'Microsoft-managed: Block legacy authentication'
+        $text = Get-Cr21 $r.Out
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match '^Bring the existing Conditional Access policy named in the RESOURCES section to the baseline ATMO-MXDR-CA-BLOCK-LEGACY[^\n]+ Set the Microsoft-managed legacy authentication policy Off\.$'
+        $text | Should -Match "Policy ATMO-MXDR-CA-BLOCK-LEGACY \($id\), Report-only today, which is in report-only mode, so it records what it would do without blocking anything\. It is brought to the baseline below:"
+        $text | Should -Match "Microsoft-managed policy Microsoft-managed: Block legacy authentication \($managedId\), Report-only today, set to Off once ATMO-MXDR-CA-BLOCK-LEGACY is On\."
+        $text | Should -Match '10\. Once ATMO-MXDR-CA-BLOCK-LEGACY shows On, open each policy that shows Microsoft in the Created by column and blocks legacy authentication \(Microsoft-managed: Block legacy authentication\), set Enable policy to Off and select Save\.'
+        $r.Index | Should -Not -Match "The policy ATMO-MXDR-CA-BLOCK-LEGACY \($id\) blocks legacy authentication but does not exclude" -Because 'the policy CR-21 edits gets the exclusions in its steps'
+        $r.Index | Should -Match "The policy Microsoft-managed: Block legacy authentication \($managedId\) blocks legacy authentication but does not exclude 6 emergency access groups or accounts" -Because 'a managed policy the client keeps needs them too'
+        @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-21').Count | Should -Be 2
+        $email = Get-Cr21 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-21 report-only'
+        $email | Should -Match 'Your tenant already has the Conditional Access policy ATMO-MXDR-CA-BLOCK-LEGACY, which is in report-only mode'
+        $email | Should -Match 'Microsoft has also added its own legacy authentication policy to your tenant, which Microsoft turns on by itself if it is left in report-only mode\. I would turn it off once the change is made, since every policy that applies to a sign-in must be satisfied'
+        $email | Should -Match '- ATMO-MXDR-CA-BLOCK-LEGACY, set to block legacy authentication for all users and turned on\r?\n- Microsoft-managed: Block legacy authentication, the Microsoft policy, turned off'
+    }
+
+    It 'brings a policy that blocks Exchange ActiveSync only to the baseline, renames it, removes the stale account and leaves the plain group for review' {
+        $r = New-LaPack 'eas' 'activesync-only'
+        $id = Get-PolicyId $r.Scenario 'Block ActiveSync basic auth'
+        $text = Get-Cr21 $r.Out
+        $text | Should -Match "Policy Block ActiveSync basic auth \($id\), On today, which applies only on some platforms, client apps, locations, risk levels or devices and leaves out 1 account and 1 group beyond the emergency access accounts\. It is brought to the baseline below and renamed ATMO-MXDR-CA-BLOCK-LEGACY:" -Because 'a policy that leaves out Other clients blocks legacy authentication in part only'
+        $text | Should -Match "4\. Open the policy Block ActiveSync basic auth \($id\)\. Rename it ATMO-MXDR-CA-BLOCK-LEGACY"
+        $text | Should -Match ("- Excluded today, to remove, no legacy sign-in in the last 30 days: account old\.contractor@contoso\.onmicrosoft\.com \({0}\)" -f $la.Ids.Stale)
+        $text | Should -Match ("- Excluded today and left as it is, for review with the client: group {0}" -f $la.Ids.ItAdmins) -Because 'a group the pack holds no members for is never removed'
+        $r.Index | Should -Match ("also excludes 1 group, role or guest setting that the pack cannot check: group {0}\. CR-21 leaves it excluded\." -f $la.Ids.ItAdmins)
+        $email = Get-Cr21 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-21 ActiveSync only'
+        $email | Should -Match 'Your tenant already has the Conditional Access policy Block ActiveSync basic auth'
+        $email | Should -Match '- Block ActiveSync basic auth, renamed ATMO-MXDR-CA-BLOCK-LEGACY, set to block legacy authentication for all users and turned on'
+        $email | Should -Match 'Removing an exclusion affects only an account that signs in with legacy authentication, and the sign-in records show none in the last 30 days for the account listed below\.'
+    }
+
+    It 'names the groups and roles an enforced baseline policy excludes for review, never reading them as approved or no gaps' {
+        $r = New-LaPack 'groups' 'groups-to-review'
+        Test-Path (Join-Path $r.Out 'CR-21-legacy-authentication.txt') | Should -BeFalse
+        $r.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, ATMO-MXDR-CA-BLOCK-LEGACY excludes 2 groups, roles or guest settings to confirm, see the notes \|  \|'
+        $r.Index | Should -Match ("ATMO-MXDR-CA-BLOCK-LEGACY \([^)]+\) is On and blocks legacy authentication for all users and all resources except the emergency access accounts and 2 more exclusions: group {0}, directory role {1}\. CR-21 is not written, but the policy is not read as in force for everyone" -f $la.Ids.ItAdmins, $la.Ids.GlobalAdminRole) -Because 'the directory sync role is kept, another role is reviewed'
+        $r.Index | Should -Not -Match '- CR-21 found legacy authentication blocked'
+    }
+
+    It 'writes no CR-21 while security defaults are on, without Entra ID P1, without the emergency access set, or when it cannot tell which policy to edit' {
+        $sd = New-LaPack 'defaults' 'security-defaults-on'
+        $sd.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, security defaults are on, see the notes \|  \|'
+        $sd.Index | Should -Match 'CR-21 is not written because security defaults are on \(IA\.8-DEFAULTS\), and Microsoft Learn says they already block every authentication request made by an older protocol'
+        $ea = New-LaPack 'ea-failed' 'emergency-access-failed'
+        $ea.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, the emergency access read is not complete \(IA\.16-ACCOUNTS UNAVAILABLE, IA\.16-GROUPS FAILED\) \|  \|'
+        $ea.Index | Should -Match 'CR-21 is not written because the emergency access read is not complete'
+        $lic = New-LaPack 'unlicensed' 'no-policy' $false
+        $lic.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, needs Microsoft Entra ID P1, for Conditional Access, which reads Not licensed \|  \|'
+        $lic.Index | Should -Match '- Without Microsoft Entra ID P1 for the users in scope, security defaults stand in for CR-21: Microsoft Learn says customers without licenses that include Conditional Access can use security defaults to block legacy authentication \(Block legacy authentication with Conditional Access\)\. IA\.8-DEFAULTS reads them off'
+        $amb = New-LaPack 'ambiguous' 'ambiguous'
+        $amb.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, 2 policies block legacy authentication in part, see the notes \|'
+        $amb.Index | Should -Match 'CR-21 is not written because 2 policies already block legacy authentication in part, and none is named ATMO-MXDR-CA-BLOCK-LEGACY: Block legacy auth - pilot \([^)]+\), which applies to selected users only / Block legacy auth - all \([^)]+\), which is in report-only mode'
+        foreach ($r in $sd, $ea, $lic, $amb) { @(Get-ChildItem $r.Out -Filter 'CR-21-*').Count | Should -Be 0 }
+    }
+
+    It 'writes no CR-21 on a partial policy or sign-in read, since a missed sign-in would read as an exclusion no longer used' {
+        foreach ($id in 'IA.8-POLICIES', 'IA.8-SIGNINS', 'IA.8-SIGNINS-NONINTERACTIVE') {
+            $pack = Join-Path $TestDrive "la-partial-$id"
+            New-ChangeFixture $pack
+            $null = Add-LaScenario $pack 'stale-exclusions'
+            $rows = @(Get-Content (Join-Path $pack "results/$id.json") -Raw | ConvertFrom-Json)
+            Set-PackResult $pack $id $rows -Status 'PARTIAL' -Detail 'The read stopped after the first page.'
+            $null = & $generator -EvidencePath $pack
+            $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+            $index | Should -Match ('\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, partial collection scope \({0}\), see the notes \|  \|' -f [regex]::Escape($id)) -Because $id
+            $index | Should -Match ('CR-21 is not written because {0} The read stopped after the first page read in part\.' -f [regex]::Escape($id))
+            @(Get-ChildItem (Join-Path $pack '05-change-requests') -Filter 'CR-21-*').Count | Should -Be 0 -Because $id
+        }
+    }
+
+    It 'asks for recollection on a pack without the raw policies' {
+        $old = Join-Path $TestDrive 'la-old'
+        New-ChangeFixture $old
+        $null = & $generator -EvidencePath $old
+        (Get-Content (Join-Path $old '05-change-requests/00-index.md') -Raw) | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Needs recollection with CyberSOC collector 1\.16\.0 or later \|'
+        # A 1.15.0 pack has the interactive sign-ins only.
+        $older = Join-Path $TestDrive 'la-1.15'
+        New-ChangeFixture $older
+        $null = Add-LaScenario $older 'stale-exclusions'
+        Remove-PackResult $older 'IA.8-SIGNINS-NONINTERACTIVE'
+        $null = & $generator -EvidencePath $older
+        (Get-Content (Join-Path $older '05-change-requests/00-index.md') -Raw) | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Needs recollection with CyberSOC collector 1\.16\.0 or later \|' -Because 'without the non-interactive sign-ins an exclusion still in use could read as stale'
+    }
+
+    It 'writes no CR-21 when the workspace does not receive a sign-in log, or began receiving it within the 30 days' {
+        $r = New-LaPack 'no-ni' 'no-noninteractive'
+        $r.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, the sign-in logs do not cover the last 30 days, see the notes \|  \|'
+        $r.Index | Should -Match "CR-21 is not written because the non-interactive sign-in log \(AADNonInteractiveUserSignInLogs\) holds no sign-in in the last 30 days and the interactive sign-in log \(SigninLogs\) holds no sign-in in the last 30 days \(IA\.8-SIGNINS-NONINTERACTIVE: Failed to resolve table or column expression named 'AADNonInteractiveUserSignInLogs'\)\."
+        $r.Index | Should -Match 'Send NonInteractiveUserSignInLogs and SignInLogs to the workspace under Entra ID > Monitoring & health > Diagnostic settings'
+        $w = New-LaPack 'short' 'short-window'
+        $w.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, the sign-in logs do not cover the last 30 days, see the notes \|  \|' -Because 'a log received for part of the window misses the legacy sign-ins from before, so an exclusion in use could read as stale'
+        $w.Index | Should -Match 'CR-21 is not written because the non-interactive sign-in log \(AADNonInteractiveUserSignInLogs\) starts on 2026-10-02, inside the 30 days\.'
+        foreach ($x in $r, $w) { @(Get-ChildItem $x.Out -Filter 'CR-21-*').Count | Should -Be 0 }
+    }
+
+    It 'leaves a policy that also blocks modern client apps unchanged and creates the baseline policy beside it' {
+        $r = New-LaPack 'mixed' 'mixed-clients'
+        $id = Get-PolicyId $r.Scenario 'Block untrusted locations'
+        $text = Get-Cr21 $r.Out
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match '^Create the Conditional Access policy ATMO-MXDR-CA-BLOCK-LEGACY, On' -Because 'editing it to the legacy client apps alone would drop its browser block'
+        $text | Should -Not -Match "Open the policy Block untrusted locations"
+        $text | Should -Match "Policy Block untrusted locations \($id\), On today, left unchanged and named in the index\."
+        $r.Index | Should -Match "CR-21 leaves Block untrusted locations \($id\), which applies only on some platforms, client apps, locations, risk levels or devices, unchanged, since it also blocks modern client apps and the baseline steps would remove that, and ATMO-MXDR-CA-BLOCK-LEGACY is created beside it\."
+        Assert-ApprovalEmail (Get-Cr21 $r.Out '.email.txt') 'CR-21 beside a mixed policy'
+    }
+
+    It 'keeps the directory sync role and the accounts still in use out of the gap, and reads a policy that leaves out one legacy client type as a gap' {
+        $ea = [pscustomobject]@{ Protected = @($eaGroups + $eaUsers); ExcludeGroups = @($eaGroups); ExcludeUsers = @($eaUsers) }
+        $base = { param([hashtable]$Users = @{}, [string[]]$ClientApps = @('exchangeActiveSync', 'other'))
+            $u = @{ includeUsers = @('All'); excludeUsers = @($eaUsers); excludeGroups = @($eaGroups); excludeRoles = @() }; foreach ($k in $Users.Keys) { $u[$k] = $Users[$k] }
+            [pscustomobject]@{ id = (New-Guid).Guid; displayName = 'ATMO-MXDR-CA-BLOCK-LEGACY'; state = 'enabled'
+                conditions = [pscustomobject]@{ users = [pscustomobject]$u; applications = [pscustomobject]@{ includeApplications = @('All'); excludeApplications = @() }; clientAppTypes = $ClientApps }
+                grantControls = [pscustomobject]@{ builtInControls = @('block') } } }
+        $keep = 'a1a2a3a4-0000-4000-8000-000000000001'
+        $gap = { param($p) Get-CyberSocCaGap -Policies @($p) -Match { param($f) $f.Block -and $f.Legacy } -Baseline 'ATMO-MXDR-CA-BLOCK-LEGACY' -Access $ea -ClientAppCondition -ClientApps 'exchangeActiveSync', 'other' -AllowedExclude @($script:CyberSocDirSyncRoleId, $keep) }
+        (& $gap (& $base)).Covering.Count | Should -Be 1
+        $kept = & $gap (& $base -Users @{ excludeUsers = @($eaUsers) + $keep.ToUpperInvariant(); excludeRoles = @($script:CyberSocDirSyncRoleId) })
+        $kept.Covering.Count | Should -Be 1 -Because 'the directory sync role and an account still using legacy authentication are exclusions the baseline keeps'
+        @($kept.Policies[0].Kept.Users) | Should -Be @($keep.ToUpperInvariant())
+        @($kept.Policies[0].Kept.Roles) | Should -Be @($script:CyberSocDirSyncRoleId)
+        $stale = & $gap (& $base -Users @{ excludeUsers = @($eaUsers) + 'b1b2b3b4-0000-4000-8000-000000000002' })
+        @($stale.Policies[0].Reasons) | Should -Be @('Exclusions')
+        $stale.Target.Name | Should -Be 'ATMO-MXDR-CA-BLOCK-LEGACY'
+        @($stale.Target.Extra.Users) | Should -Be @('b1b2b3b4-0000-4000-8000-000000000002')
+        Format-CyberSocCaGapReason $stale.Target | Should -Be 'leaves out 1 account beyond the emergency access accounts'
+        @((& $gap (& $base -ClientApps @('exchangeActiveSync'))).Policies[0].Reasons) | Should -Be @('Conditions') -Because 'a block on Exchange ActiveSync clients alone leaves Other clients open'
+        @((& $gap (& $base -ClientApps @('other'))).Policies[0].Reasons) | Should -Be @('Conditions')
+        (& $gap (& $base -ClientApps @('exchangeActiveSync', 'other', 'browser'))).Covering.Count | Should -Be 1 -Because 'a block on more client app types still covers both legacy ones'
+        $mixed = Get-CyberSocCaGap -Policies @((& $base -ClientApps @('browser', 'exchangeActiveSync', 'other')) | ForEach-Object { $_.displayName = 'Client block'; $_ }) -Match { param($f) $f.Block -and $f.Legacy } -Baseline 'ATMO-MXDR-CA-BLOCK-LEGACY' -Access $ea -ClientAppCondition -ClientApps 'exchangeActiveSync', 'other' -Editable { param($f) $f.LegacyOnly }
+        $mixed.Covering.Count | Should -Be 1 -Because 'blocking browser sign-ins as well still blocks legacy authentication for everyone'
+        $scoped = & $base -ClientApps @('browser', 'exchangeActiveSync', 'other'); $scoped.displayName = 'Client block'; $scoped.conditions.users.includeUsers = @('a1a2a3a4-0000-4000-8000-000000000009')
+        $m = Get-CyberSocCaGap -Policies @($scoped) -Match { param($f) $f.Block -and $f.Legacy } -Baseline 'ATMO-MXDR-CA-BLOCK-LEGACY' -Access $ea -ClientAppCondition -ClientApps 'exchangeActiveSync', 'other' -Editable { param($f) $f.LegacyOnly }
+        $m.Target | Should -BeNullOrEmpty -Because 'a policy that also blocks modern client apps is never edited down to legacy only'
+        @($m.Others).Count | Should -Be 1
+        $m.Ambiguous | Should -BeFalse
+        $steps = Get-CyberSocCaPolicySteps -Target $null -Baseline 'ATMO-MXDR-CA-BLOCK-LEGACY' -Resources 'R.' -Condition 'C.' -Keep 'K.'
+        $steps.Count | Should -Be 7 -Because 'without a companion no companion step is written'
+        $steps[2] | Should -Be 'Under Exclude, select Users and groups and add each Atmosera group and each emergency access account listed in the RESOURCES section. K.'
     }
 }
