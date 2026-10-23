@@ -100,8 +100,9 @@
     CR-20 reads the raw Conditional Access policies (IA.8-POLICIES) and the device code sign-ins (IA.8-SIGNINS), added in
     1.10.0, with security defaults (IA.8-DEFAULTS), and on an earlier pack says "needs recollection". It needs Microsoft
     Entra ID P1 and the emergency access accounts, and is not written while security defaults are on.
-    CR-21 reads the same results for legacy authentication, with the legacy sign-ins of IA.8-SIGNINS, under the same
-    gates. It names an excluded account from IA.8-SIGNINS or IA.15-DISABLED where the pack can, and by object ID otherwise.
+    CR-21 reads the same results for legacy authentication, with the legacy sign-ins of IA.8-SIGNINS and of
+    IA.8-SIGNINS-NONINTERACTIVE, added in 1.16.0, under the same gates, and is written only when the non-interactive read
+    shows the workspace receives those sign-ins. It names an excluded account from IA.8-SIGNINS or IA.15-DISABLED where the pack can, and by object ID otherwise.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -144,6 +145,8 @@ foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'L
 foreach ($id in 'IA.16-ACCOUNTS', 'IA.16-GROUPS') { $detailVersions[$id] = '1.12.0' }
 foreach ($id in 'NB.5-FTPAUTH', 'NB.5-FTPAUTH-DETAIL') { $detailVersions[$id] = '1.14.0' }
 $detailVersions['DR.6-MYSQLAUDIT'] = '1.15.0'
+# CR-21 reads the non-interactive legacy sign-ins too, added in 1.16.0, since IA.8-SIGNINS holds the interactive ones only.
+$detailVersions['IA.8-SIGNINS-NONINTERACTIVE'] = '1.16.0'
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -3207,7 +3210,7 @@ $catalog = @(
                     Csv = $csv
                     Email = $email
                 } } } }
-    @{ Number = 21; Key = 'legacy-authentication'; Change = 'Legacy authentication blocked by Conditional Access'; Sources = @('IA.8-POLICIES', 'IA.8-SIGNINS'); Requires = @('EntraIdP1'); EmergencyAccess = $true
+    @{ Number = 21; Key = 'legacy-authentication'; Change = 'Legacy authentication blocked by Conditional Access'; Sources = @('IA.8-POLICIES', 'IA.8-SIGNINS', 'IA.8-SIGNINS-NONINTERACTIVE'); Requires = @('EntraIdP1'); EmergencyAccess = $true
        # Without Entra ID P1 there is no Conditional Access, so the index points to security defaults instead.
        Unlicensed = {
             $sd = Get-SecurityDefaults
@@ -3224,12 +3227,12 @@ $catalog = @(
             $notes = [System.Collections.Generic.List[string]]::new()
             # The policy is created On straight away, and an exclusion is removed because no legacy sign-in was read for it,
             # so a partial read never lets it through.
-            $partialReads = @('IA.8-POLICIES', 'IA.8-SIGNINS' | Where-Object { (Get-Status $_) -eq 'PARTIAL' })
+            $partialReads = @('IA.8-POLICIES', 'IA.8-SIGNINS', 'IA.8-SIGNINS-NONINTERACTIVE' | Where-Object { (Get-Status $_) -eq 'PARTIAL' })
             if ($partialReads.Count) {
                 $why = @($partialReads | ForEach-Object { ('{0} {1}' -f $_, (Get-ResultDetail $_)).Trim().TrimEnd('.') })
                 $note = 'CR-21 is not written because {0} read in part.' -f (Join-Words $why)
                 if ($partialReads -contains 'IA.8-POLICIES') { $note += ' A policy left out of the read could be the baseline policy, which CR-21 would then add again beside it.' }
-                if ($partialReads -contains 'IA.8-SIGNINS') { $note += ' An account left out of the sign-ins would read as no longer using legacy authentication, and CR-21 would remove its exclusion or block it unasked.' }
+                if (@($partialReads | Where-Object { $_ -like 'IA.8-SIGNINS*' }).Count) { $note += ' An account left out of the sign-ins would read as no longer using legacy authentication, and CR-21 would remove its exclusion or block it unasked.' }
                 $note += ' Recollect the pack so every policy and every legacy sign-in of the last 30 days is read.'
                 return @{ State = 'Not written, partial collection scope ({0}), see the notes' -f ($partialReads -join ', '); Notes = @($note) }
             }
@@ -3238,10 +3241,18 @@ $catalog = @(
                 return @{ State = 'Not written, security defaults are on, see the notes'; Notes = @('CR-21 is not written because security defaults are on (IA.8-DEFAULTS), and Microsoft Learn says they already block every authentication request made by an older protocol (Security defaults in Microsoft Entra ID). An organization moving to Conditional Access must turn security defaults off first, which also replaces their MFA and device code protections, so plan it with the client, with the ATMO-MXDR identity policies, before CR-21.') }
             }
             if ($null -eq $sd) { $notes.Add('The security defaults state was not read (IA.8-DEFAULTS), so step 1 of CR-21 checks it in the Microsoft Entra admin center before anything changes.') }
+            # IA.8-SIGNINS holds the interactive sign-ins only, and a service account using SMTP AUTH, POP or IMAP can sign in
+            # non-interactively, so without the non-interactive sign-ins an account still using legacy authentication could
+            # read as unused and lose its exclusion, or be blocked unasked. The Coverage row proves the workspace receives them.
+            $nonInteractive = @(Get-Rows 'IA.8-SIGNINS-NONINTERACTIVE')
+            if (-not @($nonInteractive | Where-Object { (Get-Text $_.Kind) -eq 'Coverage' -and (Get-Number $_.SignIns) -gt 0 }).Count) {
+                return @{ State = 'Not written, the non-interactive sign-ins are not in the workspace, see the notes'; Notes = @(('CR-21 is not written because IA.8-SIGNINS-NONINTERACTIVE found no non-interactive sign-in in the last 30 days{0}, so the workspace does not receive the non-interactive sign-in log. A service account that sends mail with SMTP AUTH or reads it with POP or IMAP can sign in non-interactively only, so without that log CR-21 could remove the exclusion of an account still using legacy authentication, or block it without asking. Send NonInteractiveUserSignInLogs to the workspace under Entra ID > Monitoring & health > Diagnostic settings, and recollect once 30 days are in.' -f $(if ((Get-ResultDetail 'IA.8-SIGNINS-NONINTERACTIVE')) { ' ({0})' -f (Get-ResultDetail 'IA.8-SIGNINS-NONINTERACTIVE').TrimEnd('.') } else { '' }))) }
+            }
             # The successful legacy sign-ins by account, with the protocols (the client app Entra ID records), the
             # applications and the count. The emergency access accounts stay excluded whatever they did, so they are named
             # in the index and never in the email.
-            $accounts = @(@(foreach ($g in @(Get-Rows 'IA.8-SIGNINS' | Where-Object { (Get-Text $_.Flow) -eq 'Legacy authentication' } | Group-Object { (Get-Text $_.UserId).ToLowerInvariant() })) {
+            $legacyRows = @(@(Get-Rows 'IA.8-SIGNINS' | Where-Object { (Get-Text $_.Flow) -eq 'Legacy authentication' }) + @($nonInteractive | Where-Object { (Get-Text $_.Kind) -eq 'Account' -and (Get-Text $_.Flow) -eq 'Legacy authentication' }))
+            $accounts = @(@(foreach ($g in @($legacyRows | Where-Object { Get-Text $_.UserId } | Group-Object { (Get-Text $_.UserId).ToLowerInvariant() })) {
                     $first = $g.Group[0]
                     $upn = ConvertTo-CopyText $first.UserPrincipalName
                     $last = @($g.Group | ForEach-Object { if ($_.LastSignIn -is [datetime]) { $_.LastSignIn.ToUniversalTime().ToString('yyyy-MM-dd', $inv) } else { Get-Text $_.LastSignIn } } | Where-Object { $_ -match '^\d{4}-\d{2}-\d{2}' } | ForEach-Object { $_.Substring(0, 10) } | Sort-Object)
@@ -3256,13 +3267,15 @@ $catalog = @(
             $atmosera = @($accounts | Where-Object Access)
             $users = @($accounts | Where-Object { -not $_.Access })
             if ($atmosera.Count) { $notes.Add(('{0} with legacy sign-ins in the last 30 days {1} an emergency access {2}, which every Conditional Access change excludes, so CR-21 leaves {3} out of its email: {4}. Confirm with Atmosera that the use was expected.' -f (Get-Count $atmosera.Count 'account' 'accounts'), (Get-Pick $atmosera.Count 'is' 'are'), (Get-Pick $atmosera.Count 'account' 'accounts'), (Get-Pick $atmosera.Count 'it' 'them'), (@($atmosera | ForEach-Object { '{0} ({1})' -f $_.Upn, (Get-Count $_.SignIns 'sign-in' 'sign-ins') }) -join ', '))) }
+            # A policy that also blocks modern client apps is never edited: the baseline selects the legacy client apps only, so
+            # its steps would drop the rest of what that policy blocks. It is left as it is and the baseline is created beside it.
             $gap = Get-CyberSocCaGap -Policies @(Get-Rows 'IA.8-POLICIES') -Match { param($f) $f.Block -and $f.Legacy } -Baseline $laPolicy -Access $emergencyAccess -ClientAppCondition -ClientApps $laClientApps `
-                -AllowedExclude (@($script:CyberSocDirSyncRoleId) + @($users | ForEach-Object Id))
+                -AllowedExclude (@($script:CyberSocDirSyncRoleId) + @($users | ForEach-Object Id)) -Editable { param($f) $f.LegacyOnly }
             $named = { param($p) '{0} ({1})' -f (ConvertTo-CopyText $p.Name), (ConvertTo-CopyText $p.Id) }
             $describe = { param($p) '{0}, which {1}' -f (& $named $p), (Format-CyberSocCaGapReason $p) }
             # An account the raw policy names by ID only, named from the sign-ins or the disabled accounts where the pack can.
             $known = @{}
-            foreach ($row in @(Get-Rows 'IA.8-SIGNINS')) { $id = (Get-Text $row.UserId).ToLowerInvariant(); if ($id -and (Get-Text $row.UserPrincipalName)) { $known[$id] = ConvertTo-CopyText $row.UserPrincipalName } }
+            foreach ($row in @(@(Get-Rows 'IA.8-SIGNINS') + $nonInteractive)) { $id = (Get-Text $row.UserId).ToLowerInvariant(); if ($id -and (Get-Text $row.UserPrincipalName)) { $known[$id] = ConvertTo-CopyText $row.UserPrincipalName } }
             if (Test-ResultRead 'IA.15-DISABLED') { foreach ($row in @(Get-Rows 'IA.15-DISABLED' | Where-Object { (Get-Text $_.AccountEnabled) -ieq 'false' })) { $id = (Get-Text $row.PrincipalId).ToLowerInvariant(); if ($id) { $known[$id] = '{0}, disabled' -f $(if ($known[$id]) { $known[$id] } elseif (Get-Text $row.UserPrincipalName) { ConvertTo-CopyText $row.UserPrincipalName } else { 'name not read' }) } } }
             $account = { param($id) $n = $known[(Get-Text $id).ToLowerInvariant()]; if ($n) { 'account {0} ({1})' -f $n, $id } else { 'account {0}' -f $id } }
             $legacyOf = { param($id) @($users | Where-Object { $_.Id -eq (Get-Text $id).ToLowerInvariant() }) | Select-Object -First 1 }
@@ -3297,11 +3310,14 @@ $catalog = @(
                 return @{ State = 'Not written, {0} excludes {1} to confirm, see the notes' -f (ConvertTo-CopyText $held.Name), (Get-Count $items.Count 'group, role or guest setting' 'groups, roles or guest settings'); Notes = $notes.ToArray() }
             }
             if ($gap.Ambiguous) {
-                $candidates = @($gap.Policies | Where-Object { -not $_.Managed })
+                $candidates = @($gap.Policies | Where-Object { -not $_.Managed -and -not $_.Covers -and -not $_.GroupsOnly -and $_.Editable })
                 $notes.Insert(0, ('CR-21 is not written because {0} policies already block legacy authentication in part, and none is named {1}: {2}. Agree with the client which one becomes the baseline, rename it {1}, and run again, so CR-21 brings it to the baseline rather than adding a duplicate.' -f $candidates.Count, $laPolicy, (@($candidates | ForEach-Object { & $describe $_ }) -join ' / ')))
                 return @{ State = 'Not written, {0} policies block legacy authentication in part, see the notes' -f $candidates.Count; Notes = $notes.ToArray() }
             }
-            foreach ($o in @($gap.Others)) { $notes.Add(('CR-21 brings {0} to the baseline and leaves {1} unchanged. Review it with the client, since its exclusions can keep legacy authentication open to some accounts.' -f $laPolicy, (& $describe $o))) }
+            foreach ($o in @($gap.Others)) {
+                if ($o.Editable) { $notes.Add(('CR-21 brings {0} to the baseline and leaves {1} unchanged. Review it with the client, since its exclusions can keep legacy authentication open to some accounts.' -f $laPolicy, (& $describe $o))) }
+                else { $notes.Add(('CR-21 leaves {0}, unchanged, since it also blocks modern client apps and the baseline steps would remove that, and {1} {2} beside it. Review it with the client, since its exclusions and conditions can keep legacy authentication open to some accounts.' -f (& $describe $o), $laPolicy, $(if ($gap.Target) { 'is brought to the baseline' } else { 'is created' }))) }
+            }
             # The exclusions an edited policy loses: accounts with no legacy sign-in in the last 30 days, never an emergency
             # access one (Get-CyberSocCaGap leaves those out of Extra).
             $remove = @(if ($t) { @($t.Extra.Users) | Where-Object { -not (Test-CyberSocEmergencyAccessId $emergencyAccess $_) } })
@@ -3341,10 +3357,10 @@ $catalog = @(
             foreach ($o in @($gap.Others)) { $lines.Add(''); $lines.Add(('Policy {0}, {1} today, left unchanged and named in the index.' -f (& $named $o), (& $stateWord $o.State))) }
             $lines.Add('')
             if ($accounts.Count) {
-                $lines.Add('Legacy authentication sign-ins that succeeded in the last 30 days (IA.8-SIGNINS), by account:')
+                $lines.Add('Legacy authentication sign-ins that succeeded in the last 30 days, interactive and non-interactive (IA.8-SIGNINS and IA.8-SIGNINS-NONINTERACTIVE), by account:')
                 foreach ($a in $accounts) { $lines.Add(('- {0}{1}, {2} with {3}, applications {4}{5}{6}' -f $a.Upn, $(if ($a.Type) { " ($($a.Type))" } else { '' }), (Get-Count $a.SignIns 'sign-in' 'sign-ins'), $(if ($a.Protocols.Count) { Join-Words @($a.Protocols) } else { 'a client app not recorded' }), $(if ($a.Apps.Count) { $a.Apps -join ', ' } else { 'not recorded' }), $(if ($a.Last) { ", last $($a.Last)" } else { '' }), $(if ($a.Access) { ', emergency access account, stays excluded' } else { '' }))) }
             }
-            else { $lines.Add('No legacy authentication sign-in succeeded in the last 30 days (IA.8-SIGNINS).') }
+            else { $lines.Add('No legacy authentication sign-in succeeded in the last 30 days, interactive or non-interactive (IA.8-SIGNINS and IA.8-SIGNINS-NONINTERACTIVE).') }
 
             $csv = @(
                 New-Resource $laPolicy '' '' $(if ($onlyRemove) { 'today On as {0}, {1} removed' -f (ConvertTo-CopyText $t.Name), (Get-Count $remove.Count 'exclusion' 'exclusions') } elseif ($t) { 'today {0} as {1}, brought to the baseline and On' -f (& $stateWord $t.State), (ConvertTo-CopyText $t.Name) } else { 'to create, On' }) $(if ($t) { $t.Id } else { '' })

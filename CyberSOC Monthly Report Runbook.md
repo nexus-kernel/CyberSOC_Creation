@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, 1.14.0 for NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, the FTP basic authentication setting of each App Service app that CR-17 turns off, and 1.15.0 for DR.6-MYSQLAUDIT, the audit log parameters of each MySQL flexible server that CR-01 and CR-10 set. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, 1.14.0 for NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, the FTP basic authentication setting of each App Service app that CR-17 turns off, 1.15.0 for DR.6-MYSQLAUDIT, the audit log parameters of each MySQL flexible server that CR-01 and CR-10 set, and 1.16.0 for IA.8-SIGNINS-NONINTERACTIVE, the non-interactive legacy sign-ins CR-21 needs before it removes an exclusion or blocks legacy authentication. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -631,6 +631,33 @@ ConsistencyLevel: eventual
 ```
 
 IA.16-ACCOUNTS, one row per account: `PrincipalId`, `UserPrincipalName`, `DisplayName`, `UserType`, `AccountEnabled`, `MatchedBy` (UPN, Group, or UPN and group) and the Atmosera groups it sits in (`Groups`, `GroupIds`). IA.16-GROUPS, one row per Atmosera group: `GroupId`, `DisplayName`, `Members` (its user members, counted once each), `Membership` (Assigned, Dynamic for a dynamic membership group, On-premises for a group synced from Active Directory), `MembersRead` and the `MembershipRule` of a dynamic group. Each read pages through `@odata.nextLink` and fails when pages remain after the page limit, so a read cut short is never taken as complete. A refused read is UNAVAILABLE with the permission it needs, any other failure FAILED. A group whose members cannot be read makes both results PARTIAL and is named. The groups unread leave IA.16-ACCOUNTS PARTIAL with the UPN matches only. A tenant with no match reads EMPTY on both, which the change requests treat as no emergency access account, not as clearance. An account Atmosera uses whose UPN does not contain the word is found only when it sits in an Atmosera group.
+
+### IA.8-SIGNINS-NONINTERACTIVE Non-interactive legacy sign-ins
+
+Engine LA, read once from the workspace that holds the tenant-wide `SigninLogs`. CyberSOC collector 1.16.0. Names accounts and stays internal. Feeds CR-21 with IA.8-SIGNINS: IA.8-SIGNINS reads `SigninLogs`, the interactive sign-ins only, and a service account that sends mail with SMTP AUTH or reads it with POP or IMAP can sign in non-interactively only, so without this read its exclusion could read as no longer used. Microsoft Learn (Block legacy authentication with Conditional Access, identify legacy authentication use) has legacy use checked on the interactive and the non-interactive sign-ins. Legacy authentication is read as IA.8-SIGNINS reads it: a client app other than Browser, Mobile Apps and Desktop clients and Unknown. `ConditionalAccessPolicies` is a string in this table (Azure Monitor table reference, AADNonInteractiveUserSignInLogs), which `todynamic` reads. The `Coverage` row counts every non-interactive sign-in of the 30 days: a workspace that does not receive `NonInteractiveUserSignInLogs` from the Microsoft Entra diagnostic settings has no table, which reads EMPTY, or no row, and CR-21 then writes nothing rather than read either as no legacy sign-in.
+
+```kusto
+let NonInteractive = AADNonInteractiveUserSignInLogs
+| where TimeGenerated between (ago(30d) .. now());
+let Legacy = NonInteractive
+| where ResultType == "0" and isnotempty(UserId)
+| where isnotempty(ClientAppUsed) and ClientAppUsed !in ("Browser", "Mobile Apps and Desktop clients", "Unknown")
+| extend Flow = "Legacy authentication"
+| mv-apply Policy = todynamic(ConditionalAccessPolicies) on (
+    where tostring(Policy.result) != "notEnabled"
+    | summarize PolicySet = make_set(strcat(tostring(Policy.id), "=", tostring(Policy.result)))
+  )
+| extend PolicyResults = strcat_array(array_sort_asc(PolicySet), ",")
+| summarize SignIns = count(), LastSignIn = max(TimeGenerated), Apps = strcat_array(make_set(AppDisplayName, 5), ", ")
+          by Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults
+| extend Kind = "Account";
+NonInteractive
+| summarize SignIns = count(), LastSignIn = max(TimeGenerated)
+| extend Kind = "Coverage", Flow = "", ClientAppUsed = "", UserId = "", UserPrincipalName = "", UserType = "", PolicyResults = "", Apps = ""
+| union Legacy
+| project Kind, Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults, SignIns, LastSignIn, Apps
+| order by Kind asc, SignIns desc
+```
 
 ### NB.2-DETAIL Internet-exposed management port rules with their properties and attachments
 

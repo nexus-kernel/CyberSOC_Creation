@@ -22,7 +22,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
   (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
 - **Emergency access accounts.** Every account with Atmosera in its UPN or in an Atmosera group (IA.16-ACCOUNTS and
   IA.16-GROUPS), which every Conditional Access change excludes. See the collector 1.12.0 notes below.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.15.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.16.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -338,6 +338,16 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.16.0 (October 23, 2026): `IA.8-SIGNINS-NONINTERACTIVE` (engine LA, phase P2 Identity, read from the
+  workspace that holds the tenant-wide `SigninLogs`) reads the successful legacy authentication sign-ins of the last 30
+  days from `AADNonInteractiveUserSignInLogs`, the way `IA.8-SIGNINS` reads them from `SigninLogs`, which holds the
+  interactive sign-ins only. A service account sending mail with SMTP AUTH or reading it with POP or IMAP can sign in
+  non-interactively only, and Microsoft Learn has legacy use checked on both tabs of the sign-in logs. One `Account` row
+  per account, client app and set of policy results, and one `Coverage` row that counts every non-interactive sign-in of
+  the 30 days, so a workspace that does not receive `NonInteractiveUserSignInLogs` (no table, read as EMPTY, or no row)
+  never reads as no legacy sign-in. Change request CR-21 removes an exclusion, or creates its policy On, only with that
+  coverage, and on an earlier pack asks for recollection. Internal, since it names accounts. The query is in section 6
+  of the CyberSOC Monthly Report Runbook.
 - CyberSOC collector 1.15.0 (October 21, 2026): `DR.6-MYSQLAUDIT` (engine `MYSQL-AUDIT`, phase P2 Detection and
   response) reads the audit log parameters of every MySQL flexible server. Server parameters are not in Resource Graph,
   so it lists the servers from `resources` with the `{{MRG}}` exclusion and reads each one with a GET on

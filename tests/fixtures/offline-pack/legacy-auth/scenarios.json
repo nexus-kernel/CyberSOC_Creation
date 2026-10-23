@@ -1,5 +1,5 @@
 {
-  "Description": "CR-21 (legacy authentication) scenarios. Raw Conditional Access policies as IA.8-POLICIES holds them, the security defaults state (IA.8-DEFAULTS) and the emergency access scenario from ../emergency-access. Every scenario uses the same successful sign-ins (IA.8-SIGNINS): an SMTP AUTH service account on two rows, an account reading mail over IMAP, an emergency access account using Exchange ActiveSync, and a device code sign-in that CR-21 ignores but uses to name an excluded account. Synthetic IDs.",
+  "Description": "CR-21 (legacy authentication) scenarios. Raw Conditional Access policies as IA.8-POLICIES holds them, the security defaults state (IA.8-DEFAULTS) and the emergency access scenario from ../emergency-access. Every scenario uses the same successful sign-ins (IA.8-SIGNINS): an SMTP AUTH service account on two rows, an account reading mail over IMAP, an emergency access account using Exchange ActiveSync, and a device code sign-in that CR-21 ignores but uses to name an excluded account. The non-interactive sign-ins (IA.8-SIGNINS-NONINTERACTIVE) hold the Coverage row and a multifunction printer that sends mail with SMTP AUTH non-interactively only, so it never appears in IA.8-SIGNINS. A scenario with its own NonInteractive replaces them. Synthetic IDs.",
   "Ids": {
     "Tier0": "b2dc5657-a9c1-5cb7-a1f2-02138a08ff3f",
     "Scanner": "a62ac359-f60a-59ed-b2d7-de339bf424dd",
@@ -8,7 +8,8 @@
     "StaleDisabled": "f2c7b8a9-0fb4-45c6-8d1e-5c6d7e8f9a07",
     "ItAdmins": "2b36a5e4-a16c-5159-b0d5-a27334c1bbfe",
     "DirSyncRole": "d29b2b05-8046-44ba-8758-1e26182fcf32",
-    "GlobalAdminRole": "62e90394-69f5-4237-9190-012177145e10"
+    "GlobalAdminRole": "62e90394-69f5-4237-9190-012177145e10",
+    "Printer": "d4bd6af3-f9d1-5e08-9263-3f235e511aa8"
   },
   "SignIns": [
     {
@@ -125,7 +126,7 @@
       "SecurityDefaults": false
     },
     "stale-exclusions": {
-      "Description": "The baseline policy is On and excludes, beyond the emergency access accounts, the Directory Synchronization Accounts role, an emergency access account matched through an Atmosera group, an SMTP AUTH account still in use, and two accounts with no legacy sign-in (one disabled): CR-21 removes those two only",
+      "Description": "The baseline policy is On and excludes, beyond the emergency access accounts, the Directory Synchronization Accounts role, an emergency access account matched through an Atmosera group, an SMTP AUTH account still in use, and two accounts with no legacy sign-in (one disabled): CR-21 removes those two only, and a printer whose SMTP AUTH sign-ins are non-interactive only, which stays excluded",
       "EmergencyAccess": "complete",
       "Policies": [
         {
@@ -195,7 +196,8 @@
                 "b2dc5657-a9c1-5cb7-a1f2-02138a08ff3f",
                 "a62ac359-f60a-59ed-b2d7-de339bf424dd",
                 "e157910b-3fd0-5c3a-927d-63dff52169af",
-                "f2c7b8a9-0fb4-45c6-8d1e-5c6d7e8f9a07"
+                "f2c7b8a9-0fb4-45c6-8d1e-5c6d7e8f9a07",
+                "d4bd6af3-f9d1-5e08-9263-3f235e511aa8"
               ],
               "includeGroups": [],
               "excludeGroups": [
@@ -956,6 +958,207 @@
         }
       ],
       "SecurityDefaults": false
+    },
+    "mixed-clients": {
+      "Description": "The only policy that blocks legacy authentication also blocks browser sign-ins, outside trusted locations: CR-21 leaves it unchanged and creates the baseline policy beside it",
+      "EmergencyAccess": "complete",
+      "SecurityDefaults": false,
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "b07ed177-89e0-52aa-b817-ff7ef0be3cf4",
+          "displayName": "Block untrusted locations",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "browser",
+              "exchangeActiveSync",
+              "other"
+            ],
+            "platforms": null,
+            "locations": {
+              "includeLocations": [
+                "All"
+              ],
+              "excludeLocations": [
+                "AllTrusted"
+              ]
+            },
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ]
+    },
+    "no-noninteractive": {
+      "Description": "No policy blocks legacy authentication, and the workspace does not receive the non-interactive sign-in log: CR-21 is not written",
+      "EmergencyAccess": "complete",
+      "SecurityDefaults": false,
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "NonInteractive": []
     }
-  }
+  },
+  "NonInteractive": [
+    {
+      "Kind": "Coverage",
+      "Flow": "",
+      "ClientAppUsed": "",
+      "UserId": "",
+      "UserPrincipalName": "",
+      "UserType": "",
+      "PolicyResults": "",
+      "SignIns": 18250,
+      "LastSignIn": "2026-10-12T06:05:00Z",
+      "Apps": ""
+    },
+    {
+      "Kind": "Account",
+      "Flow": "Legacy authentication",
+      "ClientAppUsed": "Authenticated SMTP",
+      "UserId": "d4bd6af3-f9d1-5e08-9263-3f235e511aa8",
+      "UserPrincipalName": "mfp-scan@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "",
+      "SignIns": 96,
+      "LastSignIn": "2026-10-11T17:30:00Z",
+      "Apps": "Office 365 Exchange Online"
+    }
+  ]
 }

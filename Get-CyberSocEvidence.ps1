@@ -243,7 +243,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.15.0, based on the EBR collector 1.14.0
+    Version: 1.16.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -293,7 +293,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.15.0'
+$script:EbrVersion = '1.16.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -1697,6 +1697,29 @@ SigninLogs
 | summarize SignIns = count(), LastSignIn = max(TimeGenerated), Apps = strcat_array(make_set(AppDisplayName, 5), ", ")
           by Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults
 | order by Flow asc, SignIns desc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'IA.8-SIGNINS-NONINTERACTIVE' -Phase 'P2 Identity' -Engine 'LA' -TenantTable 'SigninLogs' -Title 'Successful non-interactive legacy sign-ins, with the coverage of the non-interactive sign-in log' -Notes 'Added in CyberSOC 1.16.0. IA.8-SIGNINS reads SigninLogs, the interactive sign-ins only, so an account whose legacy sign-ins are all non-interactive, such as a service account, would read as no longer using legacy authentication. This reads AADNonInteractiveUserSignInLogs the same way: one Account row per account, client app and set of policy results, as IA.8-SIGNINS has them, and one Coverage row with every non-interactive sign-in of the 30 days counted, so a workspace that does not receive NonInteractiveUserSignInLogs (no table, or no row) never reads as no legacy sign-in. CR-21 removes an exclusion, or creates its policy On, only with that coverage. Internal: names accounts.' -Query @'
+let NonInteractive = AADNonInteractiveUserSignInLogs
+| where TimeGenerated between (ago(30d) .. now());
+let Legacy = NonInteractive
+| where ResultType == "0" and isnotempty(UserId)
+| where isnotempty(ClientAppUsed) and ClientAppUsed !in ("Browser", "Mobile Apps and Desktop clients", "Unknown")
+| extend Flow = "Legacy authentication"
+| mv-apply Policy = todynamic(ConditionalAccessPolicies) on (
+    where tostring(Policy.result) != "notEnabled"
+    | summarize PolicySet = make_set(strcat(tostring(Policy.id), "=", tostring(Policy.result)))
+  )
+| extend PolicyResults = strcat_array(array_sort_asc(PolicySet), ",")
+| summarize SignIns = count(), LastSignIn = max(TimeGenerated), Apps = strcat_array(make_set(AppDisplayName, 5), ", ")
+          by Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults
+| extend Kind = "Account";
+NonInteractive
+| summarize SignIns = count(), LastSignIn = max(TimeGenerated)
+| extend Kind = "Coverage", Flow = "", ClientAppUsed = "", UserId = "", UserPrincipalName = "", UserType = "", PolicyResults = "", Apps = ""
+| union Legacy
+| project Kind, Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults, SignIns, LastSignIn, Apps
+| order by Kind asc, SignIns desc
 '@))
 
     $q.Add((New-EbrQuery -Id 'IA.11' -Phase 'P2 Identity' -Engine 'GRAPH' -Title 'Identity Protection risk policies in force' -Query @'

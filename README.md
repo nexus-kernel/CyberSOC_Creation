@@ -131,7 +131,9 @@ missing evidence never becomes a favorable zero.
    security defaults are on. CR-21 does the same for legacy authentication (Client apps set to Exchange ActiveSync
    clients and Other clients), or, where the block is in force, removes the excluded accounts with no legacy sign-in in
    the last 30 days. It keeps the emergency access accounts, the Directory Synchronization Accounts role and the accounts
-   still using legacy authentication excluded, names an excluded group or role it cannot check for review, and asks the
+   still using legacy authentication excluded, reading the interactive and the non-interactive sign-ins (collector
+   1.16.0), leaves a policy that also blocks modern client apps unchanged, names an excluded group or role it cannot
+   check for review, and asks the
    client before the approval which service accounts still use SMTP AUTH, POP or IMAP and whether each should move to
    modern authentication. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
    account the collection read as disabled, after checking that the account still shows as disabled. Its email lists

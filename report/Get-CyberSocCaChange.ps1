@@ -63,6 +63,11 @@ function Get-CyberSocCaGap {
         The user and directory role IDs (role template IDs) the baseline lets a policy keep excluded, such as the Directory
         Synchronization Accounts role and the accounts still signing in with legacy authentication (CR-21). They are never
         extra exclusions, and each policy lists the ones it excludes in Kept.
+    .PARAMETER Editable
+        Script block taking the facts of one policy and returning true when the change may bring it to the baseline. A
+        policy it refuses, such as one that blocks more than the path (CR-21: modern client apps too), is never edited, since
+        the baseline steps would drop what it does beyond the path: it is left unchanged in Others and the baseline policy
+        is created beside it. A policy named Baseline is always editable.
     .PARAMETER Access
         The emergency access set from Get-CyberSocEmergencyAccess. Its groups and accounts are never extra exclusions.
     .PARAMETER AllowedExcludeApps
@@ -75,15 +80,15 @@ function Get-CyberSocCaGap {
         Covering   the enabled policies that block the path for all users and all resources.
         Target     the existing policy the change edits: the one named Baseline, or the only other candidate. Null when
                    the change creates the baseline policy.
-        Others     the candidates the change leaves unchanged and names, when one named Baseline is edited.
+        Others     the candidates the change leaves unchanged and names: beside the one it edits, and any Editable refuses.
         Managed    the Microsoft-managed policies that block the path.
-        Ambiguous  more than one candidate and none named Baseline, so the change cannot tell which to edit.
+        Ambiguous  more than one editable candidate and none named Baseline, so the change cannot tell which to edit.
         Companions the policies named Companion, whatever they hold: Id, Name, State.
         Review     the enabled policies named Baseline whose one gap is groups excluded beyond the emergency access set:
                    the block is in force for everyone else, so the change is not written, but the groups are named for
                    review and never read as no gaps, since a group for all staff would leave the path open to them.
     #>
-    param($Policies, [Parameter(Mandatory)][scriptblock]$Match, [Parameter(Mandatory)][string]$Baseline, [string]$Companion = '', $Access, [string[]]$AllowedExcludeApps = @(), [switch]$ClientAppCondition, [string[]]$ClientApps = @(), [string[]]$AllowedExclude = @())
+    param($Policies, [Parameter(Mandatory)][scriptblock]$Match, [Parameter(Mandatory)][string]$Baseline, [string]$Companion = '', $Access, [string[]]$AllowedExcludeApps = @(), [switch]$ClientAppCondition, [string[]]$ClientApps = @(), [string[]]$AllowedExclude = @(), [scriptblock]$Editable)
     $allowedApps = @($AllowedExcludeApps | ForEach-Object { (Get-CyberSocCaText $_).ToLowerInvariant() })
     $allowed = @($AllowedExclude | ForEach-Object { (Get-CyberSocCaText $_).ToLowerInvariant() } | Where-Object { $_ })
     $isAllowed = { param($id) (Get-CyberSocCaText $id).ToLowerInvariant() -in $allowed }
@@ -136,6 +141,7 @@ function Get-CyberSocCaGap {
                 Reasons = $reasons; Covers = -not $reasons.Count
                 Extra = [pscustomobject]@{ Users = $extraUsers; Groups = $extraGroups; Roles = $extraRoles; Guests = $guests; Apps = $extraApps; Filter = $appFilter }
                 Kept = $kept
+                Editable = $baselineName -or -not $Editable -or [bool](& $Editable $f)
                 GroupsOnly = $state -eq 'enabled' -and $baselineName -and (@($reasons) -join ',') -eq 'Exclusions' -and -not ($extraUsers.Count -or $extraRoles.Count -or $guests)
                 ExcludedGroups = @($f.ExcludeGroups); ExcludedUsers = @($f.ExcludeUsers); MissingAccess = $missing
             })
@@ -143,14 +149,15 @@ function Get-CyberSocCaGap {
     $review = @($rows | Where-Object GroupsOnly)
     $candidates = @($rows | Where-Object { -not $_.Managed -and -not $_.Covers -and -not $_.GroupsOnly })
     $named = @($candidates | Where-Object Baseline)
-    $target = if ($named.Count) { $named[0] } elseif ($candidates.Count -eq 1) { $candidates[0] } else { $null }
+    $canEdit = @($candidates | Where-Object Editable)
+    $target = if ($named.Count) { $named[0] } elseif ($canEdit.Count -eq 1) { $canEdit[0] } else { $null }
     [pscustomobject]@{
         Policies = $rows.ToArray()
         Covering = @($rows | Where-Object Covers)
         Target = $target
-        Others = @($candidates | Where-Object { $target -and $_ -ne $target })
+        Others = @($candidates | Where-Object { $_ -ne $target })
         Managed = @($rows | Where-Object Managed)
-        Ambiguous = $candidates.Count -gt 1 -and -not $named.Count
+        Ambiguous = $canEdit.Count -gt 1 -and -not $named.Count
         Review = $review
         Companions = $companions.ToArray()
     }

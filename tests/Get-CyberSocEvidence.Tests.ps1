@@ -573,7 +573,7 @@ Describe 'Query catalog' {
 
     It 'reads tenant-wide tables from one workspace only' {
         $tenant = $catalog | Where-Object TenantTable
-        foreach ($id in 'IA.1', 'IA.1-ADMINPORTAL', 'IA.2', 'IA.2-METHOD', 'IA.3', 'IA.3-DEVICECODE', 'IA.4', 'IA.4b', 'IA.8-SUB', 'IA.8-SIGNINS', 'IA.14') {
+        foreach ($id in 'IA.1', 'IA.1-ADMINPORTAL', 'IA.2', 'IA.2-METHOD', 'IA.3', 'IA.3-DEVICECODE', 'IA.4', 'IA.4b', 'IA.8-SUB', 'IA.8-SIGNINS', 'IA.8-SIGNINS-NONINTERACTIVE', 'IA.14') {
             ($tenant | Where-Object Id -eq $id).TenantTable | Should -Be 'SigninLogs' -Because $id
         }
         $tenant.TenantTable | Should -Not -Contain 'AuditLogs' -Because 'OUT.8 is not collected, so nothing reads the tenant audit log'
@@ -581,7 +581,7 @@ Describe 'Query catalog' {
         ($tenant | Where-Object Id -eq 'TI.5').TenantTable | Should -Be 'SigninLogs'
         ($tenant | Where-Object Id -eq 'TI.5-RISK').TenantTable | Should -Be 'AADUserRiskEvents'
         ($tenant | Where-Object Id -eq 'TI.6').TenantTable | Should -Be 'EmailEvents'
-        @($tenant).Count | Should -Be 14
+        @($tenant).Count | Should -Be 15
     }
 
     It 'checks for Defender XDR incidents synced into more than one workspace' {
@@ -685,6 +685,18 @@ Describe 'Network virtual appliances, backup findings and Conditional Access inp
         $q | Should -Match 'mv-apply Policy = todynamic\(ConditionalAccessPolicies\)'
         $q | Should -Match 'by Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults'
         ($catalog | Where-Object Id -eq 'IA.3').Query | Should -Match '"Mobile Apps and Desktop clients", "Unknown"\)'
+    }
+    It 'reads the non-interactive legacy sign-ins with a Coverage row, so a workspace without that log never reads as no legacy sign-in (1.16.0)' {
+        $item = $catalog | Where-Object Id -eq 'IA.8-SIGNINS-NONINTERACTIVE'
+        $item.Engine | Should -Be 'LA'
+        $item.Notes | Should -Match '^Added in CyberSOC 1\.16\.0\.'
+        $q = $item.Query
+        $q | Should -Match '^let NonInteractive = AADNonInteractiveUserSignInLogs'
+        $q | Should -Match 'ClientAppUsed !in \("Browser", "Mobile Apps and Desktop clients", "Unknown"\)' -Because 'legacy authentication is read as IA.8-SIGNINS reads it'
+        $q | Should -Match 'mv-apply Policy = todynamic\(ConditionalAccessPolicies\)' -Because 'the non-interactive table holds the policies as a string'
+        $q | Should -Match 'by Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults'
+        $q | Should -Match 'extend Kind = "Coverage"' -Because 'every non-interactive sign-in is counted, so an empty log is told apart from no legacy sign-in'
+        $q | Should -Not -Match '\bSigninLogs\b' -Because 'IA.8-SIGNINS reads the interactive sign-ins'
     }
 }
 
@@ -3215,7 +3227,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
     }
 
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.15.0'
+        $params.ScriptVersion | Should -Be '1.16.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -3313,7 +3325,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.15.0'
+        $params2.ScriptVersion | Should -Be '1.16.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {
