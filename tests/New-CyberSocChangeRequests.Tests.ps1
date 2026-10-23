@@ -3697,6 +3697,14 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         $m.Index | Should -Match 'Only the Microsoft-managed policy blocks device code flow today\.'
     }
 
+    It 'names the groups an enforced baseline policy excludes for review, never taking one as the approved exception group' {
+        $r = New-DcPack 'enforced-group' 'enforced-with-group'
+        Test-Path (Join-Path $r.Out 'CR-20-device-code-flow.txt') | Should -BeFalse
+        $r.Index | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \|  \| Not written, ATMO-MXDR-CA-BLOCK-DEVICECODE excludes 1 group to confirm, see the notes \|  \|' -Because 'a group the raw policy names by ID only is never read as approved, so the policy is never read as no gaps'
+        $r.Index | Should -Match ("ATMO-MXDR-CA-BLOCK-DEVICECODE \([^)]+\) is On and blocks device code flow for all users and all resources except the emergency access accounts and 1 group it also excludes: {0}\. CR-20 is not written, but the policy is not read as in force for everyone: confirm under Entra ID > Groups that it is ATMO-MXDR-DEVICECODE-APPROVED, the exception group" -f $dc.Ids.ApprovedGroup)
+        $r.Index | Should -Not -Match '- CR-20 found device code flow blocked'
+    }
+
     It 'writes no CR-20 while security defaults are on, without Entra ID P1, without the emergency access set, or when it cannot tell which policy to edit' {
         $sd = New-DcPack 'defaults' 'security-defaults-on'
         $sd.Index | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \|  \| Not written, security defaults are on, see the notes \|  \|'
@@ -3743,8 +3751,16 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         (& $gap (& $base -Apps @{ excludeApplications = @($script:CyberSocDeviceRegistrationAppId) })).Covering.Count | Should -Be 1 -Because 'Device Registration Service is the one resource the baseline excludes'
         @((& $gap (& $base -Apps @{ excludeApplications = @('00000003-0000-0ff1-ce00-000000000000') })).Policies[0].Reasons) | Should -Be @('Resources')
         @((& $gap (& $base -Users @{ excludeRoles = @('62e90394-69f5-4237-9190-012177145e10') })).Policies[0].Reasons) | Should -Be @('Exclusions')
-        @((& $gap (& $base -Users @{ excludeGroups = @($eaGroups) + 'b1b2b3b4-0000-4000-8000-000000000001' } -Name 'Client block')).Policies[0].Reasons) | Should -Be @('Exclusions') -Because 'only the baseline policy may exclude the exception group'
-        (& $gap (& $base -Users @{ excludeGroups = @($eaGroups) + 'b1b2b3b4-0000-4000-8000-000000000001' })).Covering.Count | Should -Be 1
+        @((& $gap (& $base -Users @{ excludeGroups = @($eaGroups) + 'b1b2b3b4-0000-4000-8000-000000000001' } -Name 'Client block')).Policies[0].Reasons) | Should -Be @('Exclusions')
+        $grouped = & $gap (& $base -Users @{ excludeGroups = @($eaGroups) + 'b1b2b3b4-0000-4000-8000-000000000001' })
+        $grouped.Covering.Count | Should -Be 0 -Because 'the baseline name does not make an excluded group the approved one'
+        $grouped.Review.Count | Should -Be 1
+        $grouped.Target | Should -BeNullOrEmpty -Because 'a policy in force but for groups to confirm is reviewed, not edited'
+        $platforms = & $base; $platforms.conditions | Add-Member platforms ([pscustomobject]@{ includePlatforms = @('all'); excludePlatforms = @('android') })
+        @((& $gap $platforms).Policies[0].Reasons) | Should -Be @('Conditions') -Because 'an excluded platform takes its sign-ins out of the block'
+        $filtered = & $base -Apps @{ applicationFilter = [pscustomobject]@{ mode = 'exclude'; rule = 'CustomSecurityAttribute.Engineering_Project -eq "Baker"' } }
+        @((& $gap $filtered).Policies[0].Reasons) | Should -Be @('Resources') -Because 'an application filter takes the matching applications out of the block'
+        (& $gap $filtered).Covering.Count | Should -Be 0
         @((& $gap (& $base -State 'disabled')).Policies[0].Reasons) | Should -Be @('Off')
         (& $gap (& $base -State 'enabledForReportingButNotEnforced' -Name 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS')).Policies.Count | Should -Be 0 -Because 'the report-only companion is never a gap'
         @((& $gap (& $base -Users @{ excludeUsers = @(); excludeGroups = @() })).Policies[0].MissingAccess).Count | Should -Be 6

@@ -3038,6 +3038,14 @@ $catalog = @(
                 elseif (-not @($gap.Covering | Where-Object { -not $_.Managed }).Count) { $notes.Add(('Only the Microsoft-managed policy blocks device code flow today. The baseline moves the block to {0}, with the exception group and its report-only companion, and sets the managed policy Off at the next identity change with the client.' -f $dcPolicy)) }
                 return @{ State = 'No gaps found'; Notes = $notes.ToArray() }
             }
+            if ($gap.Review.Count) {
+                # The baseline policy is On for everyone but the groups it excludes. The raw policy holds their IDs only,
+                # so neither the exception group nor any other group is taken as approved: each is named for review.
+                $r = $gap.Review[0]
+                $k = @($r.Extra.Groups).Count
+                $notes.Insert(0, ('{0} is On and blocks device code flow for all users and all resources except the emergency access accounts and {1} it also excludes: {2}. CR-20 is not written, but the policy is not read as in force for everyone: confirm under Entra ID > Groups that {3} {4}, the exception group, and that its members are the accounts the client approved. Remove any other group from the exclusions, since a group such as one for all staff leaves device code flow open to its members.' -f (& $named $r), (Get-Count $k 'group' 'groups'), (@($r.Extra.Groups) -join ', '), (Get-Pick $k 'it is' 'one of them is'), $dcGroup))
+                return @{ State = 'Not written, {0} excludes {1} to confirm, see the notes' -f $dcPolicy, (Get-Count $k 'group' 'groups'); Notes = $notes.ToArray() }
+            }
             $describe = { param($p) '{0}, which {1}' -f (& $named $p), (Format-CyberSocCaGapReason $p) }
             if ($gap.Ambiguous) {
                 $candidates = @($gap.Policies | Where-Object { -not $_.Managed })

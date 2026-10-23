@@ -39,8 +39,9 @@ function Get-CyberSocCaGap {
     .PARAMETER Match
         Script block taking the facts of one policy (Get-EbrCaPolicyFacts) and returning true when it blocks the path.
     .PARAMETER Baseline
-        The baseline policy name, such as ATMO-MXDR-CA-BLOCK-DEVICECODE. A policy of that name is the one the change edits,
-        and the only one whose other excluded groups read as the approved exception group rather than a gap.
+        The baseline policy name, such as ATMO-MXDR-CA-BLOCK-DEVICECODE. A policy of that name is the one the change edits.
+        The raw policies carry group IDs only, so no excluded group is ever read as the approved exception group: on an
+        enabled baseline policy otherwise in force, the groups beyond the emergency access set go to Review.
     .PARAMETER Companion
         The name of the report-only companion policy, which targets the exception group and is never read as a gap.
     .PARAMETER Access
@@ -57,6 +58,9 @@ function Get-CyberSocCaGap {
         Others     the candidates the change leaves unchanged and names, when one named Baseline is edited.
         Managed    the Microsoft-managed policies that block the path.
         Ambiguous  more than one candidate and none named Baseline, so the change cannot tell which to edit.
+        Review     the enabled policies named Baseline whose one gap is groups excluded beyond the emergency access set:
+                   the block is in force for everyone else, so the change is not written, but the groups are named for
+                   review and never read as no gaps, since a group for all staff would leave the path open to them.
     #>
     param($Policies, [Parameter(Mandatory)][scriptblock]$Match, [Parameter(Mandatory)][string]$Baseline, [string]$Companion = '', $Access, [string[]]$AllowedExcludeApps = @())
     $allowedApps = @($AllowedExcludeApps | ForEach-Object { (Get-CyberSocCaText $_).ToLowerInvariant() })
@@ -72,29 +76,34 @@ function Get-CyberSocCaGap {
         $baselineName = $name -ieq $Baseline
         $isAccess = { param($id) [bool]$Access -and (Test-CyberSocEmergencyAccessId $Access $id) }
         $extraUsers = @($f.ExcludeUsers | Where-Object { -not (& $isAccess $_) })
-        # The baseline policy excludes one group for the approved accounts, so its other groups read as that group.
-        $extraGroups = @(if (-not $baselineName) { $f.ExcludeGroups | Where-Object { -not (& $isAccess $_) } })
+        $extraGroups = @($f.ExcludeGroups | Where-Object { -not (& $isAccess $_) })
         $extraRoles = @($f.ExcludeRoles)
         $guests = $null -ne (Get-EbrCaValue $users 'excludeGuestsOrExternalUsers')
         $extraApps = @(Get-EbrCaList $apps 'excludeApplications' | Where-Object { $_.ToLowerInvariant() -notin $allowedApps })
+        # Two conditions the policy facts leave out: an excluded platform and an application filter each take part of the
+        # sign-ins out of the block.
+        $excludedPlatforms = @(Get-EbrCaList (Get-EbrCaValue $c 'platforms') 'excludePlatforms')
+        $appFilter = $null -ne (Get-EbrCaValue $apps 'applicationFilter')
         $state = Get-CyberSocCaText $f.State
         $reasons = @(
             if ($state -eq 'enabledForReportingButNotEnforced') { 'Report-only' }
             elseif ($state -ne 'enabled') { 'Off' }
             if (-not $f.AllUsers) { 'Users' }
-            if (-not $f.AllApps -or $extraApps.Count) { 'Resources' }
-            if ($f.Narrowed) { 'Conditions' }
+            if (-not $f.AllApps -or $extraApps.Count -or $appFilter) { 'Resources' }
+            if ($f.Narrowed -or $excludedPlatforms.Count) { 'Conditions' }
             if ($extraUsers.Count -or $extraGroups.Count -or $extraRoles.Count -or $guests) { 'Exclusions' })
         $excluded = @(@($f.ExcludeUsers) + @($f.ExcludeGroups) | ForEach-Object { $_.ToLowerInvariant() })
         $missing = @(if ($Access) { @($Access.ExcludeGroups) + @($Access.ExcludeUsers) | Where-Object { $_ -and $_ -notin $excluded } })
         $rows.Add([pscustomobject]@{
                 Id = Get-CyberSocCaText $f.Id; Name = $name; State = $state; Managed = Test-CyberSocCaManaged $name; Baseline = $baselineName
                 Reasons = $reasons; Covers = -not $reasons.Count
-                Extra = [pscustomobject]@{ Users = $extraUsers; Groups = $extraGroups; Roles = $extraRoles; Guests = $guests; Apps = $extraApps }
+                Extra = [pscustomobject]@{ Users = $extraUsers; Groups = $extraGroups; Roles = $extraRoles; Guests = $guests; Apps = $extraApps; Filter = $appFilter }
+                GroupsOnly = $state -eq 'enabled' -and $baselineName -and (@($reasons) -join ',') -eq 'Exclusions' -and -not ($extraUsers.Count -or $extraRoles.Count -or $guests)
                 ExcludedGroups = @($f.ExcludeGroups); MissingAccess = $missing
             })
     }
-    $candidates = @($rows | Where-Object { -not $_.Managed -and -not $_.Covers })
+    $review = @($rows | Where-Object GroupsOnly)
+    $candidates = @($rows | Where-Object { -not $_.Managed -and -not $_.Covers -and -not $_.GroupsOnly })
     $named = @($candidates | Where-Object Baseline)
     $target = if ($named.Count) { $named[0] } elseif ($candidates.Count -eq 1) { $candidates[0] } else { $null }
     [pscustomobject]@{
@@ -104,6 +113,7 @@ function Get-CyberSocCaGap {
         Others = @($candidates | Where-Object { $target -and $_ -ne $target })
         Managed = @($rows | Where-Object Managed)
         Ambiguous = $candidates.Count -gt 1 -and -not $named.Count
+        Review = $review
     }
 }
 
@@ -114,7 +124,7 @@ function Format-CyberSocCaGapReason($Row) {
                 'Report-only' { 'is in report-only mode, so it records what it would do without blocking anything' }
                 'Off' { 'is Off' }
                 'Users' { 'applies to selected users only' }
-                'Resources' { if (@($Row.Extra.Apps).Count) { 'leaves out resources beyond what the baseline allows' } else { 'applies to selected resources only' } }
+                'Resources' { if (@($Row.Extra.Apps).Count -or $Row.Extra.Filter) { 'leaves out resources beyond what the baseline allows' } else { 'applies to selected resources only' } }
                 'Conditions' { 'applies only on some platforms, locations, risk levels or devices' }
                 'Exclusions' { 'leaves out {0} beyond the emergency access accounts' -f (Format-CyberSocCaExtra $Row.Extra) }
             } })

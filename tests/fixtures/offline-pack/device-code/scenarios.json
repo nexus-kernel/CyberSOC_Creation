@@ -399,7 +399,7 @@
       }
     },
     "enforced": {
-      "Description": "The baseline policy is On for all users and all resources but Device Registration Service, with the emergency access accounts and the approved group excluded, and the Microsoft-managed policy is still On beside it",
+      "Description": "The baseline policy is On for all users and all resources but Device Registration Service, with only the emergency access accounts excluded, and the Microsoft-managed policy is still On beside it",
       "Policies": [
         {
           "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
@@ -470,8 +470,7 @@
               "excludeGroups": [
                 "60cc37ba-dee8-5330-bd03-51890d7c6baa",
                 "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
-                "8609bd57-3931-50b5-8dbd-1a14d439760d",
-                "efcd8baa-fb1b-55c5-8f56-76f56449a536"
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
               ],
               "includeRoles": [],
               "excludeRoles": [],
@@ -560,6 +559,121 @@
       "EmergencyAccess": "complete",
       "Expect": {
         "State": "No gaps found"
+      }
+    },
+    "enforced-with-group": {
+      "Description": "The baseline policy is On for all users and all resources and also excludes a group beyond the emergency access set. The raw policy holds its ID only, so it is named for review, never taken as the approved exception group",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "e9422c3f-3fd3-5c3f-a97d-619a3e035a25",
+          "displayName": "ATMO-MXDR-CA-BLOCK-DEVICECODE",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d",
+                "efcd8baa-fb1b-55c5-8f56-76f56449a536"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": {
+              "transferMethods": "deviceCodeFlow"
+            }
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false,
+      "EmergencyAccess": "complete",
+      "Expect": {
+        "State": "Not written, ATMO-MXDR-CA-BLOCK-DEVICECODE excludes 1 group to confirm, see the notes"
       }
     },
     "security-defaults-on": {
