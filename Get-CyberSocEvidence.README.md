@@ -343,10 +343,11 @@ in the pack (`results/<ID>.csv`).
   days from `AADNonInteractiveUserSignInLogs`, the way `IA.8-SIGNINS` reads them from `SigninLogs`, which holds the
   interactive sign-ins only. A service account sending mail with SMTP AUTH or reading it with POP or IMAP can sign in
   non-interactively only, and Microsoft Learn has legacy use checked on both tabs of the sign-in logs. One `Account` row
-  per account, client app and set of policy results, and one `Coverage` row that counts every non-interactive sign-in of
-  the 30 days, so a workspace that does not receive `NonInteractiveUserSignInLogs` (no table, read as EMPTY, or no row)
-  never reads as no legacy sign-in. Change request CR-21 removes an exclusion, or creates its policy On, only with that
-  coverage, and on an earlier pack asks for recollection. Internal, since it names accounts. The query is in section 6
+  per account, client app and set of policy results, and one `Coverage` row per sign-in table (`AADNonInteractiveUserSignInLogs`
+  and `SigninLogs`) with its sign-ins of the 30 days, the first and the last, and `FullWindow`, true only when the first is
+  more than 29 days old. A log the workspace does not receive (no table, read as EMPTY, or no row), or began receiving
+  within the 30 days, never reads as no legacy sign-in. Change request CR-21 removes an exclusion, or creates its policy
+  On, only when both logs cover the whole window, and on an earlier pack asks for recollection. Internal, since it names accounts. The query is in section 6
   of the CyberSOC Monthly Report Runbook.
 - CyberSOC collector 1.15.0 (October 21, 2026): `DR.6-MYSQLAUDIT` (engine `MYSQL-AUDIT`, phase P2 Detection and
   response) reads the audit log parameters of every MySQL flexible server. Server parameters are not in Resource Graph,

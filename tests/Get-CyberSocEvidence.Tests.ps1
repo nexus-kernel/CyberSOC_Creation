@@ -695,8 +695,8 @@ Describe 'Network virtual appliances, backup findings and Conditional Access inp
         $q | Should -Match 'ClientAppUsed !in \("Browser", "Mobile Apps and Desktop clients", "Unknown"\)' -Because 'legacy authentication is read as IA.8-SIGNINS reads it'
         $q | Should -Match 'mv-apply Policy = todynamic\(ConditionalAccessPolicies\)' -Because 'the non-interactive table holds the policies as a string'
         $q | Should -Match 'by Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults'
-        $q | Should -Match 'extend Kind = "Coverage"' -Because 'every non-interactive sign-in is counted, so an empty log is told apart from no legacy sign-in'
-        $q | Should -Not -Match '\bSigninLogs\b' -Because 'IA.8-SIGNINS reads the interactive sign-ins'
+        $q | Should -Match 'extend Kind = "Coverage", FullWindow = SignIns > 0 and FirstSignIn < ago\(29d\)' -Because 'a log that is empty or began within the 30 days is told apart from no legacy sign-in'
+        $q | Should -Match 'extend Table = "AADNonInteractiveUserSignInLogs"\),\s+\(SigninLogs \| where TimeGenerated between \(ago\(30d\) \.\. now\(\)\) \| summarize SignIns = count\(\), FirstSignIn = min\(TimeGenerated\)' -Because 'the interactive log that IA.8-SIGNINS reads must cover the window too'
     }
 }
 

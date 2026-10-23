@@ -1699,7 +1699,7 @@ SigninLogs
 | order by Flow asc, SignIns desc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'IA.8-SIGNINS-NONINTERACTIVE' -Phase 'P2 Identity' -Engine 'LA' -TenantTable 'SigninLogs' -Title 'Successful non-interactive legacy sign-ins, with the coverage of the non-interactive sign-in log' -Notes 'Added in CyberSOC 1.16.0. IA.8-SIGNINS reads SigninLogs, the interactive sign-ins only, so an account whose legacy sign-ins are all non-interactive, such as a service account, would read as no longer using legacy authentication. This reads AADNonInteractiveUserSignInLogs the same way: one Account row per account, client app and set of policy results, as IA.8-SIGNINS has them, and one Coverage row with every non-interactive sign-in of the 30 days counted, so a workspace that does not receive NonInteractiveUserSignInLogs (no table, or no row) never reads as no legacy sign-in. CR-21 removes an exclusion, or creates its policy On, only with that coverage. Internal: names accounts.' -Query @'
+    $q.Add((New-EbrQuery -Id 'IA.8-SIGNINS-NONINTERACTIVE' -Phase 'P2 Identity' -Engine 'LA' -TenantTable 'SigninLogs' -Title 'Successful non-interactive legacy sign-ins, with the coverage of the non-interactive sign-in log' -Notes 'Added in CyberSOC 1.16.0. IA.8-SIGNINS reads SigninLogs, the interactive sign-ins only, so an account whose legacy sign-ins are all non-interactive, such as a service account, would read as no longer using legacy authentication. This reads AADNonInteractiveUserSignInLogs the same way: one Account row per account, client app and set of policy results, as IA.8-SIGNINS has them. One Coverage row per sign-in table (AADNonInteractiveUserSignInLogs and SigninLogs) counts its sign-ins of the 30 days with the first and last, and FullWindow is true only when the first is more than 29 days old, so a log the workspace does not receive (no table, or no row) or started receiving within the 30 days never reads as no legacy sign-in. CR-21 removes an exclusion, or creates its policy On, only when both tables cover the whole window. Internal: names accounts.' -Query @'
 let NonInteractive = AADNonInteractiveUserSignInLogs
 | where TimeGenerated between (ago(30d) .. now());
 let Legacy = NonInteractive
@@ -1713,13 +1713,14 @@ let Legacy = NonInteractive
 | extend PolicyResults = strcat_array(array_sort_asc(PolicySet), ",")
 | summarize SignIns = count(), LastSignIn = max(TimeGenerated), Apps = strcat_array(make_set(AppDisplayName, 5), ", ")
           by Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults
-| extend Kind = "Account";
-NonInteractive
-| summarize SignIns = count(), LastSignIn = max(TimeGenerated)
-| extend Kind = "Coverage", Flow = "", ClientAppUsed = "", UserId = "", UserPrincipalName = "", UserType = "", PolicyResults = "", Apps = ""
-| union Legacy
-| project Kind, Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults, SignIns, LastSignIn, Apps
-| order by Kind asc, SignIns desc
+| extend Kind = "Account", Table = "AADNonInteractiveUserSignInLogs";
+let Coverage = union
+    (NonInteractive | summarize SignIns = count(), FirstSignIn = min(TimeGenerated), LastSignIn = max(TimeGenerated) | extend Table = "AADNonInteractiveUserSignInLogs"),
+    (SigninLogs | where TimeGenerated between (ago(30d) .. now()) | summarize SignIns = count(), FirstSignIn = min(TimeGenerated), LastSignIn = max(TimeGenerated) | extend Table = "SigninLogs")
+| extend Kind = "Coverage", FullWindow = SignIns > 0 and FirstSignIn < ago(29d);
+union Coverage, Legacy
+| project Kind, Table, Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults, SignIns, FirstSignIn, LastSignIn, FullWindow, Apps
+| order by Kind asc, Table asc, SignIns desc
 '@))
 
     $q.Add((New-EbrQuery -Id 'IA.11' -Phase 'P2 Identity' -Engine 'GRAPH' -Title 'Identity Protection risk policies in force' -Query @'

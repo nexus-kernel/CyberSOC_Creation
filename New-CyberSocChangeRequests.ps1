@@ -387,7 +387,7 @@ $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, 
 # CR-19 adds the management groups and root scope above the subscriptions and the Microsoft Entra directory roles,
 # which belong to no subscription, and CR-20 and CR-21 the Conditional Access policies, the accounts that signed in with
 # device code flow or legacy authentication and the exclusions removed, which belong to the tenant.
-$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|Legacy authentication sign-ins in the last 30 days|Exclusions to remove):$'
+$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days):$'
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
 $proposedDay = Format-Day $proposedDate
 $replyDay = Format-Day $replyDate
@@ -3243,10 +3243,20 @@ $catalog = @(
             if ($null -eq $sd) { $notes.Add('The security defaults state was not read (IA.8-DEFAULTS), so step 1 of CR-21 checks it in the Microsoft Entra admin center before anything changes.') }
             # IA.8-SIGNINS holds the interactive sign-ins only, and a service account using SMTP AUTH, POP or IMAP can sign in
             # non-interactively, so without the non-interactive sign-ins an account still using legacy authentication could
-            # read as unused and lose its exclusion, or be blocked unasked. The Coverage row proves the workspace receives them.
+            # read as unused and lose its exclusion, or be blocked unasked. Each sign-in log must also cover the whole 30 days:
+            # one the workspace began receiving within them misses the legacy sign-ins from before. The Coverage rows prove both.
             $nonInteractive = @(Get-Rows 'IA.8-SIGNINS-NONINTERACTIVE')
-            if (-not @($nonInteractive | Where-Object { (Get-Text $_.Kind) -eq 'Coverage' -and (Get-Number $_.SignIns) -gt 0 }).Count) {
-                return @{ State = 'Not written, the non-interactive sign-ins are not in the workspace, see the notes'; Notes = @(('CR-21 is not written because IA.8-SIGNINS-NONINTERACTIVE found no non-interactive sign-in in the last 30 days{0}, so the workspace does not receive the non-interactive sign-in log. A service account that sends mail with SMTP AUTH or reads it with POP or IMAP can sign in non-interactively only, so without that log CR-21 could remove the exclusion of an account still using legacy authentication, or block it without asking. Send NonInteractiveUserSignInLogs to the workspace under Entra ID > Monitoring & health > Diagnostic settings, and recollect once 30 days are in.' -f $(if ((Get-ResultDetail 'IA.8-SIGNINS-NONINTERACTIVE')) { ' ({0})' -f (Get-ResultDetail 'IA.8-SIGNINS-NONINTERACTIVE').TrimEnd('.') } else { '' }))) }
+            $logs = [ordered]@{ AADNonInteractiveUserSignInLogs = 'non-interactive'; SigninLogs = 'interactive' }
+            $short = @(foreach ($table in $logs.Keys) {
+                    $c = @($nonInteractive | Where-Object { (Get-Text $_.Kind) -eq 'Coverage' -and (Get-Text $_.Table) -eq $table }) | Select-Object -First 1
+                    if (-not $c -or (Get-Number $c.SignIns) -le 0) { 'the {0} sign-in log ({1}) holds no sign-in in the last 30 days' -f $logs[$table], $table }
+                    elseif (-not (Test-True $c.FullWindow)) {
+                        $first = if ($c.FirstSignIn -is [datetime]) { $c.FirstSignIn.ToUniversalTime().ToString('yyyy-MM-dd', $inv) } else { (Get-Text $c.FirstSignIn) -replace 'T.*$', '' }
+                        'the {0} sign-in log ({1}) starts on {2}, inside the 30 days' -f $logs[$table], $table, $first
+                    } })
+            if ($short.Count) {
+                $detail = (Get-ResultDetail 'IA.8-SIGNINS-NONINTERACTIVE').TrimEnd('.')
+                return @{ State = 'Not written, the sign-in logs do not cover the last 30 days, see the notes'; Notes = @(('CR-21 is not written because {0}{1}. A service account that sends mail with SMTP AUTH or reads it with POP or IMAP can sign in non-interactively only or rarely, so without both logs over the whole 30 days CR-21 could remove the exclusion of an account still using legacy authentication, or block it without asking. Send NonInteractiveUserSignInLogs and SignInLogs to the workspace under Entra ID > Monitoring & health > Diagnostic settings, and recollect once 30 days are in.' -f (Join-Words $short), $(if ($detail) { " (IA.8-SIGNINS-NONINTERACTIVE: $detail)" } else { '' }))) }
             }
             # The successful legacy sign-ins by account, with the protocols (the client app Entra ID records), the
             # applications and the count. The emergency access accounts stay excluded whatever they did, so they are named
@@ -3411,9 +3421,9 @@ $catalog = @(
             $policyItems = @(
                 $(if ($onlyRemove) { '{0}, on today, with the exclusions below removed' -f (ConvertTo-CopyText $t.Name) } elseif ($edits) { '{0}{1}, set to block legacy authentication for all users and turned on' -f (ConvertTo-CopyText $t.Name), $(if ($t.Baseline) { '' } else { ", renamed $laPolicy" }) } else { '{0}, a new policy that blocks legacy authentication for all users, turned on' -f $laPolicy })
                 foreach ($m in $managed) { '{0}, the Microsoft policy, turned off' -f (ConvertTo-CopyText $m.Name) })
-            $resources = @('Conditional Access policies:', [string[]]$policyItems)
-            if ($remove.Count) { $resources += @('Exclusions to remove:', [string[]]@($remove | ForEach-Object { $k = $known[(Get-Text $_).ToLowerInvariant()]; if ($k) { '{0}, object ID {1}' -f $k, $_ } else { 'the account with object ID {0}' -f $_ } })) }
-            if ($n) { $resources += @('Legacy authentication sign-ins in the last 30 days:', [string[]]@($users | ForEach-Object { '{0}, {1} with {2}, {3}' -f $_.Upn, (Get-Count $_.SignIns 'sign-in' 'sign-ins'), $(if ($_.Protocols.Count) { Join-Words @($_.Protocols) } else { 'a protocol the sign-in log did not name' }), $(if ($_.Id -in @($keptUsers | ForEach-Object { (Get-Text $_).ToLowerInvariant() })) { 'excluded today' } else { 'not excluded today' }) })) }
+            $resources = @('The Conditional Access policies it changes are these:', [string[]]$policyItems)
+            if ($remove.Count) { $resources += @('It removes the exclusions of these accounts:', [string[]]@($remove | ForEach-Object { $k = $known[(Get-Text $_).ToLowerInvariant()]; if ($k) { '{0}, object ID {1}' -f $k, $_ } else { 'the account with object ID {0}' -f $_ } })) }
+            if ($n) { $resources += @('These accounts completed a legacy authentication sign-in in the last 30 days:', [string[]]@($users | ForEach-Object { '{0}, {1} with {2}, {3}' -f $_.Upn, (Get-Count $_.SignIns 'sign-in' 'sign-ins'), $(if ($_.Protocols.Count) { Join-Words @($_.Protocols) } else { 'a protocol the sign-in log did not name' }), $(if ($_.Id -in @($keptUsers | ForEach-Object { (Get-Text $_).ToLowerInvariant() })) { 'excluded today' } else { 'not excluded today' }) })) }
             $listedParts = @('the Conditional Access policies below'
                 if ($remove.Count) { 'the exclusions it removes' }
                 if ($n) { 'the {0} that completed a legacy authentication sign-in in the last 30 days, with the protocols used and the number of sign-ins' -f (Get-Pick $n 'account' "$n accounts") })

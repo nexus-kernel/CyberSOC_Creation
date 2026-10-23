@@ -238,7 +238,7 @@ BeforeAll {
     # The lines that head each group of resources: a subscription, for CR-19 a management group, the root scope and the
     # Microsoft Entra directory roles, and for CR-20 and CR-21 the policies, sign-ins and exclusions, which belong to no
     # subscription.
-    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|Legacy authentication sign-ins in the last 30 days|Exclusions to remove):$'
+    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days):$'
     $dayPattern = '(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}'
     # Checks one client email against the shared structure and the copy rules. Every generated email goes through it.
     # The parts are found by what each paragraph says: the ask, why, what it means for the client, the resources by
@@ -313,7 +313,7 @@ BeforeAll {
         Set-PackResult $Path 'IA.8-POLICIES' @($sc.Policies)
         Set-PackResult $Path 'IA.8-DEFAULTS' @(@{ SecurityDefaults = [bool]$sc.SecurityDefaults })
         Set-PackResult $Path 'IA.8-SIGNINS' @($dc.SignIns)
-        Set-PackResult $Path 'IA.8-SIGNINS-NONINTERACTIVE' @(@{ Kind = 'Coverage'; Flow = ''; ClientAppUsed = ''; UserId = ''; UserPrincipalName = ''; UserType = ''; PolicyResults = ''; SignIns = 1200; LastSignIn = '2026-10-12T06:00:00Z'; Apps = '' })
+        Set-PackResult $Path 'IA.8-SIGNINS-NONINTERACTIVE' @(foreach ($table in 'AADNonInteractiveUserSignInLogs', 'SigninLogs') { @{ Kind = 'Coverage'; Table = $table; Flow = ''; ClientAppUsed = ''; UserId = ''; UserPrincipalName = ''; UserType = ''; PolicyResults = ''; SignIns = 1200; FirstSignIn = '2026-09-12T06:30:00Z'; LastSignIn = '2026-10-12T06:00:00Z'; FullWindow = $true; Apps = '' } })
         $null = Add-EaScenario $Path $sc.EmergencyAccess
         Set-EntraP1 $Path $Licensed
         $sc
@@ -3898,7 +3898,7 @@ Describe 'Legacy authentication blocked by Conditional Access (CR-21)' {
         $email | Should -Match 'Atmosera''s emergency access accounts stay excluded'
         $email | Should -Match 'which holds the Directory Synchronization Accounts role, stays excluded too'
         $email | Should -Match 'Exchange Online has already turned off basic authentication for POP, IMAP, Exchange ActiveSync and its other protocols except SMTP AUTH'
-        $email | Should -Match "Legacy authentication sign-ins in the last 30 days:\r?\n\r?\n- scanner-smtp@contoso\.onmicrosoft\.com, 422 sign-ins with Authenticated SMTP, not excluded today\r?\n- dana\.finance@contoso\.onmicrosoft\.com, 220 sign-ins with IMAP4, not excluded today\r?\n"
+        $email | Should -Match "These accounts completed a legacy authentication sign-in in the last 30 days:\r?\n\r?\n- scanner-smtp@contoso\.onmicrosoft\.com, 422 sign-ins with Authenticated SMTP, not excluded today\r?\n- dana\.finance@contoso\.onmicrosoft\.com, 220 sign-ins with IMAP4, not excluded today\r?\n"
         $email | Should -Not -Match 'breakglass' -Because 'the emergency access accounts stay excluded and are never listed'
         $email | Should -Match 'Before I schedule the change, could you confirm which of the accounts listed above are service accounts, devices or applications that still send mail with SMTP AUTH or read it with POP or IMAP, and whether each one should move to modern authentication\? I will keep excluded only the accounts you confirm still need legacy authentication for now\. With that confirmed, could you approve this change for ' -Because 'the email asks before it asks for approval'
         $email | Should -Not -Match 'Removing an exclusion' -Because 'a new policy removes no exclusion'
@@ -3914,7 +3914,7 @@ Describe 'Legacy authentication blocked by Conditional Access (CR-21)' {
         Assert-ApprovalEmail $text 'CR-21 with no legacy sign-in'
         $text | Should -Match 'No account in your organization, other than the emergency access accounts, completed a legacy authentication sign-in in the last 30 days, so I expect no one to notice the change\.'
         $text | Should -Match 'could you tell me whether any service account, device or application in your organization, such as a printer or scanner that sends mail, still uses SMTP AUTH, POP or IMAP with a username and password\?'
-        $text | Should -Not -Match 'Legacy authentication sign-ins in the last 30 days:'
+        $text | Should -Not -Match 'These accounts completed a legacy authentication sign-in'
     }
 
     It 'removes only the exclusions with no legacy sign-in from an enforced policy, and keeps the emergency access accounts, the directory sync role and the accounts still in use' {
@@ -3950,7 +3950,7 @@ Describe 'Legacy authentication blocked by Conditional Access (CR-21)' {
         $email | Should -Match '^Subject: Approval requested: removing exclusions no longer needed from the legacy authentication block'
         $email | Should -Match 'I would like your approval to remove 2 accounts from the exclusions of ATMO-MXDR-CA-BLOCK-LEGACY, the Conditional Access policy that blocks legacy authentication in your tenant, since none of them signed in with legacy authentication in the last 30 days\.'
         $email | Should -Match 'Removing an exclusion affects only an account that signs in with legacy authentication, and the sign-in records show none in the last 30 days for the 2 accounts listed below\.'
-        $email | Should -Match "Exclusions to remove:\r?\n\r?\n- old\.contractor@contoso\.onmicrosoft\.com, object ID $($la.Ids.Stale)\r?\n- pat\.moreno@contoso\.com, disabled, object ID $($la.Ids.StaleDisabled)\r?\n"
+        $email | Should -Match "It removes the exclusions of these accounts:\r?\n\r?\n- old\.contractor@contoso\.onmicrosoft\.com, object ID $($la.Ids.Stale)\r?\n- pat\.moreno@contoso\.com, disabled, object ID $($la.Ids.StaleDisabled)\r?\n"
         $email | Should -Match '- scanner-smtp@contoso\.onmicrosoft\.com, 422 sign-ins with Authenticated SMTP, excluded today'
         $email | Should -Match '- mfp-scan@contoso\.onmicrosoft\.com, 96 sign-ins with Authenticated SMTP, excluded today'
         $email | Should -Match 'Atmosera''s emergency access accounts stay excluded'
@@ -4053,12 +4053,15 @@ Describe 'Legacy authentication blocked by Conditional Access (CR-21)' {
         (Get-Content (Join-Path $older '05-change-requests/00-index.md') -Raw) | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Needs recollection with CyberSOC collector 1\.16\.0 or later \|' -Because 'without the non-interactive sign-ins an exclusion still in use could read as stale'
     }
 
-    It 'writes no CR-21 when the workspace does not receive the non-interactive sign-in log' {
+    It 'writes no CR-21 when the workspace does not receive a sign-in log, or began receiving it within the 30 days' {
         $r = New-LaPack 'no-ni' 'no-noninteractive'
-        $r.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, the non-interactive sign-ins are not in the workspace, see the notes \|  \|'
-        $r.Index | Should -Match "CR-21 is not written because IA\.8-SIGNINS-NONINTERACTIVE found no non-interactive sign-in in the last 30 days \(Failed to resolve table or column expression named 'AADNonInteractiveUserSignInLogs'\), so the workspace does not receive the non-interactive sign-in log\."
-        $r.Index | Should -Match 'Send NonInteractiveUserSignInLogs to the workspace under Entra ID > Monitoring & health > Diagnostic settings'
-        @(Get-ChildItem $r.Out -Filter 'CR-21-*').Count | Should -Be 0
+        $r.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, the sign-in logs do not cover the last 30 days, see the notes \|  \|'
+        $r.Index | Should -Match "CR-21 is not written because the non-interactive sign-in log \(AADNonInteractiveUserSignInLogs\) holds no sign-in in the last 30 days and the interactive sign-in log \(SigninLogs\) holds no sign-in in the last 30 days \(IA\.8-SIGNINS-NONINTERACTIVE: Failed to resolve table or column expression named 'AADNonInteractiveUserSignInLogs'\)\."
+        $r.Index | Should -Match 'Send NonInteractiveUserSignInLogs and SignInLogs to the workspace under Entra ID > Monitoring & health > Diagnostic settings'
+        $w = New-LaPack 'short' 'short-window'
+        $w.Index | Should -Match '\| 21 \| Legacy authentication blocked by Conditional Access \|  \| Not written, the sign-in logs do not cover the last 30 days, see the notes \|  \|' -Because 'a log received for part of the window misses the legacy sign-ins from before, so an exclusion in use could read as stale'
+        $w.Index | Should -Match 'CR-21 is not written because the non-interactive sign-in log \(AADNonInteractiveUserSignInLogs\) starts on 2026-10-02, inside the 30 days\.'
+        foreach ($x in $r, $w) { @(Get-ChildItem $x.Out -Filter 'CR-21-*').Count | Should -Be 0 }
     }
 
     It 'leaves a policy that also blocks modern client apps unchanged and creates the baseline policy beside it' {

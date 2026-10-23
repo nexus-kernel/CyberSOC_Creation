@@ -634,7 +634,7 @@ IA.16-ACCOUNTS, one row per account: `PrincipalId`, `UserPrincipalName`, `Displa
 
 ### IA.8-SIGNINS-NONINTERACTIVE Non-interactive legacy sign-ins
 
-Engine LA, read once from the workspace that holds the tenant-wide `SigninLogs`. CyberSOC collector 1.16.0. Names accounts and stays internal. Feeds CR-21 with IA.8-SIGNINS: IA.8-SIGNINS reads `SigninLogs`, the interactive sign-ins only, and a service account that sends mail with SMTP AUTH or reads it with POP or IMAP can sign in non-interactively only, so without this read its exclusion could read as no longer used. Microsoft Learn (Block legacy authentication with Conditional Access, identify legacy authentication use) has legacy use checked on the interactive and the non-interactive sign-ins. Legacy authentication is read as IA.8-SIGNINS reads it: a client app other than Browser, Mobile Apps and Desktop clients and Unknown. `ConditionalAccessPolicies` is a string in this table (Azure Monitor table reference, AADNonInteractiveUserSignInLogs), which `todynamic` reads. The `Coverage` row counts every non-interactive sign-in of the 30 days: a workspace that does not receive `NonInteractiveUserSignInLogs` from the Microsoft Entra diagnostic settings has no table, which reads EMPTY, or no row, and CR-21 then writes nothing rather than read either as no legacy sign-in.
+Engine LA, read once from the workspace that holds the tenant-wide `SigninLogs`. CyberSOC collector 1.16.0. Names accounts and stays internal. Feeds CR-21 with IA.8-SIGNINS: IA.8-SIGNINS reads `SigninLogs`, the interactive sign-ins only, and a service account that sends mail with SMTP AUTH or reads it with POP or IMAP can sign in non-interactively only, so without this read its exclusion could read as no longer used. Microsoft Learn (Block legacy authentication with Conditional Access, identify legacy authentication use) has legacy use checked on the interactive and the non-interactive sign-ins. Legacy authentication is read as IA.8-SIGNINS reads it: a client app other than Browser, Mobile Apps and Desktop clients and Unknown. `ConditionalAccessPolicies` is a string in this table (Azure Monitor table reference, AADNonInteractiveUserSignInLogs), which `todynamic` reads. One `Coverage` row per sign-in table, `AADNonInteractiveUserSignInLogs` and `SigninLogs`, counts its sign-ins of the 30 days with the first and the last, and `FullWindow` is true only when the first is more than 29 days old. A workspace that does not receive `NonInteractiveUserSignInLogs` from the Microsoft Entra diagnostic settings has no table, which reads EMPTY, or no row, and one that began receiving a log within the 30 days misses the legacy sign-ins from before. CR-21 then writes nothing rather than read any of them as no legacy sign-in. A pause in forwarding inside the window is not detected.
 
 ```kusto
 let NonInteractive = AADNonInteractiveUserSignInLogs
@@ -650,13 +650,14 @@ let Legacy = NonInteractive
 | extend PolicyResults = strcat_array(array_sort_asc(PolicySet), ",")
 | summarize SignIns = count(), LastSignIn = max(TimeGenerated), Apps = strcat_array(make_set(AppDisplayName, 5), ", ")
           by Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults
-| extend Kind = "Account";
-NonInteractive
-| summarize SignIns = count(), LastSignIn = max(TimeGenerated)
-| extend Kind = "Coverage", Flow = "", ClientAppUsed = "", UserId = "", UserPrincipalName = "", UserType = "", PolicyResults = "", Apps = ""
-| union Legacy
-| project Kind, Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults, SignIns, LastSignIn, Apps
-| order by Kind asc, SignIns desc
+| extend Kind = "Account", Table = "AADNonInteractiveUserSignInLogs";
+let Coverage = union
+    (NonInteractive | summarize SignIns = count(), FirstSignIn = min(TimeGenerated), LastSignIn = max(TimeGenerated) | extend Table = "AADNonInteractiveUserSignInLogs"),
+    (SigninLogs | where TimeGenerated between (ago(30d) .. now()) | summarize SignIns = count(), FirstSignIn = min(TimeGenerated), LastSignIn = max(TimeGenerated) | extend Table = "SigninLogs")
+| extend Kind = "Coverage", FullWindow = SignIns > 0 and FirstSignIn < ago(29d);
+union Coverage, Legacy
+| project Kind, Table, Flow, ClientAppUsed, UserId, UserPrincipalName, UserType, PolicyResults, SignIns, FirstSignIn, LastSignIn, FullWindow, Apps
+| order by Kind asc, Table asc, SignIns desc
 ```
 
 ### NB.2-DETAIL Internet-exposed management port rules with their properties and attachments
