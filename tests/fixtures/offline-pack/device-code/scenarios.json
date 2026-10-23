@@ -905,6 +905,120 @@
         "State": "Not written, 2 policies block device code flow in part, see the notes"
       }
     },
+    "companion-on": {
+      "Description": "No policy blocks device code flow for everyone, but the report-only companion from an earlier change exists and reads On, so it blocks the approved accounts: CR-20 brings it back to report-only rather than creating a second one",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "321b76bf-1fc5-5367-b144-e652b136743f",
+          "displayName": "ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
+              ],
+              "includeGroups": [
+                "efcd8baa-fb1b-55c5-8f56-76f56449a536"
+              ],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": {
+              "transferMethods": "deviceCodeFlow"
+            }
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false,
+      "EmergencyAccess": "complete",
+      "Expect": {
+        "State": "Change request and client email"
+      }
+    },
     "managed-only": {
       "Description": "Only the Microsoft-managed policy blocks device code flow, On for all users",
       "Policies": [

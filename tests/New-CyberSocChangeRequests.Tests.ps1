@@ -3697,6 +3697,25 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         $m.Index | Should -Match 'Only the Microsoft-managed policy blocks device code flow today\.'
     }
 
+    It 'brings an existing companion back to report-only rather than creating a second one' {
+        $r = New-DcPack 'companion' 'companion-on'
+        $id = @($r.Scenario.Policies | Where-Object displayName -eq 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS')[0].id
+        $text = Get-Cr20 $r.Out
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match 'Correct the existing report-only companion ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS for that group\.'
+        $text | Should -Match "Policy ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS \($id\), On today, brought to these settings, Report-only:"
+        $text | Should -Match "11\. Open the policy ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS \($id\), which already exists\. Under Users or workload identities, set Include to the group ATMO-MXDR-DEVICECODE-APPROVED only"
+        $text | Should -Match '12\. Set Enable policy to Report-only and select Save\.'
+        $text | Should -Not -Match 'Select New policy and name it ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS' -Because 'the companion is never duplicated'
+        $text | Should -Match '3\. Go to Entra ID > Conditional Access > Policies\. Record in the change record'
+        $text | Should -Match 'Open ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS and set its state, users, exclusions, target resources and conditions back to those recorded in step 3'
+        $text | Should -Match 'Select New policy and name it ATMO-MXDR-CA-BLOCK-DEVICECODE\.' -Because 'the companion is not a block for everyone, so the baseline policy is still created'
+        @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object { $_.CR -eq 'CR-20' -and $_.ResourceId -eq $id }).CurrentSetting | Should -Be 'today On, set to the companion settings and Report-only'
+        $r.Index | Should -Match "The companion ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS \($id\) reads On, so it blocks the approved device code accounts it should only watch\."
+        $email = Get-Cr20 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-20 with a companion'
+        $email | Should -Match '- ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS, the existing policy that watches the exception group, kept in report-only mode'
+    }
+
     It 'names the groups an enforced baseline policy excludes for review, never taking one as the approved exception group' {
         $r = New-DcPack 'enforced-group' 'enforced-with-group'
         Test-Path (Join-Path $r.Out 'CR-20-device-code-flow.txt') | Should -BeFalse
@@ -3761,6 +3780,12 @@ Describe 'Device code flow blocked by Conditional Access (CR-20)' {
         $filtered = & $base -Apps @{ applicationFilter = [pscustomobject]@{ mode = 'exclude'; rule = 'CustomSecurityAttribute.Engineering_Project -eq "Baker"' } }
         @((& $gap $filtered).Policies[0].Reasons) | Should -Be @('Resources') -Because 'an application filter takes the matching applications out of the block'
         (& $gap $filtered).Covering.Count | Should -Be 0
+        $browser = & $base; $browser.conditions | Add-Member clientAppTypes @('browser', 'mobileAppsAndDesktopClients')
+        @((& $gap $browser).Policies[0].Reasons) | Should -Be @('Conditions') -Because 'a block on some client app types leaves device code open on the others'
+        $all = & $base; $all.conditions | Add-Member clientAppTypes @('all')
+        (& $gap $all).Covering.Count | Should -Be 1
+        $legacy = Get-CyberSocCaGap -Policies @($browser) -Match { param($f) $f.Block } -Baseline 'ATMO-MXDR-CA-BLOCK-DEVICECODE' -Access $ea -ClientAppCondition
+        $legacy.Covering.Count | Should -Be 1 -Because 'for legacy authentication (CR-21) the client app types are the condition itself'
         @((& $gap (& $base -State 'disabled')).Policies[0].Reasons) | Should -Be @('Off')
         (& $gap (& $base -State 'enabledForReportingButNotEnforced' -Name 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS')).Policies.Count | Should -Be 0 -Because 'the report-only companion is never a gap'
         @((& $gap (& $base -Users @{ excludeUsers = @(); excludeGroups = @() })).Policies[0].MissingAccess).Count | Should -Be 6
