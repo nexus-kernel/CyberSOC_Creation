@@ -237,7 +237,7 @@ BeforeAll {
     $oldEmailTitles = 'What I am asking to change', 'Why I recommend it', 'What it means for you', 'The resources', 'How it can be reversed', 'Your approval', 'Your approval and a maintenance window'
     # The lines that head each group of resources: a subscription, and for CR-19 a management group, the root scope and
     # the Microsoft Entra directory roles, which belong to no subscription.
-    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles):$'
+    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days):$'
     $dayPattern = '(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}'
     # Checks one client email against the shared structure and the copy rules. Every generated email goes through it.
     # The parts are found by what each paragraph says: the ask, why, what it means for the client, the resources by
@@ -282,6 +282,39 @@ BeforeAll {
         $Text | Should -Not -Match '>' -Because "$Name has no navigation step, so no greater-than sign"
         $Text | Should -Not -Match '<' -Because "$Name has no angle bracket"
         $Text | Should -Not -Match '(?i)\b(we|our|ours|us)\b' -Because "$Name reads as written by one person"
+    }
+    . (Join-Path $PSScriptRoot '../report/Get-CyberSocEmergencyAccess.ps1')
+    # A scenario from tests/fixtures/offline-pack/emergency-access written into a pack as the collector writes it: the
+    # rows from the shared match, with the status the collector tests check it gives them. A string answer is a failed read.
+    function Add-EaScenario([string]$Path, [string]$Name) {
+        $sc = Get-Content (Join-Path $PSScriptRoot "fixtures/offline-pack/emergency-access/$Name.json") -Raw | ConvertFrom-Json
+        $read = { param($v) if ($v -is [string]) { $null } else { @($v) } }
+        $members = @{}
+        foreach ($p in @($sc.Graph.Members.PSObject.Properties)) { $members[$p.Name] = & $read $p.Value }
+        $set = ConvertTo-CyberSocEmergencyAccessRows -Users (& $read $sc.Graph.Users) -Groups (& $read $sc.Graph.Groups) -Members $members
+        $bad = { param($s) $s -notin 'OK', 'PARTIAL', 'EMPTY' }
+        $accStatus = $sc.Expect.'IA.16-ACCOUNTS'.Status; $grpStatus = $sc.Expect.'IA.16-GROUPS'.Status
+        Set-PackResult $Path 'IA.16-ACCOUNTS' $(if (& $bad $accStatus) { @() } else { @($set.Accounts) }) -Status $accStatus -Detail $(if (& $bad $accStatus) { 'Not a zero: the Graph token cannot read user accounts. Needs User.Read.All.' } else { '' })
+        Set-PackResult $Path 'IA.16-GROUPS' $(if (& $bad $grpStatus) { @() } else { @($set.Groups) }) -Status $grpStatus -Detail $(if (& $bad $grpStatus) { 'The groups could not be read in full. HTTP 500: Internal Server Error' } else { '' })
+        $sc
+    }
+    # A licence read with one SKU, so Microsoft Entra ID P1 reads Licensed (AAD_PREMIUM) or Not licensed (no plan).
+    function Set-EntraP1([string]$Path, [bool]$Licensed) {
+        $plans = @(if ($Licensed) { @{ ServicePlanId = '41781fb2-bc02-4b7c-bd55-b576c07bb09d'; ServicePlanName = 'AAD_PREMIUM'; ProvisioningStatus = 'Success'; AppliesTo = 'User' } }
+            else { @{ ServicePlanId = '57ff2da0-773e-42df-b2af-ffb7a2317929'; ServicePlanName = 'TEAMS1'; ProvisioningStatus = 'Success'; AppliesTo = 'User' } })
+        Set-PackResult $Path 'LIC.1-SKUS' @(@{ SkuId = 'f245ecc8-75af-4f8e-b61f-27d8114de5f3'; SkuPartNumber = $(if ($Licensed) { 'SPB' } else { 'O365_BUSINESS_ESSENTIALS' }); AppliesTo = 'User'; CapabilityStatus = 'Enabled'; Enabled = 50; Suspended = 0; Warning = 0; LockedOut = 0; Consumed = 41; ServicePlans = $plans })
+    }
+    # A scenario written into a pack as collector 1.15.0 writes it: IA.8-POLICIES raw, IA.8-DEFAULTS, IA.8-SIGNINS, the
+    # emergency access read and a licence read.
+    function Add-DcScenario([string]$Path, [string]$Name, [bool]$Licensed = $true) {
+        $dc = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/device-code/scenarios.json') -Raw | ConvertFrom-Json
+        $sc = $dc.Scenarios.$Name
+        Set-PackResult $Path 'IA.8-POLICIES' @($sc.Policies)
+        Set-PackResult $Path 'IA.8-DEFAULTS' @(@{ SecurityDefaults = [bool]$sc.SecurityDefaults })
+        Set-PackResult $Path 'IA.8-SIGNINS' @($dc.SignIns)
+        $null = Add-EaScenario $Path $sc.EmergencyAccess
+        Set-EntraP1 $Path $Licensed
+        $sc
     }
     $templateHeadings = @(
         '1. Summary', 'A) CHANGE DESCRIPTION', 'B) PURPOSE', 'C) RESOURCES',
@@ -1175,7 +1208,7 @@ Describe 'Change request variants' {
         $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
     }
 
-    It 'writes a client email for every change request, CR-01 to CR-19' {
+    It 'writes a client email for every change request, CR-01 to CR-20' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
         # written at least once. A change request written without its email, or with an email that does not
@@ -1189,6 +1222,8 @@ Describe 'Change request variants' {
         Set-PackResult $more 'DR.6-INITIATIVE' @(@{ DefinitionName = 'ATMO-MXDR-KV-TOSENT'; Resources = 6; Compliant = 5; NonCompliant = 1 })
         Set-PackResult $more 'DR.6-COVERAGE' @(@{ subscriptionId = $s1; Resources = 5; Assignments = 1 })
         Set-PackResult $more 'DR.6-NONCOMPLIANT' @(@{ ResourceId = "/subscriptions/$s1/resourcegroups/rg-app/providers/microsoft.keyvault/vaults/kv-app"; ResourceType = 'microsoft.keyvault/vaults'; AssignmentName = 'ATMO-MXDR-DIAG-TOSENT'; AssignmentId = "/subscriptions/$s1/providers/microsoft.authorization/policyassignments/a1"; Policies = 'ATMO-MXDR-KV-TOSENT' })
+        # No policy blocks device code flow, the emergency access read is complete and Entra ID P1 is licensed, so CR-20 is written.
+        $null = Add-DcScenario $more 'no-policy'
         $null = & $generator -EvidencePath $more -PurgeProtectionApproved
         $written = @()
         foreach ($pack in $full, $more) {
@@ -1207,7 +1242,7 @@ Describe 'Change request variants' {
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
-        @($written | Sort-Object -Unique) | Should -Be @(1..19) -Because 'the two packs between them write every change request'
+        @($written | Sort-Object -Unique) | Should -Be @(1..20) -Because 'the two packs between them write every change request'
         $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
@@ -3269,7 +3304,7 @@ Describe 'Licensing check and capability gate (collector 1.11.0)' {
         $section | Should -Match 'Defender for Endpoint plan: Plan 2, from the API reads\. Licenses: Plan 2 licensed'
         $section | Should -Match '- Onboarded servers without a server license: 1\. Named in LIC\.5-SERVERS: vm-sql01\.'
         $section | Should -Match '- Client devices tagged License MDE P1: 0\.'
-        $section | Should -Match '\| Microsoft Entra ID P1, for Conditional Access \| Licensed \| 250 \| 231 \| None yet \| In SPE_E5'
+        $section | Should -Match '\| Microsoft Entra ID P1, for Conditional Access \| Licensed \| 250 \| 231 \| CR-20 \| In SPE_E5'
         $section | Should -Match '\| Defender for Servers Plan 2 \| Partly licensed \|  \|  \| CR-16 \(no gate\) \| On in 1 of 2 subscriptions\. Off in a0b1c2d3'
         $section | Should -Match '\| Defender for Endpoint Plan 2 or Defender for Servers, the vulnerability and configuration data behind EW\.3, EW\.4 and EW\.5 \| Partly licensed \|  \|  \| EW\.3, EW\.4 and EW\.5 evidence \|'
         $section | Should -Match '\| Defender for Endpoint on servers, a server license for each onboarded server \| Partly licensed \|'
@@ -3293,11 +3328,11 @@ Describe 'Licensing check and capability gate (collector 1.11.0)' {
     }
 
     It 'writes no change request whose capability reads Not licensed, and keeps one reading Unknown with a note to confirm it' {
-        # No change request in CR-01 to CR-19 requires a license yet, so a copy of the generator gives CR-02 a requirement,
+        # A copy of the generator gives CR-02 a requirement on a license the fixtures lack, beside CR-20's Entra ID P1,
         # which exercises the gate in the generator loop itself. The fixtures here have no Defender for Office 365.
         $copy = Join-Path $TestDrive 'gate-tool'
         New-Item -ItemType Directory -Path (Join-Path $copy 'report') -Force | Out-Null
-        Copy-Item (Join-Path $PSScriptRoot '../report/Read-CyberSocPackResult.ps1'), (Join-Path $PSScriptRoot '../report/Get-CyberSocLicensing.ps1'), (Join-Path $PSScriptRoot '../report/Get-CyberSocEmergencyAccess.ps1') (Join-Path $copy 'report')
+        Copy-Item (Join-Path $PSScriptRoot '../report/*.ps1') (Join-Path $copy 'report')
         $text = Get-Content $generator -Raw
         $entry = "Change = 'Secure transfer required on storage accounts'; Sources = @('DP.1-DETAIL')"
         $text.Contains($entry) | Should -BeTrue
@@ -3339,21 +3374,6 @@ Describe 'Licensing check and capability gate (collector 1.11.0)' {
 
 Describe 'Emergency access accounts (collector 1.12.0)' {
     BeforeAll {
-        . (Join-Path $PSScriptRoot '../report/Get-CyberSocEmergencyAccess.ps1')
-        # A scenario from tests/fixtures/offline-pack/emergency-access written into a pack as the collector writes it: the
-        # rows from the shared match, with the status the collector tests check it gives them. A string answer is a failed read.
-        function Add-EaScenario([string]$Path, [string]$Name) {
-            $sc = Get-Content (Join-Path $PSScriptRoot "fixtures/offline-pack/emergency-access/$Name.json") -Raw | ConvertFrom-Json
-            $read = { param($v) if ($v -is [string]) { $null } else { @($v) } }
-            $members = @{}
-            foreach ($p in @($sc.Graph.Members.PSObject.Properties)) { $members[$p.Name] = & $read $p.Value }
-            $set = ConvertTo-CyberSocEmergencyAccessRows -Users (& $read $sc.Graph.Users) -Groups (& $read $sc.Graph.Groups) -Members $members
-            $bad = { param($s) $s -notin 'OK', 'PARTIAL', 'EMPTY' }
-            $accStatus = $sc.Expect.'IA.16-ACCOUNTS'.Status; $grpStatus = $sc.Expect.'IA.16-GROUPS'.Status
-            Set-PackResult $Path 'IA.16-ACCOUNTS' $(if (& $bad $accStatus) { @() } else { @($set.Accounts) }) -Status $accStatus -Detail $(if (& $bad $accStatus) { 'Not a zero: the Graph token cannot read user accounts. Needs User.Read.All.' } else { '' })
-            Set-PackResult $Path 'IA.16-GROUPS' $(if (& $bad $grpStatus) { @() } else { @($set.Groups) }) -Status $grpStatus -Detail $(if (& $bad $grpStatus) { 'The groups could not be read in full. HTTP 500: Internal Server Error' } else { '' })
-            $sc
-        }
         function Get-Index([string]$Pack) { Get-Content (Join-Path $Pack '05-change-requests/00-index.md') -Raw }
         function Get-EaSection([string]$Index) { ($Index -split '(?m)^## ') | Where-Object { $_ -like 'Emergency access accounts*' } | Select-Object -First 1 }
         function Read-EaPack([string]$Pack) {
@@ -3362,8 +3382,8 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
             Initialize-CyberSocPackReader -Pack $Pack -Manifest $manifest
             Get-CyberSocEmergencyAccess -Read { param([string]$Id) $s = Get-Status $Id; $ok = $s -in 'OK', 'EMPTY', 'PARTIAL'; @{ Status = $s; Rows = @(if ($ok) { Get-Rows $Id }); Unreadable = ($ok -and (Test-Unreadable $Id)) } }
         }
-        # No change request in CR-01 to CR-19 changes Conditional Access yet, so a copy of the generator marks CR-02 as one,
-        # which exercises the emergency access gate in the generator loop itself.
+        # A copy of the generator also marks CR-02 as a Conditional Access change, which exercises the emergency access gate
+        # in the generator loop itself on the full fixture, beside CR-20.
         $copy = Join-Path $TestDrive 'ea-gate-tool'
         New-Item -ItemType Directory -Path (Join-Path $copy 'report') -Force | Out-Null
         Copy-Item (Join-Path $PSScriptRoot '../report/*.ps1') (Join-Path $copy 'report')
@@ -3406,7 +3426,7 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
         $section = Get-EaSection (Get-Index $pack)
         $section | Should -Match 'every account with Atmosera in its UPN and every member of an Atmosera group, a group whose display name contains Atmosera'
         $section | Should -Match 'no change removes an existing exclusion of any of them'
-        $section | Should -Match 'No change request in this build changes Conditional Access yet, and one that does is written only when the read is complete and found at least one account\.'
+        $section | Should -Match 'CR-20 is written only when the read is complete and found at least one account\.'
         $section | Should -Match ('\| Atmosera Emergency Access \| 3 \| Assigned \| {0} \|' -f @($sc.Graph.Groups)[0].id)
         $section | Should -Match '\| SOC-atmosera-Tier0 \| 1 \| Dynamic \|'
         $section | Should -Match '\| breakglass-atmosera01@contoso\.onmicrosoft\.com \| Emergency Access 01 \| Member \| Yes \| UPN \|  \| the account \|'
@@ -3439,7 +3459,7 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
             Test-Path (Join-Path $pack '05-change-requests/CR-03-storage-minimum-tls.txt') | Should -BeTrue -Because 'a change request that is not a Conditional Access change is unaffected'
             $section = Get-EaSection $index
             if ($case.Name) { $section | Should -Match 'No Conditional Access change can be written: ' -Because $case.Name }
-            else { $section | Should -Match 'The pack was collected before the emergency access read, so no Conditional Access change can be written\. Recollect with CyberSOC collector 1\.12\.0 or later\. CR-02 is written only with the emergency access accounts\.' }
+            else { $section | Should -Match 'The pack was collected before the emergency access read, so no Conditional Access change can be written\. Recollect with CyberSOC collector 1\.12\.0 or later\. CR-02 and CR-20 are written only with the emergency access accounts\.' }
         }
         $index | Should -Not -Match '\| Atmosera group \|'
         $pack = Join-Path $TestDrive 'ea-gate-ok'
@@ -3447,7 +3467,7 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
         $null = Add-EaScenario $pack 'complete'
         Invoke-WithWindowsPowerShellJson { $null = & $script:eaGated -EvidencePath $pack }
         Test-Path (Join-Path $pack '05-change-requests/CR-02-storage-secure-transfer.email.txt') | Should -BeTrue -Because 'a complete read with accounts lets the change through'
-        (Get-EaSection (Get-Index $pack)) | Should -Match 'CR-02 is written only when the read is complete'
+        (Get-EaSection (Get-Index $pack)) | Should -Match 'CR-02 and CR-20 are written only when the read is complete'
     }
 
     Context 'CR-19 leaves the emergency access accounts out' {
@@ -3548,5 +3568,185 @@ Describe 'Emergency access accounts (collector 1.12.0)' {
         $ea = Read-EaPack $pack 3>$null
         $ea.Ready | Should -BeFalse
         $ea.Why | Should -Be 'the emergency access read is not complete (IA.16-GROUPS unreadable)'
+    }
+}
+
+Describe 'Device code flow blocked by Conditional Access (CR-20)' {
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '../report/Get-CyberSocCaChange.ps1')
+        $script:dc = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/device-code/scenarios.json') -Raw | ConvertFrom-Json
+        function New-DcPack([string]$Name, [string]$Scenario, [bool]$Licensed = $true) {
+            $pack = Join-Path $TestDrive "dc-$Name"
+            New-ChangeFixture $pack
+            $sc = Add-DcScenario $pack $Scenario $Licensed
+            Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -ClientContact 'Dana' -SenderName 'Scott Example' }
+            [pscustomobject]@{ Pack = $pack; Out = Join-Path $pack '05-change-requests'; Scenario = $sc; Index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw }
+        }
+        function Get-Cr20([string]$Out, [string]$Suffix = '.txt') { Get-Content (Join-Path $Out "CR-20-device-code-flow$Suffix") -Raw }
+        $script:eaGroups = '60cc37ba-dee8-5330-bd03-51890d7c6baa', '0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32', '8609bd57-3931-50b5-8dbd-1a14d439760d'
+        $script:eaUsers = 'ce843e0d-f976-5bcd-87e9-8dd7714bb782', '6ed69dbd-f1b1-5207-9f50-41d3c37d461b', 'b598e961-2bb3-539e-8bf3-b7b38ab7b94d'
+    }
+
+    It 'creates the baseline policy On when no policy blocks device code flow, with the exclusions, the exception group and the report-only companion' {
+        $r = New-DcPack 'none' 'no-policy'
+        $r.Index | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \| 3 \| Change request and client email \| CR-20-device-code-flow\.txt, CR-20-device-code-flow\.email\.txt \|'
+        $text = Get-Cr20 $r.Out
+        $text | Should -Match '^Title: Block device code flow with Conditional Access'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match '^Create the Conditional Access policy ATMO-MXDR-CA-BLOCK-DEVICECODE, On, which blocks device code flow for all users and all resources'
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match 'Policy ATMO-MXDR-CA-BLOCK-DEVICECODE, to create, On:\n- Users: All users'
+        foreach ($g in $eaGroups) { $res | Should -Match "- Excluded: Atmosera group [^\n]+ \($g\)" -Because 'every Atmosera group is excluded' }
+        foreach ($u in $eaUsers) { $res | Should -Match "- Excluded: emergency access account [^\n]+ \($u\)" -Because 'every account matched by its UPN is excluded on its own' }
+        $res | Should -Match '- Excluded: group ATMO-MXDR-DEVICECODE-APPROVED, the exception group'
+        $res | Should -Match '- Target resources: All resources, excluding Device Registration Service only where the client confirms that devices register with device code flow'
+        $res | Should -Match '- Conditions: Authentication flows set to Device code flow' -Because 'device code sits under Authentication flows, not Client apps'
+        $res | Should -Match '- Grant: Block access'
+        $res | Should -Match 'Policy ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS, to create, Report-only:\n- Users: group ATMO-MXDR-DEVICECODE-APPROVED only'
+        $res | Should -Match '- mtr-boardroom@contoso\.onmicrosoft\.com \(Member\), 41 sign-ins, applications Microsoft Teams, Microsoft Teams Rooms, last 2026-10-11' -Because 'the two rows of one account are added up'
+        $res | Should -Match '- kai\.helpdesk@contoso\.onmicrosoft\.com \(Member\), 14 sign-ins, applications Microsoft Azure CLI, last 2026-10-06'
+        $res | Should -Match '- breakglass-atmosera01@contoso\.onmicrosoft\.com \(Member\), 1 sign-in, applications Microsoft Azure CLI, last 2026-09-30, emergency access account, stays excluded'
+        $res | Should -Not -Match 'dana\.finance' -Because 'a legacy sign-in is not a device code sign-in'
+        $impl = Get-Section $text 'A) IMPLEMENTATION PLAN'
+        $impl[0] | Should -Match '^1\. Sign in to the Microsoft Entra admin center as at least a Conditional Access Administrator, go to Entra ID > Overview > Properties and select Manage security defaults\. Confirm Security defaults reads Disabled\.'
+        $impl[1] | Should -Match 'create the group ATMO-MXDR-DEVICECODE-APPROVED: Group type Security, Membership type Assigned\. Add each account the client confirmed still needs device code flow, and record the reason'
+        $impl[2] | Should -Be '3. Go to Entra ID > Conditional Access > Policies.'
+        $impl[3] | Should -Be '4. Select New policy and name it ATMO-MXDR-CA-BLOCK-DEVICECODE.'
+        ($impl -join "`n") | Should -Match '6\. Under Exclude, select Users and groups and add each Atmosera group and each emergency access account listed in the RESOURCES section, and the group ATMO-MXDR-DEVICECODE-APPROVED\.\n'
+        ($impl -join "`n") | Should -Match '8\. Under Conditions, select Authentication flows, set Configure to Yes, select Device code flow and select Done\. Leave every other condition not configured\.'
+        ($impl -join "`n") | Should -Match '10\. Set Enable policy to On and select Create\.' -Because 'the baseline creates the policy On after the 30-day review, never report-only'
+        ($impl -join "`n") | Should -Match '11\. Select New policy and name it ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS\. Under Users or workload identities, include the group ATMO-MXDR-DEVICECODE-APPROVED only, and exclude each Atmosera group and each emergency access account as in step 6\. Set the target resources, the condition and the grant as in steps 7 to 9\.'
+        ($impl -join "`n") | Should -Match '12\. Set Enable policy to Report-only and select Create\.'
+        ($impl -join "`n") | Should -Match '13\. Once ATMO-MXDR-CA-BLOCK-DEVICECODE shows On, check the policy list for a policy that shows Microsoft in the Created by column'
+        $impl[-1] | Should -Match '^14\. Open ATMO-MXDR-CA-BLOCK-DEVICECODE again and read its exclusions' -Because 'the exclusions are read again after saving'
+        $testing = (Get-Section $text 'B) TESTING PLAN') -join "`n"
+        $testing | Should -Match 'confirm ATMO-MXDR-CA-BLOCK-DEVICECODE reads On, ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS reads Report-only'
+        $testing | Should -Match 'run az login --use-device-code as a test account outside the group ATMO-MXDR-DEVICECODE-APPROVED, and enter the code on another device\. Confirm the sign-in is refused'
+        $rollback = Get-Section $text 'C) ROLLBACK PLAN'
+        $rollback[0] | Should -Match 'open ATMO-MXDR-CA-BLOCK-DEVICECODE, set Enable policy to Off and select Save\.'
+        foreach ($ref in @(Get-Section $text 'A) REFERENCES')) { $ref | Should -Match ': https://learn\.microsoft\.com/' -Because 'References are Microsoft Learn pages only' }
+        $text | Should -Match 'Authentication flows in Conditional Access: https://learn\.microsoft\.com/entra/identity/conditional-access/concept-authentication-flows'
+        $text | Should -Match 'Restrict device code flow for Microsoft Teams devices with Conditional Access: '
+        $text | Should -Match 'Manage emergency access accounts in Microsoft Entra ID: '
+        $text | Should -Match 'What is Conditional Access\?, license requirements: '
+        $csv = @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-20')
+        @($csv.Resource) | Should -Be @('ATMO-MXDR-CA-BLOCK-DEVICECODE', 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS', 'ATMO-MXDR-DEVICECODE-APPROVED')
+        $r.Index | Should -Match '- 1 account with device code sign-ins in the last 30 days is an emergency access account, which every Conditional Access change excludes, so CR-20 leaves it out of its email: breakglass-atmosera01@contoso\.onmicrosoft\.com \(1 sign-in\)\.'
+        $r.Index | Should -Match '\| Microsoft Entra ID P1, for Conditional Access \| Licensed \|[^\n]*\| CR-20 \|'
+    }
+
+    It 'writes a client email that explains device code once, lists the accounts and asks which still need it before the approval' {
+        $r = New-DcPack 'email' 'no-policy'
+        $email = Get-Cr20 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-20'
+        $email | Should -Match '^Subject: Approval requested: blocking device code sign-in\r?\n\r?\nHello Dana,'
+        $email | Should -Match 'I would like your approval to block device code sign-in for everyone in your organization, except the accounts you confirm still need it and the emergency access accounts Atmosera keeps for your tenant\.'
+        ([regex]::Matches($email, 'Device code sign-in lets a device')).Count | Should -Be 1 -Because 'device code flow is explained once'
+        $email | Should -Match 'a device code sign-in is refused for everyone outside the exception group'
+        $email | Should -Match 'Atmosera''s emergency access accounts stay excluded'
+        $email | Should -Match "Device code sign-ins in the last 30 days:\r?\n\r?\n- mtr-boardroom@contoso\.onmicrosoft\.com, 41 sign-ins with Microsoft Teams and Microsoft Teams Rooms\r?\n- kai\.helpdesk@contoso\.onmicrosoft\.com, 14 sign-ins with Microsoft Azure CLI\r?\n"
+        $email | Should -Not -Match 'breakglass' -Because 'the emergency access accounts stay excluded and are never listed'
+        $email | Should -Match 'could you tell me which of the accounts listed above still need device code sign-in, for example for the Azure CLI, a Teams Rooms device, digital signage or an automated task, and why each one needs it\?' -Because 'the email asks before it asks for approval'
+        $email | Should -Match 'whether any of your devices register with device code sign-in'
+        $email | Should -Match 'A second policy in report-only mode, which records what it would do without blocking anything, watches that group'
+    }
+
+    It 'turns a report-only baseline policy On and sets the Microsoft-managed policy Off, rather than adding a duplicate' {
+        $r = New-DcPack 'report-only' 'report-only'
+        $text = Get-Cr20 $r.Out
+        $id = @($r.Scenario.Policies | Where-Object displayName -eq 'ATMO-MXDR-CA-BLOCK-DEVICECODE')[0].id
+        $managedId = @($r.Scenario.Policies | Where-Object displayName -like 'Microsoft-managed*')[0].id
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match '^Bring the existing Conditional Access policy named in the RESOURCES section to the baseline ATMO-MXDR-CA-BLOCK-DEVICECODE'
+        $text | Should -Match "Policy ATMO-MXDR-CA-BLOCK-DEVICECODE \($id\), Report-only today, which is in report-only mode, so it records what it would do without blocking anything\. It is brought to the baseline below:"
+        $text | Should -Match "Microsoft-managed policy Microsoft-managed: Block device code flow \($managedId\), Report-only today, set to Off once ATMO-MXDR-CA-BLOCK-DEVICECODE is On\."
+        $text | Should -Match "4\. Open the policy ATMO-MXDR-CA-BLOCK-DEVICECODE \($id\)\.\r?\n" -Because 'the baseline policy is edited, not renamed and not duplicated'
+        $text | Should -Not -Match 'Select New policy and name it ATMO-MXDR-CA-BLOCK-DEVICECODE\.'
+        $text | Should -Match '10\. Set Enable policy to On and select Save\.'
+        $text | Should -Match '13\. Once ATMO-MXDR-CA-BLOCK-DEVICECODE shows On, open each policy that shows Microsoft in the Created by column and blocks device code flow \(Microsoft-managed: Block device code flow\), set Enable policy to Off and select Save\.'
+        $text | Should -Match 'set its name, state, users, exclusions, target resources and conditions back to those recorded in step 3'
+        $text | Should -Match 'Microsoft-managed Conditional Access policies: https://learn\.microsoft\.com/entra/identity/conditional-access/managed-policies'
+        @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-20').Count | Should -Be 4
+        $email = Get-Cr20 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-20 report-only'
+        $email | Should -Match 'Your tenant already has the Conditional Access policy ATMO-MXDR-CA-BLOCK-DEVICECODE, which is in report-only mode, so it records what it would do without blocking anything\. I would bring it to this standard rather than add a second policy beside it\.'
+        $email | Should -Match 'Microsoft has also added its own device code policy to your tenant\. I would turn it off once the new policy is on'
+        $email | Should -Match '- Microsoft-managed: Block device code flow, the Microsoft policy, turned off'
+    }
+
+    It 'brings a policy scoped to some users to the baseline, renames it, and names its exclusions beyond the baseline' {
+        $r = New-DcPack 'scoped' 'scoped-users'
+        $text = Get-Cr20 $r.Out
+        $pilot = @($r.Scenario.Policies | Where-Object displayName -eq 'Block device code - pilot')[0].id
+        $dana = $dc.Ids.Dana
+        $text | Should -Match "Policy Block device code - pilot \($pilot\), On today, which applies to selected users only and leaves out 1 account beyond the emergency access accounts\. It is brought to the baseline below and renamed ATMO-MXDR-CA-BLOCK-DEVICECODE:"
+        $text | Should -Match "- Excluded today beyond the baseline, removed once the accounts the client confirms are in ATMO-MXDR-DEVICECODE-APPROVED: accounts $dana"
+        $text | Should -Match "4\. Open the policy Block device code - pilot \($pilot\)\. Rename it ATMO-MXDR-CA-BLOCK-DEVICECODE, so the baseline policy keeps one name across clients\."
+        $text | Should -Match 'Remove every other exclusion listed for the policy in the RESOURCES section, after the accounts the client confirmed were added to the group, and never remove an Atmosera group or an emergency access account\.'
+        $r.Index | Should -Match "excludes 1 account beyond the baseline: accounts $dana\. Look each one up by its object ID"
+        $r.Index | Should -Not -Match 'does not exclude [0-9]+ emergency access' -Because 'the policy CR-20 edits gets the exclusions in its steps'
+        Assert-ApprovalEmail (Get-Cr20 $r.Out '.email.txt') 'CR-20 scoped'
+    }
+
+    It 'writes no CR-20 when an enabled policy already blocks device code flow for all users and all resources, and names a managed policy still On' {
+        $r = New-DcPack 'enforced' 'enforced'
+        Test-Path (Join-Path $r.Out 'CR-20-device-code-flow.txt') | Should -BeFalse
+        $r.Index | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \|  \| No gaps found \|  \|'
+        $r.Index | Should -Match '- CR-20 found device code flow blocked for all users and all resources by ATMO-MXDR-CA-BLOCK-DEVICECODE \('
+        $r.Index | Should -Match 'The Microsoft-managed policy Microsoft-managed: Block device code flow \([^)]+\) still reads On or Report-only beside it\.'
+        $m = New-DcPack 'managed-only' 'managed-only'
+        $m.Index | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \|  \| No gaps found \|'
+        $m.Index | Should -Match 'Only the Microsoft-managed policy blocks device code flow today\.'
+    }
+
+    It 'writes no CR-20 while security defaults are on, without Entra ID P1, without the emergency access set, or when it cannot tell which policy to edit' {
+        $sd = New-DcPack 'defaults' 'security-defaults-on'
+        $sd.Index | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \|  \| Not written, security defaults are on, see the notes \|  \|'
+        $sd.Index | Should -Match 'CR-20 is not written because security defaults are on \(IA\.8-DEFAULTS\)\. Microsoft Learn lists blocking device code flow among the protections security defaults enforce'
+        $ea = New-DcPack 'ea-failed' 'emergency-access-failed'
+        $ea.Index | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \|  \| Not written, the emergency access read is not complete \(IA\.16-ACCOUNTS UNAVAILABLE, IA\.16-GROUPS FAILED\) \|  \|'
+        $ea.Index | Should -Match 'CR-20 is not written because the emergency access read is not complete'
+        Test-Path (Join-Path $ea.Out 'CR-20-device-code-flow.email.txt') | Should -BeFalse
+        $lic = New-DcPack 'unlicensed' 'no-policy' $false
+        $lic.Index | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \|  \| Not written, needs Microsoft Entra ID P1, for Conditional Access, which reads Not licensed \|  \|'
+        $lic.Index | Should -Match '- Without Microsoft Entra ID P1 for the users in scope, security defaults stand in for CR-20: Microsoft Learn lists blocking device code flow among the protections they enforce \(Security defaults in Microsoft Entra ID\)\. IA\.8-DEFAULTS reads them off'
+        $amb = New-DcPack 'ambiguous' 'ambiguous'
+        $amb.Index | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \|  \| Not written, 2 policies block device code flow in part, see the notes \|'
+        $amb.Index | Should -Match 'CR-20 is not written because 2 policies already block device code flow in part, and none is named ATMO-MXDR-CA-BLOCK-DEVICECODE: Block device code - pilot \([^)]+\), which applies to selected users only / Block device code - all \([^)]+\), which is in report-only mode'
+        foreach ($r in $sd, $ea, $lic, $amb) { @(Get-ChildItem $r.Out -Filter 'CR-20-*').Count | Should -Be 0 }
+    }
+
+    It 'asks for recollection on a pack without the raw policies, and confirms the license when it is unknown' {
+        $old = Join-Path $TestDrive 'dc-old'
+        New-ChangeFixture $old
+        $null = & $generator -EvidencePath $old
+        (Get-Content (Join-Path $old '05-change-requests/00-index.md') -Raw) | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \|  \| Needs recollection with CyberSOC collector 1\.10\.0 or later \|'
+        $pack = Join-Path $TestDrive 'dc-unknown'
+        New-ChangeFixture $pack
+        $null = Add-DcScenario $pack 'no-policy'
+        Remove-PackResult $pack 'LIC.1-SKUS'
+        Remove-PackResult $pack 'IA.8-DEFAULTS'
+        $null = & $generator -EvidencePath $pack
+        $index = Get-Content (Join-Path $pack '05-change-requests/00-index.md') -Raw
+        $index | Should -Match '\| 20 \| Device code flow blocked by Conditional Access \| 3 \| Change request and client email, confirm the license before sending \|'
+        $index | Should -Match 'The security defaults state was not read \(IA\.8-DEFAULTS\), so step 1 of CR-20 checks it'
+    }
+
+    It 'reads a policy as covering only when nothing narrows it, and never counts an emergency access exclusion as a gap' {
+        $ea = [pscustomobject]@{ Protected = @($eaGroups + $eaUsers); ExcludeGroups = @($eaGroups); ExcludeUsers = @($eaUsers) }
+        $base = { param([hashtable]$Users = @{}, [hashtable]$Apps = @{}, [string]$State = 'enabled', [string]$Name = 'ATMO-MXDR-CA-BLOCK-DEVICECODE')
+            $u = @{ includeUsers = @('All'); excludeUsers = @($eaUsers); excludeGroups = @($eaGroups); excludeRoles = @() }; foreach ($k in $Users.Keys) { $u[$k] = $Users[$k] }
+            $a = @{ includeApplications = @('All'); excludeApplications = @() }; foreach ($k in $Apps.Keys) { $a[$k] = $Apps[$k] }
+            [pscustomobject]@{ id = (New-Guid).Guid; displayName = $Name; state = $State
+                conditions = [pscustomobject]@{ users = [pscustomobject]$u; applications = [pscustomobject]$a; authenticationFlows = [pscustomobject]@{ transferMethods = 'deviceCodeFlow' } }
+                grantControls = [pscustomobject]@{ builtInControls = @('block') } } }
+        $gap = { param($p) Get-CyberSocCaGap -Policies @($p) -Match { param($f) $f.Block -and $f.DeviceCode } -Baseline 'ATMO-MXDR-CA-BLOCK-DEVICECODE' -Companion 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS' -Access $ea -AllowedExcludeApps @($script:CyberSocDeviceRegistrationAppId) }
+        (& $gap (& $base)).Covering.Count | Should -Be 1
+        (& $gap (& $base -Apps @{ excludeApplications = @($script:CyberSocDeviceRegistrationAppId) })).Covering.Count | Should -Be 1 -Because 'Device Registration Service is the one resource the baseline excludes'
+        @((& $gap (& $base -Apps @{ excludeApplications = @('00000003-0000-0ff1-ce00-000000000000') })).Policies[0].Reasons) | Should -Be @('Resources')
+        @((& $gap (& $base -Users @{ excludeRoles = @('62e90394-69f5-4237-9190-012177145e10') })).Policies[0].Reasons) | Should -Be @('Exclusions')
+        @((& $gap (& $base -Users @{ excludeGroups = @($eaGroups) + 'b1b2b3b4-0000-4000-8000-000000000001' } -Name 'Client block')).Policies[0].Reasons) | Should -Be @('Exclusions') -Because 'only the baseline policy may exclude the exception group'
+        (& $gap (& $base -Users @{ excludeGroups = @($eaGroups) + 'b1b2b3b4-0000-4000-8000-000000000001' })).Covering.Count | Should -Be 1
+        @((& $gap (& $base -State 'disabled')).Policies[0].Reasons) | Should -Be @('Off')
+        (& $gap (& $base -State 'enabledForReportingButNotEnforced' -Name 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS')).Policies.Count | Should -Be 0 -Because 'the report-only companion is never a gap'
+        @((& $gap (& $base -Users @{ excludeUsers = @(); excludeGroups = @() })).Policies[0].MissingAccess).Count | Should -Be 6
     }
 }

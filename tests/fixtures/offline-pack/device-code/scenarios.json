@@ -1,0 +1,901 @@
+{
+  "Description": "CR-20 (device code flow) scenarios. Raw Conditional Access policies as IA.8-POLICIES holds them, the security defaults state (IA.8-DEFAULTS) and the emergency access scenario from ../emergency-access. Every scenario uses the same successful sign-ins (IA.8-SIGNINS): a Teams Rooms resource account on two rows, an account using the Azure CLI, an emergency access account, and a legacy sign-in that CR-20 ignores. Synthetic IDs.",
+  "Ids": {
+    "ApprovedGroup": "efcd8baa-fb1b-55c5-8f56-76f56449a536",
+    "DeviceRegistrationService": "01cb2876-7ebd-4aa4-9cc9-d28bd4d359a9",
+    "Room": "74237083-6806-50db-ba2b-c0eed395307f",
+    "Kai": "33e31b69-62dd-5c79-80c5-c81a5b63f437",
+    "Dana": "e2fe905b-078d-55c1-a550-a1b092b6ef93"
+  },
+  "SignIns": [
+    {
+      "Flow": "Device code",
+      "ClientAppUsed": "Mobile Apps and Desktop clients",
+      "UserId": "74237083-6806-50db-ba2b-c0eed395307f",
+      "UserPrincipalName": "mtr-boardroom@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "",
+      "SignIns": 30,
+      "LastSignIn": "2026-10-09T07:58:12Z",
+      "Apps": "Microsoft Teams Rooms, Microsoft Teams"
+    },
+    {
+      "Flow": "Device code",
+      "ClientAppUsed": "Mobile Apps and Desktop clients",
+      "UserId": "74237083-6806-50db-ba2b-c0eed395307f",
+      "UserPrincipalName": "mtr-boardroom@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "6cd58ea9-3f0b-5264-a01a-88a91e716af3=reportOnlyFailure",
+      "SignIns": 11,
+      "LastSignIn": "2026-10-11T08:02:40Z",
+      "Apps": "Microsoft Teams Rooms"
+    },
+    {
+      "Flow": "Device code",
+      "ClientAppUsed": "Mobile Apps and Desktop clients",
+      "UserId": "33e31b69-62dd-5c79-80c5-c81a5b63f437",
+      "UserPrincipalName": "kai.helpdesk@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "",
+      "SignIns": 14,
+      "LastSignIn": "2026-10-06T16:20:00Z",
+      "Apps": "Microsoft Azure CLI"
+    },
+    {
+      "Flow": "Device code",
+      "ClientAppUsed": "Mobile Apps and Desktop clients",
+      "UserId": "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+      "UserPrincipalName": "breakglass-atmosera01@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "",
+      "SignIns": 1,
+      "LastSignIn": "2026-09-30T12:00:00Z",
+      "Apps": "Microsoft Azure CLI"
+    },
+    {
+      "Flow": "Legacy authentication",
+      "ClientAppUsed": "IMAP4",
+      "UserId": "e2fe905b-078d-55c1-a550-a1b092b6ef93",
+      "UserPrincipalName": "dana.finance@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "",
+      "SignIns": 220,
+      "LastSignIn": "2026-10-11T23:10:00Z",
+      "Apps": "Office 365 Exchange Online"
+    }
+  ],
+  "Scenarios": {
+    "no-policy": {
+      "Description": "No policy blocks device code flow, only an MFA policy: CR-20 creates the baseline policy",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false,
+      "EmergencyAccess": "complete",
+      "Expect": {
+        "State": "Change request and client email",
+        "Edits": false
+      }
+    },
+    "report-only": {
+      "Description": "The baseline policy exists in report-only and the Microsoft-managed policy is report-only too: CR-20 turns the baseline policy On and the managed policy Off",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "e9422c3f-3fd3-5c3f-a97d-619a3e035a25",
+          "displayName": "ATMO-MXDR-CA-BLOCK-DEVICECODE",
+          "state": "enabledForReportingButNotEnforced",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [
+                "01cb2876-7ebd-4aa4-9cc9-d28bd4d359a9"
+              ],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": {
+              "transferMethods": "deviceCodeFlow"
+            }
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "6cd58ea9-3f0b-5264-a01a-88a91e716af3",
+          "displayName": "Microsoft-managed: Block device code flow",
+          "state": "enabledForReportingButNotEnforced",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": {
+              "transferMethods": "deviceCodeFlow"
+            }
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false,
+      "EmergencyAccess": "complete",
+      "Expect": {
+        "State": "Change request and client email",
+        "Edits": true
+      }
+    },
+    "scoped-users": {
+      "Description": "A client policy blocks device code flow for one account only, excludes another and not the emergency access accounts: CR-20 brings it to the baseline and renames it",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "8bc99aa2-5b3c-5ebe-b58d-9c2dac468b2b",
+          "displayName": "Block device code - pilot",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "33e31b69-62dd-5c79-80c5-c81a5b63f437"
+              ],
+              "excludeUsers": [
+                "e2fe905b-078d-55c1-a550-a1b092b6ef93"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": {
+              "transferMethods": "deviceCodeFlow"
+            }
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false,
+      "EmergencyAccess": "complete",
+      "Expect": {
+        "State": "Change request and client email",
+        "Edits": true
+      }
+    },
+    "enforced": {
+      "Description": "The baseline policy is On for all users and all resources but Device Registration Service, with the emergency access accounts and the approved group excluded, and the Microsoft-managed policy is still On beside it",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "e9422c3f-3fd3-5c3f-a97d-619a3e035a25",
+          "displayName": "ATMO-MXDR-CA-BLOCK-DEVICECODE",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d",
+                "efcd8baa-fb1b-55c5-8f56-76f56449a536"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [
+                "01cb2876-7ebd-4aa4-9cc9-d28bd4d359a9"
+              ],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": {
+              "transferMethods": "deviceCodeFlow"
+            }
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "6cd58ea9-3f0b-5264-a01a-88a91e716af3",
+          "displayName": "Microsoft-managed: Block device code flow",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": {
+              "transferMethods": "deviceCodeFlow"
+            }
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false,
+      "EmergencyAccess": "complete",
+      "Expect": {
+        "State": "No gaps found"
+      }
+    },
+    "security-defaults-on": {
+      "Description": "Security defaults are on and no Conditional Access policy exists",
+      "Policies": [],
+      "SecurityDefaults": true,
+      "EmergencyAccess": "complete",
+      "Expect": {
+        "State": "Not written, security defaults are on, see the notes"
+      }
+    },
+    "emergency-access-failed": {
+      "Description": "No policy blocks device code flow, but the emergency access read failed",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false,
+      "EmergencyAccess": "failed-read",
+      "Expect": {
+        "State": "Not written, the emergency access read is not complete (IA.16-ACCOUNTS UNAVAILABLE, IA.16-GROUPS FAILED)"
+      }
+    },
+    "ambiguous": {
+      "Description": "Two client policies block device code flow in part and neither has the baseline name",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "8bc99aa2-5b3c-5ebe-b58d-9c2dac468b2b",
+          "displayName": "Block device code - pilot",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "33e31b69-62dd-5c79-80c5-c81a5b63f437"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": {
+              "transferMethods": "deviceCodeFlow"
+            }
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "27c5a93e-f995-5e3f-8e50-ae4409c54c15",
+          "displayName": "Block device code - all",
+          "state": "enabledForReportingButNotEnforced",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": {
+              "transferMethods": "deviceCodeFlow"
+            }
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false,
+      "EmergencyAccess": "complete",
+      "Expect": {
+        "State": "Not written, 2 policies block device code flow in part, see the notes"
+      }
+    },
+    "managed-only": {
+      "Description": "Only the Microsoft-managed policy blocks device code flow, On for all users",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "6cd58ea9-3f0b-5264-a01a-88a91e716af3",
+          "displayName": "Microsoft-managed: Block device code flow",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": {
+              "transferMethods": "deviceCodeFlow"
+            }
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false,
+      "EmergencyAccess": "complete",
+      "Expect": {
+        "State": "No gaps found"
+      }
+    }
+  }
+}

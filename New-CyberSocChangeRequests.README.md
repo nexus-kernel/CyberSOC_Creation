@@ -62,6 +62,7 @@ Each change is written only when the pack shows resources still to fix. The numb
 | 17 | Plain FTP turned off on App Service and Function apps: the FTP state set to FTPS only, or to Disabled only where the client confirms no tool, process or person uses FTP or FTPS on the app, to upload files or to download files or logs. Only an app whose state reads `AllAllowed` is changed. Before changing an app, the steps read its FTP state under Settings > Configuration > General settings, and an app that no longer shows the recorded All allowed has changed since collection, so it is skipped and left for the next pack. FTPS only does not support TLS 1.0 or 1.1, so an app whose minimum inbound TLS version reads 1.0 or 1.1 is left unchanged until CR-04 sets 1.2, unless the client chooses Disabled. RESOURCES and the CSV show that minimum beside the FTP state. FTP Basic Auth Publishing Credentials (Settings > Configuration > General settings), the second part since collector 1.14.0, is turned Off on every app where NB.5-FTPAUTH-DETAIL reads it On, whatever its FTP state, since an app already set to FTPS only still accepts FTPS sign-in with deployment credentials. The steps read it first and leave an app that already shows Off. It is turned off only where the client confirmed that no deployment tool, process or person uses deployment credentials, from the publish profile or a user's own, to sign in to FTP or FTPS or to deploy through local Git, and otherwise left On and noted. That holds on an app whose FTP state is Disabled too: nothing connects over FTP there, but Microsoft Learn says publishing through local Git with deployment credentials also needs FTP basic authentication On. RESOURCES and the CSV show the recorded setting beside the FTP state. The rollback sets back only what the change made, the FTP state to All allowed and FTP basic authentication to On, the recorded values. The SCM basic authentication setting is left out. On a pack collected before 1.14.0, CR-17 writes the FTP state part only | NB.5-FTPS-DETAIL, NB.5-FTPAUTH-DETAIL, NB.5-FTPAUTH | Yes, approval request |
 | 18 | Blob containers set to private access: each container set to Blob or Container in a storage account that allows anonymous access, so anyone can read it today, set to Private under Data storage > Containers > Change access level, grouped by subscription and account. RESOURCES has one line per account with its containers counted and named, each with its recorded level, and the CSV one row per container. Before the change, the steps read Allow Blob anonymous access under Settings > Configuration and skip an account that now shows Disabled, since its containers can no longer be read anonymously and the portal cannot change their level, then read each listed container and skip one that no longer shows its recorded level or that the client asked to keep out. A container opened after collection is noted for the next pack, never changed. Setting a container to Private stops anonymous reads straight away, which the purpose and the email say. The static website container `$web` is left out, since its site is served from the web endpoint whatever its level. RESOURCES explains the order with CR-07: CR-07 takes only an account with no container set to Blob or Container, so a later pack picks each account up for CR-07 once its containers read Private. The rollback sets each container back to its recorded level, which Microsoft Learn allows only while the account allows anonymous access, so after CR-07 it needs that setting enabled again, which reopens every public container in the account | DP.1-CONTAINERS-DETAIL, DP.1-CONTAINERS, DP.1-DETAIL | Yes, approval request |
 | 19 | Roles removed from disabled accounts: every Azure role assignment, at management group, subscription, resource group, resource or root scope, and every Microsoft Entra role assignment, standing, time-bound, activated or eligible, that a user account the pack records as disabled holds, assigned to the account itself or through a group. A role assigned to the account is removed at its scope. A role held through a group is taken away by removing the account from the group it sits in, the role group itself or a group nested in it, which the pack records from collector 1.10.0 (`MemberOfId`, `GroupPath`), so the group and its other members keep the role. A group whose members a rule decides (dynamic membership) or that is synced from on-premises Active Directory cannot lose a member here, so its roles stay and the index names them. RESOURCES lists the Azure assignments by subscription, then the management groups and the root scope above them, the Entra assignments on their own, each with the account and its object ID, the role and its definition ID, the scope and the assignment ID, and then the group memberships removed, each with the group the account leaves, the role group it is nested in where it is, and the roles that group holds. Before removing anything, the steps open the account under Microsoft Entra ID > Users and read Account status, and an account turned back on since collection, or one the client asked to keep, is left unchanged and noted. An Azure assignment is removed under Access control (IAM) > Role assignments at the scope where it was made, and one at the root scope, which the portal cannot remove, with `az role assignment delete` from Cloud Shell. An Entra assignment is removed under Roles and administrators, or from its administrative unit, and an eligible one in Privileged Identity Management. An Entra role scoped to an administrative unit, or to a single application or other object (a directory scope of the form `/<object ID>`), is removed and restored from that unit or object, never from the tenant-wide list, which would restore it across the tenant. A group membership is removed under Groups > All groups > the group > Members > Remove, after confirming that each role group on the line still holds its roles (Azure role assignments or Assigned roles) and that each nested group is still a member of the one above it (Group memberships), since a membership that still carries any role on its line is removed and one whose every role is gone, or whose chain is broken, stays, and restored with Add members. The rollback recreates each assignment from its recorded role, scope and account, which the CSV carries in full, one row per assignment and one per membership (resource ID `/groups/<group>/members/<account>/$ref`), with any ABAC condition and its version exactly as Azure has them. A condition narrows what the role grants, so an assignment recorded with one is recreated with it: on the Conditions tab in the code editor, or with `az role assignment create --condition "$(cat condition.txt)"` from Cloud Shell in Bash at a management group or root scope, where the portal cannot add a condition. The command reads the condition from a file, so the shell never expands a token such as `$key_case_sensitive$`. Each assignment matches one rollback step only: without a condition below the root, with a condition at any scope, or without a condition at the root. Only one side is written when the other could not be read, and the index says which side is missing and why. A disabled emergency access account (see Emergency access accounts) is left out: none of its roles is removed, it is not removed from any group, and it appears nowhere in RESOURCES, the CSV, the attached account list or the email. The index names each one and why. With IA.16 missing, failed or partial, an account in an Atmosera group cannot be told apart, so CR-19 is not written when the pack lists any disabled account: it reads "Needs recollection with CyberSOC collector 1.12.0 or later" or "Not written, the emergency access read is not complete (...)" | IA.15-DISABLED, IA.15-RBAC, IA.15-ENTRA | Yes, approval request, with the accounts and their roles in `CR-19-disabled-account-roles.email.csv` to attach |
+| 20 | Device code flow blocked by Conditional Access (ATMO-MXDR-CA-BLOCK-DEVICECODE, from the MXDR baseline), written when no enabled policy blocks device code flow for all users and all resources (Get-CyberSocCaGap, see Conditional Access changes). A policy in report-only or Off, scoped to some users or resources, narrowed by a platform, location, risk or device condition, or with exclusions beyond the emergency access accounts and the exception group is a gap too, and CR-20 brings it to the baseline rather than adding a duplicate: the policy named ATMO-MXDR-CA-BLOCK-DEVICECODE when there is one, or the only other policy that blocks device code flow, renamed. When several do and none has the baseline name, CR-20 is not written and the index names them, so the client chooses which becomes the baseline. The policy covers All users and All resources, excluding Device Registration Service only where the client confirms devices register with device code flow (Microsoft Learn requires that exclusion for them), with the condition Authentication flows set to Device code flow, never Client apps, and the grant Block access. It is created or turned On, since the 30 days of device code sign-ins in the pack are the review the baseline asks for. It excludes each Atmosera group and each emergency access account matched by its UPN (IA.16, every time), and the group ATMO-MXDR-DEVICECODE-APPROVED, created by the change with assigned membership, which holds the accounts the client confirms and so records each exception. The report-only companion ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS targets that group, so the next pack shows whether an exception is still used. A Microsoft-managed device code policy is set Off once ATMO-MXDR is On, and the steps check for one Microsoft added after collection. RESOURCES lists the policies with every exclusion by name and object ID, the exclusions of an edited policy beyond the baseline by object ID, and the device code sign-ins of the last 30 days by account (IA.8-SIGNINS, the rows of one account added up) with its applications, count and last sign-in. The steps start by checking that security defaults read Disabled, record each existing policy for the rollback, and read the exclusions again after saving. The testing plan checks the states and exclusions and refuses an `az login --use-device-code` sign-in by a test account outside the exception group. The rollback sets the policy Off, or the edited policy back to its record, sets the companion Off and the managed policy back to its recorded state. It requires Microsoft Entra ID P1 (`Requires = @('EntraIdP1')`), and without it the index points to security defaults. It is written only with the emergency access accounts (`EmergencyAccess = $true`). While security defaults are on (IA.8-DEFAULTS) it reads "Not written, security defaults are on, see the notes", since Conditional Access replaces them only once they are off. On a pack without IA.8-POLICIES or IA.8-SIGNINS it reads "Needs recollection with CyberSOC collector 1.10.0 or later" | IA.8-POLICIES, IA.8-SIGNINS, IA.8-DEFAULTS, IA.16-ACCOUNTS, IA.16-GROUPS | Yes, approval request, asking which accounts still need device code flow and why, and whether devices register with it, before the approval |
 
 Resources a change leaves out are named in the index notes:
 
@@ -224,6 +225,21 @@ Resources a change leaves out are named in the index notes:
     open. It is reviewed with the client and narrowed, and a later pack picks it up once it names a management port.
 
   When only those remain, CR-16 reads "Only rules for cleanup or review remain, see the notes".
+- CR-20 names in the index:
+  - the policy or policies that already block device code flow for all users and all resources, when it reads "No gaps
+    found", and a Microsoft-managed device code policy still On or Report-only beside an ATMO-MXDR policy, to set Off.
+    When only the Microsoft-managed policy blocks it, the note says the baseline moves the block to
+    ATMO-MXDR-CA-BLOCK-DEVICECODE at the next identity change with the client.
+  - each policy that blocks device code flow but does not exclude every Atmosera group and emergency access account,
+    other than the one CR-20 edits, whose steps add them.
+  - the exclusions of the edited policy beyond the baseline, by object ID, to look up before sending, since the raw
+    policies carry IDs only.
+  - each other policy that blocks device code flow in part, left unchanged, and, when several do and none has the
+    baseline name, each of them with why it is a gap.
+  - the emergency access accounts with device code sign-ins, which stay excluded and are left out of the email.
+  - that the security defaults state was not read (IA.8-DEFAULTS), when it was not, since step 1 checks it.
+  - without Microsoft Entra ID P1, that security defaults stand in, which Microsoft Learn says block device code flow,
+    and whether IA.8-DEFAULTS reads them on.
 - AKS node pools (a scale set in the node resource group of a cluster, or tagged `aks-managed-`) get no change
   request. AKS sets encryption at host only when a node pool is created, so an existing pool is replaced: a new node
   pool created with `--enable-encryption-at-host`, its workloads moved across and the old pool removed. That needs
@@ -317,6 +333,26 @@ part of a name, so it misses a group such as prodAtmoseraOps that the shared mat
 written, as long as the pack lists any disabled account, and the index says why. The client email never mentions the
 accounts left out.
 
+## Conditional Access changes
+
+CR-20 is the first change request that changes Conditional Access, and CR-21 (legacy authentication) shares its reads
+and its handling of exclusions. The shared pieces are in `report/Get-CyberSocCaChange.ps1`, which builds on the policy
+facts of `report/Get-EbrCaEvaluation.ps1`, the evaluation the report and the worklist already use:
+
+| Function | What it does |
+|---|---|
+| `Get-CyberSocCaGap` | Reads IA.8-POLICIES with a `Match` script block on the policy facts (`$f.Block -and $f.DeviceCode` for CR-20). A policy covers the path when it is enabled for All users and All resources, with no excluded resource but the ones the baseline allows (`-AllowedExcludeApps`), no platform, location, risk or device condition, and no exclusion beyond the emergency access set and, on the policy with the baseline name only, its exception group. It returns each matching policy with why it is a gap (`Reasons`: Report-only, Off, Users, Resources, Conditions, Exclusions), its exclusions beyond the baseline, the emergency access groups and accounts it does not exclude, the covering policies, the policy to edit (`Target`), the others left unchanged, the Microsoft-managed policies (named `Microsoft-managed:`, as Microsoft Learn says) and whether it cannot tell which one to edit (`Ambiguous`). The report-only companion is never read as a gap |
+| `Format-CyberSocCaGapReason`, `Format-CyberSocCaExtra` | The reasons and the extra exclusions in words, for the change request, the index and the email |
+| `Get-CyberSocCaExclusions` | The exclusions every policy carries: each Atmosera group and each account matched by its UPN, named with their object IDs, then the exception group |
+| `Get-CyberSocCaPolicySteps` | The portal steps that create the baseline policy, or bring the target to it (renamed where its name differs, every other condition set to Not configured, every exclusion beyond the baseline removed once the confirmed accounts are in the group, never an emergency access one), set it On, then create the report-only companion for the exception group. The caller gives the resource and condition steps |
+
+CR-21 calls them the same way: `Get-CyberSocCaGap` with `Match = { param($f) $f.Block -and $f.Legacy }`, its own
+baseline name (ATMO-MXDR-CA-BLOCK-LEGACY), companion and exception group, and no excluded resource;
+`Get-CyberSocCaExclusions` with its exception group; and `Get-CyberSocCaPolicySteps` with the Client apps condition
+(Exchange ActiveSync clients and Other clients). Its catalog entry sets `Requires = @('EntraIdP1')` and
+`EmergencyAccess = $true` as CR-20 does, and a stale exclusion it removes is never one `Test-CyberSocEmergencyAccessId`
+names. Security defaults (`Get-SecurityDefaults` in the generator) hold either change back while they are on.
+
 ## How each change request is written
 
 The sections follow the template headings, in order, so each one pastes into the change request form.
@@ -349,7 +385,7 @@ The sections follow the template headings, in order, so each one pastes into the
 - The notification list is left empty to fill in.
 - Every change request writes a client email (`CR-NN-<change>.email.txt`) that asks for the client's approval,
   built by the one shared builder, `New-ApprovalEmail`. The generator stops before writing anything when a change
-  request has no approval request, and the Pester suite fails when any change request from CR-01 to CR-19 is written
+  request has no approval request, and the Pester suite fails when any change request from CR-01 to CR-20 is written
   without one, or with an email that leaves the shared structure, carries a title, or opens two paragraphs the same
   way. A new change request builds its email the same way.
 
@@ -372,7 +408,9 @@ order:
    roles under each line rather than naming them, and names them in `CR-19-disabled-account-roles.email.csv`, written
    beside the email to attach, since the list can be long: one line per role with the account, its sign-in name, the
    role, where it applies, how the account holds it (assigned to it, or through a group, nested or not) and what the
-   change does about it, including the memberships it leaves alone.
+   change does about it, including the memberships it leaves alone. CR-20 lists the policies it changes under
+   `Conditional Access policies:` and the accounts that completed a device code sign-in in the last 30 days under
+   `Device code sign-ins in the last 30 days:`, since they belong to the tenant rather than a subscription.
 7. How the change can be reversed, or that it cannot.
 8. The request: approval of the proposed date (`-ChangeDate`, two weeks after the build by default), or, for CR-09
    and CR-15, which restart each machine, approval of the change and a maintenance window. It asks for a reply by a
@@ -455,6 +493,17 @@ Each change keeps its own content inside that structure:
   name from the directory, gets an apostrophe in front, which the spreadsheet hides. It offers to restore any role from the record and to add an account back to its group, and
   before asking for approval it asks whether any account is expected back in use, such as someone on leave or a
   seasonal worker, or is kept for emergency access, and says such an account stays out of the change.
+- CR-20 explains device code sign-in once, in plain words, as the way a device without a keyboard or browser signs in
+  by showing a code that a person enters on another device. It says that a device code sign-in is then refused for
+  everyone outside the exception group and that a session that began with one can be signed out, that every other way
+  of signing in keeps working, that Atmosera's emergency access accounts stay excluded, and that the group membership
+  records each exception, which a report-only policy watches from month to month. Where it edits an existing policy it
+  names the policy and why it falls short, and where a Microsoft-managed policy blocks device code flow it says that
+  policy is turned off once the new one is on. It lists the accounts that completed a device code sign-in in the last
+  30 days, each with its count and applications, leaving out the emergency access accounts, or says that none did.
+  Before asking for approval it asks which of those accounts still need device code sign-in, for example for the
+  Azure CLI, a Teams Rooms device, digital signage or an automated task, and why, and whether any device registers
+  with device code sign-in, so device registration can be left out of the block.
 - CR-05, CR-11, CR-12 and CR-14 say that the change cannot be reversed, because the service takes no lower minimum,
   and why no reversal should be needed.
 
@@ -510,7 +559,24 @@ State link (Assign Azure roles using the Azure portal), while a resource scope h
 on a resource is read and recreated in Privileged Identity Management (Assign Azure resource roles in Privileged
 Identity Management), and Resource Graph returns assignments at parent scopes only
 with the `AtScopeAboveAndBelow` scope filter and holds role assignments, role definitions and classic administrators
-only (Understanding the Azure Resource Graph query language, Azure Resource Graph table and resource type reference). A role assignment condition filters down what the role grants and is added under Conditions in the code editor, except at a management group scope, where the portal cannot add one (Azure role assignment conditions, Add or edit Azure role assignment conditions using the Azure portal, using Azure CLI), and an Entra role can be scoped to a single app registration, which is assigned from App registrations, the application, Roles and administrators (Assign Microsoft Entra roles).
+only (Understanding the Azure Resource Graph query language, Azure Resource Graph table and resource type reference). A role assignment condition filters down what the role grants and is added under Conditions in the code editor, except at a management group scope, where the portal cannot add one (Azure role assignment conditions, Add or edit Azure role assignment conditions using the Azure portal, using Azure CLI), and an Entra role can be scoped to a single app registration, which is assigned from App registrations, the application, Roles and administrators (Assign Microsoft Entra roles). For CR-20: device code flow lets devices
+without a local input sign in, is a high-risk method used in phishing, and Microsoft recommends blocking it wherever
+possible, it sits under the Authentication flows condition, a policy for All resources applies to Device Registration
+Service, which is excluded by its client ID `01cb2876-7ebd-4aa4-9cc9-d28bd4d359a9` where devices register with device
+code flow, a session that began with device code flow stays protocol tracked so the block can sign it out, and a device
+may need a fresh token once the policy is Off or Report-only (Authentication flows in Conditional Access), the policy
+is built from Users, Target resources, Conditions, Authentication flows and Grant, Block access, and an exception is
+scoped by group (Block authentication flows with Conditional Access policy, Restrict device code flow for Microsoft
+Teams devices with Conditional Access), emergency access accounts are excluded from policies that block or restrict
+sign-in (Manage emergency access accounts in Microsoft Entra ID), Conditional Access needs Microsoft Entra ID P1 for the
+users in scope (What is Conditional Access?, license requirements), report-only evaluates a policy without enforcing
+it (Analyze Conditional Access policy impact), a Microsoft-managed policy shows Microsoft in the Created by column, its
+name starts with Microsoft-managed:, and it can be turned Off and take exclusions but not be renamed or deleted
+(Microsoft-managed Conditional Access policies), security defaults block device code flow and are turned off before
+Conditional Access replaces them, under Entra ID, Overview, Properties, Manage security defaults (Security defaults in
+Microsoft Entra ID), a security group is created under Entra ID, Groups, All groups, New group (Manage Microsoft Entra
+groups and group membership), and `az login --use-device-code` forces device code flow (Sign into Azure interactively
+using the Azure CLI).
 
 Every change request, email and the index keep to the copy rules: no semicolons, arrows (Unicode arrows and `->`,
 `<-`, `=>`), emoji or angle brackets, and the greater-than sign only in navigation steps such as Settings >
@@ -531,8 +597,8 @@ Each change reports one of these statuses in the index: change request and clien
 license before sending" when a capability it needs reads Unknown), not written because a capability it needs reads Not
 licensed, no gaps found, not collected with the manifest status, result file unreadable, or needs recollection with CyberSOC collector 1.1.0 or
 later (1.2.0 or later for CR-11 to CR-14, 1.3.0 or later for CR-15, 1.4.0 or later for CR-09 and CR-15 when they
-have a machine or scale set to change, 1.6.0 or later for CR-16, 1.14.0 or later for CR-17 when neither of its results is in the pack, and 1.8.0 or later
-for CR-18). CR-01 and CR-10 read DR.6-MYSQLAUDIT apart from their sources, as the notes above describe. CR-17 reads its two results apart: on a pack collected before 1.14.0 it writes its FTP state part only,
+have a machine or scale set to change, 1.6.0 or later for CR-16, 1.14.0 or later for CR-17 when neither of its results is in the pack, 1.8.0 or later
+for CR-18, 1.10.0 or later for CR-20, and 1.12.0 or later for CR-20 when the emergency access read is missing). CR-01 and CR-10 read DR.6-MYSQLAUDIT apart from their sources, as the notes above describe. CR-17 reads its two results apart: on a pack collected before 1.14.0 it writes its FTP state part only,
 and with no FTP state gap reads no FTP state gaps found, the FTP basic authentication part needs recollection with
 CyberSOC collector 1.14.0 or later. When NB.5-FTPS-DETAIL failed or is unreadable but NB.5-FTPAUTH-DETAIL was read, it
 writes the FTP basic authentication part only and says so in a note, and only when neither was read does it read not
@@ -541,7 +607,7 @@ collected or result file unreadable for NB.5-FTPS-DETAIL. A partial read with no
 NB.5-FTPAUTH could not read, or say that the app list itself may be incomplete. A result the manifest reads as OK or PARTIAL whose file is missing, empty or not valid JSON is unreadable, never
 read as no gaps. A change request that also reads a result beyond its sources (DR.6-COVERAGE and P0.5 for CR-01,
 DR.6-NONCOMPLIANT and DR.6-MYSQLAUDIT for CR-10, DR.6-MYSQLAUDIT for CR-01, DP.1-CONTAINERS for CR-07 and CR-18, DP.4-VMSS-ELIGIBILITY for CR-09 on a 1.3.0 pack, P0.3 for
-CR-16, NB.5-FTPAUTH-DETAIL for CR-17) reads "partial
+CR-16, NB.5-FTPAUTH-DETAIL for CR-17, IA.8-DEFAULTS for CR-20) reads "partial
 collection scope" when that result
 is PARTIAL, and gets a note in the index when it was not collected or is unreadable.
 
