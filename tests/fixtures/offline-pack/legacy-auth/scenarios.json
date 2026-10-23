@@ -1,0 +1,961 @@
+{
+  "Description": "CR-21 (legacy authentication) scenarios. Raw Conditional Access policies as IA.8-POLICIES holds them, the security defaults state (IA.8-DEFAULTS) and the emergency access scenario from ../emergency-access. Every scenario uses the same successful sign-ins (IA.8-SIGNINS): an SMTP AUTH service account on two rows, an account reading mail over IMAP, an emergency access account using Exchange ActiveSync, and a device code sign-in that CR-21 ignores but uses to name an excluded account. Synthetic IDs.",
+  "Ids": {
+    "Tier0": "b2dc5657-a9c1-5cb7-a1f2-02138a08ff3f",
+    "Scanner": "a62ac359-f60a-59ed-b2d7-de339bf424dd",
+    "Dana": "e2fe905b-078d-55c1-a550-a1b092b6ef93",
+    "Stale": "e157910b-3fd0-5c3a-927d-63dff52169af",
+    "StaleDisabled": "f2c7b8a9-0fb4-45c6-8d1e-5c6d7e8f9a07",
+    "ItAdmins": "2b36a5e4-a16c-5159-b0d5-a27334c1bbfe",
+    "DirSyncRole": "d29b2b05-8046-44ba-8758-1e26182fcf32",
+    "GlobalAdminRole": "62e90394-69f5-4237-9190-012177145e10"
+  },
+  "SignIns": [
+    {
+      "Flow": "Legacy authentication",
+      "ClientAppUsed": "Authenticated SMTP",
+      "UserId": "a62ac359-f60a-59ed-b2d7-de339bf424dd",
+      "UserPrincipalName": "scanner-smtp@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "",
+      "SignIns": 410,
+      "LastSignIn": "2026-10-12T06:00:00Z",
+      "Apps": "Office 365 Exchange Online"
+    },
+    {
+      "Flow": "Legacy authentication",
+      "ClientAppUsed": "Authenticated SMTP",
+      "UserId": "a62ac359-f60a-59ed-b2d7-de339bf424dd",
+      "UserPrincipalName": "scanner-smtp@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "fb2b1f65-16ae-5f03-be9f-60d36af7d4ea=notApplied",
+      "SignIns": 12,
+      "LastSignIn": "2026-10-02T06:00:00Z",
+      "Apps": "Office 365 Exchange Online"
+    },
+    {
+      "Flow": "Legacy authentication",
+      "ClientAppUsed": "IMAP4",
+      "UserId": "e2fe905b-078d-55c1-a550-a1b092b6ef93",
+      "UserPrincipalName": "dana.finance@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "",
+      "SignIns": 220,
+      "LastSignIn": "2026-10-11T23:10:00Z",
+      "Apps": "Office 365 Exchange Online"
+    },
+    {
+      "Flow": "Legacy authentication",
+      "ClientAppUsed": "Exchange ActiveSync",
+      "UserId": "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+      "UserPrincipalName": "breakglass-atmosera01@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "",
+      "SignIns": 2,
+      "LastSignIn": "2026-09-30T12:00:00Z",
+      "Apps": "Office 365 Exchange Online"
+    },
+    {
+      "Flow": "Device code",
+      "ClientAppUsed": "Mobile Apps and Desktop clients",
+      "UserId": "e157910b-3fd0-5c3a-927d-63dff52169af",
+      "UserPrincipalName": "old.contractor@contoso.onmicrosoft.com",
+      "UserType": "Member",
+      "PolicyResults": "",
+      "SignIns": 1,
+      "LastSignIn": "2026-09-20T12:00:00Z",
+      "Apps": "Microsoft Azure CLI"
+    }
+  ],
+  "Scenarios": {
+    "no-policy": {
+      "Description": "No policy blocks legacy authentication, only an MFA policy: CR-21 creates the baseline policy",
+      "EmergencyAccess": "complete",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false
+    },
+    "stale-exclusions": {
+      "Description": "The baseline policy is On and excludes, beyond the emergency access accounts, the Directory Synchronization Accounts role, an emergency access account matched through an Atmosera group, an SMTP AUTH account still in use, and two accounts with no legacy sign-in (one disabled): CR-21 removes those two only",
+      "EmergencyAccess": "complete",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "fb2b1f65-16ae-5f03-be9f-60d36af7d4ea",
+          "displayName": "ATMO-MXDR-CA-BLOCK-LEGACY",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d",
+                "b2dc5657-a9c1-5cb7-a1f2-02138a08ff3f",
+                "a62ac359-f60a-59ed-b2d7-de339bf424dd",
+                "e157910b-3fd0-5c3a-927d-63dff52169af",
+                "f2c7b8a9-0fb4-45c6-8d1e-5c6d7e8f9a07"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [
+                "d29b2b05-8046-44ba-8758-1e26182fcf32"
+              ],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "exchangeActiveSync",
+              "other"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false
+    },
+    "exclusions-in-use": {
+      "Description": "The baseline policy is On and every exclusion beyond the emergency access accounts is the Directory Synchronization Accounts role or an account with legacy sign-ins in the last 30 days: no gaps",
+      "EmergencyAccess": "complete",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "fb2b1f65-16ae-5f03-be9f-60d36af7d4ea",
+          "displayName": "ATMO-MXDR-CA-BLOCK-LEGACY",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d",
+                "a62ac359-f60a-59ed-b2d7-de339bf424dd",
+                "e2fe905b-078d-55c1-a550-a1b092b6ef93"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [
+                "d29b2b05-8046-44ba-8758-1e26182fcf32"
+              ],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "exchangeActiveSync",
+              "other"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false
+    },
+    "report-only-managed": {
+      "Description": "The baseline policy is report-only and excludes the Atmosera groups but not the accounts matched by UPN, and the Microsoft-managed policy is report-only too: CR-21 turns the baseline policy On and the managed policy Off",
+      "EmergencyAccess": "complete",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "fb2b1f65-16ae-5f03-be9f-60d36af7d4ea",
+          "displayName": "ATMO-MXDR-CA-BLOCK-LEGACY",
+          "state": "enabledForReportingButNotEnforced",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "exchangeActiveSync",
+              "other"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "0df750b1-388b-5318-a649-db934e79611a",
+          "displayName": "Microsoft-managed: Block legacy authentication",
+          "state": "enabledForReportingButNotEnforced",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "exchangeActiveSync",
+              "other"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false
+    },
+    "groups-to-review": {
+      "Description": "The baseline policy is On and excludes a plain group and a directory role beyond the emergency access set: CR-21 is not written and names them for review",
+      "EmergencyAccess": "complete",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "fb2b1f65-16ae-5f03-be9f-60d36af7d4ea",
+          "displayName": "ATMO-MXDR-CA-BLOCK-LEGACY",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d",
+                "2b36a5e4-a16c-5159-b0d5-a27334c1bbfe"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [
+                "d29b2b05-8046-44ba-8758-1e26182fcf32",
+                "62e90394-69f5-4237-9190-012177145e10"
+              ],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "exchangeActiveSync",
+              "other"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false
+    },
+    "activesync-only": {
+      "Description": "A client policy blocks Exchange ActiveSync clients only, excludes a stale account and a plain group: CR-21 brings it to the baseline, renames it, removes the account and leaves the group for review",
+      "EmergencyAccess": "complete",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "ca1156a3-27f6-5c26-a40a-6d70b2ce3ad3",
+          "displayName": "Block ActiveSync basic auth",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d",
+                "e157910b-3fd0-5c3a-927d-63dff52169af"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d",
+                "2b36a5e4-a16c-5159-b0d5-a27334c1bbfe"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "exchangeActiveSync"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false
+    },
+    "security-defaults-on": {
+      "Description": "Security defaults are on and no policy exists",
+      "EmergencyAccess": "complete",
+      "SecurityDefaults": true,
+      "Policies": []
+    },
+    "emergency-access-failed": {
+      "Description": "No policy blocks legacy authentication, and the emergency access read failed",
+      "EmergencyAccess": "failed-read",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false
+    },
+    "ambiguous": {
+      "Description": "Two client policies block legacy authentication in part and none has the baseline name",
+      "EmergencyAccess": "complete",
+      "Policies": [
+        {
+          "id": "1511b592-65d0-5ed0-96c2-8776df6e3458",
+          "displayName": "CA001 Require MFA for all users",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "all"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "mfa"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "dddb080f-b781-5ddb-83ea-6613a435b58e",
+          "displayName": "Block legacy auth - pilot",
+          "state": "enabled",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "e2fe905b-078d-55c1-a550-a1b092b6ef93"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "exchangeActiveSync",
+              "other"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        },
+        {
+          "id": "90319269-1a18-5d03-9c4f-a84910f9adb3",
+          "displayName": "Block legacy auth - all",
+          "state": "enabledForReportingButNotEnforced",
+          "createdDateTime": "2026-03-02T10:00:00Z",
+          "modifiedDateTime": "2026-09-14T10:00:00Z",
+          "conditions": {
+            "users": {
+              "includeUsers": [
+                "All"
+              ],
+              "excludeUsers": [
+                "ce843e0d-f976-5bcd-87e9-8dd7714bb782",
+                "6ed69dbd-f1b1-5207-9f50-41d3c37d461b",
+                "b598e961-2bb3-539e-8bf3-b7b38ab7b94d"
+              ],
+              "includeGroups": [],
+              "excludeGroups": [
+                "60cc37ba-dee8-5330-bd03-51890d7c6baa",
+                "0d4b95cb-c2b8-5f81-bb64-a7b083f0eb32",
+                "8609bd57-3931-50b5-8dbd-1a14d439760d"
+              ],
+              "includeRoles": [],
+              "excludeRoles": [],
+              "includeGuestsOrExternalUsers": null,
+              "excludeGuestsOrExternalUsers": null
+            },
+            "applications": {
+              "includeApplications": [
+                "All"
+              ],
+              "excludeApplications": [],
+              "includeUserActions": []
+            },
+            "clientAppTypes": [
+              "exchangeActiveSync",
+              "other"
+            ],
+            "platforms": null,
+            "locations": null,
+            "devices": null,
+            "signInRiskLevels": [],
+            "userRiskLevels": [],
+            "authenticationFlows": null
+          },
+          "grantControls": {
+            "operator": "OR",
+            "builtInControls": [
+              "block"
+            ],
+            "authenticationStrength": null
+          },
+          "sessionControls": null
+        }
+      ],
+      "SecurityDefaults": false
+    }
+  }
+}

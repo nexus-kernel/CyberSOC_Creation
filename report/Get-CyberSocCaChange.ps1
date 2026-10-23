@@ -1,6 +1,6 @@
 <#
     Conditional Access change requests shared by New-CyberSocChangeRequests.ps1 (CR-20, device code flow, and CR-21,
-    legacy authentication, next) and their tests. Offline: it reads the raw policies the collector wrote to IA.8-POLICIES
+    legacy authentication) and their tests. Offline: it reads the raw policies the collector wrote to IA.8-POLICIES
     and the emergency access set from report/Get-CyberSocEmergencyAccess.ps1, and calls nothing.
 
     A change request that blocks one authentication path with Conditional Access uses three pieces:
@@ -10,12 +10,15 @@
                                  duplicate beside it. A policy in report-only or Off, scoped to some users or resources,
                                  narrowed by a condition, or with exclusions beyond the baseline is a gap.
       Get-CyberSocCaExclusions   the exclusions every policy the change writes carries: each Atmosera group and each
-                                 account matched by its UPN (decision 4 of the Oct 21 review), with the exception group.
-      Get-CyberSocCaPolicySteps  the portal steps that create or edit the policy, then its report-only companion, which
-                                 targets the exception group so the next pack shows whether each exception is still used.
+                                 account matched by its UPN (decision 4 of the Oct 21 review), with any exception group.
+      Get-CyberSocCaPolicySteps  the portal steps that create or edit the policy, then, where the change has one, its
+                                 report-only companion, which targets the exception group so the next pack shows whether
+                                 each exception is still used.
 
-    CR-21 calls them the same way with its own Match (Block and Legacy from Get-EbrCaPolicyFacts), baseline name,
-    companion name, exception group and condition steps, and no excluded resource.
+    CR-21 calls them with its own Match (Block and Legacy from Get-EbrCaPolicyFacts), baseline name and condition steps,
+    no excluded resource, and no companion or exception group: the accounts that keep legacy authentication stay excluded
+    one by one (AllowedExclude), with the Directory Synchronization Accounts role, so each pack's legacy sign-ins show
+    which exclusion is no longer used.
 #>
 
 . (Join-Path $PSScriptRoot 'Get-EbrCaEvaluation.ps1')
@@ -23,6 +26,10 @@
 # Device Registration Service, the one resource the device code baseline may exclude, by its client ID (Microsoft Learn,
 # Authentication flows in Conditional Access).
 $script:CyberSocDeviceRegistrationAppId = '01cb2876-7ebd-4aa4-9cc9-d28bd4d359a9'
+# The Directory Synchronization Accounts role, by its template ID (Microsoft Learn, Microsoft Entra built-in roles), which
+# Microsoft Learn has policies for all users exclude where Microsoft Entra Connect syncs the directory. Conditional Access
+# names a directory role by its template ID.
+$script:CyberSocDirSyncRoleId = 'd29b2b05-8046-44ba-8758-1e26182fcf32'
 
 function Get-CyberSocCaText($v) { if ($null -eq $v) { '' } else { ([string]$v).Trim() } }
 
@@ -49,14 +56,22 @@ function Get-CyberSocCaGap {
     .PARAMETER ClientAppCondition
         The path is itself a client app condition, as legacy authentication is (CR-21). Otherwise a policy that selects some
         client app types rather than all of them blocks the path only for those, so it is a gap.
+    .PARAMETER ClientApps
+        With ClientAppCondition, the client app types the baseline selects, such as exchangeActiveSync and other. A policy
+        that leaves one of them out blocks the path only in part, so it is a gap.
+    .PARAMETER AllowedExclude
+        The user and directory role IDs (role template IDs) the baseline lets a policy keep excluded, such as the Directory
+        Synchronization Accounts role and the accounts still signing in with legacy authentication (CR-21). They are never
+        extra exclusions, and each policy lists the ones it excludes in Kept.
     .PARAMETER Access
         The emergency access set from Get-CyberSocEmergencyAccess. Its groups and accounts are never extra exclusions.
     .PARAMETER AllowedExcludeApps
         The application IDs the baseline lets a policy exclude from All resources.
     .OUTPUTS
         Policies   one row per matching policy: Id, Name, State, Managed, Reasons (why it is a gap), Extra (its exclusions
-                   beyond the baseline), MissingAccess (the emergency access groups and accounts it does not exclude),
-                   Covers (enabled with no reason).
+                   beyond the baseline), Kept (its exclusions AllowedExclude names, Users and Roles), ExcludedUsers and
+                   ExcludedGroups (every exclusion as the policy holds it), MissingAccess (the emergency access groups and
+                   accounts it does not exclude), Covers (enabled with no reason).
         Covering   the enabled policies that block the path for all users and all resources.
         Target     the existing policy the change edits: the one named Baseline, or the only other candidate. Null when
                    the change creates the baseline policy.
@@ -68,8 +83,10 @@ function Get-CyberSocCaGap {
                    the block is in force for everyone else, so the change is not written, but the groups are named for
                    review and never read as no gaps, since a group for all staff would leave the path open to them.
     #>
-    param($Policies, [Parameter(Mandatory)][scriptblock]$Match, [Parameter(Mandatory)][string]$Baseline, [string]$Companion = '', $Access, [string[]]$AllowedExcludeApps = @(), [switch]$ClientAppCondition)
+    param($Policies, [Parameter(Mandatory)][scriptblock]$Match, [Parameter(Mandatory)][string]$Baseline, [string]$Companion = '', $Access, [string[]]$AllowedExcludeApps = @(), [switch]$ClientAppCondition, [string[]]$ClientApps = @(), [string[]]$AllowedExclude = @())
     $allowedApps = @($AllowedExcludeApps | ForEach-Object { (Get-CyberSocCaText $_).ToLowerInvariant() })
+    $allowed = @($AllowedExclude | ForEach-Object { (Get-CyberSocCaText $_).ToLowerInvariant() } | Where-Object { $_ })
+    $isAllowed = { param($id) (Get-CyberSocCaText $id).ToLowerInvariant() -in $allowed }
     $rows = [System.Collections.Generic.List[object]]::new()
     $companions = [System.Collections.Generic.List[object]]::new()
     foreach ($p in @($Policies | Where-Object { $null -ne $_ })) {
@@ -85,18 +102,24 @@ function Get-CyberSocCaGap {
         $apps = Get-EbrCaValue $c 'applications'
         $baselineName = $name -ieq $Baseline
         $isAccess = { param($id) [bool]$Access -and (Test-CyberSocEmergencyAccessId $Access $id) }
-        $extraUsers = @($f.ExcludeUsers | Where-Object { -not (& $isAccess $_) })
+        $extraUsers = @($f.ExcludeUsers | Where-Object { -not (& $isAccess $_) -and -not (& $isAllowed $_) })
         $extraGroups = @($f.ExcludeGroups | Where-Object { -not (& $isAccess $_) })
-        $extraRoles = @($f.ExcludeRoles)
+        $extraRoles = @($f.ExcludeRoles | Where-Object { -not (& $isAllowed $_) })
+        $kept = [pscustomobject]@{
+            Users = @($f.ExcludeUsers | Where-Object { -not (& $isAccess $_) -and (& $isAllowed $_) })
+            Roles = @($f.ExcludeRoles | Where-Object { & $isAllowed $_ })
+        }
         $guests = $null -ne (Get-EbrCaValue $users 'excludeGuestsOrExternalUsers')
         $extraApps = @(Get-EbrCaList $apps 'excludeApplications' | Where-Object { $_.ToLowerInvariant() -notin $allowedApps })
         # Two conditions the policy facts leave out: an excluded platform and an application filter each take part of the
         # sign-ins out of the block.
         $excludedPlatforms = @(Get-EbrCaList (Get-EbrCaValue $c 'platforms') 'excludePlatforms')
         $appFilter = $null -ne (Get-EbrCaValue $apps 'applicationFilter')
-        # Client app types other than all, which the policy facts leave out too, unless they are the path itself.
-        $clientApps = @(Get-EbrCaList $c 'clientAppTypes')
-        $someClientApps = -not $ClientAppCondition -and $clientApps.Count -and $clientApps -notcontains 'all'
+        # Client app types other than all, which the policy facts leave out too, unless they are the path itself. Then a
+        # policy that leaves out one of the types the baseline selects blocks the path in part only.
+        $appTypes = @(Get-EbrCaList $c 'clientAppTypes')
+        $someClientApps = if ($ClientAppCondition) { $appTypes -notcontains 'all' -and @($ClientApps | Where-Object { $_ -notin $appTypes }).Count -gt 0 }
+        else { $appTypes.Count -and $appTypes -notcontains 'all' }
         $state = Get-CyberSocCaText $f.State
         $reasons = @(
             if (-not $matched) { 'Control' }
@@ -112,8 +135,9 @@ function Get-CyberSocCaGap {
                 Id = Get-CyberSocCaText $f.Id; Name = $name; State = $state; Managed = Test-CyberSocCaManaged $name; Baseline = $baselineName
                 Reasons = $reasons; Covers = -not $reasons.Count
                 Extra = [pscustomobject]@{ Users = $extraUsers; Groups = $extraGroups; Roles = $extraRoles; Guests = $guests; Apps = $extraApps; Filter = $appFilter }
+                Kept = $kept
                 GroupsOnly = $state -eq 'enabled' -and $baselineName -and (@($reasons) -join ',') -eq 'Exclusions' -and -not ($extraUsers.Count -or $extraRoles.Count -or $guests)
-                ExcludedGroups = @($f.ExcludeGroups); MissingAccess = $missing
+                ExcludedGroups = @($f.ExcludeGroups); ExcludedUsers = @($f.ExcludeUsers); MissingAccess = $missing
             })
     }
     $review = @($rows | Where-Object GroupsOnly)
@@ -142,7 +166,7 @@ function Format-CyberSocCaGapReason($Row) {
                 'Users' { 'applies to selected users only' }
                 'Resources' { if (@($Row.Extra.Apps).Count -or $Row.Extra.Filter) { 'leaves out resources beyond what the baseline allows' } else { 'applies to selected resources only' } }
                 'Conditions' { 'applies only on some platforms, client apps, locations, risk levels or devices' }
-                'Exclusions' { 'leaves out {0} beyond the emergency access accounts' -f (Format-CyberSocCaExtra $Row.Extra) }
+                'Exclusions' { 'leaves out {0} beyond {1}' -f (Format-CyberSocCaExtra $Row.Extra), $(if (@($Row.Kept.Users).Count -or @($Row.Kept.Roles).Count) { 'the exclusions the baseline keeps' } else { 'the emergency access accounts' }) }
             } })
     if ($parts.Count -le 1) { $parts -join '' } else { (($parts | Select-Object -SkipLast 1) -join ', ') + ' and ' + $parts[-1] }
 }
@@ -181,16 +205,22 @@ function Get-CyberSocCaPolicySteps {
     <#
     .SYNOPSIS
         The portal steps that bring one block policy to the baseline, from Entra ID > Conditional Access > Policies, then
-        create its report-only companion. Step numbers in the text count from First, the number of the first step returned.
+        create its report-only companion when the change has one. Step numbers in the text count from First, the number
+        of the first step returned.
     .PARAMETER Target
         The policy to edit (a row of Get-CyberSocCaGap), or null to create the baseline policy.
     .PARAMETER Condition
         The step that sets the condition, such as Authentication flows set to Device code flow.
     .PARAMETER Resources
         The step that sets the target resources.
+    .PARAMETER Companion
+        The report-only companion and its exception group. Without them (CR-21) no companion step is written, the exclusions
+        keep what Keep says, and an edited policy loses only the exclusions the RESOURCES section lists to remove.
+    .PARAMETER Keep
+        Sentences added to the exclusion step for what else the policy keeps excluded, such as a directory role.
     #>
-    param($Target, [Parameter(Mandatory)][string]$Baseline, [Parameter(Mandatory)][string]$Companion, [Parameter(Mandatory)][string]$ExceptionGroup, $ExistingCompanion,
-        [Parameter(Mandatory)][string]$Condition, [Parameter(Mandatory)][string]$Resources, [int]$First = 1)
+    param($Target, [Parameter(Mandatory)][string]$Baseline, [string]$Companion = '', [string]$ExceptionGroup = '', $ExistingCompanion,
+        [Parameter(Mandatory)][string]$Condition, [Parameter(Mandatory)][string]$Resources, [string]$Keep = '', [int]$First = 1)
     $clean = { param($v) ((Get-CyberSocCaText $v) -replace ';', ',' -replace '[<>]', ' ' -replace '\s+', ' ').Trim() }
     $steps = [System.Collections.Generic.List[string]]::new()
     if ($Target) {
@@ -199,11 +229,14 @@ function Get-CyberSocCaPolicySteps {
     }
     else { $steps.Add(('Select New policy and name it {0}.' -f $Baseline)) }
     $steps.Add('Under Assignments, select Users or workload identities. Under Include, select All users.')
-    $steps.Add(('Under Exclude, select Users and groups and add each Atmosera group and each emergency access account listed in the RESOURCES section, and the group {0}.{1}' -f $ExceptionGroup, $(if ($Target -and @($Target.Reasons) -contains 'Exclusions') { ' Remove every other exclusion listed for the policy in the RESOURCES section, after the accounts the client confirmed were added to the group, and never remove an Atmosera group or an emergency access account.' } else { '' })))
+    $removes = $Target -and @($Target.Reasons) -contains 'Exclusions'
+    if ($ExceptionGroup) { $steps.Add(('Under Exclude, select Users and groups and add each Atmosera group and each emergency access account listed in the RESOURCES section, and the group {0}.{1}{2}' -f $ExceptionGroup, $(if ($Keep) { " $Keep" } else { '' }), $(if ($removes) { ' Remove every other exclusion listed for the policy in the RESOURCES section, after the accounts the client confirmed were added to the group, and never remove an Atmosera group or an emergency access account.' } else { '' }))) }
+    else { $steps.Add(('Under Exclude, select Users and groups and add each Atmosera group and each emergency access account listed in the RESOURCES section.{0}{1}' -f $(if ($Keep) { " $Keep" } else { '' }), $(if ($removes) { ' Remove each exclusion the RESOURCES section lists to remove, and leave every other exclusion as it is. Never remove an Atmosera group or an emergency access account.' } else { '' }))) }
     $steps.Add($Resources)
     $steps.Add(('{0}{1}' -f $Condition, $(if ($Target) { ' Set every other condition the policy has to Not configured.' } else { ' Leave every other condition not configured.' })))
     $steps.Add('Under Access controls, select Grant, select Block access and select Select.')
     $steps.Add(('Set Enable policy to On and select {0}.' -f $(if ($Target) { 'Save' } else { 'Create' })))
+    if (-not $Companion) { return $steps.ToArray() }
     if ($ExistingCompanion) {
         # A companion already in the tenant, from an earlier change or one that drifted, is brought to its settings rather
         # than duplicated, since one left On would block the approved accounts.

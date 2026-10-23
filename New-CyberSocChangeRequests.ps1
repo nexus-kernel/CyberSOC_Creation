@@ -14,7 +14,8 @@
     accounts still hold, by removing a role assigned to the account itself and by removing the account from the
     group that gives it a role, the role group or one nested in it, and blocking device code flow with the
     Conditional Access policy ATMO-MXDR-CA-BLOCK-DEVICECODE where no enabled policy blocks it for all users and all
-    resources (CR-20). Every change request
+    resources (CR-20), and blocking legacy authentication with ATMO-MXDR-CA-BLOCK-LEGACY, or removing from the policy in
+    force the excluded accounts with no legacy sign-in in the last 30 days (CR-21). Every change request
     also gets a client email, drafted and ready to send, that asks for the client's approval. The CR-19 email names
     the accounts and their roles in a CSV written beside it (CR-19-disabled-account-roles.email.csv), to attach,
     since the list can be long. Every email has the same parts in the
@@ -99,6 +100,8 @@
     CR-20 reads the raw Conditional Access policies (IA.8-POLICIES) and the device code sign-ins (IA.8-SIGNINS), added in
     1.10.0, with security defaults (IA.8-DEFAULTS), and on an earlier pack says "needs recollection". It needs Microsoft
     Entra ID P1 and the emergency access accounts, and is not written while security defaults are on.
+    CR-21 reads the same results for legacy authentication, with the legacy sign-ins of IA.8-SIGNINS, under the same
+    gates. It names an excluded account from IA.8-SIGNINS or IA.15-DISABLED where the pack can, and by object ID otherwise.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -274,7 +277,7 @@ $licensing = Get-CyberSocLicensing -Read $readPack -Subscriptions @($parameters.
 # $emergencyAccess.ExcludeUsers. Test-CyberSocEmergencyAccessId names an existing exclusion it must never remove.
 . (Join-Path $PSScriptRoot 'report/Get-CyberSocEmergencyAccess.ps1')
 $emergencyAccess = Get-CyberSocEmergencyAccess -Read $readPack
-# The Conditional Access changes (CR-20, and CR-21 next) share the policy gap check, the exclusion list and the report-only
+# The Conditional Access changes (CR-20 and CR-21) share the policy gap check, the exclusion list and the report-only
 # companion in report/Get-CyberSocCaChange.ps1, which also loads the policy facts of report/Get-EbrCaEvaluation.ps1.
 . (Join-Path $PSScriptRoot 'report/Get-CyberSocCaChange.ps1')
 # Copy text that keeps a portal path such as Settings > Endpoints > Licenses, which the copy rules allow in the index.
@@ -379,9 +382,9 @@ $groupLabel = { '{0} (resource group {1})' -f $_.Name, $_.ResourceGroup }
 $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, $_.Setting }
 # The lines that head each group of resources in a client email. Azure resources sit under their subscription, and
 # CR-19 adds the management groups and root scope above the subscriptions and the Microsoft Entra directory roles,
-# which belong to no subscription, and CR-20 the Conditional Access policies and the accounts that signed in with device
-# code flow, which belong to the tenant.
-$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days):$'
+# which belong to no subscription, and CR-20 and CR-21 the Conditional Access policies, the accounts that signed in with
+# device code flow or legacy authentication and the exclusions removed, which belong to the tenant.
+$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|Legacy authentication sign-ins in the last 30 days|Exclusions to remove):$'
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
 $proposedDay = Format-Day $proposedDate
 $replyDay = Format-Day $replyDate
@@ -1030,6 +1033,11 @@ function Get-ServersPlan2 {
 $dcPolicy = 'ATMO-MXDR-CA-BLOCK-DEVICECODE'
 $dcCompanion = 'ATMO-MXDR-CA-BLOCK-DEVICECODE-EXCEPTIONS'
 $dcGroup = 'ATMO-MXDR-DEVICECODE-APPROVED'
+# CR-21 blocks legacy authentication under the baseline name, with the two client app types Microsoft Learn's policy
+# selects. It has no companion or exception group: the accounts that still need legacy authentication stay excluded one by
+# one, so each pack's legacy sign-ins show when an exclusion is no longer used.
+$laPolicy = 'ATMO-MXDR-CA-BLOCK-LEGACY'
+$laClientApps = @('exchangeActiveSync', 'other')
 # Security defaults on or off (IA.8-DEFAULTS), or $null when not read. Security defaults and Conditional Access policies
 # do not run together, so a Conditional Access change waits while they are on.
 function Get-SecurityDefaults {
@@ -3196,6 +3204,238 @@ $catalog = @(
                         , @('Security defaults in Microsoft Entra ID, disabling security defaults', 'https://learn.microsoft.com/entra/fundamentals/security-defaults#disabling-security-defaults')
                         , @('Manage Microsoft Entra groups and group membership, create a basic group and add members', 'https://learn.microsoft.com/entra/fundamentals/how-to-manage-groups#create-a-basic-group-and-add-members')
                         , @('Sign into Azure interactively using the Azure CLI, sign in with a browser', 'https://learn.microsoft.com/cli/azure/authenticate-azure-cli-interactively#sign-in-with-a-browser'))
+                    Csv = $csv
+                    Email = $email
+                } } } }
+    @{ Number = 21; Key = 'legacy-authentication'; Change = 'Legacy authentication blocked by Conditional Access'; Sources = @('IA.8-POLICIES', 'IA.8-SIGNINS'); Requires = @('EntraIdP1'); EmergencyAccess = $true
+       # Without Entra ID P1 there is no Conditional Access, so the index points to security defaults instead.
+       Unlicensed = {
+            $sd = Get-SecurityDefaults
+            'Without Microsoft Entra ID P1 for the users in scope, security defaults stand in for CR-21: Microsoft Learn says customers without licenses that include Conditional Access can use security defaults to block legacy authentication (Block legacy authentication with Conditional Access). {0}' -f $(switch ($sd) { $true { 'IA.8-DEFAULTS reads them on.' } $false { 'IA.8-DEFAULTS reads them off, so raise turning them on, or licensing Microsoft Entra ID P1, with the client.' } default { 'IA.8-DEFAULTS was not read, so confirm under Entra ID > Overview > Properties > Manage security defaults.' } })
+        }
+       Build = {
+            # IA.8-POLICIES holds the policies as Graph returned them, and IA.8-SIGNINS the successful legacy sign-ins of the
+            # last 30 days by account. CR-21 has two cases, and the evidence says which applies: no enabled policy blocks
+            # legacy authentication for all users and all resources, so it creates or brings one to the baseline, or the
+            # policy is in force but excludes accounts that no longer sign in with legacy authentication, so it removes them.
+            # The exclusions that stay are the emergency access accounts, the Directory Synchronization Accounts role and
+            # the accounts with legacy sign-ins, which the email names for the client to confirm (AllowedExclude). An
+            # excluded group, directory role or guest setting the pack cannot check is never removed: it is named for review.
+            $notes = [System.Collections.Generic.List[string]]::new()
+            # The policy is created On straight away, and an exclusion is removed because no legacy sign-in was read for it,
+            # so a partial read never lets it through.
+            $partialReads = @('IA.8-POLICIES', 'IA.8-SIGNINS' | Where-Object { (Get-Status $_) -eq 'PARTIAL' })
+            if ($partialReads.Count) {
+                $why = @($partialReads | ForEach-Object { ('{0} {1}' -f $_, (Get-ResultDetail $_)).Trim().TrimEnd('.') })
+                $note = 'CR-21 is not written because {0} read in part.' -f (Join-Words $why)
+                if ($partialReads -contains 'IA.8-POLICIES') { $note += ' A policy left out of the read could be the baseline policy, which CR-21 would then add again beside it.' }
+                if ($partialReads -contains 'IA.8-SIGNINS') { $note += ' An account left out of the sign-ins would read as no longer using legacy authentication, and CR-21 would remove its exclusion or block it unasked.' }
+                $note += ' Recollect the pack so every policy and every legacy sign-in of the last 30 days is read.'
+                return @{ State = 'Not written, partial collection scope ({0}), see the notes' -f ($partialReads -join ', '); Notes = @($note) }
+            }
+            $sd = Get-SecurityDefaults
+            if ($sd -eq $true) {
+                return @{ State = 'Not written, security defaults are on, see the notes'; Notes = @('CR-21 is not written because security defaults are on (IA.8-DEFAULTS), and Microsoft Learn says they already block every authentication request made by an older protocol (Security defaults in Microsoft Entra ID). An organization moving to Conditional Access must turn security defaults off first, which also replaces their MFA and device code protections, so plan it with the client, with the ATMO-MXDR identity policies, before CR-21.') }
+            }
+            if ($null -eq $sd) { $notes.Add('The security defaults state was not read (IA.8-DEFAULTS), so step 1 of CR-21 checks it in the Microsoft Entra admin center before anything changes.') }
+            # The successful legacy sign-ins by account, with the protocols (the client app Entra ID records), the
+            # applications and the count. The emergency access accounts stay excluded whatever they did, so they are named
+            # in the index and never in the email.
+            $accounts = @(@(foreach ($g in @(Get-Rows 'IA.8-SIGNINS' | Where-Object { (Get-Text $_.Flow) -eq 'Legacy authentication' } | Group-Object { (Get-Text $_.UserId).ToLowerInvariant() })) {
+                    $first = $g.Group[0]
+                    $upn = ConvertTo-CopyText $first.UserPrincipalName
+                    $last = @($g.Group | ForEach-Object { if ($_.LastSignIn -is [datetime]) { $_.LastSignIn.ToUniversalTime().ToString('yyyy-MM-dd', $inv) } else { Get-Text $_.LastSignIn } } | Where-Object { $_ -match '^\d{4}-\d{2}-\d{2}' } | ForEach-Object { $_.Substring(0, 10) } | Sort-Object)
+                    [pscustomobject]@{
+                        Id = $g.Name; Upn = $(if ($upn) { $upn } else { $g.Name }); Type = ConvertTo-CopyText $first.UserType
+                        SignIns = [int](@($g.Group | ForEach-Object { Get-Number $_.SignIns }) | Measure-Object -Sum).Sum
+                        Protocols = @($g.Group | ForEach-Object { ConvertTo-CopyText $_.ClientAppUsed } | Where-Object { $_ } | Sort-Object -Unique)
+                        Apps = @($g.Group | ForEach-Object { (Get-Text $_.Apps) -split ',' } | ForEach-Object { ConvertTo-CopyText $_ } | Where-Object { $_ } | Sort-Object -Unique)
+                        Last = $(if ($last.Count) { $last[-1] } else { '' })
+                        Access = (Test-CyberSocEmergencyAccessUpn $upn) -or (Test-CyberSocEmergencyAccessId $emergencyAccess $g.Name)
+                    } }) | Sort-Object @{ e = 'SignIns'; Descending = $true }, Upn)
+            $atmosera = @($accounts | Where-Object Access)
+            $users = @($accounts | Where-Object { -not $_.Access })
+            if ($atmosera.Count) { $notes.Add(('{0} with legacy sign-ins in the last 30 days {1} an emergency access {2}, which every Conditional Access change excludes, so CR-21 leaves {3} out of its email: {4}. Confirm with Atmosera that the use was expected.' -f (Get-Count $atmosera.Count 'account' 'accounts'), (Get-Pick $atmosera.Count 'is' 'are'), (Get-Pick $atmosera.Count 'account' 'accounts'), (Get-Pick $atmosera.Count 'it' 'them'), (@($atmosera | ForEach-Object { '{0} ({1})' -f $_.Upn, (Get-Count $_.SignIns 'sign-in' 'sign-ins') }) -join ', '))) }
+            $gap = Get-CyberSocCaGap -Policies @(Get-Rows 'IA.8-POLICIES') -Match { param($f) $f.Block -and $f.Legacy } -Baseline $laPolicy -Access $emergencyAccess -ClientAppCondition -ClientApps $laClientApps `
+                -AllowedExclude (@($script:CyberSocDirSyncRoleId) + @($users | ForEach-Object Id))
+            $named = { param($p) '{0} ({1})' -f (ConvertTo-CopyText $p.Name), (ConvertTo-CopyText $p.Id) }
+            $describe = { param($p) '{0}, which {1}' -f (& $named $p), (Format-CyberSocCaGapReason $p) }
+            # An account the raw policy names by ID only, named from the sign-ins or the disabled accounts where the pack can.
+            $known = @{}
+            foreach ($row in @(Get-Rows 'IA.8-SIGNINS')) { $id = (Get-Text $row.UserId).ToLowerInvariant(); if ($id -and (Get-Text $row.UserPrincipalName)) { $known[$id] = ConvertTo-CopyText $row.UserPrincipalName } }
+            if (Test-ResultRead 'IA.15-DISABLED') { foreach ($row in @(Get-Rows 'IA.15-DISABLED' | Where-Object { (Get-Text $_.AccountEnabled) -ieq 'false' })) { $id = (Get-Text $row.PrincipalId).ToLowerInvariant(); if ($id) { $known[$id] = '{0}, disabled' -f $(if ($known[$id]) { $known[$id] } elseif (Get-Text $row.UserPrincipalName) { ConvertTo-CopyText $row.UserPrincipalName } else { 'name not read' }) } } }
+            $account = { param($id) $n = $known[(Get-Text $id).ToLowerInvariant()]; if ($n) { 'account {0} ({1})' -f $n, $id } else { 'account {0}' -f $id } }
+            $legacyOf = { param($id) @($users | Where-Object { $_.Id -eq (Get-Text $id).ToLowerInvariant() }) | Select-Object -First 1 }
+            # What the pack cannot check: an excluded group it holds no members for, another directory role, or guests.
+            $reviewItems = { param($p) @(
+                    foreach ($x in @($p.Extra.Groups)) { "group $x" }
+                    foreach ($x in @($p.Extra.Roles)) { "directory role $x" }
+                    if ($p.Extra.Guests) { 'guests or external users' }) }
+            $keptItems = { param($p) @(
+                    foreach ($x in @($p.Kept.Roles)) { if ((Get-Text $x).ToLowerInvariant() -eq $script:CyberSocDirSyncRoleId) { "directory role Directory Synchronization Accounts ($x)" } else { "directory role $x" } }
+                    foreach ($x in @($p.Kept.Users)) { $a = & $legacyOf $x; '{0} ({1}), {2} in the last 30 days with {3}' -f $a.Upn, $a.Id, (Get-Count $a.SignIns 'legacy sign-in' 'legacy sign-ins'), (Join-Words @($a.Protocols)) }) }
+            foreach ($p in @($gap.Policies | Where-Object { @($_.MissingAccess).Count -and $_.State -ne 'disabled' -and $_ -ne $gap.Target })) {
+                $notes.Add(('The policy {0} blocks legacy authentication but does not exclude {1}: {2}. Microsoft Learn recommends excluding the emergency access accounts from every policy that blocks or restricts sign-in, so add them to its exclusions.' -f (& $named $p), (Get-Count (@($p.MissingAccess).Count) 'emergency access group or account' 'emergency access groups or accounts'), (@($p.MissingAccess) -join ', ')))
+            }
+            $managed = @($gap.Managed | Where-Object { $_.State -ne 'disabled' })
+            if ($gap.Covering.Count) {
+                $notes.Insert(0, ('CR-21 found legacy authentication blocked for all users and all resources by {0}, with no exclusion that can be removed.' -f (Join-Words @($gap.Covering | ForEach-Object { & $named $_ }))))
+                foreach ($c in @($gap.Covering | Where-Object { @($_.Kept.Users).Count })) { $notes.Add(('{0} keeps excluded {1} that still signed in with legacy authentication in the last 30 days: {2}. Confirm with the client that each still needs it, and whether it should move to modern authentication, after which a later pack shows no legacy sign-in and CR-21 removes the exclusion.' -f (& $named $c), (Get-Count @($c.Kept.Users).Count 'account' 'accounts'), (@(& $keptItems $c | Where-Object { $_ -notmatch '^directory role' }) -join ', '))) }
+                if (@($gap.Covering | Where-Object { -not $_.Managed }).Count -and $managed.Count) {
+                    $notes.Add(('The Microsoft-managed {0} {1} still {2} beside it. Every policy that applies to a sign-in must be satisfied, so an account the ATMO-MXDR policy keeps excluded is still blocked by a managed policy that is On, and the baseline sets {3} Off so every exception sits in one place.' -f (Get-Pick $managed.Count 'policy' 'policies'), (Join-Words @($managed | ForEach-Object { & $named $_ })), (Get-Pick $managed.Count 'reads On or Report-only' 'read On or Report-only'), (Get-Pick $managed.Count 'it' 'them')))
+                }
+                elseif (-not @($gap.Covering | Where-Object { -not $_.Managed }).Count) { $notes.Add(('Only the Microsoft-managed policy blocks legacy authentication today. The baseline moves the block to {0} and sets the managed policy Off at the next identity change with the client.' -f $laPolicy)) }
+                return @{ State = 'No gaps found'; Notes = $notes.ToArray() }
+            }
+            # The policy is On for everyone but exclusions the pack cannot check. The raw policy holds their IDs only, so none
+            # is taken as approved or removed: each is named for review, and the state never reads no gaps.
+            $t = if ($gap.Ambiguous) { $null } else { $gap.Target }
+            $held = if ($gap.Review.Count) { $gap.Review[0] } elseif ($t -and $t.State -eq 'enabled' -and (@($t.Reasons) -join ',') -eq 'Exclusions' -and -not @($t.Extra.Users).Count) { $t } else { $null }
+            if ($held) {
+                $items = @(& $reviewItems $held)
+                $notes.Insert(0, ('{0} is On and blocks legacy authentication for all users and all resources except the emergency access accounts and {1}: {2}. CR-21 is not written, but the policy is not read as in force for everyone: the pack holds no members for these, so it cannot tell whether they still sign in with legacy authentication. Confirm each with the client under Entra ID > Groups or Roles and administrators, exclude any account that still needs legacy authentication on its own, and remove the rest, since a group such as one for all staff leaves legacy authentication open to its members.' -f (& $named $held), (Get-Count $items.Count 'more exclusion' 'more exclusions'), ($items -join ', ')))
+                return @{ State = 'Not written, {0} excludes {1} to confirm, see the notes' -f (ConvertTo-CopyText $held.Name), (Get-Count $items.Count 'group, role or guest setting' 'groups, roles or guest settings'); Notes = $notes.ToArray() }
+            }
+            if ($gap.Ambiguous) {
+                $candidates = @($gap.Policies | Where-Object { -not $_.Managed })
+                $notes.Insert(0, ('CR-21 is not written because {0} policies already block legacy authentication in part, and none is named {1}: {2}. Agree with the client which one becomes the baseline, rename it {1}, and run again, so CR-21 brings it to the baseline rather than adding a duplicate.' -f $candidates.Count, $laPolicy, (@($candidates | ForEach-Object { & $describe $_ }) -join ' / ')))
+                return @{ State = 'Not written, {0} policies block legacy authentication in part, see the notes' -f $candidates.Count; Notes = $notes.ToArray() }
+            }
+            foreach ($o in @($gap.Others)) { $notes.Add(('CR-21 brings {0} to the baseline and leaves {1} unchanged. Review it with the client, since its exclusions can keep legacy authentication open to some accounts.' -f $laPolicy, (& $describe $o))) }
+            # The exclusions an edited policy loses: accounts with no legacy sign-in in the last 30 days, never an emergency
+            # access one (Get-CyberSocCaGap leaves those out of Extra).
+            $remove = @(if ($t) { @($t.Extra.Users) | Where-Object { -not (Test-CyberSocEmergencyAccessId $emergencyAccess $_) } })
+            $review = @(if ($t) { & $reviewItems $t })
+            # The removal-only case: the policy is in force, and its one gap is exclusions no longer used.
+            # A policy under another name is renamed, so it takes the edit path, whose email says so.
+            $onlyRemove = $t -and $t.Baseline -and $t.State -eq 'enabled' -and (@($t.Reasons) -join ',') -eq 'Exclusions'
+            if ($review.Count) { $notes.Add(('{0} also excludes {1} that the pack cannot check: {2}. CR-21 leaves {3} excluded. Confirm each with the client under Entra ID > Groups or Roles and administrators, exclude any account that still needs legacy authentication on its own, and remove the rest.' -f (& $named $t), (Get-Count $review.Count 'group, role or guest setting' 'groups, roles or guest settings'), ($review -join ', '), (Get-Pick $review.Count 'it' 'them'))) }
+            if ($remove.Count) { $notes.Add(('{0} excludes {1} with no legacy sign-in in the last 30 days, which CR-21 removes: {2}. Look each one up by its object ID under Entra ID > Users before sending CR-21.' -f (& $named $t), (Get-Count $remove.Count 'account' 'accounts'), (@($remove | ForEach-Object { & $account $_ }) -join ', '))) }
+
+            $exclusions = Get-CyberSocCaExclusions -Access $emergencyAccess
+            $stateWord = { param($s) switch ($s) { 'enabled' { 'On' } 'enabledForReportingButNotEnforced' { 'Report-only' } 'disabled' { 'Off' } default { ConvertTo-CopyText $s } } }
+            $keptUsers = @(if ($t) { @($t.Kept.Users) })
+            $added = @($users | Where-Object { $_.Id -notin @($keptUsers | ForEach-Object { (Get-Text $_).ToLowerInvariant() }) })
+            $tenant = ConvertTo-CopyText $parameters.TenantId
+            $lines = [System.Collections.Generic.List[string]]::new()
+            if ($tenant) { $lines.Add("Tenant: $tenant"); $lines.Add('') }
+            if ($t) { $lines.Add(('Policy {0}, {1} today, which {2}. {3}{4}:' -f (& $named $t), (& $stateWord $t.State), (Format-CyberSocCaGapReason $t), $(if ($onlyRemove) { 'Its exclusions no longer used are removed' } else { 'It is brought to the baseline below' }), $(if ($t.Baseline) { '' } else { " and renamed $laPolicy" }))) }
+            else { $lines.Add(('Policy {0}, to create, On:' -f $laPolicy)) }
+            $lines.Add('- Users: All users')
+            foreach ($x in @($exclusions.Lines)) { $lines.Add("- Excluded: $x") }
+            $lines.Add(('- Excluded: directory role Directory Synchronization Accounts ({0}), for the account Microsoft Entra Connect syncs the directory with' -f $script:CyberSocDirSyncRoleId))
+            # An existing exclusion of an emergency access account matched through an Atmosera group only, which the policy
+            # keeps although the baseline excludes the group rather than the account.
+            foreach ($x in @(if ($t) { @($t.ExcludedUsers) | Where-Object { (Test-CyberSocEmergencyAccessId $emergencyAccess $_) -and (Get-Text $_).ToLowerInvariant() -notin @($emergencyAccess.ExcludeUsers) } })) {
+                $a = @($emergencyAccess.Accounts | Where-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() -eq (Get-Text $x).ToLowerInvariant() }) | Select-Object -First 1
+                $lines.Add(('- Excluded today and kept, emergency access account through an Atmosera group: {0} ({1})' -f $(if ($a) { ConvertTo-CopyText $a.UserPrincipalName } else { 'unnamed' }), $x))
+            }
+            foreach ($x in @(if ($t) { & $keptItems $t | Where-Object { $_ -notmatch '^directory role Directory Synchronization' } })) { $lines.Add("- Excluded today and kept, for the client to confirm: $x") }
+            foreach ($a in $added) { $lines.Add(('- To exclude only if the client confirms it still needs legacy authentication: {0} ({1}), {2} in the last 30 days with {3}' -f $a.Upn, $a.Id, (Get-Count $a.SignIns 'legacy sign-in' 'legacy sign-ins'), (Join-Words @($a.Protocols)))) }
+            foreach ($x in $remove) { $lines.Add(('- Excluded today, to remove, no legacy sign-in in the last 30 days: {0}' -f (& $account $x))) }
+            foreach ($x in $review) { $lines.Add("- Excluded today and left as it is, for review with the client: $x") }
+            $lines.Add('- Target resources: All resources')
+            $lines.Add('- Conditions: Client apps set to Exchange ActiveSync clients and Other clients')
+            $lines.Add('- Grant: Block access')
+            foreach ($m in $managed) { $lines.Add(''); $lines.Add(('Microsoft-managed policy {0}, {1} today, set to Off once {2} is On.' -f (& $named $m), (& $stateWord $m.State), $laPolicy)) }
+            foreach ($o in @($gap.Others)) { $lines.Add(''); $lines.Add(('Policy {0}, {1} today, left unchanged and named in the index.' -f (& $named $o), (& $stateWord $o.State))) }
+            $lines.Add('')
+            if ($accounts.Count) {
+                $lines.Add('Legacy authentication sign-ins that succeeded in the last 30 days (IA.8-SIGNINS), by account:')
+                foreach ($a in $accounts) { $lines.Add(('- {0}{1}, {2} with {3}, applications {4}{5}{6}' -f $a.Upn, $(if ($a.Type) { " ($($a.Type))" } else { '' }), (Get-Count $a.SignIns 'sign-in' 'sign-ins'), $(if ($a.Protocols.Count) { Join-Words @($a.Protocols) } else { 'a client app not recorded' }), $(if ($a.Apps.Count) { $a.Apps -join ', ' } else { 'not recorded' }), $(if ($a.Last) { ", last $($a.Last)" } else { '' }), $(if ($a.Access) { ', emergency access account, stays excluded' } else { '' }))) }
+            }
+            else { $lines.Add('No legacy authentication sign-in succeeded in the last 30 days (IA.8-SIGNINS).') }
+
+            $csv = @(
+                New-Resource $laPolicy '' '' $(if ($onlyRemove) { 'today On as {0}, {1} removed' -f (ConvertTo-CopyText $t.Name), (Get-Count $remove.Count 'exclusion' 'exclusions') } elseif ($t) { 'today {0} as {1}, brought to the baseline and On' -f (& $stateWord $t.State), (ConvertTo-CopyText $t.Name) } else { 'to create, On' }) $(if ($t) { $t.Id } else { '' })
+                foreach ($x in $remove) { New-Resource (& $account $x) '' '' ('excluded from {0}, exclusion removed' -f (ConvertTo-CopyText $t.Name)) $x }
+                foreach ($m in $managed) { New-Resource $m.Name '' '' ('today {0}, set to Off' -f (& $stateWord $m.State)) $m.Id })
+
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add('Sign in to the Microsoft Entra admin center as at least a Conditional Access Administrator, go to Entra ID > Overview > Properties and select Manage security defaults. Confirm Security defaults reads Disabled. If it reads Enabled, stop: Conditional Access replaces security defaults only once they are turned off, which is a separate change with the client.')
+            $impl.Add(('Go to Entra ID > Conditional Access > Policies.{0}' -f $(if ($t -or $managed.Count) { ' Record in the change record the state, users, exclusions, target resources, conditions and grant of each existing policy listed in the RESOURCES section, for the rollback.' } else { '' })))
+            # The pack read the sign-ins up to the collection, so an account is checked again before its exclusion goes.
+            if ($remove.Count) { $impl.Add('Before removing an exclusion, go to Entra ID > Monitoring & health > Sign-in logs, add the Client app column, select Add filters > Client app and choose every legacy authentication protocol, then filter on each account the RESOURCES section lists to remove, on the User sign-ins (interactive) and User sign-ins (non-interactive) tabs. An account with a successful legacy sign-in since collection still uses legacy authentication: leave it excluded and note it in the change record.') }
+            $policySteps = Get-CyberSocCaPolicySteps -Target $t -Baseline $laPolicy -First ($impl.Count + 1) `
+                -Keep $(if ($t) { 'Select Directory roles and add Directory Synchronization Accounts if the policy does not exclude it already. Keep each account the RESOURCES section lists as kept, and add each account listed to exclude only if the client confirmed it still needs legacy authentication.' } else { 'Select Directory roles and add Directory Synchronization Accounts. Add each account the RESOURCES section lists to exclude only if the client confirmed it still needs legacy authentication.' }) `
+                -Resources ('Under Target resources, select Resources. Under Include, select All resources, and leave Exclude empty.{0}' -f $(if ($t) { ' Remove any excluded resource.' } else { '' })) `
+                -Condition 'Under Conditions, select Client apps, set Configure to Yes, select only Exchange ActiveSync clients and Other clients, and select Done.'
+            foreach ($s in $policySteps) { $impl.Add($s) }
+            if ($managed.Count) { $impl.Add(('Once {0} shows On, open each policy that shows Microsoft in the Created by column and blocks legacy authentication ({1}), set Enable policy to Off and select Save. A Microsoft-managed policy can be turned off, but not renamed or deleted.' -f $laPolicy, (Join-Words @($managed | ForEach-Object { ConvertTo-CopyText $_.Name })))) }
+            else { $impl.Add(('Once {0} shows On, check the policy list for a policy that shows Microsoft in the Created by column and blocks legacy authentication, which Microsoft may have added since collection. If one shows On or Report-only, record its state, set Enable policy to Off and select Save. A policy that shows Baseline security mode in the Created by column is managed in the Microsoft 365 admin center, so leave it and note it in the change record.' -f $laPolicy)) }
+            $impl.Add(('Open {0} again and read its exclusions under Users or workload identities: each Atmosera group and each emergency access account listed in the RESOURCES section, the Directory Synchronization Accounts role, the accounts kept or confirmed by the client and the exclusions left for review, and nothing else.{1}' -f $laPolicy, $(if ($remove.Count) { ' No account the RESOURCES section lists to remove is still excluded, unless step 3 kept it.' } else { '' })))
+
+            $testing = @(
+                ('In the Microsoft Entra admin center, go to Entra ID > Conditional Access > Policies and confirm {0} reads On and any Microsoft-managed policy that blocks legacy authentication reads Off.' -f $laPolicy)
+                ('Open {0} and confirm its exclusions match the list approved for the change: the RESOURCES section, with the emergency access accounts and the Directory Synchronization Accounts role excluded and the accounts the client confirmed.' -f $laPolicy)
+                ('On the Policies page, select What If. Set the user to a test account the policy does not exclude, the target resource to Office 365 Exchange Online, the device platform to Windows and the client app to Other clients, and select What If. Confirm {0} is listed among the policies that apply, with Block access. Run it again with an emergency access account and confirm {0} is listed among the policies that do not apply.' -f $laPolicy))
+            $rollback = [System.Collections.Generic.List[string]]::new()
+            if ($t) { $rollback.Add(('In the Microsoft Entra admin center, go to Entra ID > Conditional Access > Policies, open {0} and set its name, state, users, exclusions, target resources, conditions and grant back to those recorded in step 2, then select Save. This restores every exclusion the change removed.' -f $laPolicy)) }
+            else { $rollback.Add(('In the Microsoft Entra admin center, go to Entra ID > Conditional Access > Policies, open {0}, set Enable policy to Off and select Save.' -f $laPolicy)) }
+            $rollback.Add('Set each Microsoft-managed policy the change turned Off back to the state recorded for it, and select Save.')
+
+            # The client email.
+            $n = $users.Count
+            $edits = [bool]$t
+            $explain = 'Legacy authentication is the older way some mail apps, devices and scripts sign in: they send a username and password with every request, through protocols such as SMTP AUTH, POP and IMAP, and cannot ask for multifactor authentication.'
+            $change = if ($onlyRemove) { @(('I would like to remove {0} from the exclusions of {1}, the Conditional Access policy that blocks legacy authentication in your tenant, since {2} with legacy authentication in the last 30 days.' -f (Get-Count $remove.Count 'account' 'accounts'), (ConvertTo-CopyText $t.Name), (Get-Pick $remove.Count 'it has not signed in' 'none of them signed in')), $explain) }
+            else { @('I would like to block legacy authentication for everyone in your organization, except the accounts you confirm still need it and the emergency access accounts Atmosera keeps for your tenant.', $explain) }
+            $effect = [System.Collections.Generic.List[string]]::new()
+            if (-not $onlyRemove) { $effect.Add('Once the change is made, a sign-in with legacy authentication is refused for everyone the policy does not exclude. Every sign-in that uses modern authentication keeps working as it does today.') }
+            if ($remove.Count) { $effect.Add(('Removing an exclusion affects only an account that signs in with legacy authentication, and the sign-in records show none in the last 30 days for the {0} listed below. {1} then blocked from legacy authentication like everyone else, and keeps every sign-in with modern authentication.' -f (Get-Pick $remove.Count 'account' "$($remove.Count) accounts"), (Get-Pick $remove.Count 'It is' 'Each one is'))) }
+            $effect.Add('Atmosera''s emergency access accounts stay excluded, so they can still reach your tenant if every other way in fails.')
+            $effect.Add('The account Microsoft Entra Connect uses to sync your directory, which holds the Directory Synchronization Accounts role, stays excluded too.')
+            if ($n) {
+                $effect.Add('Each account below that signed in with legacy authentication in the last 30 days keeps working only while the policy excludes it, so I would keep excluded only the ones you confirm still need it, until they move to modern authentication.')
+                $effect.Add('Exchange Online has already turned off basic authentication for POP, IMAP, Exchange ActiveSync and its other protocols except SMTP AUTH, and Microsoft has announced plans to retire it for SMTP AUTH too, so an account that still uses it needs to move to modern authentication in any case.')
+            }
+            if ($edits -and -not $onlyRemove) { $effect.Add(('Your tenant already has the Conditional Access policy {0}, which {1}. I would bring it to this standard rather than add a second policy beside it.' -f (ConvertTo-CopyText $t.Name), (Format-CyberSocCaGapReason $t))) }
+            if ($managed.Count) { $effect.Add(('Microsoft has also added its own legacy authentication {0} to your tenant{2}. I would turn {1} off once the change is made, since every policy that applies to a sign-in must be satisfied, so an account you keep excluded would still be blocked by the Microsoft one.' -f (Get-Pick $managed.Count 'policy' 'policies'), (Get-Pick $managed.Count 'it' 'them'), $(if (@($managed | Where-Object State -eq 'enabledForReportingButNotEnforced').Count) { ', which Microsoft turns on by itself if it is left in report-only mode' } else { '' }))) }
+            if (-not $n) { $effect.Add('No account in your organization, other than the emergency access accounts, completed a legacy authentication sign-in in the last 30 days, so I expect no one to notice the change.') }
+            $policyItems = @(
+                $(if ($onlyRemove) { '{0}, on today, with the exclusions below removed' -f (ConvertTo-CopyText $t.Name) } elseif ($edits) { '{0}{1}, set to block legacy authentication for all users and turned on' -f (ConvertTo-CopyText $t.Name), $(if ($t.Baseline) { '' } else { ", renamed $laPolicy" }) } else { '{0}, a new policy that blocks legacy authentication for all users, turned on' -f $laPolicy })
+                foreach ($m in $managed) { '{0}, the Microsoft policy, turned off' -f (ConvertTo-CopyText $m.Name) })
+            $resources = @('Conditional Access policies:', [string[]]$policyItems)
+            if ($remove.Count) { $resources += @('Exclusions to remove:', [string[]]@($remove | ForEach-Object { $k = $known[(Get-Text $_).ToLowerInvariant()]; if ($k) { '{0}, object ID {1}' -f $k, $_ } else { 'the account with object ID {0}' -f $_ } })) }
+            if ($n) { $resources += @('Legacy authentication sign-ins in the last 30 days:', [string[]]@($users | ForEach-Object { '{0}, {1} with {2}, {3}' -f $_.Upn, (Get-Count $_.SignIns 'sign-in' 'sign-ins'), $(if ($_.Protocols.Count) { Join-Words @($_.Protocols) } else { 'a protocol the sign-in log did not name' }), $(if ($_.Id -in @($keptUsers | ForEach-Object { (Get-Text $_).ToLowerInvariant() })) { 'excluded today' } else { 'not excluded today' }) })) }
+            $listedParts = @('the Conditional Access policies below'
+                if ($remove.Count) { 'the exclusions it removes' }
+                if ($n) { 'the {0} that completed a legacy authentication sign-in in the last 30 days, with the protocols used and the number of sign-ins' -f (Get-Pick $n 'account' "$n accounts") })
+            $email = New-ApprovalEmail -Subject $(if ($onlyRemove) { 'removing exclusions no longer needed from the legacy authentication block' } else { 'blocking legacy authentication' }) `
+                -Change $change `
+                -Why $(if ($onlyRemove) { 'I recommend this change because an account left out of the block can still be signed in to with a password alone over legacy authentication, which cannot ask for multifactor authentication, so an exclusion that is no longer used only leaves that way in open.' } else { 'I recommend this change because legacy authentication cannot ask for multifactor authentication, so a stolen or guessed password is enough to sign in with it. Microsoft finds that more than 99 percent of password spray attacks use legacy authentication protocols, and recommends blocking them.' }) `
+                -Effect $effect.ToArray() `
+                -Listed ('The change touches {0}:' -f (Join-Words $listedParts)) `
+                -Resources $resources `
+                -Reversal $(if ($onlyRemove) { 'Any exclusion removed can be added back to the policy at any time, and the account can then sign in with legacy authentication again.' } else { 'The policy can be turned off at any time, which ends the block straight away{0}.' -f $(if ($edits) { ' and returns the existing policy to the settings it has today' } elseif ($managed.Count) { ', and I can set the Microsoft policy back as it was' } else { '' }) }) `
+                -Ask $(if ($n) { 'Before I schedule the change, could you confirm which of the accounts listed above are service accounts, devices or applications that still send mail with SMTP AUTH or read it with POP or IMAP, and whether each one should move to modern authentication? I will keep excluded only the accounts you confirm still need legacy authentication for now. With that confirmed, could you approve this change for {0}?' -f $proposedDay } else { 'Before I schedule the change, could you tell me whether any service account, device or application in your organization, such as a printer or scanner that sends mail, still uses SMTP AUTH, POP or IMAP with a username and password? With that confirmed, could you approve this change for {0}?' -f $proposedDay })
+            $purpose = 'Legacy authentication cannot ask for multifactor authentication, and Microsoft finds that more than 99 percent of password spray attacks use it, so Microsoft recommends blocking it. Each exclusion is kept only for an account that still signs in with it, which each pack measures from the legacy sign-ins of the last 30 days.'
+            @{ Used = @('IA.8-DEFAULTS'); Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
+                    Number = 21; Key = 'legacy-authentication'; Title = $(if ($onlyRemove) { 'Remove exclusions no longer needed from the legacy authentication block' } else { 'Block legacy authentication with Conditional Access' })
+                    Description = $(if ($onlyRemove) { 'Remove from the Conditional Access policy {0} the exclusions of the accounts listed in the RESOURCES section, which had no legacy sign-in in the last 30 days, keeping the emergency access accounts, the Directory Synchronization Accounts role and the accounts still using legacy authentication.{1}' -f (ConvertTo-CopyText $t.Name), $(if ($managed.Count) { ' Set the Microsoft-managed legacy authentication policy Off.' } else { '' }) }
+                        elseif ($edits) { 'Bring the existing Conditional Access policy named in the RESOURCES section to the baseline {0}, which blocks legacy authentication for all users and all resources and is On, excluding the emergency access accounts, the Directory Synchronization Accounts role and the accounts the client confirms still need legacy authentication.{1}' -f $laPolicy, $(if ($managed.Count) { ' Set the Microsoft-managed legacy authentication policy Off.' } else { '' }) }
+                        else { 'Create the Conditional Access policy {0}, On, which blocks legacy authentication for all users and all resources, excluding the emergency access accounts, the Directory Synchronization Accounts role and the accounts the client confirms still need legacy authentication.{1}' -f $laPolicy, $(if ($managed.Count) { ' Set the Microsoft-managed legacy authentication policy Off.' } else { '' }) })
+                    Purpose = $purpose
+                    ResourceIntro = '{1} The emergency access accounts are excluded every time (IA.16), and the legacy sign-ins of the last 30 days are the review the baseline makes {0}.' -f $(if ($onlyRemove) { 'before an exclusion is removed' } else { 'before the policy is On' }), $(if ($onlyRemove) { 'The policy below blocks legacy authentication for all users and all resources, and excludes accounts that no longer sign in with it.' } elseif ($edits) { 'No enabled policy blocks legacy authentication for all users and all resources, and the existing policy below is brought to the baseline rather than duplicated.' } else { 'No enabled policy blocks legacy authentication for all users and all resources, so the baseline policy below is created.' })
+                    ResourceLines = $lines.ToArray()
+                    Availability = $(if ($onlyRemove) { 'No impact on any service, since only the accounts listed lose their exclusion and none of them signed in with legacy authentication in the last 30 days.' } else { 'No impact on any service the client confirms, since the accounts that still need legacy authentication stay excluded and every modern sign-in keeps working.' })
+                    UserExperience = 'A legacy authentication sign-in by anyone the policy does not exclude is refused, and every sign-in with modern authentication works as before.'
+                    Dependencies = 'Needs the client to confirm which accounts listed still use SMTP AUTH, POP, IMAP or another legacy protocol, and whether each should move to modern authentication.'
+                    Implementation = $impl.ToArray()
+                    Testing = $testing
+                    Rollback = $rollback.ToArray()
+                    References = @(
+                        , @('Block legacy authentication with Conditional Access', 'https://learn.microsoft.com/entra/identity/conditional-access/policy-block-legacy-authentication')
+                        , @('Deprecation of Basic authentication in Exchange Online', 'https://learn.microsoft.com/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online')
+                        , @('Manage emergency access accounts in Microsoft Entra ID', 'https://learn.microsoft.com/entra/identity/role-based-access-control/security-emergency-access')
+                        , @('Conditional Access: Conditions, client apps', 'https://learn.microsoft.com/entra/identity/conditional-access/concept-conditional-access-conditions#client-apps')
+                        , @('Building a Conditional Access policy', 'https://learn.microsoft.com/entra/identity/conditional-access/concept-conditional-access-policies')
+                        , @('Microsoft-managed Conditional Access policies', 'https://learn.microsoft.com/entra/identity/conditional-access/managed-policies')
+                        , @('Microsoft Entra built-in roles, Directory Synchronization Accounts', 'https://learn.microsoft.com/entra/identity/role-based-access-control/permissions-reference#directory-synchronization-accounts')
+                        , @('Require multifactor authentication for all users, create a Conditional Access policy', 'https://learn.microsoft.com/entra/identity/conditional-access/policy-all-users-mfa-strength#create-a-conditional-access-policy')
+                        , @('What is Conditional Access?, license requirements', 'https://learn.microsoft.com/entra/identity/conditional-access/overview#license-requirements')
+                        , @('Security defaults in Microsoft Entra ID, disabling security defaults', 'https://learn.microsoft.com/entra/fundamentals/security-defaults#disabling-security-defaults')
+                        , @('Troubleshoot Conditional Access policies with the What If tool', 'https://learn.microsoft.com/entra/identity/conditional-access/what-if-tool'))
                     Csv = $csv
                     Email = $email
                 } } } }
