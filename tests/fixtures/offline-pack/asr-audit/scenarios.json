@@ -1,5 +1,5 @@
 {
-  "Description": "CR-22 (ASR rules in audit mode on Windows servers) scenarios, synthetic names and IDs. Servers is EW.4-SERVERS as collector 1.17.0 writes it: srv-app01 with no rule configured, srv-sql01 with two rules already configured (in Block on the server), the domain controller dc01, srv-legacy01 whose Microsoft Defender Antivirus is in Passive mode (EW.4-AVMODE), srv-files01 with cloud-delivered protection Off, srv-new01 seen but not onboarded, and srv-web01 with no configuration assessment and not yet managed by security settings management (LIC.4-DEVICES). Events is EW.5. A scenario with its own Servers replaces them.",
+  "Description": "CR-22 (ASR rules in audit mode on Windows servers) scenarios, synthetic names and IDs. Servers is EW.4-SERVERS as collector 1.17.0 writes it: srv-app01 with no rule configured, srv-sql01 with two rules already configured (in Block on the server), the domain controller dc01, srv-legacy01 whose Microsoft Defender Antivirus is in Passive mode (EW.4-AVMODE), srv-files01 with cloud-delivered protection Off, srv-new01 seen but not onboarded, and srv-web01 with no configuration assessment and not yet managed by security settings management (LIC.4-DEVICES). Events is EW.5. A scenario with its own Servers replaces them. unsupported-rules is a Windows Server 2016 machine with every rule configured that its operating system supports: the two it does not support are never applicable, so they are no gap.",
   "Rules": [
     "Block abuse of exploited vulnerable signed drivers",
     "Block credential stealing from the Windows local security authority subsystem",
@@ -307,6 +307,15 @@
     {
       "MachineId": "b6eef9982615723166371f2c48e5b3751a762a52",
       "ComputerDnsName": "srv-web01.corp.example",
+      "OsPlatform": "Windows Server",
+      "AvMode": "0",
+      "AvModeName": "Active",
+      "DataRefreshTimestamp": "2026-10-12T05:00:00Z",
+      "LastSeenTime": "2026-10-12T05:30:00Z"
+    },
+    {
+      "MachineId": "073bd6aadecbc7afa85db98748469e401af37d53",
+      "ComputerDnsName": "srv-old2016.corp.example",
       "OsPlatform": "Windows Server",
       "AvMode": "0",
       "AvModeName": "Active",
@@ -634,6 +643,47 @@
             "Block Webshell creation for Servers",
             "Use advanced protection against ransomware"
           ]
+        }
+      ]
+    },
+    "unsupported-rules": {
+      "Servers": [
+        {
+          "DeviceId": "073bd6aadecbc7afa85db98748469e401af37d53",
+          "DeviceName": "srv-old2016.corp.example",
+          "VmName": "srv-old2016",
+          "ResourceGroup": "rg-app",
+          "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+          "AzureResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourcegroups/rg-app/providers/microsoft.compute/virtualmachines/srv-old2016",
+          "OSPlatform": "WindowsServer2016",
+          "OSVersion": "10.0",
+          "OnboardingStatus": "Onboarded",
+          "MachineGroup": "Servers",
+          "AadDeviceId": "f3d0da91-0275-55b0-b579-0fdb262ffcf3",
+          "DomainController": false,
+          "RealTimeProtection": "On",
+          "CloudProtection": "On",
+          "AsrApplicable": 16,
+          "AsrConfigured": 16,
+          "ConfiguredRules": [
+            "Block abuse of exploited vulnerable signed drivers",
+            "Block credential stealing from the Windows local security authority subsystem",
+            "Block Adobe Reader from creating child processes",
+            "Block all Office applications from creating child processes",
+            "Block executable content from email client and webmail",
+            "Block executable files from running unless they meet a prevalence, age, or trusted list criterion",
+            "Block execution of potentially obfuscated scripts",
+            "Block Office applications from creating executable content",
+            "Block Office applications from injecting code into other processes",
+            "Block Office communication application from creating child processes",
+            "Block process creations originating from PSExec and WMI commands",
+            "Block rebooting machine in Safe Mode",
+            "Block untrusted and unsigned processes that run from USB",
+            "Block use of copied or impersonated system tools",
+            "Block Webshell creation for Servers",
+            "Use advanced protection against ransomware"
+          ],
+          "MissingRules": []
         }
       ]
     }

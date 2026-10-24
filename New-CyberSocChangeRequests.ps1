@@ -3539,6 +3539,7 @@ $catalog = @(
                         Onboarded = (Get-Text $row.OnboardingStatus) -ieq 'Onboarded'; Onboarding = ConvertTo-CopyText $row.OnboardingStatus; Dc = Test-True $row.DomainController
                         Mode = $(if ($a) { ConvertTo-CopyText $a.AvModeName } else { '' }); Rtp = Get-Text $row.RealTimeProtection; Cloud = Get-Text $row.CloudProtection
                         Applicable = Get-Number $row.AsrApplicable; Configured = @(Get-List $row.ConfiguredRules | ForEach-Object { $known[(& $ruleKey $_)] } | Where-Object { $_ })
+                        Missing = @(Get-List $row.MissingRules | ForEach-Object { $known[(& $ruleKey $_)] } | Where-Object { $_ })
                         Managed = $managed
                     } })
             $where = { param($s) '{0} (resource group {1}, subscription {2})' -f $s.Name, $s.ResourceGroup, (Format-Subscription $s.SubscriptionId) }
@@ -3559,9 +3560,12 @@ $catalog = @(
             foreach ($r in $asrRules) { $on = @($inScope | Where-Object { $_.Configured -contains $r }); if ($on.Count) { $configured[$r] = $on } }
             $audit = @($asrRules | Where-Object { -not $configured.Contains($_) })
             $unassessed = @($inScope | Where-Object { $_.Applicable -eq 0 })
-            $gaps = @($inScope | Where-Object { $s = $_; $_.Applicable -eq 0 -or @($asrRules | Where-Object { $s.Configured -notcontains $_ }).Count })
+            # A server has a gap when a rule the assessment reads as applicable to it is not configured (MissingRules), or when it
+            # has no assessment at all. A rule its operating system does not support, such as Block persistence through WMI
+            # event subscription on Windows Server 2016 (ASR rules reference), is never applicable, so it is no gap.
+            $gaps = @($inScope | Where-Object { $_.Applicable -eq 0 -or $_.Missing.Count })
             if (-not $gaps.Count) {
-                if ($inScope.Count) { $notes.Insert(0, ('Every Windows server in scope already has every ASR rule configured, in Audit, Block or Warn: {0}.' -f (Join-Words @($inScope | ForEach-Object { & $where $_ })))) }
+                if ($inScope.Count) { $notes.Insert(0, ('Every Windows server in scope already has every ASR rule that applies to it configured, in Audit, Block or Warn: {0}.' -f (Join-Words @($inScope | ForEach-Object { & $where $_ })))) }
                 $state = if ($inScope.Count -or -not $left.Count) { 'No gaps found' } else { 'Not written, no server meets the ASR prerequisites, see the notes' }
                 if ($partial -and $state -eq 'No gaps found') { $state = 'No gaps found in the servers read, partial collection scope'; $notes.Add(('EW.4-SERVERS read in part ({0}), so a Windows server left out of the read may still have ASR rules not configured. Recollect the pack.' -f (Get-ResultDetail 'EW.4-SERVERS').TrimEnd('.'))) }
                 return @{ State = $state; Notes = $notes.ToArray() }

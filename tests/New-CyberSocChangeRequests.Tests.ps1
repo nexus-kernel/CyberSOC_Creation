@@ -4241,7 +4241,10 @@ Describe 'Attack surface reduction rules in audit mode on Windows servers (CR-22
     It 'reads no gaps when every server in scope has every rule, and writes nothing when no rule is left to set or no server meets the prerequisites' {
         $r = New-AsrPack 'all' 'all-configured'
         $r.Index | Should -Match '\| 22 \| Attack surface reduction rules in audit mode on Windows servers \|  \| No gaps found \|  \|'
-        $r.Index | Should -Match '- Every Windows server in scope already has every ASR rule configured, in Audit, Block or Warn: srv-app01 '
+        $r.Index | Should -Match '- Every Windows server in scope already has every ASR rule that applies to it configured, in Audit, Block or Warn: srv-app01 '
+        $r = New-AsrPack 'unsupported' 'unsupported-rules'
+        $r.Index | Should -Match '\| 22 \| Attack surface reduction rules in audit mode on Windows servers \|  \| No gaps found \|  \|' -Because 'a rule Windows Server 2016 does not support is never applicable there, so it is no gap'
+        $r.Index | Should -Match '- Every Windows server in scope already has every ASR rule that applies to it configured, in Audit, Block or Warn: srv-old2016 '
         Test-Path (Join-Path $r.Out 'CR-22-asr-audit-servers.txt') | Should -BeFalse
         $r = New-AsrPack 'somewhere' 'every-rule-somewhere'
         $r.Index | Should -Match '\| 22 \| [^|]+ \|  \| Not written, every ASR rule is configured on a server in scope, see the notes \|'
