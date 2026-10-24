@@ -247,7 +247,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.21.0, based on the EBR collector 1.14.0
+    Version: 1.22.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -297,7 +297,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.21.0'
+$script:EbrVersion = '1.22.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -878,15 +878,19 @@ function New-EbrQuery {
         # tenant-wide table. CombinedOnly: no per-workspace breakdown. AlwaysBreakdown: per-
         # workspace run even with -SkipWorkspaceBreakdown, because later steps depend on it.
         [string]$TenantTable = '', [switch]$CombinedOnly, [switch]$AlwaysBreakdown,
-        # Resource Graph: the result is incomplete when read through Lighthouse
-        [switch]$LighthouseIncomplete,
+        # Resource Graph: the result is incomplete when read through Lighthouse, and LighthouseWhy says why when the
+        # reason is not the role assignments it names by default
+        [switch]$LighthouseIncomplete, [string]$LighthouseWhy = '',
+        # Resource Graph: the authorizationScopeFilter sent with the query, such as AtScopeAboveAndBelow for the policy
+        # assignments at the management groups above the subscriptions
+        [string]$ScopeFilter = '',
         # Derived: built from results already collected, no engine call. The block receives the context.
         [scriptblock]$Derive
     )
     [pscustomobject]@{
         Id = $Id; Phase = $Phase; Title = $Title; Engine = $Engine; Query = $Query.Trim(); Notes = $Notes
         TenantTable = $TenantTable; CombinedOnly = [bool]$CombinedOnly; AlwaysBreakdown = [bool]$AlwaysBreakdown
-        LighthouseIncomplete = [bool]$LighthouseIncomplete; Derive = $Derive
+        LighthouseIncomplete = [bool]$LighthouseIncomplete; LighthouseWhy = $LighthouseWhy; ScopeFilter = $ScopeFilter; Derive = $Derive
     }
 }
 
@@ -3063,6 +3067,36 @@ Also writes POS.6-TREND (one row per daily snapshot) and POS.6-CATEGORIES (point
 '@ -Notes 'Portal fallback: Defender portal > Exposure management > Secure score: record score, max and read date. Export History (90 days), Recommended actions (category points) and the Comparison view (peer median). POS.6-SUB adds the device secure score and exposure score.'))
 
     $q.Add((New-EbrQuery -Id 'POS.6-SUB' -Phase 'P3 Posture' -Engine 'DEFENDER-SCORES' -Title 'Device secure score and exposure score (substitute)' -Notes 'Substitute for part of POS.6 from the Defender API: Microsoft Secure Score for Devices and the exposure score. Not the tenant Secure Score.'))
+
+    # POS.9 (CyberSOC 1.22.0): the assignments of the built-in policy definitions that guard a remediation change request,
+    # for the guardrail template CR-27. Read with authorizationScopeFilter AtScopeAboveAndBelow, so the assignments at the
+    # management groups and root above the subscriptions come back too, and joined with the management group chain of each
+    # subscription, so each row names a subscription the assignment covers.
+    $q.Add((New-EbrQuery -Id 'POS.9-GUARDRAILS' -Phase 'P3 Posture' -Engine 'ARG' -ScopeFilter 'AtScopeAboveAndBelow' -LighthouseIncomplete -LighthouseWhy 'Read through Lighthouse, which delegates subscriptions but not the management groups above them, so an assignment at a management group is not listed and this is incomplete.' -Title 'Guardrail policy assignments' -Notes 'Added in CyberSOC 1.22.0. The assignments, at management group, subscription or resource group scope, of the built-in policy definitions that guard a remediation change request: secure transfer (404c3081-a854-4457-ae30-26a93ef643f9, CR-02), storage minimum TLS (fe83a0eb-a853-422d-aac2-1bffd182c5d0, CR-03), Azure SQL minimum TLS (32e6bbec-16b6-44c2-be37-c5b672d103cf, CR-05), Key Vault deletion protection (0b60c0b2-2dc2-4e1c-b5c9-abbed971de53, CR-06), storage account public access, Deny (4fa4b6c0-31ca-4c0d-b10d-24b96f62a751) and Modify (13502221-8df0-4414-9937-de9c5c4e396b, CR-07), App Service HTTPS only (a4af4a39-4135-47fb-b175-47fbdf85311d, CR-08), encryption at host (fc4d8e41-e223-45ea-9bf5-eada37891d87, CR-09 and CR-15) and periodic assessment, Modify (59efceea-0c96-497e-a4a1-4eb2290dac15, CR-23). Read with authorizationScopeFilter AtScopeAboveAndBelow, so an assignment at a management group or the root above the subscriptions is listed too. One row per assignment and subscription it covers (subscriptionId, empty when no subscription in the collection sits under its management group), with the definition, the scope and its level, the enforcement mode (Default or DoNotEnforce), the effect parameter (empty when the assignment leaves it at the definition default), the excluded scopes and the first non-compliance message. An assignment of an initiative that holds one of these definitions is not listed. Feeds the guardrail template CR-27, which is offered only for a change request that reads No gaps found and names an existing assignment so it is edited rather than duplicated. Internal: names assignments and scopes.' -Query @'
+policyresources
+| where type =~ "microsoft.authorization/policyassignments"
+| where id !contains "{{MRG}}"
+| extend Definition = extract(@"/providers/microsoft\.authorization/policydefinitions/([0-9a-f-]+)$", 1, tolower(tostring(properties.policyDefinitionId)))
+| where Definition in ("404c3081-a854-4457-ae30-26a93ef643f9", "fe83a0eb-a853-422d-aac2-1bffd182c5d0", "32e6bbec-16b6-44c2-be37-c5b672d103cf", "0b60c0b2-2dc2-4e1c-b5c9-abbed971de53", "4fa4b6c0-31ca-4c0d-b10d-24b96f62a751", "13502221-8df0-4414-9937-de9c5c4e396b", "a4af4a39-4135-47fb-b175-47fbdf85311d", "fc4d8e41-e223-45ea-9bf5-eada37891d87", "59efceea-0c96-497e-a4a1-4eb2290dac15")
+| extend Scope = tolower(tostring(properties.scope))
+| extend MgName = extract(@"^/providers/microsoft\.management/managementgroups/([^/]+)$", 1, Scope),
+         SubscriptionKey = extract(@"^/subscriptions/([^/]+)", 1, Scope)
+| extend ScopeLevel = case(isnotempty(MgName), "ManagementGroup", Scope matches regex @"^/subscriptions/[^/]+$", "Subscription", Scope matches regex @"^/subscriptions/[^/]+/resourcegroups/[^/]+$", "ResourceGroup", "Other"),
+         EnforcementMode = tostring(properties.enforcementMode),
+         Effect = tostring(properties.parameters.effect.value),
+         NotScopes = strcat_array(properties.notScopes, ", "),
+         NonComplianceMessage = tostring(properties.nonComplianceMessages[0].message)
+| join kind=leftouter (
+    resourcecontainers
+    | where type =~ "microsoft.resources/subscriptions"
+    | extend Chain = properties.managementGroupAncestorsChain
+    | mv-expand Chain
+    | project CoveredSubscription = tolower(subscriptionId), MgName = tolower(tostring(Chain.name))
+) on MgName
+| extend subscriptionId = iff(isnotempty(SubscriptionKey), SubscriptionKey, CoveredSubscription)
+| project AssignmentId = id, AssignmentName = name, DisplayName = tostring(properties.displayName), Definition, Scope, ScopeLevel, subscriptionId, EnforcementMode, Effect, NotScopes, NonComplianceMessage
+| order by Definition asc, Scope asc, subscriptionId asc
+'@))
 
     $q.Add((New-EbrQuery -Id 'POS.7' -Phase 'P3 Posture' -Engine 'LA' -Title 'Defender for Cloud score trend from continuous export' -Notes 'Exported rows keep the model in force when written. Pick one source for the whole series and footnote it. The current month is partial.' -Query @'
 SecureScores
@@ -6415,14 +6449,17 @@ function Invoke-EbrCatalogItem {
             catch { return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Derived from collected results' -Detail $_.Exception.Message -DurationSec (& $elapsed) }
         }
         'ARG' {
-            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
+            $scopeFilter = @{}
+            if ($Item.ScopeFilter) { $scopeFilter['authorizationScopeFilter'] = $Item.ScopeFilter }
+            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph{0}, subscriptions: {1}' -f $(if ($Item.ScopeFilter) { ' with authorizationScopeFilter ' + $Item.ScopeFilter } else { '' }), ($Ctx.Subscriptions -join ', '))
             try {
-                $r = Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant
+                $r = Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant -RequestOptions $scopeFilter
                 $status = if ($r.Rows.Count -gt 0) { 'OK' } else { 'EMPTY' }
                 $detail = $r.Detail
                 if ($Item.LighthouseIncomplete -and $Ctx.AccessPath -eq 'Lighthouse') {
                     $status = 'PARTIAL'
-                    $detail = (@($detail, "Read through Lighthouse, which shows the managing tenant's delegations rather than the client's own role assignments, so this is incomplete. Sign in directly (az login --tenant followed by the client domain) and rerun.") | Where-Object { $_ }) -join ' '
+                    $why = if ($Item.LighthouseWhy) { $Item.LighthouseWhy } else { "Read through Lighthouse, which shows the managing tenant's delegations rather than the client's own role assignments, so this is incomplete." }
+                    $detail = (@($detail, "$why Sign in directly (az login --tenant followed by the client domain) and rerun.") | Where-Object { $_ }) -join ' '
                 }
                 return New-EbrResult -ResultId $Item.Id -Status $status -Rows $r.Rows -Columns $r.Columns -Source ('Resource Graph ({0})' -f $(if ($Ctx.AccessPath) { $Ctx.AccessPath.ToLowerInvariant() } else { 'direct' })) -Detail $detail -DurationSec (& $elapsed)
             }

@@ -238,8 +238,9 @@ BeforeAll {
     # The lines that head each group of resources: a subscription, for CR-19 a management group, the root scope and the
     # Microsoft Entra directory roles, and for CR-20 and CR-21 the policies, sign-ins and exclusions, which belong to no
     # subscription, and for CR-22 the domain controllers, which the client confirms apart from the other servers, and for
-    # CR-24 the sentence that introduces its count of the devices by operating system and join type.
-    $resourceHeading = '^(By subscription, then management group and root scope, the guests with a role are these|Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
+    # CR-24 the sentence that introduces its count of the devices by operating system and join type, and for CR-27 the
+    # sentence that introduces its policies.
+    $resourceHeading = '^(The policies, each with what it covers, are these|By subscription, then management group and root scope, the guests with a role are these|Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
     $dayPattern = '(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}'
     # Checks one client email against the shared structure and the copy rules. Every generated email goes through it.
     # The parts are found by what each paragraph says: the ask, why, what it means for the client, the resources by
@@ -1225,7 +1226,7 @@ Describe 'Change request variants' {
         $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
     }
 
-    It 'writes a client email for every change request, CR-01 to CR-26' {
+    It 'writes a client email for every change request, CR-01 to CR-27' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
         # written at least once. A change request written without its email, or with an email that does not
@@ -1259,8 +1260,14 @@ Describe 'Change request variants' {
         # Virtual machines without periodic assessment, so CR-23 is written too.
         Set-PackResult $more 'EW.10-ASSESSMENT' @((Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/patch-assessment/scenarios.json') -Raw | ConvertFrom-Json).Machines)
         $null = & $generator -EvidencePath $more -PurgeProtectionApproved
+        # Purge protection on every key vault and the guardrail assignments read, so the CR-27 template is written too.
+        $guard = Join-Path $TestDrive 'every-guard'
+        New-ChangeFixture $guard
+        Set-PackResult $guard 'DP.2-DETAIL' @()
+        Set-PackResult $guard 'POS.9-GUARDRAILS' @()
+        $null = & $generator -EvidencePath $guard
         $written = @()
-        foreach ($pack in $full, $more) {
+        foreach ($pack in $full, $more, $guard) {
             $out = Join-Path $pack '05-change-requests'
             $index = Get-Content (Join-Path $out '00-index.md') -Raw
             foreach ($cr in @(Get-ChildItem $out -Filter 'CR-*.txt' | Where-Object Name -notlike '*.email.txt')) {
@@ -1271,12 +1278,12 @@ Describe 'Change request variants' {
                 $text = Get-Content $email -Raw
                 Assert-ApprovalEmail $text $cr.Name
                 # An email that attaches a CSV lists it after the email, under the same base name.
-                $index | Should -Match ('\| {0} \| [^|]+ \| \d+ \| Change request and client email(, partial collection scope)?(, confirm the license before sending)? \| {1}, {2}(, {3})? \|' -f $number, [regex]::Escape($cr.Name), [regex]::Escape($cr.BaseName + '.email.txt'), [regex]::Escape($cr.BaseName + '.email.csv')) -Because $cr.Name
+                $index | Should -Match ('\| {0} \| [^|]+ \| \d+ \| (Change request|Template) and client email(, client decisions to fill in)?(, partial collection scope)?(, confirm the license before sending)? \| {1}, {2}(, {3})? \|' -f $number, [regex]::Escape($cr.Name), [regex]::Escape($cr.BaseName + '.email.txt'), [regex]::Escape($cr.BaseName + '.email.csv')) -Because $cr.Name
                 foreach ($attached in @(Get-ChildItem $out -Filter ($cr.BaseName + '.email.csv'))) { Get-Content $attached.FullName -Raw | Should -Not -Match ';|>|<' -Because "$($attached.Name) goes to the client with the email" }
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
-        @($written | Sort-Object -Unique) | Should -Be @(1..26) -Because 'the two packs between them write every change request'
+        @($written | Sort-Object -Unique) | Should -Be @(1..27) -Because 'the three packs between them write every change request'
         $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
@@ -4891,5 +4898,180 @@ Describe 'Azure roles removed from guest accounts (CR-26, collector 1.21.0)' {
         (Get-Section (Get-Cr26 $r.Out) 'C) RESOURCES') -join "`n" | Should -Match '- Vendor Support [^\n]+, created 2025-02-03, last sign-in not read\n'
         @(Import-Csv (Join-Path $r.Out 'CR-26-guest-roles.email.csv') | ForEach-Object LastSignIn | Sort-Object -Unique) | Should -Be @('not read')
         $r.Index | Should -Match '- IA\.17-GUESTS could not read the last sign-in of the guests, which needs AuditLog\.Read\.All and Microsoft Entra ID P1 or P2'
+    }
+}
+
+Describe 'Guardrail policy template after the remediation changes (CR-27, collector 1.22.0)' {
+    BeforeAll {
+        $script:dg = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/deny-guardrails/scenarios.json') -Raw | ConvertFrom-Json
+        # The full fixture with secure transfer, minimum TLS, anonymous access and purge protection remediated: DP.1-DETAIL
+        # and DP.2-DETAIL list nothing, every account blocks anonymous access and only starchive keeps a container set to
+        # Container, which its account blocks. App Service HTTPS Only and encryption at host still have resources to fix,
+        # and POS.9-GUARDRAILS is the fixture's. A scenario's Before changes the pack further.
+        function New-DgPack([string]$Name, [scriptblock]$Before = $null) {
+            $pack = Join-Path $TestDrive "dg-$Name"
+            New-ChangeFixture $pack
+            Set-PackResult $pack 'DP.1-DETAIL' @()
+            Set-PackResult $pack 'DP.2-DETAIL' @()
+            Set-PackResult $pack 'DP.1-CONTAINERS' @(
+                @{ subscriptionId = $s1; resourceGroup = 'rg-data'; Account = 'stdata'; AccountAnonymousAccess = 'Disabled'; ResourceId = "/subscriptions/$s1/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stdata"; Containers = 4; PublicContainers = 0; ExposedContainers = 0; PublicContainerNames = ''; ReadStatus = 'OK' }
+                @{ subscriptionId = $s2; resourceGroup = 'rg-data'; Account = 'starchive'; AccountAnonymousAccess = 'Disabled'; ResourceId = "/subscriptions/$s2/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/starchive"; Containers = 3; PublicContainers = 1; ExposedContainers = 0; PublicContainerNames = 'legacy-exports (Container)'; ReadStatus = 'OK' })
+            $id = "/subscriptions/$s2/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/starchive"
+            Set-PackResult $pack 'DP.1-CONTAINERS-DETAIL' @(@{ subscriptionId = $s2; resourceGroup = 'rg-data'; Account = 'starchive'; Container = 'legacy-exports'; AccessLevel = 'Container'; AccountAnonymousAccess = 'Disabled'; ReadableToday = $false; AccountId = $id; ResourceId = "$id/blobServices/default/containers/legacy-exports" })
+            Set-PackResult $pack 'POS.9-GUARDRAILS' @($dg.Assignments)
+            if ($Before) { & $Before $pack }
+            Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -ClientContact 'Dana' -SenderName 'Scott Example' }
+            $out = Join-Path $pack '05-change-requests'
+            [pscustomobject]@{ Pack = $pack; Out = $out; Index = Get-Content (Join-Path $out '00-index.md') -Raw }
+        }
+        function Get-Cr27([string]$Out, [string]$Suffix = '.txt') { Get-Content (Join-Path $Out "CR-27-deny-guardrails$Suffix") -Raw }
+        $script:dgMain = New-DgPack 'main'
+        $script:decisionPlaceholders = @('[DECISION: SCOPE]', '[DECISION: EFFECT]', '[DECISION: NON-COMPLIANCE MESSAGE]')
+    }
+
+    It 'offers a guardrail only after a change request that reads No gaps found, as a template with the client decisions left as placeholders' {
+        $r = $dgMain
+        foreach ($n in '02', '03', '05', '06', '07') { $r.Index | Should -Match ('\| {0} \| [^|]+ \|  \| No gaps found \|' -f $n) -Because "CR-$n has nothing left to fix" }
+        $r.Index | Should -Match '\| 27 \| Guardrail policies assigned after the remediation changes \(template\) \| 5 \| Template and client email, client decisions to fill in \| CR-27-deny-guardrails\.txt, CR-27-deny-guardrails\.email\.txt \|'
+        $text = Get-Cr27 $r.Out
+        $lines = $text -split "`r?`n"
+        $lines[0] | Should -Be 'Title: Template: assign guardrail policies that keep the remediated settings in place'
+        $lines[1] | Should -Be 'Client: Example Client'
+        $lines[3] | Should -Match '^TEMPLATE: each client decision below is left as its placeholder in this change request\. Fill each one in from the client''s reply to the email before raising it\.$'
+        $lines[4] | Should -Match '^- \[DECISION: SCOPE\] Where the policies apply: the client management group, each subscription in the pack, or one or two pilot resource groups first where the client deploys with Terraform or other infrastructure as code\.'
+        $lines[5] | Should -Match '^- \[DECISION: EFFECT\] Deny or Audit\. For a Modify definition, Deny means Policy enforcement Enabled and Audit means Policy enforcement Disabled'
+        $lines[6] | Should -Match '^- \[DECISION: NON-COMPLIANCE MESSAGE\] The message a refused or non-compliant resource shows, with the route the client''s teams use to request an exception\.$'
+        @([regex]::Matches($text, '\[DECISION: [^\]]+\]') | ForEach-Object Value | Sort-Object -Unique) | Should -Be @($decisionPlaceholders | Sort-Object) -Because 'every placeholder is one of the three decisions, and each is used'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Assign the 5 built-in policy definitions listed below at [DECISION: SCOPE] with the effect [DECISION: EFFECT], so a new or updated resource cannot go without the setting a remediation change put in place. Each follows a change request that reads No gaps found, so no resource in the pack fails them today.'
+        @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Be 'At [DECISION: SCOPE], a deployment that creates or updates a resource without the setting is refused with Deny or reported as non-compliant with Audit, and a Modify definition corrects the setting instead.' -Because 'the impact follows the scope chosen'
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match '\n- Secure transfer to storage accounts should be enabled, definition 404c3081-a854-4457-ae30-26a93ef643f9, follows CR-02, effect \[DECISION: EFFECT\], not assigned today'
+        $res | Should -Match '\n- Storage accounts should have the specified minimum TLS version, definition fe83a0eb-a853-422d-aac2-1bffd182c5d0, follows CR-03, effect \[DECISION: EFFECT\], with the minimum TLS version parameter set to TLS 1\.2, not assigned today'
+        $res | Should -Match ('\n- Key vaults should have deletion protection enabled, definition 0b60c0b2-2dc2-4e1c-b5c9-abbed971de53, follows CR-06, effect \[DECISION: EFFECT\], assigned today as Key vaults should have deletion protection enabled at /subscriptions/{0}, effect Audit, enforcement Enabled' -f $s1) -Because 'an assignment that does not deny is named, so it is edited rather than duplicated'
+        $res | Should -Match '\n- Storage account public access should be disallowed, definition 4fa4b6c0-31ca-4c0d-b10d-24b96f62a751, follows CR-07, effect \[DECISION: EFFECT\], not assigned today'
+        $res | Should -Match '\n- Configure your Storage account public access to be disallowed, definition 13502221-8df0-4414-9937-de9c5c4e396b, follows CR-07, effect Modify, which corrects the setting on a new or updated resource, with Effect left at Modify, not assigned today'
+        foreach ($left in '32e6bbec', 'a4af4a39', 'fc4d8e41', '59efceea') { $res | Should -Not -Match $left -Because "$left is not offered" }
+        $impl = (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n"
+        $impl | Should -Match '^1\. In the Azure portal, go to Policy > Assignments and select Assign policy\. Where the RESOURCES section lists an assignment of the definition at \[DECISION: SCOPE\] already, open that assignment and select Edit assignment instead, so the definition is not assigned twice\.'
+        $impl | Should -Match '\n2\. On the Basics tab, set Scope to \[DECISION: SCOPE\], select the first policy definition listed in the RESOURCES section by its name and definition ID'
+        $impl | Should -Match '\n3\. On the Parameters tab, clear Only show parameters that need input or review, set Effect to \[DECISION: EFFECT\] on a Deny definition, and set any other parameter the RESOURCES section names for the definition\. For a Modify definition, leave Policy enforcement Enabled on the Basics tab where \[DECISION: EFFECT\] reads Deny, or set it to Disabled where it reads Audit, so the assignment only reports\.'
+        $impl | Should -Match '\n4\. For a Modify definition, on the Remediation tab select Create a Managed Identity with System assigned managed identity, which the portal grants the roles the definition names, and leave Create a remediation task cleared, since no resource in scope needs remediation\.'
+        $impl | Should -Match '\n5\. On the Non-compliance messages tab, enter \[DECISION: NON-COMPLIANCE MESSAGE\] as the message\.\n6\. Select Review \+ create, then Create\.\n7\. Repeat steps 1 to 6 for each remaining policy definition listed\.$'
+        $impl | Should -Not -Match 'EncryptionAtHost' -Because 'encryption at host is not offered here'
+        $testing = (Get-Section $text 'B) TESTING PLAN') -join "`n"
+        $testing | Should -Match '^1\. In the Azure portal, go to Policy > Assignments, set the scope to \[DECISION: SCOPE\] and open each assignment the implementation plan made\.'
+        $testing | Should -Match 'up to 30 minutes for a new assignment, open Policy > Compliance and confirm each assignment reads Compliant'
+        (Get-Section $text 'C) ROLLBACK PLAN') -join "`n" | Should -Match 'Select Delete assignment to remove it, or select Edit assignment, set Policy enforcement to Disabled and save, so it reports without enforcing\.'
+        $refs = @(Get-Section $text 'A) REFERENCES')
+        foreach ($ref in $refs) { $ref | Should -Match '^- [^:]+: https://learn\.microsoft\.com/azure/\S+$' -Because 'References list Microsoft Learn pages only' }
+        foreach ($page in 'governance/policy/concepts/effect-basics', 'governance/policy/concepts/effect-deny', 'governance/policy/concepts/effect-modify', 'governance/policy/how-to/remediate-resources', 'governance/policy/concepts/assignment-structure', 'governance/policy/concepts/exemption-structure', 'storage/common/policy-reference', 'key-vault/policy-reference') { $text | Should -Match ([regex]::Escape("https://learn.microsoft.com/azure/$page")) }
+        @($refs | Where-Object { $_ -match 'storage/common/policy-reference' }).Count | Should -Be 1 -Because 'a definition page is cited once'
+        $csv = @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-27')
+        @($csv | ForEach-Object ResourceId) | Should -Be @('/providers/Microsoft.Authorization/policyDefinitions/404c3081-a854-4457-ae30-26a93ef643f9', '/providers/Microsoft.Authorization/policyDefinitions/fe83a0eb-a853-422d-aac2-1bffd182c5d0', '/providers/Microsoft.Authorization/policyDefinitions/0b60c0b2-2dc2-4e1c-b5c9-abbed971de53', '/providers/Microsoft.Authorization/policyDefinitions/4fa4b6c0-31ca-4c0d-b10d-24b96f62a751', '/providers/Microsoft.Authorization/policyDefinitions/13502221-8df0-4414-9937-de9c5c4e396b')
+        ($csv | Where-Object Resource -eq 'Secure transfer to storage accounts should be enabled').CurrentSetting | Should -Be 'follows CR-02, not assigned today'
+    }
+
+    It 'names in the index what a guardrail would block, the guardrails already in force, the container check and why CR-04 has none' {
+        $i = $dgMain.Index
+        $i | Should -Match '- CR-04 has no guardrail: no built-in policy definition denies an App Service app whose minimum TLS version is below 1\.2, since App Service apps should use the latest TLS version \(f0e6e85b-9b9f-4a4b-b67b-f730d42f1b0b\) only audits \(AuditIfNotExists\)\.'
+        $i | Should -Match ('- The CR-08 guardrail, App Service apps should only be accessible over HTTPS \(a4af4a39-4135-47fb-b175-47fbdf85311d\), is not offered while 2 App Service apps would fail it: app-portal \(resource group rg-web, subscription Example Production \({0}\)\) / func-jobs \(resource group rg-web, subscription Example Production \({0}\)\)\. A Deny assigned now would block routine updates to them\. It is offered once CR-08 reads No gaps found with nothing left out\.' -f $s1)
+        $i | Should -Match '- The CR-09 and CR-15 guardrail, Virtual machines and virtual machine scale sets should have encryption at host enabled \(fc4d8e41-e223-45ea-9bf5-eada37891d87\), is not offered while 15 virtual machines and scale sets would fail it: vm-app01 [^\n]*aks-nodepool1-12345678-vmss \(resource group MC_rg-aks_aks-prod_eastus' -Because 'the machines CR-09 and CR-15 leave out, AKS node pools included, would be blocked too'
+        $i | Should -Match ('- The CR-05 guardrail, Azure SQL Database should be running TLS version 1\.2 or newer \(32e6bbec-16b6-44c2-be37-c5b672d103cf\), is already in force over every subscription in the pack: SQL minimum TLS 1\.2 at /providers/microsoft\.management/managementgroups/mg-example-platform, effect Deny, enforcement Enabled\.')
+        $i | Should -Match '- The CR-23 guardrail, Configure periodic checking for missing system updates on azure virtual machines \(59efceea-0c96-497e-a4a1-4eb2290dac15\), is not offered, since EW\.10-ASSESSMENT was not read in full \(EW\.10-ASSESSMENT MISSING\)\. Recollect the pack\.'
+        $i | Should -Match '- CR-27 offers the CR-07 Modify while 1 container in accounts that block anonymous access is still set to Blob or Container: legacy-exports \(Container\) in account starchive\. The Modify keeps those accounts blocked'
+        $i | Should -Match '- CR-27 is a template: fill in \[DECISION: SCOPE\], \[DECISION: EFFECT\] and \[DECISION: NON-COMPLIANCE MESSAGE\] from the client''s reply to its email before raising it\.'
+    }
+
+    It 'asks the client for the scope, Deny or Audit and the message with the exception route before the approval, in a letter with no placeholder' {
+        $email = Get-Cr27 $dgMain.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-27'
+        $email | Should -Not -Match '\[DECISION' -Because 'the email asks the decisions the change request leaves as placeholders'
+        $email | Should -Match '^Subject: Approval requested: policies that keep the remediated settings in place\r?\n\r?\nHello Dana,'
+        $email | Should -Match 'I would like your approval to assign 5 built-in Azure Policy definitions that keep security settings your resources already have in place on new and updated resources\. Azure Policy checks each request that creates or updates a resource, and a policy set to deny refuses one that would go without the setting\.'
+        $email | Should -Match 'I recommend these guardrails because your resources have these settings today, through the earlier changes or from the start, but nothing stops a new or redeployed resource from going without them\.' -Because 'a change request can read No gaps found without any change having been made'
+        $email | Should -Match 'With Deny, a deployment that creates or updates such a resource without the setting fails with a message that names the policy, so a deployment pipeline that builds one, such as one using Terraform or another infrastructure as code tool, stops at that resource until its template includes the setting\. With Audit, nothing is refused and the resource is reported as non-compliant\.'
+        $email | Should -Match 'Where a policy below corrects the setting instead, it does not refuse the request'
+        $email | Should -Match 'I can exempt that resource or its resource group from the policy, and the message a refused deployment shows can tell your teams how to ask for that\.'
+        $email | Should -Not -Match 'encryption at host' -Because 'encryption at host is not offered here'
+        $email | Should -Match "Each policy covers a setting that every resource I reviewed already has:\r?\n\r?\nThe policies, each with what it covers, are these:\r?\n\r?\n- Secure transfer to storage accounts should be enabled, for a storage account that does not require secure transfer, which all of yours require today\r?\n"
+        $email | Should -Match '- Configure your Storage account public access to be disallowed, which turns anonymous blob access off on a new or updated storage account instead of refusing it\r?\n'
+        $email | Should -Match ('Before I schedule the change, I need three decisions from you\. Where should the policies apply: at your management group, on each of your subscriptions, or first on one or two pilot resource groups, which suits teams that deploy with Terraform or other infrastructure as code\? Should the policies refuse a resource without the setting, or only audit it, reporting it as non-compliant without refusing anything, to start with\? What message should a refused deployment show, and how should your teams request an exception, for example by a request to your service desk\? With those decided, could you approve this change for {0}\? Please reply by {0}\.' -f $dayPattern)
+    }
+
+    It 'offers the encryption at host Deny with the feature check, and the periodic assessment Modify for CR-23, once nothing is left to fix' {
+        $r = New-DgPack 'compute' -Before { param($p)
+            Set-PackResult $p 'DP.4-ELIGIBILITY' @()
+            Set-PackResult $p 'DP.4-VMSS-ELIGIBILITY' @()
+            Set-PackResult $p 'EW.10-ASSESSMENT' @() }
+        foreach ($n in '09', '15', '23') { $r.Index | Should -Match ('\| {0} \| [^|]+ \|  \| No gaps found \|' -f $n) }
+        $r.Index | Should -Match '\| 27 \| [^|]+ \| 7 \| Template and client email, client decisions to fill in \|'
+        $text = Get-Cr27 $r.Out
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match ('- Virtual machines and virtual machine scale sets should have encryption at host enabled, definition fc4d8e41-e223-45ea-9bf5-eada37891d87, follows CR-09 and CR-15, effect \[DECISION: EFFECT\], assigned today as eah-pilot at /subscriptions/{0}/resourcegroups/rg-pilot, effect Deny, enforcement Disabled' -f $s1) -Because 'an assignment on one resource group does not cover the subscription'
+        $res | Should -Match '- Configure periodic checking for missing system updates on azure virtual machines, definition 59efceea-0c96-497e-a4a1-4eb2290dac15, follows CR-23, effect Modify, which corrects the setting on a new or updated resource, with one assignment with OS Type set to Windows and one with Linux, each with Assessment mode left at AutomaticByPlatform, not assigned today'
+        $impl = (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n"
+        $impl | Should -Match '^1\. For the encryption at host definition, open Cloud Shell in Bash in the Azure portal and read the EncryptionAtHost feature on each subscription under \[DECISION: SCOPE\]'
+        foreach ($s in $s1, $s2) { $impl | Should -Match ([regex]::Escape("az feature show --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s --query properties.state -o tsv")) }
+        $impl | Should -Match '\n2\. In the Azure portal, go to Policy > Assignments and select Assign policy\.'
+        $impl | Should -Match '\n8\. Repeat steps 2 to 7 for each remaining policy definition listed\.$'
+        @(Get-Section $text 'C) DEPENDENCIES')[0] | Should -Be 'Needs the client''s decisions on the scope, Deny or Audit and the non-compliance message, and the EncryptionAtHost feature registered on each subscription in scope.'
+        $r.Index | Should -Match '- With Deny, the CR-09 and CR-15 guardrail also refuses a new virtual machine or scale set on a size that does not support encryption at host' -Because 'the impact covers feature registration and size support'
+        foreach ($page in 'virtual-machines/policy-reference', 'virtual-machines/disks-enable-host-based-encryption-portal', 'update-manager/periodic-assessment-at-scale') { $text | Should -Match ([regex]::Escape("https://learn.microsoft.com/azure/$page")) }
+        $email = Get-Cr27 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-27 compute'
+        $email | Should -Match 'For encryption at host, a new virtual machine also needs the feature registered on its subscription and a size that supports it, so with Deny a machine on a size without support would be refused\.'
+        $email | Should -Match '- Configure periodic checking for missing system updates on azure virtual machines, which turns periodic assessment on for a new or updated virtual machine instead of refusing it, so a machine rebuilt from its image keeps it\r?\n'
+    }
+
+    It 'holds a guardrail back while a result behind it is partial, the container check is incomplete or the assignment is already in force' {
+        $r = New-DgPack 'held' -Before { param($p)
+            Set-PackResult $p 'DP.2-DETAIL' @() -Status 'PARTIAL' -Detail '1 of 2 subscriptions read.'
+            Set-PackResult $p 'DP.1-CONTAINERS' @() -Status 'FAILED' -Detail 'HTTP 500: Internal Server Error'
+            Set-PackResult $p 'POS.9-GUARDRAILS' (@($dg.Assignments) + @(
+                    foreach ($s in $s1, $s2) { @{ AssignmentId = '/providers/Microsoft.Management/managementGroups/mg-example-platform/providers/Microsoft.Authorization/policyAssignments/st-https'; AssignmentName = 'st-https'; DisplayName = 'Storage secure transfer'; Definition = '404c3081-a854-4457-ae30-26a93ef643f9'; Scope = '/providers/microsoft.management/managementgroups/mg-example-platform'; ScopeLevel = 'ManagementGroup'; subscriptionId = $s; EnforcementMode = 'Default'; Effect = 'Deny'; NotScopes = ''; NonComplianceMessage = '' } }
+                    @{ AssignmentId = "/subscriptions/$s1/providers/Microsoft.Authorization/policyAssignments/st-tls"; AssignmentName = 'st-tls'; DisplayName = 'Storage TLS'; Definition = 'fe83a0eb-a853-422d-aac2-1bffd182c5d0'; Scope = "/subscriptions/$s1"; ScopeLevel = 'Subscription'; subscriptionId = $s1; EnforcementMode = 'Default'; Effect = 'Deny'; NotScopes = ''; NonComplianceMessage = '' })) }
+        $r.Index | Should -Match '- The CR-06 guardrail, Key vaults should have deletion protection enabled \(0b60c0b2-2dc2-4e1c-b5c9-abbed971de53\), is not offered, since DP\.2-DETAIL was not read in full \(DP\.2-DETAIL PARTIAL\)\. Recollect the pack\.' -Because 'a partial read never reads as no resource left'
+        $r.Index | Should -Match '- The CR-07 guardrail, Configure your Storage account public access to be disallowed \(13502221-8df0-4414-9937-de9c5c4e396b\), is not offered, since the container access levels \(DP\.1-CONTAINERS\) were not read in full, it reads FAILED\.'
+        $r.Index | Should -Match '- The CR-02 guardrail, Secure transfer to storage accounts should be enabled \(404c3081-a854-4457-ae30-26a93ef643f9\), is already in force over every subscription in the pack: Storage secure transfer at /providers/microsoft\.management/managementgroups/mg-example-platform, effect Deny, enforcement Enabled\.'
+        $res = (Get-Section (Get-Cr27 $r.Out) 'C) RESOURCES') -join "`n"
+        $res | Should -Match ('- Storage accounts should have the specified minimum TLS version, [^\n]+, assigned today as Storage TLS at /subscriptions/{0}, effect Deny, enforcement Enabled' -f $s1) -Because 'a Deny over one of the two subscriptions leaves the other uncovered'
+        $res | Should -Match '- Storage account public access should be disallowed, definition 4fa4b6c0' -Because 'the Deny needs no container check, only the Modify does'
+        foreach ($held in '404c3081', '0b60c0b2', '13502221') { $res | Should -Not -Match $held }
+        $r.Index | Should -Match '\| 27 \| [^|]+ \| 2 \| Template and client email, client decisions to fill in \|'
+    }
+
+    It 'writes no template while nothing can be offered, and asks for recollection on a pack collected before the guardrail read' {
+        $none = New-DgPack 'none' -Before { param($p)
+            foreach ($id in 'DP.1-DETAIL', 'DP.2-DETAIL') { Remove-PackResult $p $id }
+            Set-PackResult $p 'DP.1-CONTAINERS' @() -Status 'FAILED' -Detail 'HTTP 500' }
+        $none.Index | Should -Match '\| 27 \| Guardrail policies assigned after the remediation changes \(template\) \|  \| No guardrail to offer, see the notes \|  \|'
+        Test-Path (Join-Path $none.Out 'CR-27-deny-guardrails.txt') | Should -BeFalse
+        $old = Join-Path $TestDrive 'dg-old'
+        New-ChangeFixture $old
+        $null = & $generator -EvidencePath $old
+        Get-Content (Join-Path $old '05-change-requests/00-index.md') -Raw | Should -Match '\| 27 \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.22\.0 or later \|  \|'
+        $empty = New-DgPack 'unassigned' -Before { param($p) Set-PackResult $p 'POS.9-GUARDRAILS' @() }
+        (Get-Section (Get-Cr27 $empty.Out) 'C) RESOURCES') -join "`n" | Should -Match '- Azure SQL Database should be running TLS version 1\.2 or newer, definition 32e6bbec-16b6-44c2-be37-c5b672d103cf, follows CR-05, effect \[DECISION: EFFECT\], not assigned today' -Because 'with no assignment read, every guardrail whose change reads No gaps found is offered'
+    }
+
+    It 'keeps the template rules in New-ChangeRequest and New-ApprovalEmail, so the next templates follow them' {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $generator).Path, [ref]$null, [ref]$null)
+        $names = 'New-ChangeRequest', 'New-TemplateDecision', 'Get-DecisionAsk', 'Get-SentenceCount', 'Get-Pick', 'New-ApprovalEmail'
+        $defs = @($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in $names) -or ($n -is [System.Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -in '$decisionPattern', '$emailHeading') }, $false))
+        $defs.Count | Should -Be ($names.Count + 2)
+        . ([scriptblock]::Create((@($defs | ForEach-Object { $_.Extent.Text }) -join "`n")))
+        $proposedDay = 'Monday, November 2, 2026'; $replyDay = 'Monday, October 26, 2026'; $standardMitigation = 'x'; $drImpact = 'x'; $drPlan = 'x'
+        $d = @((New-TemplateDecision 'Scope' 'Where it applies.' 'Where should it apply?'), (New-TemplateDecision 'Effect' 'Deny or Audit.' 'Should it deny or audit?'))
+        { New-TemplateDecision 'Scope' 'x' 'Tell me the scope.' } | Should -Throw '*must be asked as a question*'
+        $email = New-ApprovalEmail -Subject 'a test' -Change 'I would like to assign a policy.' -Why 'I recommend it because it helps.' -Effect 'Nothing changes today.' -Listed 'It is this:' -Resources @(, [string[]]@('one')) -Reversal 'It can be removed.' -Decisions $d
+        $email.Paragraphs[-1] | Should -Be 'Before I schedule the change, I need two decisions from you. Where should it apply? Should it deny or audit? With those decided, could you approve this change for Monday, November 2, 2026? Please reply by Monday, October 26, 2026. If another date suits you better, or anything listed above should stay out of the change, please let me know. I will not schedule this change until I have your approval.'
+        { New-ApprovalEmail -Subject 'a test' -Change 'I would like to assign a policy.' -Why 'I recommend it because it helps.' -Effect 'Nothing changes today.' -Listed 'It is this:' -Resources @(, [string[]]@('one')) -Reversal 'It can be removed.' -Decisions $d -Ask 'Could you approve it?' } | Should -Throw '*through -Decisions, not -Ask*'
+        $spec = { param($Impl, $Decisions, $Email) @{ Number = 99; Title = 'T'; Description = 'D.'; Purpose = 'P.'; Availability = 'A.'; UserExperience = 'U.'; Dependencies = 'N.'; ResourceIntro = 'R.'; ResourceLines = @(); Implementation = $Impl; Testing = @('In the Azure portal, check.'); Rollback = @('Undo.'); Decisions = $Decisions; Email = $Email } }
+        { New-ChangeRequest (& $spec @('Set Scope to [DECISION: SCOPE] with [DECISION: EFFECT].') $d $email) } | Should -Not -Throw
+        { New-ChangeRequest (& $spec @('Set Scope to [DECISION: SCOPE].') $d $email) } | Should -Throw '*declares the client decision `[DECISION: EFFECT`] but never uses it*'
+        { New-ChangeRequest (& $spec @('Set Scope to [DECISION: SCOPE] with [DECISION: EFFECT] and [DECISION: OWNER].') $d $email) } | Should -Throw '*placeholder `[DECISION: OWNER`], which is not one of its client decisions*'
+        $plain = New-ApprovalEmail -Subject 'a test' -Change 'I would like to assign a policy.' -Why 'I recommend it because it helps.' -Effect 'Nothing changes today.' -Listed 'It is this:' -Resources @(, [string[]]@('one')) -Reversal 'It can be removed.'
+        { New-ChangeRequest (& $spec @('Set Scope to [DECISION: SCOPE] with [DECISION: EFFECT].') $d $plain) } | Should -Throw '*must ask each of its client decisions in its email*'
+        { New-ChangeRequest (& $spec @('Set Scope to [DECISION: SCOPE].') @() $plain) } | Should -Throw '*not one of its client decisions*' -Because 'a change request that is not a template carries no placeholder'
     }
 }

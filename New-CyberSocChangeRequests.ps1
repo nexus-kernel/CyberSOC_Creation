@@ -22,7 +22,9 @@
     never deleting, the Microsoft Entra devices with no sign-in for more than -StaleDeviceDays days (CR-24), and turning on blob
     and container soft delete on the storage accounts without them, with -SoftDeleteRetentionDays (CR-25), and removing the
     Azure roles held by guest accounts the client no longer needs, from the answers the client gives in the attached file
-    (CR-26). Every change request
+    (CR-26). CR-27 is the first tier 2 template: it offers the built-in policy definitions that keep a remediation's
+    setting in place once that change reads No gaps found, with the client's decisions (scope, Deny or Audit and the
+    non-compliance message) left as [DECISION: NAME] placeholders that its email asks for. Every change request
     also gets a client email, drafted and ready to send, that asks for the client's approval. The CR-19 email names
     the accounts and their roles in a CSV written beside it (CR-19-disabled-account-roles.email.csv), to attach,
     since the list can be long, and the CR-24 email names the devices the same way (CR-24-stale-devices.email.csv). Every email has the same parts in the
@@ -152,6 +154,10 @@
     recollection". It changes the Azure roles only, names the Entra roles for review, leaves out the emergency access
     guests, and is written only when the emergency access read is complete, as CR-19 is. A guest is removed only with the
     client's answer: -GuestDecisions takes the file the client returned.
+    CR-27 reads the assignments of the guardrail policy definitions (POS.9-GUARDRAILS), added in 1.22.0, and on an earlier
+    pack says "needs recollection". It offers a definition only when every change request it follows reads No gaps found,
+    the results behind it were read in full and no resource in the pack would fail it, and not when an assignment already
+    enforces it over every subscription. The index names the resources each definition it holds back would block.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -216,6 +222,8 @@ $detailVersions['LIC.4-DEVICES'] = $staleDeviceVersion
 $detailVersions['DP.1-SOFTDELETE'] = '1.20.0'
 # CR-26 reads the enabled guest accounts and the roles they hold (IA.17-GUESTS, IA.17-RBAC and IA.17-ENTRA), added in 1.21.0.
 foreach ($id in 'IA.17-GUESTS', 'IA.17-RBAC', 'IA.17-ENTRA') { $detailVersions[$id] = '1.21.0' }
+# CR-27, the guardrail template, reads the assignments of the guardrail policy definitions (POS.9-GUARDRAILS), added in 1.22.0.
+$detailVersions['POS.9-GUARDRAILS'] = '1.22.0'
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -404,7 +412,15 @@ function New-ChangeRequest([hashtable]$Spec) {
     }
     # Every change request writes a client email that asks for the client's approval (New-ApprovalEmail).
     if (-not $Spec.Email -or -not $Spec.Email.Approval) { throw "CR-$($Spec.Number) has no client approval request. Every change request writes one with New-ApprovalEmail." }
-    $defaults = @{ Mitigation = $standardMitigation; DrImpact = $drImpact; DrPlan = $drPlan; Csv = $null }
+    # A template leaves each client decision as its placeholder in the change request and asks it in the email. A
+    # placeholder that is not one of its decisions, or a decision the steps or the email never use, stops the run.
+    $declared = @($Spec.Decisions | Where-Object { $_ } | ForEach-Object Placeholder)
+    $written = (@($Spec.Title, $Spec.Description, $Spec.Purpose, $Spec.ResourceIntro, $Spec.Availability, $Spec.UserExperience, $Spec.Dependencies) + @($Spec.ResourceLines) + @(foreach ($plan in 'Implementation', 'Testing', 'Rollback') { foreach ($step in @($Spec[$plan])) { @($step) } })) -join "`n"
+    $used = @([regex]::Matches($written, $decisionPattern) | ForEach-Object Value | Sort-Object -Unique)
+    foreach ($u in $used) { if ($u -notin $declared) { throw "CR-$($Spec.Number) has the placeholder $u, which is not one of its client decisions." } }
+    foreach ($d in $declared) { if ($d -notin $used) { throw "CR-$($Spec.Number) declares the client decision $d but never uses it." } }
+    if (@(Compare-Object @($declared) @($Spec.Email.Decisions | Where-Object { $_ } | ForEach-Object Placeholder)).Count) { throw "CR-$($Spec.Number) must ask each of its client decisions in its email, through New-ApprovalEmail -Decisions." }
+    $defaults = @{ Mitigation = $standardMitigation; DrImpact = $drImpact; DrPlan = $drPlan; Csv = $null; Decisions = @() }
     foreach ($k in $defaults.Keys) { if (-not $Spec.ContainsKey($k)) { $Spec[$k] = $defaults[$k] } }
     [pscustomobject]$Spec
 }
@@ -423,7 +439,14 @@ function Format-Steps($steps) {
 function Format-ChangeRequest($cr) {
     $l = [System.Collections.Generic.List[string]]::new()
     foreach ($line in @(
-            "Title: $($cr.Title)", "Client: $client", '',
+            "Title: $($cr.Title)", "Client: $client", '')) { $l.Add($line) }
+    # A template opens with the client decisions its placeholders stand for, to fill in from the client's reply.
+    if (@($cr.Decisions).Count) {
+        $l.Add('TEMPLATE: each client decision below is left as its placeholder in this change request. Fill each one in from the client''s reply to the email before raising it.')
+        foreach ($d in @($cr.Decisions)) { $l.Add(('- {0} {1}' -f $d.Placeholder, $d.Choices)) }
+        $l.Add('')
+    }
+    foreach ($line in @(
             '1. Summary', '',
             'A) CHANGE DESCRIPTION', $cr.Description, '',
             'B) PURPOSE', $cr.Purpose, '',
@@ -482,8 +505,9 @@ $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, 
 # device code flow or legacy authentication and the exclusions removed, which belong to the tenant. CR-22 lists the
 # domain controllers on their own, since the client confirms them apart from the other servers. CR-24 counts the devices
 # by operating system and join type, which belong to no subscription, after a sentence rather than a label, as CR-21 does.
-# CR-26 introduces its one list of guests, each line naming where the guest holds its roles, with a sentence too.
-$emailHeading = '^(By subscription, then management group and root scope, the guests with a role are these|Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
+# CR-26 introduces its one list of guests, each line naming where the guest holds its roles, with a sentence too, and
+# CR-27 its list of policies, each with what it covers.
+$emailHeading = '^(The policies, each with what it covers, are these|By subscription, then management group and root scope, the guests with a role are these|Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
 # A spreadsheet reads a cell that starts with =, +, - or @ as a formula, quoted or not, and a device, display or role name
 # comes from the directory, so the CSV an email attaches (CR-19, CR-24) and change-requests.csv put an apostrophe in
@@ -492,6 +516,23 @@ function ConvertTo-SheetText([string]$Value) { if ($Value -match '^[=+\-@]') { "
 $proposedDay = Format-Day $proposedDate
 $replyDay = Format-Day $replyDate
 $explainTls = 'TLS is the protocol that encrypts connections to a service, and versions 1.0 and 1.1 are its older versions.'
+# Tier 2 templates (#45, decision 2): a change request whose scope and effect the client decides. It is written into
+# 05-change-requests with each client decision left as a placeholder, [DECISION: NAME], which the copy rules allow, and
+# the index marks it as a template with decisions to fill in. A template builds its decisions once with
+# New-TemplateDecision and passes the same list to New-ChangeRequest (Decisions), which lists them at the top of the
+# change request and checks that every placeholder is one of them and every one is used, and to New-ApprovalEmail
+# (-Decisions), whose request asks each question before asking for approval. Choices is what the change request lists
+# for the decision and Question the full question the email asks. Anything that is not a client change is never written
+# as a change request, since every change request writes a client email.
+$decisionPattern = '\[DECISION: [^\]]+\]'
+function New-TemplateDecision([string]$Name, [string]$Choices, [string]$Question) {
+    if ($Question -notmatch '\?$') { throw "The client decision $Name must be asked as a question." }
+    [pscustomobject]@{ Placeholder = '[DECISION: {0}]' -f $Name.ToUpperInvariant(); Choices = $Choices; Question = $Question }
+}
+function Get-DecisionAsk($Decisions) {
+    $count = @{ 1 = 'one decision'; 2 = 'two decisions'; 3 = 'three decisions'; 4 = 'four decisions' }[@($Decisions).Count]
+    'Before I schedule the change, I need {0} from you. {1} With {2}, could you approve this change for {3}?' -f $(if ($count) { $count } else { 'some decisions' }), (@($Decisions | ForEach-Object Question) -join ' '), (Get-Pick @($Decisions).Count 'that decided' 'those decided'), $proposedDay
+}
 # Every client email is an approval request built here, so every change request asks the client the same way
 # and nothing reads as already decided. It reads as a letter: no titles, each part a plain paragraph whose
 # opening sentence says what the part is, in its own words. The parts always come in this order: the ask (one
@@ -500,9 +541,10 @@ $explainTls = 'TLS is the protocol that encrypts connections to a service, and v
 # can be reversed, and the request. The request asks for approval of the proposed date, or with -Window for a
 # maintenance window where the change needs a restart, then gives the reply-by date, any Options the client
 # has, and the promise not to schedule the change without approval. Ask replaces the standard question when
-# a change needs an answer from the client first. No two paragraphs may open with the same words.
+# a change needs an answer from the client first. A template passes its client decisions as Decisions instead, and the
+# request asks each of them before the approval (Get-DecisionAsk). No two paragraphs may open with the same words.
 function New-ApprovalEmail {
-    param([string]$Subject, [string[]]$Change, [string]$Why, [object[]]$Effect, [string]$Listed, [object[]]$Resources, [string]$Reversal, [string]$Ask, [string]$Options, [switch]$Window)
+    param([string]$Subject, [string[]]$Change, [string]$Why, [object[]]$Effect, [string]$Listed, [object[]]$Resources, [string]$Reversal, [string]$Ask, [string]$Options, [switch]$Window, [object[]]$Decisions)
     # Change is given as its authored sentences, so a name filled into one, such as a management group named
     # Contoso Inc. Production, cannot change the count.
     $Change = @($Change | Where-Object { $_ })
@@ -511,6 +553,11 @@ function New-ApprovalEmail {
     if ($Change[0] -notmatch '^I would like to ') { throw "The email for $Subject must ask with I would like to." }
     $Change[0] = 'I would like your approval to ' + $Change[0].Substring('I would like to '.Length)
     if ($Why -notmatch '^I recommend \S.* because\b') { throw "The email for $Subject must say why as I recommend ... because ..." }
+    $Decisions = @($Decisions | Where-Object { $_ })
+    if ($Decisions.Count) {
+        if ($Ask) { throw "The email for $Subject asks its client decisions through -Decisions, not -Ask." }
+        $Ask = Get-DecisionAsk $Decisions
+    }
     if (-not $Ask) { $Ask = if ($Window) { 'Could you approve this change and suggest a maintenance window that works for you?' } else { 'Could you approve this change for {0}?' -f $proposedDay } }
     if (-not $Options -and -not $Window) { $Options = 'If another date suits you better, or anything listed above should stay out of the change, please let me know.' }
     $request = (@($Ask, ('Please reply by {0}.' -f $replyDay), $Options, 'I will not schedule this change until I have your approval.') | Where-Object { $_ }) -join ' '
@@ -519,7 +566,7 @@ function New-ApprovalEmail {
     $openings = @($paragraphs | Where-Object { $_ -is [string] -and $_ -notmatch $emailHeading } | ForEach-Object { (@($_ -split '\s+' | Select-Object -First 3) -join ' ').ToLowerInvariant() })
     $repeated = @($openings | Group-Object | Where-Object Count -gt 1 | ForEach-Object Name)
     if ($repeated.Count) { throw "The email for $Subject opens more than one paragraph with $($repeated -join ', ')." }
-    @{ Subject = "Approval requested: $Subject"; Approval = $true; Window = [bool]$Window; Paragraphs = $paragraphs }
+    @{ Subject = "Approval requested: $Subject"; Approval = $true; Window = [bool]$Window; Paragraphs = $paragraphs; Decisions = $Decisions }
 }
 # CR-01 and CR-10 send resource logs to the client's Sentinel workspace, which the client pays to ingest.
 function Get-IngestionCost([bool]$ActivityLog) {
@@ -4498,10 +4545,186 @@ $catalog = @(
                     Csv = $csv
                     Email = $email
                 } } } }
+
+    @{ Number = 27; Key = 'deny-guardrails'; Change = 'Guardrail policies assigned after the remediation changes (template)'; Sources = @('POS.9-GUARDRAILS')
+       Build = {
+            # CR-27, the first tier 2 template (#57). Each guardrail is a built-in policy definition that stops a new or
+            # updated resource from going without the setting a remediation change request put in place. A guardrail is
+            # offered only when every change request it follows reads No gaps found, the results behind it were read in
+            # full and no resource in the pack would fail it, since a Deny assigned before the remediation blocks routine
+            # updates to the resources still to fix: the index names those resources instead. The scope, Deny or Audit and
+            # the non-compliance message are the client's decisions, left as placeholders. App Service minimum TLS (CR-04)
+            # has no guardrail, since its built-in definition only audits.
+            $readFull = { param([string]$Id) (Get-Status $Id) -in 'OK', 'EMPTY' -and -not (Test-Unreadable $Id) }
+            $where = { param($r) '{0} (resource group {1}, subscription {2})' -f (ConvertTo-CopyText $r.Name), (ConvertTo-CopyText $r.resourceGroup), (Format-Subscription $r.subscriptionId) }
+            $stateOf = { param([int]$Number) (@($resolved | Where-Object { $_.Item.Number -eq $Number }) | Select-Object -First 1).State }
+            $storagePage = @('Azure Policy built-in definitions for Azure Storage', 'https://learn.microsoft.com/azure/storage/common/policy-reference')
+            $vmPage = @('Azure Policy built-in definitions for Azure Virtual Machines', 'https://learn.microsoft.com/azure/virtual-machines/policy-reference')
+            $publicAccess = { @(Get-Rows 'DP.1-DETAIL' | Where-Object { Test-True $_.AllowBlobPublicAccess }) }
+            # Email is what the client email says each policy does, after its name.
+            $guardrails = @(
+                @{ Crs = @(2); Name = 'Secure transfer to storage accounts should be enabled'; Id = '404c3081-a854-4457-ae30-26a93ef643f9'; Kind = 'Deny'; Sources = @('DP.1-DETAIL'); Noun = @('storage account', 'storage accounts')
+                    Rows = { @(Get-Rows 'DP.1-DETAIL' | Where-Object { -not (Test-True $_.SecureTransfer) }) }; Email = 'for a storage account that does not require secure transfer, which all of yours require today'; Page = $storagePage }
+                @{ Crs = @(3); Name = 'Storage accounts should have the specified minimum TLS version'; Id = 'fe83a0eb-a853-422d-aac2-1bffd182c5d0'; Kind = 'Deny'; Sources = @('DP.1-DETAIL'); Noun = @('storage account', 'storage accounts')
+                    Rows = { @(Get-Rows 'DP.1-DETAIL' | Where-Object { (Get-Text $_.MinimumTlsVersion) -notin 'TLS1_2', 'TLS1_3' }) }; Email = 'for a storage account whose minimum TLS version is below 1.2, which none of yours is today'; Parameter = 'the minimum TLS version parameter set to TLS 1.2'; Page = $storagePage }
+                @{ Crs = @(5); Name = 'Azure SQL Database should be running TLS version 1.2 or newer'; Id = '32e6bbec-16b6-44c2-be37-c5b672d103cf'; Kind = 'Deny'; Sources = @('NB.6-DETAIL'); Noun = @('Azure SQL server', 'Azure SQL servers')
+                    Rows = { @(Get-Rows 'NB.6-DETAIL') }; Email = 'for an Azure SQL server whose minimum TLS version is below 1.2, which none of yours is today'; Page = @('Azure Policy built-in definitions for Azure SQL Database and SQL Managed Instance', 'https://learn.microsoft.com/azure/azure-sql/database/policy-reference') }
+                @{ Crs = @(6); Name = 'Key vaults should have deletion protection enabled'; Id = '0b60c0b2-2dc2-4e1c-b5c9-abbed971de53'; Kind = 'Deny'; Sources = @('DP.2-DETAIL'); Noun = @('key vault', 'key vaults')
+                    Rows = { @(Get-Rows 'DP.2-DETAIL') }; Email = 'for a key vault without purge protection, which all of yours have today'; Page = @('Azure Policy built-in definitions for Key Vault', 'https://learn.microsoft.com/azure/key-vault/policy-reference') }
+                @{ Crs = @(7); Name = 'Storage account public access should be disallowed'; Id = '4fa4b6c0-31ca-4c0d-b10d-24b96f62a751'; Kind = 'Deny'; Sources = @('DP.1-DETAIL'); Noun = @('storage account', 'storage accounts')
+                    Rows = $publicAccess; Email = 'for a storage account that allows anonymous access to its blobs, which none of yours does today'; Page = $storagePage }
+                # The Modify turns the account setting off on a new or updated account, so it is offered only once the
+                # container access levels were read in full and no container anyone can read today remains (CR-18).
+                @{ Crs = @(7); Name = 'Configure your Storage account public access to be disallowed'; Id = '13502221-8df0-4414-9937-de9c5c4e396b'; Kind = 'Modify'; Sources = @('DP.1-DETAIL'); Noun = @('storage account', 'storage accounts')
+                    Rows = $publicAccess; Email = 'which turns anonymous blob access off on a new or updated storage account instead of refusing it'; Parameter = 'Effect left at Modify'; Page = $storagePage
+                    Gate = {
+                        if (-not (& $readFull 'DP.1-CONTAINERS')) { return 'the container access levels (DP.1-CONTAINERS) were not read in full, it reads {0}' -f $(if (Test-Unreadable 'DP.1-CONTAINERS') { 'unreadable' } else { Get-Status 'DP.1-CONTAINERS' }) }
+                        $containers = & $stateOf 18
+                        if ($containers -ne 'No gaps found' -and $containers -notlike 'Only containers the account setting already blocks*') { return 'CR-18 reads {0}' -f $containers }
+                        '' } }
+                @{ Crs = @(8); Name = 'App Service apps should only be accessible over HTTPS'; Id = 'a4af4a39-4135-47fb-b175-47fbdf85311d'; Kind = 'Deny'; Sources = @('NB.4-DETAIL'); Noun = @('App Service app', 'App Service apps')
+                    Rows = { @(Get-Rows 'NB.4-DETAIL') }; Email = 'for an App Service app that accepts plain HTTP, which none of yours does today'; Page = @('Azure Policy built-in definitions for Azure App Service', 'https://learn.microsoft.com/azure/app-service/policy-reference') }
+                @{ Crs = @(9, 15); Name = 'Virtual machines and virtual machine scale sets should have encryption at host enabled'; Id = 'fc4d8e41-e223-45ea-9bf5-eada37891d87'; Kind = 'Deny'; Sources = @('DP.4-ELIGIBILITY', 'DP.4-VMSS-ELIGIBILITY'); Noun = @('virtual machine or scale set', 'virtual machines and scale sets')
+                    Rows = { @(Get-Rows 'DP.4-ELIGIBILITY') + @(Get-Rows 'DP.4-VMSS-ELIGIBILITY') }; Email = 'for a virtual machine or scale set without encryption at host, which all of yours have today'; Page = $vmPage; EncryptionAtHost = $true
+                    Extra = , @('Use the Azure portal to enable end-to-end encryption using encryption at host', 'https://learn.microsoft.com/azure/virtual-machines/disks-enable-host-based-encryption-portal') }
+                # The built-in that fits CR-23, named in its index note for pooled session hosts: Modify only, with no effect
+                # parameter, so the client's Audit is Policy enforcement Disabled.
+                @{ Crs = @(23); Name = 'Configure periodic checking for missing system updates on azure virtual machines'; Id = '59efceea-0c96-497e-a4a1-4eb2290dac15'; Kind = 'Modify'; NoEffect = $true; Sources = @('EW.10-ASSESSMENT'); Noun = @('virtual machine', 'virtual machines')
+                    Rows = { @(Get-Rows 'EW.10-ASSESSMENT' | Where-Object { (Get-Text $_.AssessmentMode) -ine 'AutomaticByPlatform' }) }; Email = 'which turns periodic assessment on for a new or updated virtual machine instead of refusing it, so a machine rebuilt from its image keeps it'; Parameter = 'one assignment with OS Type set to Windows and one with Linux, each with Assessment mode left at AutomaticByPlatform'; Page = $vmPage
+                    Extra = , @('Automate assessment at scale by using Azure Policy', 'https://learn.microsoft.com/azure/update-manager/periodic-assessment-at-scale') })
+            $notes = [System.Collections.Generic.List[string]]::new()
+            $notes.Add('CR-04 has no guardrail: no built-in policy definition denies an App Service app whose minimum TLS version is below 1.2, since App Service apps should use the latest TLS version (f0e6e85b-9b9f-4a4b-b67b-f730d42f1b0b) only audits (AuditIfNotExists).')
+            # The assignments the pack found. One is in force over a subscription when it covers it from the subscription or a
+            # management group above it, enforces, excludes nothing and sets the enforcing effect: Deny, or Modify, which a
+            # definition without an effect parameter always applies.
+            $subscriptions = @($parameters.Subscriptions | ForEach-Object { (ConvertTo-CopyText $_).ToLowerInvariant() } | Where-Object { $_ } | Sort-Object -Unique)
+            $assigned = @(Get-Rows 'POS.9-GUARDRAILS')
+            $enforcing = { param($g, $a)
+                $effect = Get-Text $a.Effect
+                (Get-Text $a.ScopeLevel) -in 'ManagementGroup', 'Subscription' -and (Get-Text $a.EnforcementMode) -ine 'DoNotEnforce' -and -not (Get-Text $a.NotScopes) -and
+                $(if ($g.Kind -eq 'Deny') { $effect -ieq 'Deny' } elseif ($g.NoEffect) { -not $effect -or $effect -ieq 'Modify' } else { $effect -ieq 'Modify' }) }
+            $assignmentText = { param($a)
+                $mode = if ((Get-Text $a.EnforcementMode) -ieq 'DoNotEnforce') { 'enforcement Disabled' } else { 'enforcement Enabled' }
+                '{0} at {1}, effect {2}, {3}{4}' -f $(if (Get-Text $a.DisplayName) { ConvertTo-CopyText $a.DisplayName } else { ConvertTo-CopyText $a.AssignmentName }), (ConvertTo-CopyText $a.Scope), $(if (Get-Text $a.Effect) { ConvertTo-CopyText $a.Effect } else { 'the definition default' }), $mode, $(if (Get-Text $a.NotScopes) { ', excluding ' + (ConvertTo-CopyText $a.NotScopes) } else { '' }) }
+            $offered = [System.Collections.Generic.List[object]]::new()
+            $inForce = 0
+            foreach ($g in $guardrails) {
+                $follows = Join-Words @($g.Crs | ForEach-Object { 'CR-{0:00}' -f $_ })
+                $label = 'The {0} guardrail, {1} ({2}),' -f $follows, $g.Name, $g.Id
+                $unread = @($g.Sources | Where-Object { -not (& $readFull $_) })
+                if ($unread.Count) { $notes.Add(('{0} is not offered, since {1} {2} not read in full ({3}). Recollect the pack.' -f $label, (Join-Words $unread), (Get-Pick $unread.Count 'was' 'were'), (@($unread | ForEach-Object { '{0} {1}' -f $_, $(if (Test-Unreadable $_) { 'unreadable' } else { Get-Status $_ }) }) -join ', '))); continue }
+                $rows = @(& $g.Rows)
+                if ($rows.Count) {
+                    $notes.Add(('{0} is not offered while {1} would fail it: {2}. {3} It is offered once {4} {5} No gaps found with nothing left out.' -f $label, (Get-Count $rows.Count $g.Noun[0] $g.Noun[1]), (@($rows | ForEach-Object { & $where $_ }) -join ' / '), $(if ($g.Kind -eq 'Deny') { 'A Deny assigned now would block routine updates to them.' } else { 'A Modify assigned now would change them on their next update.' }), $follows, (Get-Pick $g.Crs.Count 'reads' 'read')))
+                    continue
+                }
+                $pending = @($g.Crs | Where-Object { (& $stateOf $_) -ne 'No gaps found' })
+                if ($pending.Count) { $notes.Add(('{0} is not offered while {1}.' -f $label, (Join-Words @($pending | ForEach-Object { 'CR-{0:00} reads {1}' -f $_, (& $stateOf $_) })))); continue }
+                if ($g.Gate) {
+                    $why = & $g.Gate
+                    if ($why) { $notes.Add(('{0} is not offered, since {1}. A Modify that turns anonymous access off on new and updated accounts waits until the container access levels are read in full and no container anyone can read remains.' -f $label, $why)); continue }
+                }
+                $mine = @($assigned | Where-Object { (Get-Text $_.Definition).ToLowerInvariant() -eq $g.Id })
+                $covered = @($mine | Where-Object { & $enforcing $g $_ } | ForEach-Object { (Get-Text $_.subscriptionId).ToLowerInvariant() } | Sort-Object -Unique)
+                $byAssignment = @($mine | Group-Object { (Get-Text $_.AssignmentId).ToLowerInvariant() } | ForEach-Object { $_.Group[0] } | Sort-Object Scope, AssignmentName)
+                if ($subscriptions.Count -and -not @($subscriptions | Where-Object { $_ -notin $covered }).Count) {
+                    $inForce++
+                    $notes.Add(('{0} is already in force over every subscription in the pack: {1}.' -f $label, (@($byAssignment | Where-Object { & $enforcing $g $_ } | ForEach-Object { & $assignmentText $_ }) -join ' / ')))
+                    continue
+                }
+                $offered.Add(@{ Guardrail = $g; Follows = $follows; Assignments = @($byAssignment | ForEach-Object { & $assignmentText $_ }) })
+            }
+            if ($offered.Count -and @($offered | Where-Object { $_.Guardrail.Id -eq '13502221-8df0-4414-9937-de9c5c4e396b' }).Count) {
+                $blocked = @(Get-Rows 'DP.1-CONTAINERS' | Where-Object { (Get-Number $_.PublicContainers) -gt 0 })
+                if ($blocked.Count) { $notes.Add(('CR-27 offers the CR-07 Modify while {0} in accounts that block anonymous access {1} still set to Blob or Container: {2}. The Modify keeps those accounts blocked, so set each container to Private before an account is ever allowed anonymous access.' -f (Get-Count (@($blocked | ForEach-Object { Get-Number $_.PublicContainers }) | Measure-Object -Sum).Sum 'container' 'containers'), (Get-Pick (@($blocked | ForEach-Object { Get-Number $_.PublicContainers }) | Measure-Object -Sum).Sum 'is' 'are'), (@($blocked | ForEach-Object { '{0} in account {1}' -f (ConvertTo-CopyText $_.PublicContainerNames), (ConvertTo-CopyText $_.Account) }) -join ' / '))) }
+            }
+            if ((Get-Status 'POS.9-GUARDRAILS') -eq 'PARTIAL') { $notes.Add(('POS.9-GUARDRAILS was read in part ({0}), so an assignment at a management group may be missing from CR-27. Check Policy > Assignments at each management group above the subscriptions before raising it.' -f (Get-ResultDetail 'POS.9-GUARDRAILS').TrimEnd('.'))) }
+            $n = $offered.Count
+            if (-not $n) { return @{ State = $(if ($inForce -eq $guardrails.Count) { 'No gaps found, every guardrail is already in force' } else { 'No guardrail to offer, see the notes' }); Notes = $notes.ToArray() } }
+
+            $modify = @($offered | Where-Object { $_.Guardrail.Kind -eq 'Modify' })
+            $deny = @($offered | Where-Object { $_.Guardrail.Kind -eq 'Deny' })
+            $eah = @($offered | Where-Object { $_.Guardrail.EncryptionAtHost })
+            $decisions = @(
+                (New-TemplateDecision 'Scope' 'Where the policies apply: the client management group, each subscription in the pack, or one or two pilot resource groups first where the client deploys with Terraform or other infrastructure as code. The impact and every step below follow the scope chosen.' 'Where should the policies apply: at your management group, on each of your subscriptions, or first on one or two pilot resource groups, which suits teams that deploy with Terraform or other infrastructure as code?')
+                (New-TemplateDecision 'Effect' $(if ($modify.Count) { 'Deny or Audit. For a Modify definition, Deny means Policy enforcement Enabled and Audit means Policy enforcement Disabled, so it only reports.' } else { 'Deny or Audit.' }) 'Should the policies refuse a resource without the setting, or only audit it, reporting it as non-compliant without refusing anything, to start with?')
+                (New-TemplateDecision 'Non-compliance message' 'The message a refused or non-compliant resource shows, with the route the client''s teams use to request an exception.' 'What message should a refused deployment show, and how should your teams request an exception, for example by a request to your service desk?'))
+            $scope = $decisions[0].Placeholder; $effect = $decisions[1].Placeholder; $message = $decisions[2].Placeholder
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $csv = [System.Collections.Generic.List[object]]::new()
+            foreach ($o in $offered) {
+                $g = $o.Guardrail
+                $how = if ($g.Kind -eq 'Deny') { 'effect {0}' -f $effect } else { 'effect Modify, which corrects the setting on a new or updated resource' }
+                $today = if ($o.Assignments.Count) { 'assigned today as ' + ($o.Assignments -join ' / ') } else { 'not assigned today' }
+                $lines.Add(('- {0}, definition {1}, follows {2}, {3}{4}, {5}' -f $g.Name, $g.Id, $o.Follows, $how, $(if ($g.Parameter) { ', with ' + $g.Parameter } else { '' }), $today))
+                $csv.Add((New-Resource $g.Name '' '' ('follows {0}, {1}' -f $o.Follows, $today) ('/providers/Microsoft.Authorization/policyDefinitions/' + $g.Id)))
+            }
+            $impl = [System.Collections.Generic.List[object]]::new()
+            if ($eah.Count) {
+                $register = @(('For the encryption at host definition, open Cloud Shell in Bash in the Azure portal and read the EncryptionAtHost feature on each subscription under {0}, since a new machine with encryption at host is refused where the feature is not registered. Where one does not return Registered, register it with az feature register --name EncryptionAtHost --namespace Microsoft.Compute --subscription followed by the subscription ID. For the subscriptions in the pack:' -f $scope))
+                foreach ($s in $subscriptions) { $register += "az feature show --name EncryptionAtHost --namespace Microsoft.Compute --subscription $s --query properties.state -o tsv" }
+                $impl.Add($register)
+            }
+            $first = $impl.Count + 1
+            $impl.Add(('In the Azure portal, go to Policy > Assignments and select Assign policy. Where the RESOURCES section lists an assignment of the definition at {0} already, open that assignment and select Edit assignment instead, so the definition is not assigned twice.' -f $scope))
+            $impl.Add(('On the Basics tab, set Scope to {0}, select the first policy definition listed in the RESOURCES section by its name and definition ID, and name the assignment ATMO-MXDR-GUARD followed by the change request it follows, such as ATMO-MXDR-GUARD-CR-03.' -f $scope))
+            $impl.Add(('On the Parameters tab, clear Only show parameters that need input or review{0}{1}' -f $(if ($deny.Count) { (', set Effect to {0} on a Deny definition, and set any other parameter the RESOURCES section names for the definition.' -f $effect) } else { ' and set the parameters the RESOURCES section names for the definition.' }), $(if ($modify.Count) { (' For a Modify definition, leave Policy enforcement Enabled on the Basics tab where {0} reads Deny, or set it to Disabled where it reads Audit, so the assignment only reports.' -f $effect) } else { '' })))
+            if ($modify.Count) { $impl.Add('For a Modify definition, on the Remediation tab select Create a Managed Identity with System assigned managed identity, which the portal grants the roles the definition names, and leave Create a remediation task cleared, since no resource in scope needs remediation.') }
+            $impl.Add(('On the Non-compliance messages tab, enter {0} as the message.' -f $message))
+            $impl.Add('Select Review + create, then Create.')
+            Add-RepeatStep $impl $n $first 'policy definition'
+            $what = Get-Pick $n 'the built-in policy definition listed below' "the $n built-in policy definitions listed below"
+            $explainPolicy = 'Azure Policy checks each request that creates or updates a resource, and a policy set to deny refuses one that would go without the setting.'
+            $effectText = @(
+                'Resources that already have the setting, which is every one I reviewed, are not affected, and nothing changes on a running resource.'
+                'With Deny, a deployment that creates or updates such a resource without the setting fails with a message that names the policy, so a deployment pipeline that builds one, such as one using Terraform or another infrastructure as code tool, stops at that resource until its template includes the setting. With Audit, nothing is refused and the resource is reported as non-compliant.'
+                $(if ($modify.Count) { 'Where a policy below corrects the setting instead, it does not refuse the request: it changes the setting on the new or updated resource, through a managed identity created with the assignment and given the role the policy names.' })
+                $(if ($eah.Count) { 'For encryption at host, a new virtual machine also needs the feature registered on its subscription and a size that supports it, so with Deny a machine on a size without support would be refused.' })
+                'If a team needs a resource without the setting, for example a storage account that must serve public content, I can exempt that resource or its resource group from the policy, and the message a refused deployment shows can tell your teams how to ask for that.')
+            $email = New-ApprovalEmail -Subject 'policies that keep the remediated settings in place' `
+                -Change @(('I would like to assign {0} that keep{1} security settings your resources already have in place on new and updated resources.' -f (Get-Pick $n 'a built-in Azure Policy' "$n built-in Azure Policy definitions"), (Get-Pick $n 's' '')), $explainPolicy) `
+                -Why 'I recommend these guardrails because your resources have these settings today, through the earlier changes or from the start, but nothing stops a new or redeployed resource from going without them. A policy keeps your environment where it is now.' `
+                -Effect @($effectText | Where-Object { $_ }) `
+                -Listed ('{0} a setting that every resource I reviewed already has:' -f (Get-Pick $n 'The policy covers' 'Each policy covers')) `
+                -Resources @('The policies, each with what it covers, are these:', [string[]]@($offered | ForEach-Object { '{0}, {1}' -f $_.Guardrail.Name, $_.Guardrail.Email })) `
+                -Reversal 'I can delete any of these assignments, or set it not to enforce, at any time, and that changes nothing on your resources.' `
+                -Decisions $decisions
+            if ($eah.Count) { $notes.Add('With Deny, the CR-09 and CR-15 guardrail also refuses a new virtual machine or scale set on a size that does not support encryption at host, or in a subscription where the EncryptionAtHost feature is not registered, so confirm with the client that their builds use supported sizes before choosing Deny.') }
+            $notes.Add(('CR-27 is a template: fill in {0} from the client''s reply to its email before raising it.' -f (Join-Words @($decisions | ForEach-Object Placeholder))))
+            @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
+                    Number = 27; Key = 'deny-guardrails'; Title = 'Template: assign guardrail policies that keep the remediated settings in place'
+                    Decisions = $decisions
+                    Description = 'Assign {0} at {1} with the effect {2}, so a new or updated resource cannot go without the setting a remediation change put in place. {3} a change request that reads No gaps found, so no resource in the pack fails {4} today.' -f $what, $scope, $effect, (Get-Pick $n 'It follows' 'Each follows'), (Get-Pick $n 'it' 'them')
+                    Purpose = 'A remediation change fixes the resources that exist when it runs, but nothing stops a new or redeployed resource from going without the same setting. A policy that denies, audits or corrects such a resource keeps the estate where the remediation left it.'
+                    ResourceIntro = '{0} a remediation change request that reads No gaps found, so no resource in the pack would fail {1} today. Each line names any assignment of the definition the pack found, to edit rather than duplicate.' -f (Get-Pick $n 'The policy definition below follows' "The $n policy definitions below follow"), (Get-Pick $n 'it' 'them')
+                    ResourceLines = $lines.ToArray()
+                    Availability = 'No impact on running resources, since a policy acts only on a request that creates or updates a resource.'
+                    UserExperience = 'At {0}, a deployment that creates or updates a resource without the setting is refused with Deny or reported as non-compliant with Audit{1}.' -f $scope, $(if ($modify.Count) { ', and a Modify definition corrects the setting instead' } else { '' })
+                    Dependencies = 'Needs the client''s decisions on the scope, Deny or Audit and the non-compliance message{0}.' -f $(if ($eah.Count) { ', and the EncryptionAtHost feature registered on each subscription in scope' } else { '' })
+                    Implementation = $impl.ToArray()
+                    Testing = @(
+                        ('In the Azure portal, go to Policy > Assignments, set the scope to {0} and open each assignment the implementation plan made.' -f $scope)
+                        ('Confirm it names the definition listed in the RESOURCES section, with Effect {0} on the Parameters tab, or Policy enforcement as the implementation plan set it for a Modify definition, and the non-compliance message.' -f $effect)
+                        'After the first compliance scan, which can take up to 30 minutes for a new assignment, open Policy > Compliance and confirm each assignment reads Compliant, since no resource in scope goes without the setting.')
+                    Rollback = @(
+                        'In the Azure portal, go to Policy > Assignments and open the assignment to revert.'
+                        'Select Delete assignment to remove it, or select Edit assignment, set Policy enforcement to Disabled and save, so it reports without enforcing. For an assignment that existed before the change, set back the values recorded for it in the RESOURCES section instead.')
+                    References = @(
+                        , @('Azure Policy definitions effect basics', 'https://learn.microsoft.com/azure/governance/policy/concepts/effect-basics')
+                        , @('Azure Policy definitions deny effect', 'https://learn.microsoft.com/azure/governance/policy/concepts/effect-deny')
+                        if ($modify.Count) { , @('Azure Policy definitions modify effect', 'https://learn.microsoft.com/azure/governance/policy/concepts/effect-modify'); , @('Remediate non-compliant resources with Azure Policy', 'https://learn.microsoft.com/azure/governance/policy/how-to/remediate-resources') }
+                        , @('Azure Policy assignment structure', 'https://learn.microsoft.com/azure/governance/policy/concepts/assignment-structure')
+                        , @('Azure Policy exemption structure', 'https://learn.microsoft.com/azure/governance/policy/concepts/exemption-structure')
+                        foreach ($page in @($offered | ForEach-Object { , $_.Guardrail.Page; foreach ($x in @($_.Guardrail.Extra | Where-Object { $_ })) { , $x } } | Group-Object { $_[1] } | ForEach-Object { , $_.Group[0] })) { , $page })
+                    Csv = $csv.ToArray()
+                    Email = $email
+                } } } }
 )
 #endregion
 
-# Resolve every change to its status and build the change requests.
+# Resolve every change to its status and build the change requests. $resolved holds the changes resolved so far, so a
+# change that follows others, such as the guardrail template CR-27, reads their status.
+$resolved = [System.Collections.Generic.List[object]]::new()
 $results = foreach ($item in $catalog) {
     $state = ''; $cr = $null; $notes = @()
     $missing = @($item.Sources | Where-Object { (Get-Status $_) -eq 'MISSING' })
@@ -4526,7 +4749,7 @@ $results = foreach ($item in $catalog) {
         $built = & $item.Build
         $cr = $built.Cr
         $notes = @($built.Notes | Where-Object { $_ })
-        $state = if ($cr) { 'Change request and client email' } else { $built.State }
+        $state = if (-not $cr) { $built.State } elseif (@($cr.Decisions).Count) { 'Template and client email, client decisions to fill in' } else { 'Change request and client email' }
         # A change request also reads results beyond its sources, such as the container list behind CR-07.
         # The index says when one of them was partial, not collected or unreadable.
         $partial = @($item.Sources | Where-Object { (Get-Status $_) -eq 'PARTIAL' }).Count -gt 0
@@ -4544,7 +4767,9 @@ $results = foreach ($item in $catalog) {
             if (@($gate.Unknown).Count) { $state += ', confirm the license before sending' }
         }
     }
-    [pscustomobject]@{ Item = $item; State = $state; Cr = $cr; Notes = $notes }
+    $r = [pscustomobject]@{ Item = $item; State = $state; Cr = $cr; Notes = $notes }
+    $resolved.Add($r)
+    $r
 }
 
 # Every file is built and checked against the copy rules before anything is written, so a run that stops
@@ -4559,6 +4784,8 @@ $outputs = [System.Collections.Generic.List[object]]::new()
 function Add-Output([string]$Name, [string[]]$Lines, [string]$NewLine = "`r`n", [bool]$Bom = $false, [bool]$Prose = $true, [bool]$Email = $false) {
     $text = ($Lines -join $NewLine) + $NewLine
     if ($Prose) { Assert-CopyRules $text $Name -Email:$Email }
+    # A template's email asks its client decisions, so a placeholder never reaches the client.
+    if ($Email -and $text -match $decisionPattern) { throw "$Name carries the placeholder $($Matches[0]), which belongs in the change request only." }
     $outputs.Add([pscustomobject]@{ Path = Join-Path $folder $Name; Text = $text; Bom = $Bom })
 }
 foreach ($r in $results | Where-Object Cr) {

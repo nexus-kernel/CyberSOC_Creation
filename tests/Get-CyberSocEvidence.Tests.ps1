@@ -2046,6 +2046,45 @@ Describe 'Resource Graph request options (CyberSOC 1.9.0)' {
     }
 }
 
+Describe 'Guardrail policy assignments (POS.9-GUARDRAILS, CyberSOC 1.22.0)' {
+    BeforeAll {
+        $script:guardItem = Get-EbrQueryCatalog | Where-Object Id -eq 'POS.9-GUARDRAILS'
+        $null = New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force
+        function script:New-GuardCtx([string]$AccessPath = 'Direct') {
+            [pscustomobject]@{ ArmTenant = 'client'; AccessPath = $AccessPath; Subscriptions = @('3f6a1c2e-8b4d-4e7a-9c1f-2d5b8e0a4c61'); OutDir = $TestDrive; ManagedRgPattern = 'aznativesol0'; WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; Pending = [System.Collections.Generic.List[object]]::new() }
+        }
+    }
+
+    It 'reads the assignments of the guardrail definitions from the subscriptions up, with the managed resource group exclusion' {
+        $guardItem.Engine | Should -Be 'ARG'
+        $guardItem.Phase | Should -Be 'P3 Posture'
+        $guardItem.ScopeFilter | Should -Be 'AtScopeAboveAndBelow' -Because 'an assignment at a management group above the subscriptions guards them too'
+        $guardItem.Query | Should -Match '^policyresources\r?\n\| where type =~ "microsoft\.authorization/policyassignments"\r?\n\| where id !contains "\{\{MRG\}\}"'
+        # The built-in definitions that guard CR-02, CR-03, CR-05, CR-06, CR-07, CR-08, CR-09 and CR-15, and CR-23.
+        foreach ($d in '404c3081-a854-4457-ae30-26a93ef643f9', 'fe83a0eb-a853-422d-aac2-1bffd182c5d0', '32e6bbec-16b6-44c2-be37-c5b672d103cf', '0b60c0b2-2dc2-4e1c-b5c9-abbed971de53', '4fa4b6c0-31ca-4c0d-b10d-24b96f62a751', '13502221-8df0-4414-9937-de9c5c4e396b', 'a4af4a39-4135-47fb-b175-47fbdf85311d', 'fc4d8e41-e223-45ea-9bf5-eada37891d87', '59efceea-0c96-497e-a4a1-4eb2290dac15') {
+            $guardItem.Query | Should -Match ('"{0}"' -f $d) -Because $d
+        }
+        $guardItem.Query | Should -Match 'properties\.managementGroupAncestorsChain' -Because 'each row names a subscription the assignment covers'
+        foreach ($c in 'AssignmentId', 'Definition', 'Scope', 'ScopeLevel', 'subscriptionId', 'EnforcementMode', 'Effect', 'NotScopes', 'NonComplianceMessage') { $guardItem.Query | Should -Match "\b$c\b" }
+        foreach ($p in 'Added in CyberSOC 1\.22\.0', 'CR-27', 'Internal') { $guardItem.Notes | Should -Match $p }
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Columns = @('AssignmentId'); Rows = @([pscustomobject]@{ AssignmentId = 'a1' }); Detail = '' } }
+        $r = Invoke-EbrCatalogItem -Ctx (New-GuardCtx) -Item $guardItem
+        $r.Status | Should -Be 'OK'
+        Should -Invoke Invoke-EbrArgQuery -Times 1 -Exactly -ParameterFilter { $RequestOptions.authorizationScopeFilter -eq 'AtScopeAboveAndBelow' -and $Query -match 'id !contains "aznativesol0"' }
+        (Get-Content (Join-Path $TestDrive 'queries/POS.9-GUARDRAILS.kql') -Raw) | Should -Match 'authorizationScopeFilter AtScopeAboveAndBelow'
+    }
+
+    It 'reads partial through Lighthouse, which cannot see the management groups, and sends no scope filter with other queries' {
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Columns = @(); Rows = @(); Detail = '' } }
+        $r = Invoke-EbrCatalogItem -Ctx (New-GuardCtx 'Lighthouse') -Item $guardItem
+        $r.Status | Should -Be 'PARTIAL' -Because 'an empty read through Lighthouse never reads as no assignment'
+        $r.Detail | Should -Match 'delegates subscriptions but not the management groups above them'
+        $r.Detail | Should -Not -Match 'role assignments'
+        $null = Invoke-EbrCatalogItem -Ctx (New-GuardCtx) -Item (Get-EbrQueryCatalog | Where-Object Id -eq 'DP.1-DETAIL')
+        Should -Invoke Invoke-EbrArgQuery -Times 1 -Exactly -ParameterFilter { $Query -match 'storageaccounts' -and -not $RequestOptions.ContainsKey('authorizationScopeFilter') }
+    }
+}
+
 Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
     BeforeAll {
         # Synthetic tenant: two subscriptions under the management group mg-contoso-platform. Role definition IDs are
@@ -3643,7 +3682,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
     }
 
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.21.0'
+        $params.ScriptVersion | Should -Be '1.22.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -3741,7 +3780,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.21.0'
+        $params2.ScriptVersion | Should -Be '1.22.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

@@ -1,0 +1,57 @@
+{
+  "Description": "CR-27 (guardrail policy template) fixtures, synthetic names and IDs. Assignments is POS.9-GUARDRAILS as collector 1.22.0 writes it, one row per assignment and subscription it covers: kv-deletion-audit assigns the Key Vault deletion protection definition at the first subscription with Audit, so it is named for editing, and sql-tls-deny assigns the Azure SQL minimum TLS definition with Deny at a management group above both subscriptions, so that guardrail is already in force. eah-pilot assigns the encryption at host definition at one resource group only, which leaves the rest of the subscription uncovered. The definition IDs are the real built-in ones.",
+  "Assignments": [
+    {
+      "AssignmentId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/Microsoft.Authorization/policyAssignments/kv-deletion-audit",
+      "AssignmentName": "kv-deletion-audit",
+      "DisplayName": "Key vaults should have deletion protection enabled",
+      "Definition": "0b60c0b2-2dc2-4e1c-b5c9-abbed971de53",
+      "Scope": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "ScopeLevel": "Subscription",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "EnforcementMode": "Default",
+      "Effect": "Audit",
+      "NotScopes": "",
+      "NonComplianceMessage": ""
+    },
+    {
+      "AssignmentId": "/providers/Microsoft.Management/managementGroups/mg-example-platform/providers/Microsoft.Authorization/policyAssignments/sql-tls-deny",
+      "AssignmentName": "sql-tls-deny",
+      "DisplayName": "SQL minimum TLS 1.2",
+      "Definition": "32e6bbec-16b6-44c2-be37-c5b672d103cf",
+      "Scope": "/providers/microsoft.management/managementgroups/mg-example-platform",
+      "ScopeLevel": "ManagementGroup",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "EnforcementMode": "Default",
+      "Effect": "Deny",
+      "NotScopes": "",
+      "NonComplianceMessage": "Azure SQL servers need TLS 1.2."
+    },
+    {
+      "AssignmentId": "/providers/Microsoft.Management/managementGroups/mg-example-platform/providers/Microsoft.Authorization/policyAssignments/sql-tls-deny",
+      "AssignmentName": "sql-tls-deny",
+      "DisplayName": "SQL minimum TLS 1.2",
+      "Definition": "32e6bbec-16b6-44c2-be37-c5b672d103cf",
+      "Scope": "/providers/microsoft.management/managementgroups/mg-example-platform",
+      "ScopeLevel": "ManagementGroup",
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "EnforcementMode": "Default",
+      "Effect": "Deny",
+      "NotScopes": "",
+      "NonComplianceMessage": "Azure SQL servers need TLS 1.2."
+    },
+    {
+      "AssignmentId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-pilot/providers/Microsoft.Authorization/policyAssignments/eah-pilot",
+      "AssignmentName": "eah-pilot",
+      "DisplayName": "",
+      "Definition": "fc4d8e41-e223-45ea-9bf5-eada37891d87",
+      "Scope": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourcegroups/rg-pilot",
+      "ScopeLevel": "ResourceGroup",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "EnforcementMode": "DoNotEnforce",
+      "Effect": "Deny",
+      "NotScopes": "",
+      "NonComplianceMessage": ""
+    }
+  ]
+}
