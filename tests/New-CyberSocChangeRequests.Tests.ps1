@@ -1225,7 +1225,7 @@ Describe 'Change request variants' {
         $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
     }
 
-    It 'writes a client email for every change request, CR-01 to CR-24' {
+    It 'writes a client email for every change request, CR-01 to CR-25' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
         # written at least once. A change request written without its email, or with an email that does not
@@ -1234,6 +1234,8 @@ Describe 'Change request variants' {
         New-ChangeFixture $full
         # Microsoft Entra devices with stale ones among them, so CR-24 is written too.
         Set-PackResult $full 'LIC.4-DEVICES' @((Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/stale-devices/scenarios.json') -Raw | ConvertFrom-Json).Devices)
+        # Storage accounts with soft delete off, so CR-25 is written too.
+        Set-PackResult $full 'DP.1-SOFTDELETE' @((Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/blob-soft-delete/scenarios.json') -Raw | ConvertFrom-Json).Rows | Where-Object ReadStatus -eq 'OK')
         $null = & $generator -EvidencePath $full
         $more = Join-Path $TestDrive 'every-more'
         New-ChangeFixture $more
@@ -1271,7 +1273,7 @@ Describe 'Change request variants' {
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
-        @($written | Sort-Object -Unique) | Should -Be @(1..24) -Because 'the two packs between them write every change request'
+        @($written | Sort-Object -Unique) | Should -Be @(1..25) -Because 'the two packs between them write every change request'
         $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
@@ -4551,5 +4553,140 @@ Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
         $r.Index | Should -Match '- LIC\.4-DEVICES read in part \(Paging stopped early\), so a device left out of the read is not in CR-24\.'
         $r = New-SdPack 'partial-none' 'none-stale' -Before { param($p) Set-PackResult $p 'LIC.4-DEVICES' @($sd.Scenarios.'none-stale'.Devices) -Status 'PARTIAL' -Detail 'Paging stopped early.' }
         $r.Index | Should -Match '\| 24 \| [^|]+ \|  \| No gaps found in the devices read, partial collection scope \|' -Because 'a partial read never reads as no gaps'
+    }
+}
+
+Describe 'Blob and container soft delete turned on for storage accounts (CR-25, collector 1.20.0)' {
+    BeforeAll {
+        $script:bs = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/blob-soft-delete/scenarios.json') -Raw | ConvertFrom-Json
+        # DP.1-SOFTDELETE as collector 1.20.0 writes it from the fixture reads, partial since stdenied was not read. A
+        # scenario given Rows or a status writes those instead.
+        function New-BsPack([string]$Name, [scriptblock]$Before = $null, [hashtable]$Arguments = @{}) {
+            $pack = Join-Path $TestDrive "bs-$Name"
+            New-ChangeFixture $pack
+            Set-PackResult $pack 'DP.1-SOFTDELETE' @($bs.Rows) -Status 'PARTIAL' -Detail '8 of 9 storage accounts with a blob service read. Not read: stdenied: HTTP 403: Forbidden | AuthorizationFailed'
+            if ($Before) { & $Before $pack }
+            Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -ClientContact 'Dana' -SenderName 'Scott Example' @Arguments }
+            $out = Join-Path $pack '05-change-requests'
+            [pscustomobject]@{ Pack = $pack; Out = $out; Index = Get-Content (Join-Path $out '00-index.md') -Raw }
+        }
+        function Get-Cr25([string]$Out, [string]$Suffix = '.txt') { Get-Content (Join-Path $Out "CR-25-blob-soft-delete$Suffix") -Raw }
+        $script:bsMixed = New-BsPack 'mixed' -Arguments @{ SoftDeleteExclude = @('stclientlogs', 'stgone') }
+    }
+    It 'turns on whichever of blob and container soft delete is off, keeping a setting already on with its retention' {
+        $r = $bsMixed
+        $r.Index | Should -Match '\| 25 \| Blob and container soft delete turned on for storage accounts \| 4 \| Change request and client email, partial collection scope \| CR-25-blob-soft-delete\.txt, CR-25-blob-soft-delete\.email\.txt \|'
+        $text = Get-Cr25 $r.Out
+        $text | Should -Match '^Title: Turn on blob and container soft delete on storage accounts'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Turn on blob soft delete and container soft delete with a retention period of 7 days on the 4 storage accounts listed below. An account that already has one of them keeps it with its retention period and gets only the one it is missing.'
+        @(Get-Section $text 'B) PURPOSE')[0] | Should -Match '^Soft delete keeps a deleted blob or container for the retention period, so it can be restored until the period ends\. Deleted data is billed as storage at the same rate as active data until then\.$'
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match ("Subscription: Example Production \($s1\)\n- stcontaineron, resource group rg-app, blob soft delete off, container soft delete on for 14 days, 2 lifecycle rules, 1 deleting blobs\n- stbothoff, resource group rg-data, blob soft delete off, container soft delete off, no lifecycle rules\n- stblobon, resource group rg-web, blob soft delete on for 30 days, container soft delete off, no lifecycle rules")
+        $res | Should -Match ("Subscription: Example, Dev Test \($s2\)\n- stlake, resource group rg-analytics, blob soft delete off, container soft delete off, 1 lifecycle rule, 1 deleting blobs, hierarchical namespace") -Because 'the disabled rule does not count, and a hierarchical namespace account is named as one'
+        foreach ($out in 'stallon', 'stsrcache01', 'stdrcacheasrcache', 'stclientlogs', 'stdenied', 'stpremfiles') { $res | Should -Not -Match $out -Because "$out is not changed" }
+        $impl = (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n"
+        $impl | Should -Match '^1\. In the Azure portal, go to Storage accounts and open the first storage account listed in the RESOURCES section\.'
+        $impl | Should -Match '\n2\. Go to Data management > Data protection\. In the Recovery section, record in the change record whether Enable soft delete for blobs and Enable soft delete for containers are selected, with the retention period of each, for the rollback\.'
+        $impl | Should -Match '\n3\. Go to Data management > Lifecycle management and compare the rules with those the RESOURCES section records\.' -Because 'the lifecycle rules are checked before soft delete is turned on'
+        $impl | Should -Match '\n4\. Leave the account unchanged and note it if the client asked to keep it out of the change, or named an application that reaches it through the Data Lake Storage endpoint \(dfs\.core\.windows\.net\) while it has no hierarchical namespace'
+        $impl | Should -Match '\n5\. Go back to Data management > Data protection\. If Enable soft delete for blobs is not selected, select it and set its retention period to 7 days\. If Enable soft delete for containers is not selected, select it and set its retention period to 7 days\. Leave a setting that is already selected, and its retention period, as it is, and select Save\.'
+        $impl | Should -Match '\n6\. Repeat steps 1 to 5 for each remaining storage account listed\.$'
+        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'Confirm Enable soft delete for blobs and Enable soft delete for containers are both selected, each one the change turned on with a retention period of 7 days and each one already on with the retention period recorded in implementation step 2'
+        $rollback = (Get-Section $text 'C) ROLLBACK PLAN') -join "`n"
+        $rollback | Should -Match 'Clear only the settings the change turned on, as recorded in implementation step 2, leave a setting the account had before as it is, and select Save\.'
+        $rollback | Should -Match 'A blob or container deleted before the rollback stays soft deleted, restorable and billed until its own retention period ends\. Turning soft delete off does not remove it sooner\.' -Because 'Microsoft Learn says data already in retention stays recoverable after soft delete is turned off'
+        @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Match 'a request through the Data Lake Storage endpoint of an account without a hierarchical namespace fails\.$'
+        foreach ($ref in @(Get-Section $text 'A) REFERENCES')) { $ref | Should -Match ': https://learn\.microsoft\.com/' -Because 'References list Microsoft Learn pages only' }
+        foreach ($page in 'storage/blobs/soft-delete-blob-overview', 'storage/blobs/soft-delete-container-overview', 'storage/blobs/lifecycle-management-policy-delete', 'site-recovery/azure-to-azure-support-matrix#cache-storage') { $text | Should -Match ([regex]::Escape("https://learn.microsoft.com/azure/$page")) }
+        $csv = @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-25')
+        @($csv | ForEach-Object Resource | Sort-Object) | Should -Be @('stblobon', 'stbothoff', 'stcontaineron', 'stlake')
+        ($csv | Where-Object Resource -eq 'stblobon').CurrentSetting | Should -Be 'blob soft delete on for 30 days, container soft delete off, no lifecycle rules'
+        ($csv | Where-Object Resource -eq 'stlake').ResourceId | Should -Be "/subscriptions/$s2/resourceGroups/rg-analytics/providers/Microsoft.Storage/storageAccounts/stlake"
+    }
+
+    It 'writes an email that explains soft delete once, says deleted data is billed, and asks for the retention period and the accounts to leave out' {
+        $email = Get-Cr25 $bsMixed.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-25'
+        $email | Should -Match '^Subject: Approval requested: soft delete for Azure Blob Storage\r?\n\r?\nHello Dana,'
+        $email | Should -Match 'I would like your approval to turn on soft delete for blobs and containers on 4 of your storage accounts, with a retention period of 7 days\. Soft delete keeps a deleted blob or container for the retention period, so it can be restored until the period ends\.'
+        ([regex]::Matches($email, 'Soft delete keeps')).Count | Should -Be 1 -Because 'soft delete is explained once'
+        $email | Should -Match 'I recommend this change because a blob or container deleted by mistake, by an application fault or by someone misusing access cannot be recovered from these accounts today\. Microsoft recommends turning on both, with a retention period of at least seven days\.'
+        $email | Should -Match 'Deleted data is billed as storage at the same rate as the rest of your data until its retention period ends'
+        $email | Should -Match '2 of these accounts have lifecycle rules that delete blobs on a schedule\. With soft delete on, each blob a rule deletes is kept for the retention period too, and billed until it ends\.'
+        $email | Should -Match 'Where an account already has one of the two settings on, it keeps that setting with its retention period and only the missing one is turned on, which applies to 2 accounts\.'
+        $email | Should -Match 'On an account without a hierarchical namespace, which 3 of these accounts are, soft delete blocks requests made through the Data Lake Storage endpoint, dfs\.core\.windows\.net, which then fail'
+        $email | Should -Match 'I left out the storage account that Azure Site Recovery uses as cache storage, since Microsoft does not support soft delete there\.'
+        $email | Should -Match ("The 4 accounts are listed below by subscription, with what each has on today and its lifecycle rules:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- stcontaineron \(resource group rg-app, blob soft delete off, container soft delete on for 14 days, 2 lifecycle rules, 1 deleting blobs\)")
+        $email | Should -Match 'Soft delete can be turned off again at any time\. Data deleted before then stays restorable, and billed, until its own retention period ends\.'
+        $email | Should -Match 'Before I schedule the change, could you confirm the retention period of 7 days, or tell me the period you prefer, and tell me which accounts to leave out because data there is deleted or overwritten often, such as accounts that stage logs or backups\? Could you also confirm that no application reaches the accounts without a hierarchical namespace through the Data Lake Storage endpoint\? With that confirmed, could you approve this change for '
+        $email | Should -Not -Match 'stsrcache01|stdrcacheasrcache|stclientlogs|stdenied|stpremfiles|stallon' -Because 'the accounts left out are named in the index, not in the email'
+    }
+
+    It 'names in the index each account left out and why, the lifecycle rules, the accounts without a hierarchical namespace and a name -SoftDeleteExclude did not match' {
+        $index = $bsMixed.Index
+        $index | Should -Match '- 1 storage account left out of CR-25 because a FileStorage account has no blob service, so it has no blob or container soft delete to turn on: stpremfiles \(resource group rg-files, '
+        $index | Should -Match '- 1 storage account left out of CR-25 because DP\.1-SOFTDELETE could not read its soft delete settings and lifecycle rules: stdenied \(resource group rg-data, [^\n]*HTTP 403: Forbidden[^\n]*An account that was not read is never taken as having soft delete, so recollect the pack\.'
+        $index | Should -Match '- 1 storage account left out of CR-25 as Site Recovery cache or log storage that a Recovery Services vault names: stsrcache01 \(resource group rg-dr, [^\n]*, vault rsv-dr\. Site Recovery does not support soft delete on its cache storage'
+        $index | Should -Match '- 1 storage account left out of CR-25 because the name contains asrcache, which suggests Site Recovery cache storage, although no Recovery Services vault read names it: stdrcacheasrcache [^\n]*Add it to a later change only once the owner confirms Site Recovery does not use it\.'
+        $index | Should -Match '- 1 storage account left out of CR-25 at the client''s request \(-SoftDeleteExclude\): stclientlogs \(resource group rg-logs, '
+        $index | Should -Match '- -SoftDeleteExclude names 1 storage account that DP\.1-SOFTDELETE does not list: stgone\. Check the name or resource ID\.'
+        $index | Should -Match '- Lifecycle rules delete blobs on 2 storage accounts in CR-25: stcontaineron [^\n]*, 2 lifecycle rules, 1 deleting blobs / stlake [^\n]*, 1 lifecycle rule, 1 deleting blobs\. With soft delete on, each blob a rule deletes is kept and billed for the retention period'
+        $index | Should -Match '- 3 storage accounts in CR-25 have no hierarchical namespace: stcontaineron '
+        $index | Should -Match '- CR-25 changes the data protection settings only\. CR-07 and CR-18 change anonymous access on some of the same accounts and stay separate changes\.'
+        $index | Should -Match '- Verify CR-25 with the next pack: DP\.1-SOFTDELETE should read BlobSoftDelete and ContainerSoftDelete On for each account changed\.'
+        $index | Should -Match '- DP\.1-SOFTDELETE read in part \(8 of 9 storage accounts with a blob service read\. Not read: stdenied: HTTP 403: Forbidden \| AuthorizationFailed\), so an account it did not read is not in CR-25\.'
+        $index | Should -Not -Match 'stallon' -Because 'an account with both settings on is neither changed nor left out'
+    }
+
+    It 'writes the email for one account in the singular, with the retention -SoftDeleteRetentionDays sets and no Data Lake Storage question for a hierarchical namespace account' {
+        $r = New-BsPack 'single' { param($p) Set-PackResult $p 'DP.1-SOFTDELETE' @($bs.Rows | Where-Object Account -in 'stlake', 'stallon') } @{ SoftDeleteRetentionDays = 14 }
+        $r.Index | Should -Match '\| 25 \| [^|]+ \| 1 \| Change request and client email \|'
+        $email = Get-Cr25 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-25 for one account'
+        $email | Should -Match 'on one of your storage accounts, with a retention period of 14 days\.'
+        $email | Should -Match 'cannot be recovered from this account today\.'
+        $email | Should -Match 'The account has lifecycle rules that delete blobs on a schedule\.'
+        $email | Should -Match 'The account is listed below with what it has on today and its lifecycle rules:'
+        $email | Should -Match 'Just before the change, I will check the account again and leave it unchanged if its settings have changed since my review\.'
+        $email | Should -Not -Match 'Data Lake Storage|already has one of the two|Site Recovery' -Because 'none of these applies to a hierarchical namespace account with both settings off'
+        $text = Get-Cr25 $r.Out
+        $text | Should -Match 'set its retention period to 14 days'
+        @(Get-Section $text 'B) USER EXPERIENCE')[0] | Should -Be 'None for people, while an application that lists deleted blobs sees them during the retention period.'
+        @(Get-Section $text 'A) IMPLEMENTATION PLAN' | Where-Object { $_ -match '^\d+\. ' }).Count | Should -Be 5 -Because 'one account needs no repeat step'
+        { & $generator -EvidencePath $r.Pack -SoftDeleteRetentionDays 0 } | Should -Throw -Because 'Microsoft Learn takes a retention period between 1 and 365 days'
+        { & $generator -EvidencePath $r.Pack -SoftDeleteRetentionDays 366 } | Should -Throw
+    }
+
+    It 'reads no gaps when every account has both on, and writes nothing when every account without soft delete is left out' {
+        $r = New-BsPack 'all-on' { param($p) Set-PackResult $p 'DP.1-SOFTDELETE' @($bs.Rows | Where-Object Account -in 'stallon', 'stpremfiles') }
+        $r.Index | Should -Match '\| 25 \| Blob and container soft delete turned on for storage accounts \|  \| No gaps found \|  \|'
+        $r.Index | Should -Match '- 1 storage account left out of CR-25 because a FileStorage account has no blob service' -Because 'a FileStorage account is named whatever the others read'
+        Test-Path (Join-Path $r.Out 'CR-25-blob-soft-delete.txt') | Should -BeFalse
+        $r = New-BsPack 'empty' { param($p) Set-PackResult $p 'DP.1-SOFTDELETE' @() }
+        $r.Index | Should -Match '\| 25 \| [^|]+ \|  \| No gaps found \|  \|'
+        $r = New-BsPack 'left' { param($p) Set-PackResult $p 'DP.1-SOFTDELETE' @($bs.Rows | Where-Object Account -in 'stsrcache01', 'stdrcacheasrcache', 'stallon') }
+        $r.Index | Should -Match '\| 25 \| [^|]+ \|  \| Not written, every storage account without soft delete is left out, see the notes \|'
+        $r.Index | Should -Match '- 1 storage account left out of CR-25 as Site Recovery cache or log storage'
+        Test-Path (Join-Path $r.Out 'CR-25-blob-soft-delete.txt') | Should -BeFalse
+        $r = New-BsPack 'partial-none' { param($p) Set-PackResult $p 'DP.1-SOFTDELETE' @($bs.Rows | Where-Object Account -in 'stallon', 'stdenied') -Status 'PARTIAL' -Detail 'Not read: stdenied: HTTP 403: Forbidden' }
+        $r.Index | Should -Match '\| 25 \| [^|]+ \|  \| No gaps found in the accounts read, partial collection scope \|' -Because 'a partial read never reads as no gaps'
+        $r.Index | Should -Match '- 1 storage account left out of CR-25 because DP\.1-SOFTDELETE could not read its soft delete settings'
+    }
+
+    It 'leaves out every account a Recovery Services vault read could not clear, and names cache storage that already has soft delete on' {
+        $unknown = @($bs.Rows | Where-Object Account -in 'stbothoff', 'stblobon' | ForEach-Object { $c = $_ | Select-Object *; $c.SiteRecoveryCache = 'Unknown'; $c })
+        $cacheOn = @($bs.Rows | Where-Object Account -eq 'stsrcache01' | ForEach-Object { $c = $_ | Select-Object *; $c.BlobSoftDelete = 'On'; $c.BlobRetentionDays = '7'; $c })
+        $r = New-BsPack 'unknown' { param($p) Set-PackResult $p 'DP.1-SOFTDELETE' @($unknown + $cacheOn) -Status 'PARTIAL' -Detail 'Recovery Services vaults not read, so SiteRecoveryCache reads Unknown: rsv-backup: HTTP 403: Forbidden' }
+        $r.Index | Should -Match '\| 25 \| [^|]+ \|  \| Not written, every storage account without soft delete is left out, see the notes \|'
+        $r.Index | Should -Match '- 2 storage accounts left out of CR-25 because a Recovery Services vault could not be read, so they may be Site Recovery cache storage: stbothoff [^\n]* / stblobon [^\n]*\. Recollect the pack\.'
+        $r.Index | Should -Match '- 1 storage account that a Recovery Services vault names as Site Recovery cache or log storage already has soft delete on: stsrcache01 [^\n]*blob soft delete on for 7 days[^\n]*vault rsv-dr\. Site Recovery does not support soft delete on its cache storage, so review turning it off with the client\.'
+    }
+
+    It 'needs recollection on a pack before 1.20.0 and is not written when the read failed' {
+        $r = New-BsPack 'old' { param($p) Remove-PackResult $p 'DP.1-SOFTDELETE' }
+        $r.Index | Should -Match '\| 25 \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.20\.0 or later \|'
+        $r = New-BsPack 'failed' { param($p) Set-PackResult $p 'DP.1-SOFTDELETE' @() -Status 'FAILED' -Detail 'Resource Graph throttled' }
+        $r.Index | Should -Match '\| 25 \| [^|]+ \|  \| Not collected \(DP\.1-SOFTDELETE FAILED\) \|' -Because 'a failed read is never no gaps'
+        Test-Path (Join-Path $r.Out 'CR-25-blob-soft-delete.txt') | Should -BeFalse
     }
 }

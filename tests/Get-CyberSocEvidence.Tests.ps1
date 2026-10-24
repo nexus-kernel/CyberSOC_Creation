@@ -784,7 +784,9 @@ Describe 'Network devices and blob containers (1.11.0)' {
     It 'reads blob containers per storage account through a GET on the Storage resource provider' {
         $item = $catalog | Where-Object Id -eq 'DP.1-CONTAINERS'
         $item.Engine | Should -Be 'STORAGE-CONTAINERS'
-        $item.Query | Should -Match 'kind !~ "FileStorage"'
+        $item.Query | Should -Not -Match 'kind !~ "FileStorage"' -Because 'from 1.20.0 DP.1-SOFTDELETE lists the FileStorage accounts, and the engine leaves them out of the container listing'
+        $item.Query | Should -Match 'Kind = kind'
+        $item.Query | Should -Match 'HnsEnabled = coalesce\(tobool\(properties\.isHnsEnabled\), false\)'
         $item.Query | Should -Match 'AllowBlobPublicAccess = tostring\(properties\.allowBlobPublicAccess\)'
         { Assert-EbrReadOnlyRequest -Method GET -Uri 'https://management.azure.com/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/a/blobServices/default/containers?api-version=2023-05-01' } | Should -Not -Throw
     }
@@ -851,7 +853,7 @@ Describe 'Network devices and blob containers (1.11.0)' {
         Mock Invoke-EbrRest { if ($Uri -match 'stdenied') { throw 'HTTP 403: Forbidden' }; [pscustomobject]@{ value = @([pscustomobject]@{ name = 'images'; properties = [pscustomobject]@{ publicAccess = 'Blob' } }, [pscustomobject]@{ name = 'logs'; properties = [pscustomobject]@{ publicAccess = 'None' } }) } }
         $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
         $res.Status | Should -Be 'OK'
-        $ctx.Pending.Count | Should -Be 1
+        @($ctx.Pending | ForEach-Object ResultId) | Should -Be @('DP.1-CONTAINERS-DETAIL', 'DP.1-SOFTDELETE') -Because 'the same pass writes the soft delete read from 1.20.0'
         $d = $ctx.Pending[0]
         @($d.ResultId, $d.Status) | Should -Be @('DP.1-CONTAINERS-DETAIL', 'OK')
         @($d.Rows).Count | Should -Be 1
@@ -877,6 +879,7 @@ Describe 'Network devices and blob containers (1.11.0)' {
         (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'FAILED'
         $ctx.Pending[0].Status | Should -Be 'FAILED'
         $ctx.Pending[0].Detail | Should -Match 'throttled'
+        @($ctx.Pending | ForEach-Object { '{0} {1}' -f $_.ResultId, $_.Status }) | Should -Be @('DP.1-CONTAINERS-DETAIL FAILED', 'DP.1-SOFTDELETE FAILED') -Because 'a failed account list never reads as no account without soft delete'
     }
     It 'reads encryption at host support per size from the Compute resource SKUs API, one region at a time' {
         Mock Invoke-EbrRest {
@@ -973,6 +976,99 @@ Describe 'Network devices and blob containers (1.11.0)' {
         $res.Status | Should -Be 'FAILED' -Because 'no scale set that needed a size list had one read'
         Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @(); Detail = '' } }
         (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'EMPTY'
+    }
+}
+
+Describe 'Blob and container soft delete (DP.1-SOFTDELETE, CyberSOC 1.20.0)' {
+    BeforeAll {
+        $script:sd = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/blob-soft-delete/scenarios.json') -Raw | ConvertFrom-Json
+        $script:sdItem = Get-EbrQueryCatalog | Where-Object Id -eq 'DP.1-CONTAINERS'
+        # Answers each GET from the fixture by account or vault name and path. A string is the error the request throws.
+        function Get-SdAnswer([string]$Uri) {
+            if ($Uri -notmatch '/(storageAccounts|vaults)/([^/?]+)/([^?]+)\?') { throw "Unexpected GET $Uri" }
+            $key = '{0}/{1}' -f $Matches[2], $Matches[3]
+            $answer = $sd.Arm.PSObject.Properties[$key]
+            if (-not $answer) { throw "HTTP 404: Not Found ($key)" }
+            if ($answer.Value -is [string]) { throw $answer.Value }
+            $answer.Value
+        }
+        function New-SdCtx {
+            New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force | Out-Null
+            [pscustomobject]@{ WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; ManagedRgPattern = 'aznativesol0'; OutDir = $TestDrive; Subscriptions = @('s1', 's2'); ArmTenant = 't'; AccessPath = ''; Pending = [System.Collections.Generic.List[object]]::new() }
+        }
+        function Get-SdResult($Ctx) { $Ctx.Pending | Where-Object ResultId -eq 'DP.1-SOFTDELETE' }
+        $script:sdColumns = 'subscriptionId', 'resourceGroup', 'Account', 'Kind', 'HnsEnabled', 'BlobSoftDelete', 'BlobRetentionDays', 'ContainerSoftDelete', 'ContainerRetentionDays', 'LifecycleRules', 'LifecycleDeleteRules', 'SiteRecoveryCache', 'SiteRecoveryVaults', 'ReadStatus', 'ResourceId'
+        function Format-SdRow($Row) { (@($sdColumns | ForEach-Object { '{0}={1}' -f $_, [string]$Row.$_ }) -join '|') }
+    }
+    It 'records the read in the catalog notes and the read-only header, with the vault read and the lifecycle read' {
+        $sdItem.Notes | Should -Match 'Since CyberSOC 1\.20\.0 it also writes DP\.1-SOFTDELETE in the same pass, one row per storage account with blob soft delete and container soft delete'
+        $sdItem.Notes | Should -Match 'a 404 read as no policy'
+        $sdItem.Query | Should -Match 'where id !contains "\{\{MRG\}\}"'
+        foreach ($uri in 'https://management.azure.com/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/a/blobServices/default?api-version=2023-05-01', 'https://management.azure.com/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/a/managementPolicies/default?api-version=2023-05-01', 'https://management.azure.com/subscriptions/s/resourceGroups/rg/providers/Microsoft.RecoveryServices/vaults/v/replicationProtectedItems?api-version=2023-08-01') {
+            { Assert-EbrReadOnlyRequest -Method GET -Uri $uri } | Should -Not -Throw
+        }
+        $text = Get-Content (Join-Path $PSScriptRoot '..' 'Get-CyberSocEvidence.ps1') -Raw
+        $text | Should -Match 'GET  <storage account>/blobServices/default and <storage account>/managementPolicies/default \(blob and container soft delete and the lifecycle rules, DP\.1-SOFTDELETE\)'
+        $text | Should -Match 'GET  <Recovery Services vault>/replicationProtectedItems \(the Site Recovery cache and log storage accounts, DP\.1-SOFTDELETE\)'
+    }
+    It 'writes one row per storage account from the fixture reads, with the cache account the vault names and the FileStorage account unread' {
+        Mock Invoke-EbrArgQuery { if ($Query -match 'microsoft\.recoveryservices/vaults') { [pscustomobject]@{ Rows = @($sd.Vaults); Detail = '' } } else { [pscustomobject]@{ Rows = @($sd.Arg); Detail = '' } } }
+        Mock Invoke-EbrRest { Get-SdAnswer $Uri }
+        $ctx = New-SdCtx
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $sdItem
+        $res.Status | Should -Be 'PARTIAL' -Because 'stdenied could not be listed'
+        @($res.Rows | ForEach-Object Account) | Should -Not -Contain 'stpremfiles' -Because 'a FileStorage account has no containers to list'
+        $soft = Get-SdResult $ctx
+        $soft.Status | Should -Be 'PARTIAL' -Because 'an account that was not read is never read as having soft delete'
+        @($soft.Rows | ForEach-Object { Format-SdRow $_ } | Sort-Object) | Should -Be @($sd.Rows | ForEach-Object { Format-SdRow $_ } | Sort-Object)
+        $soft.Detail | Should -Match '^8 of 9 storage accounts with a blob service read: blob soft delete off in 6, container soft delete off in 6, lifecycle rules that delete in 2\. 1 account named as a Site Recovery cache or log storage account in the 2 of 2 Recovery Services vaults read\. 1 FileStorage, not read\. Not read: stdenied: HTTP 403'
+        Should -Invoke Invoke-EbrRest -Times 0 -Exactly -ParameterFilter { $Uri -match 'stpremfiles' } -Because 'a FileStorage account is never read'
+        Should -Invoke Invoke-EbrRest -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://management.azure.com/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-dr/providers/Microsoft.RecoveryServices/vaults/rsv-dr/replicationProtectedItems?api-version=2023-08-01' }
+    }
+    It 'reads every account as Unknown for Site Recovery when a vault was not read, and the result as partial' {
+        Mock Invoke-EbrArgQuery { if ($Query -match 'microsoft\.recoveryservices/vaults') { [pscustomobject]@{ Rows = @($sd.Vaults); Detail = '' } } else { [pscustomobject]@{ Rows = @($sd.Arg | Where-Object Account -in 'stbothoff', 'stallon'); Detail = '' } } }
+        Mock Invoke-EbrRest { if ($Uri -match 'rsv-backup') { throw 'HTTP 403: Forbidden' }; Get-SdAnswer $Uri }
+        $ctx = New-SdCtx
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $sdItem
+        $soft = Get-SdResult $ctx
+        $soft.Status | Should -Be 'PARTIAL' -Because 'an account in a vault not read may be a cache account'
+        @($soft.Rows | ForEach-Object SiteRecoveryCache | Sort-Object -Unique) | Should -Be @('Unknown')
+        $soft.Detail | Should -Match 'Recovery Services vaults not read, so SiteRecoveryCache reads Unknown: rsv-backup: HTTP 403: Forbidden$'
+        Mock Invoke-EbrArgQuery { if ($Query -match 'microsoft\.recoveryservices/vaults') { throw 'Resource Graph throttled' } else { [pscustomobject]@{ Rows = @($sd.Arg | Where-Object Account -eq 'stbothoff'); Detail = '' } } }
+        $ctx = New-SdCtx
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $sdItem
+        (Get-SdResult $ctx).Status | Should -Be 'PARTIAL'
+        @(Get-SdResult $ctx).Rows[0].SiteRecoveryCache | Should -Be 'Unknown'
+    }
+    It 'reads a missing policy as Off, a 404 lifecycle read as no rules, and any other failure as unread' {
+        $a = [pscustomobject]@{ ResourceId = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/a'; Account = 'a'; resourceGroup = 'rg'; subscriptionId = 's'; Kind = 'StorageV2'; HnsEnabled = $false }
+        $ok = [pscustomobject]@{ Accounts = @{}; Failed = @(); Vaults = 0; Read = 0 }
+        Mock Invoke-EbrRest { if ($Uri -match 'managementPolicies') { throw 'HTTP 404: Not Found' }; [pscustomobject]@{ properties = [pscustomobject]@{ deleteRetentionPolicy = [pscustomobject]@{ enabled = $true; days = 7 } } } }
+        $r = Get-EbrBlobSoftDeleteRow -Account $a -Tenant 't' -SiteRecovery $ok
+        @($r.BlobSoftDelete, $r.BlobRetentionDays, $r.ContainerSoftDelete, $r.ContainerRetentionDays, $r.LifecycleRules, $r.LifecycleDeleteRules, $r.SiteRecoveryCache, $r.ReadStatus) | Should -Be @('On', '7', 'Off', '', 0, 0, 'No', 'OK')
+        Mock Invoke-EbrRest { if ($Uri -match 'managementPolicies') { throw 'HTTP 403: Forbidden' }; [pscustomobject]@{ properties = [pscustomobject]@{ deleteRetentionPolicy = [pscustomobject]@{ enabled = $false } } } }
+        $r = Get-EbrBlobSoftDeleteRow -Account $a -Tenant 't' -SiteRecovery $ok
+        $r.ReadStatus | Should -Be 'Lifecycle management policy: HTTP 403: Forbidden' -Because 'the lifecycle rules change how much deleted data is kept, so an account is read only with them'
+        @($r.BlobSoftDelete, $r.ContainerSoftDelete, $r.LifecycleRules) | Should -Be @('', '', '') -Because 'an unread account is never read as Off or On'
+        Mock Invoke-EbrRest { [pscustomobject]@{ value = @() } }
+        $r = Get-EbrBlobSoftDeleteRow -Account $a -Tenant 't' -SiteRecovery $ok
+        $r.ReadStatus | Should -Be 'The blob service response carried no properties.'
+        $r = Get-EbrBlobSoftDeleteRow -Account $a -Tenant 't'
+        $r.SiteRecoveryCache | Should -Be 'Unknown' -Because 'no vault read means a cache account cannot be ruled out'
+    }
+    It 'writes DP.1-SOFTDELETE as FAILED when no account could be read, and lists only FileStorage accounts when there is nothing else' {
+        Mock Invoke-EbrArgQuery { if ($Query -match 'microsoft\.recoveryservices/vaults') { [pscustomobject]@{ Rows = @(); Detail = '' } } else { [pscustomobject]@{ Rows = @($sd.Arg | Where-Object Account -in 'stbothoff', 'stpremfiles'); Detail = '' } } }
+        Mock Invoke-EbrRest { throw 'HTTP 403: Forbidden' }
+        $ctx = New-SdCtx
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $sdItem
+        (Get-SdResult $ctx).Status | Should -Be 'FAILED'
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @($sd.Arg | Where-Object Account -eq 'stpremfiles'); Detail = '' } }
+        $ctx = New-SdCtx
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $sdItem).Status | Should -Be 'EMPTY'
+        $soft = Get-SdResult $ctx
+        $soft.Status | Should -Be 'OK'
+        @($soft.Rows).Count | Should -Be 1
+        $soft.Detail | Should -Be 'No storage account with a blob service in scope, 1 FileStorage.'
     }
 }
 
@@ -3380,6 +3476,11 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         @(Get-ChildItem (Join-Path $outDir.FullName 'queries') -Filter 'NB.5-FTPAUTH.*').Count | Should -Be 1 -Because 'the Resource Graph query is written to the pack'
     }
 
+    It 'writes DP.1-SOFTDELETE in the container pass, and reads an account it could not read as failed, never as having soft delete (CyberSOC 1.20.0)' {
+        (Get-M 'DP.1-SOFTDELETE').Status | Should -Be (Get-M 'DP.1-CONTAINERS-DETAIL').Status -Because 'both are written in the same pass from the same account list'
+        (Get-M 'DP.1-SOFTDELETE').Status | Should -BeIn 'FAILED', 'EMPTY' -Because 'the mocked GETs read no blob service'
+    }
+
     It 'writes DR.6-MYSQLAUDIT, and reads a server it could not read as failed, never as set (CyberSOC 1.15.0)' {
         (Get-M 'DR.6-MYSQLAUDIT').Status | Should -Be 'FAILED' -Because 'the mocked GET is refused for every server'
         (Get-M 'DR.6-MYSQLAUDIT').Phase | Should -Be 'P2 Detection and response'
@@ -3387,7 +3488,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
     }
 
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.19.0'
+        $params.ScriptVersion | Should -Be '1.20.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -3485,7 +3586,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.19.0'
+        $params2.ScriptVersion | Should -Be '1.20.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

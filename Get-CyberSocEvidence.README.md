@@ -22,7 +22,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
   (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
 - **Emergency access accounts.** Every account with Atmosera in its UPN or in an Atmosera group (IA.16-ACCOUNTS and
   IA.16-GROUPS), which every Conditional Access change excludes. See the collector 1.12.0 notes below.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.19.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.20.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -340,6 +340,20 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.20.0 (October 24, 2026): `DP.1-CONTAINERS` also writes `DP.1-SOFTDELETE` in the same pass over
+  the storage accounts, for change request CR-25, which turns on blob and container soft delete. One row per storage
+  account with blob soft delete and container soft delete (`deleteRetentionPolicy` and `containerDeleteRetentionPolicy`
+  of a `GET <account>/blobServices/default`, enabled and days), the enabled lifecycle rules and those that delete
+  (`GET <account>/managementPolicies/default`, a 404 read as no policy), whether a Recovery Services vault names the
+  account as Site Recovery cache or log storage (Resource Graph lists the vaults, with the `{{MRG}}` exclusion, and
+  `GET <vault>/replicationProtectedItems` names the accounts), the hierarchical namespace, and a read status. Reader is
+  enough for every read. The DP.1-CONTAINERS query now projects `Kind` and `HnsEnabled` and keeps the FileStorage accounts,
+  which the engine leaves out of the container listing and lists in DP.1-SOFTDELETE with no read, since they have no blob
+  service. An account that cannot be read keeps its settings empty and records why, a vault that cannot be read makes
+  every account read `SiteRecoveryCache` Unknown, and either makes the result PARTIAL, never no gaps. It is written with
+  every outcome of DP.1-CONTAINERS, so a failed account list reads FAILED rather than needing a newer collector. CR-25
+  asks for recollection on an earlier pack. Internal, since it names accounts. The query is in section 6 of the CyberSOC
+  Monthly Report Runbook.
 - CyberSOC collector 1.19.0 (October 24, 2026): `LIC.4-DEVICES` gains `PhysicalIds`, `ProfileType` and `SystemLabels`
   (`physicalIds`, `profileType` and `systemLabels` in the same Graph `devices` read, with Device.Read.All as before) for
   change request CR-24, which disables the stale Microsoft Entra devices and never deletes them. A `physicalIds` entry

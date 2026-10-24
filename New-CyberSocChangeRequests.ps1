@@ -19,7 +19,8 @@
     rules to Audit on the Windows servers through one endpoint security policy and security settings management (CR-22),
     leaving every rule already configured on a server as it is, and turning on periodic assessment in Azure Update Manager
     on the virtual machines without it, changing the assessment mode only and never the patch mode (CR-23), and disabling,
-    never deleting, the Microsoft Entra devices with no sign-in for more than -StaleDeviceDays days (CR-24). Every change request
+    never deleting, the Microsoft Entra devices with no sign-in for more than -StaleDeviceDays days (CR-24), and turning on blob
+    and container soft delete on the storage accounts without them, with -SoftDeleteRetentionDays (CR-25). Every change request
     also gets a client email, drafted and ready to send, that asks for the client's approval. The CR-19 email names
     the accounts and their roles in a CSV written beside it (CR-19-disabled-account-roles.email.csv), to attach,
     since the list can be long, and the CR-24 email names the devices the same way (CR-24-stale-devices.email.csv). Every email has the same parts in the
@@ -76,6 +77,14 @@
     The days without a sign-in after which CR-24 reads an enabled Microsoft Entra device as stale, counted back from the
     device read. Defaults to 90. Microsoft Entra ID updates the activity timestamp only about every 14 days, give or take
     5, so it takes no value under 21. The CR-24 email asks the client to approve the threshold with the device list.
+.PARAMETER SoftDeleteRetentionDays
+    The retention period CR-25 sets when it turns on blob soft delete or container soft delete, between 1 and 365 days as
+    Microsoft Learn allows. Defaults to 7, the minimum Microsoft recommends. An account that already has one of them keeps
+    its own retention period. The CR-25 email asks the client to confirm the period.
+.PARAMETER SoftDeleteExclude
+    The storage accounts the client asked to keep out of CR-25, each by name or resource ID, such as an account that stages
+    logs or backups, where deleted data would be kept and billed. The index names each one left out, and any name that
+    matches no account in the pack.
 .EXAMPLE
     ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000
 .EXAMPLE
@@ -125,6 +134,11 @@
     Intune or another MDM manages (isManaged, whether or not Intune is licensed), devices Defender for Endpoint security
     settings management manages, Windows Autopilot devices, printers, devices with a system label and devices with no
     sign-in recorded, and names them in the index.
+    CR-25 reads blob and container soft delete, the lifecycle rules and the Site Recovery use of each storage account
+    (DP.1-SOFTDELETE), added in 1.20.0, and on an earlier pack says "needs recollection". It leaves out FileStorage accounts,
+    account kinds without soft delete, accounts that were not read, the Site Recovery cache and log storage a Recovery
+    Services vault names, accounts named like Site Recovery cache storage, accounts a vault not read may use, and the accounts
+    -SoftDeleteExclude names, and names them in the index.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -142,7 +156,10 @@ param(
     [ValidateSet('Plan1', 'Plan2', 'Business', 'Mixed')]
     [string]$DefenderEndpointPlan,
     [ValidateRange(21, 3650)]
-    [int]$StaleDeviceDays = 90
+    [int]$StaleDeviceDays = 90,
+    [ValidateRange(1, 365)]
+    [int]$SoftDeleteRetentionDays = 7,
+    [string[]]$SoftDeleteExclude
 )
 
 $ErrorActionPreference = 'Stop'
@@ -181,6 +198,8 @@ $detailVersions['EW.10-ASSESSMENT'] = '1.18.0'
 # without LIC.4-DEVICES at all, needs recollection with 1.19.0 or later.
 $staleDeviceVersion = '1.19.0'
 $detailVersions['LIC.4-DEVICES'] = $staleDeviceVersion
+# CR-25 reads blob and container soft delete of each storage account (DP.1-SOFTDELETE), added in 1.20.0.
+$detailVersions['DP.1-SOFTDELETE'] = '1.20.0'
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -3991,6 +4010,144 @@ $catalog = @(
                         , @('Microsoft Graph device resource type', 'https://learn.microsoft.com/graph/api/resources/device')
                         , @('Create device groups for Windows Autopilot', 'https://learn.microsoft.com/autopilot/enrollment-autopilot'))
                     Csv = $csv
+                    Email = $email
+                } } } }
+    @{ Number = 25; Key = 'blob-soft-delete'; Change = 'Blob and container soft delete turned on for storage accounts'; Sources = @('DP.1-SOFTDELETE')
+       Build = {
+            # DP.1-SOFTDELETE lists every storage account with blob soft delete and container soft delete, its lifecycle rules
+            # and whether a Recovery Services vault names it as Site Recovery cache or log storage. CR-25 turns on whichever
+            # of the two is off, with -SoftDeleteRetentionDays, and keeps the one an account already has with its retention.
+            # It is a change of its own: CR-07 and CR-18 change anonymous access on some of the same accounts.
+            $notes = [System.Collections.Generic.List[string]]::new()
+            $partial = (Get-Status 'DP.1-SOFTDELETE') -eq 'PARTIAL'
+            $days = $SoftDeleteRetentionDays
+            $dayText = Get-Count $days 'day' 'days'
+            # Container soft delete is available for general-purpose v2 and v1, block blob and Blob storage accounts (Soft
+            # delete for containers), and blob soft delete for the same blob accounts. A FileStorage account has no blob service.
+            $kinds = 'StorageV2', 'Storage', 'BlockBlobStorage', 'BlobStorage'
+            $exclude = @($SoftDeleteExclude | Where-Object { $_ } | ForEach-Object { ([string]$_).Trim().TrimEnd('/').ToLowerInvariant() } | Where-Object { $_ })
+            $matched = [System.Collections.Generic.HashSet[string]]::new()
+            $accounts = @(foreach ($row in @(Get-Rows 'DP.1-SOFTDELETE')) {
+                    $name = ConvertTo-CopyText $row.Account
+                    $id = Get-Text $row.ResourceId
+                    $kind = ConvertTo-CopyText $row.Kind
+                    $read = (Get-Text $row.ReadStatus) -eq 'OK'
+                    $blob = (Get-Text $row.BlobSoftDelete) -eq 'On'
+                    $container = (Get-Text $row.ContainerSoftDelete) -eq 'On'
+                    $cache = Get-Text $row.SiteRecoveryCache
+                    $named = @($exclude | Where-Object { $_ -in $name.ToLowerInvariant(), $id.ToLowerInvariant() })
+                    foreach ($x in $named) { [void]$matched.Add($x) }
+                    # Why an account is left out, the first reason that applies. Site Recovery does not support soft delete on
+                    # its cache storage, whose log files it creates and deletes all the time (Azure to Azure support matrix).
+                    $out = if ($kind -ieq 'FileStorage') { 'filestorage' }
+                    elseif ($kind -notin $kinds) { 'kind' }
+                    elseif (-not $read) { 'unread' }
+                    elseif ($cache -eq 'Yes') { 'cache' }
+                    elseif ($name -match '(?i)asrcache') { 'asrname' }
+                    elseif ($cache -ne 'No') { 'unknown' }
+                    elseif ($named.Count) { 'client' }
+                    else { '' }
+                    [pscustomobject]@{
+                        Name = $name; ResourceGroup = ConvertTo-CopyText $row.resourceGroup; SubscriptionId = (ConvertTo-CopyText $row.subscriptionId).ToLowerInvariant(); ResourceId = $id
+                        Kind = $(if ($kind) { $kind } else { 'kind not recorded' }); Hns = Test-True $row.HnsEnabled; Blob = $blob; BlobDays = Get-Number $row.BlobRetentionDays; Container = $container; ContainerDays = Get-Number $row.ContainerRetentionDays
+                        Rules = Get-Number $row.LifecycleRules; DeleteRules = Get-Number $row.LifecycleDeleteRules; Vaults = ConvertTo-CopyText $row.SiteRecoveryVaults; Status = ConvertTo-CopyText $row.ReadStatus
+                        Gap = $read -and -not ($blob -and $container); Out = $out
+                    } })
+            $where = { param($a) '{0} (resource group {1}, subscription {2})' -f $a.Name, $a.ResourceGroup, (Format-Subscription $a.SubscriptionId) }
+            $protection = { param($on, $d, $what) if ($on) { '{0} soft delete on for {1}' -f $what, (Get-Count $d 'day' 'days') } else { '{0} soft delete off' -f $what } }
+            $lifecycle = { param($a) if (-not $a.Rules) { 'no lifecycle rules' } elseif ($a.DeleteRules) { '{0}, {1} deleting blobs' -f (Get-Count $a.Rules 'lifecycle rule' 'lifecycle rules'), $a.DeleteRules } else { '{0}, none deleting blobs' -f (Get-Count $a.Rules 'lifecycle rule' 'lifecycle rules') } }
+            $setting = { param($a) '{0}, {1}, {2}{3}' -f (& $protection $a.Blob $a.BlobDays 'blob'), (& $protection $a.Container $a.ContainerDays 'container'), (& $lifecycle $a), $(if ($a.Hns) { ', hierarchical namespace' } else { '' }) }
+            $leftNote = { param($key, [bool]$gapOnly, $text)
+                $list = @($accounts | Where-Object { $_.Out -eq $key -and (-not $gapOnly -or $_.Gap) })
+                if ($list.Count) { $notes.Add(($text -f (Get-Count $list.Count 'storage account' 'storage accounts'), (@($list | ForEach-Object { '{0}, {1}' -f (& $where $_), $(if ($key -in 'filestorage', 'kind') { 'kind ' + $_.Kind } elseif ($key -eq 'unread') { $_.Status } elseif ($key -eq 'cache') { '{0}, vault {1}' -f (& $setting $_), $_.Vaults } else { & $setting $_ }) }) -join ' / '), (Get-Pick $list.Count 'it' 'they'), (Get-Pick $list.Count 'its' 'their'), (Get-Pick $list.Count 'it' 'them'))) } }
+            & $leftNote 'filestorage' $false '{0} left out of CR-25 because a FileStorage account has no blob service, so it has no blob or container soft delete to turn on: {1}.'
+            & $leftNote 'kind' $true '{0} left out of CR-25 because Microsoft Learn lists soft delete for containers on general-purpose v2 and v1, block blob and Blob storage accounts only: {1}. Review {2} with the owner.'
+            & $leftNote 'unread' $false '{0} left out of CR-25 because DP.1-SOFTDELETE could not read {3} soft delete settings and lifecycle rules: {1}. An account that was not read is never taken as having soft delete, so recollect the pack.'
+            & $leftNote 'cache' $true '{0} left out of CR-25 as Site Recovery cache or log storage that a Recovery Services vault names: {1}. Site Recovery does not support soft delete on its cache storage, since it creates and deletes log files all the time and soft delete would keep and bill each one.'
+            & $leftNote 'asrname' $true '{0} left out of CR-25 because the name contains asrcache, which suggests Site Recovery cache storage, although no Recovery Services vault read names {4}: {1}. Add {4} to a later change only once the owner confirms Site Recovery does not use {4}.'
+            & $leftNote 'unknown' $true '{0} left out of CR-25 because a Recovery Services vault could not be read, so {2} may be Site Recovery cache storage: {1}. Recollect the pack.'
+            & $leftNote 'client' $true '{0} left out of CR-25 at the client''s request (-SoftDeleteExclude): {1}.'
+            # Cache storage that already has soft delete on costs more than it should, so it is named for review.
+            $cacheOn = @($accounts | Where-Object { $_.Out -eq 'cache' -and ($_.Blob -or $_.Container) })
+            if ($cacheOn.Count) { $notes.Add(('{0} that a Recovery Services vault names as Site Recovery cache or log storage already {1} soft delete on: {2}. Site Recovery does not support soft delete on its cache storage, so review turning it off with the client.' -f (Get-Count $cacheOn.Count 'storage account' 'storage accounts'), (Get-Pick $cacheOn.Count 'has' 'have'), (@($cacheOn | ForEach-Object { '{0}, {1}, vault {2}' -f (& $where $_), (& $setting $_), $_.Vaults }) -join ' / '))) }
+            $unmatched = @($exclude | Where-Object { -not $matched.Contains($_) })
+            if ($unmatched.Count) { $notes.Add(('-SoftDeleteExclude names {0} that DP.1-SOFTDELETE does not list: {1}. Check the name or resource ID.' -f (Get-Count $unmatched.Count 'storage account' 'storage accounts'), ((@($unmatched | ForEach-Object { ConvertTo-CopyText $_ })) -join ', '))) }
+            $partialNote = { if ($partial) { $notes.Add(('DP.1-SOFTDELETE read in part ({0}), so an account it did not read is not in CR-25. Recollect the pack.' -f (Get-ResultDetail 'DP.1-SOFTDELETE').TrimEnd('.'))) } }
+            $inScope = @($accounts | Where-Object { $_.Gap -and -not $_.Out } | Sort-Object { Format-Subscription $_.SubscriptionId }, ResourceGroup, Name)
+            if (-not $inScope.Count) {
+                $state = if (@($accounts | Where-Object { $_.Gap }).Count) { 'Not written, every storage account without soft delete is left out, see the notes' } elseif ($partial) { 'No gaps found in the accounts read, partial collection scope' } else { 'No gaps found' }
+                & $partialNote
+                return @{ State = $state; Notes = $notes.ToArray() }
+            }
+            $m = $inScope.Count
+            $blobNeeded = @($inScope | Where-Object { -not $_.Blob })
+            $containerNeeded = @($inScope | Where-Object { -not $_.Container })
+            $kept = @($inScope | Where-Object { $_.Blob -or $_.Container })
+            $deleting = @($inScope | Where-Object DeleteRules)
+            $flat = @($inScope | Where-Object { -not $_.Hns })
+            $cacheOut = @($accounts | Where-Object { $_.Out -eq 'cache' -and $_.Gap })
+            if ($deleting.Count) { $notes.Add(('Lifecycle rules delete blobs on {0} in CR-25: {1}. With soft delete on, each blob a rule deletes is kept and billed for the retention period, so review the rules with the client before the change.' -f (Get-Count $deleting.Count 'storage account' 'storage accounts'), (@($deleting | ForEach-Object { '{0}, {1}' -f (& $where $_), (& $lifecycle $_) }) -join ' / '))) }
+            if ($flat.Count) { $notes.Add(('{0} in CR-25 {1} no hierarchical namespace: {2}. Soft delete blocks requests through the Data Lake Storage endpoint (dfs.core.windows.net) of such an account, and an upgrade to a hierarchical namespace while it is on, so the email asks the client to confirm no application uses that endpoint.' -f (Get-Count $flat.Count 'storage account' 'storage accounts'), (Get-Pick $flat.Count 'has' 'have'), (@($flat | ForEach-Object { & $where $_ }) -join ' / '))) }
+            $notes.Add('CR-25 changes the data protection settings only. CR-07 and CR-18 change anonymous access on some of the same accounts and stay separate changes.')
+            $notes.Add('Verify CR-25 with the next pack: DP.1-SOFTDELETE should read BlobSoftDelete and ContainerSoftDelete On for each account changed.')
+            & $partialNote
+
+            $resources = @($inScope | ForEach-Object { New-Resource $_.Name $_.ResourceGroup $_.SubscriptionId (& $setting $_) $_.ResourceId })
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add((Get-OpenStep $m 'Storage accounts' 'storage account'))
+            $impl.Add('Go to Data management > Data protection. In the Recovery section, record in the change record whether Enable soft delete for blobs and Enable soft delete for containers are selected, with the retention period of each, for the rollback. If both are already selected, or the account was removed since collection, leave it unchanged, note it in the change record and skip the remaining steps for it.')
+            $impl.Add('Go to Data management > Lifecycle management and compare the rules with those the RESOURCES section records. With soft delete on, each blob a rule deletes is kept and billed for the retention period, so leave the account unchanged and note it if a rule that deletes blobs was added since collection and the client has not seen it.')
+            $impl.Add('Leave the account unchanged and note it if the client asked to keep it out of the change, or named an application that reaches it through the Data Lake Storage endpoint (dfs.core.windows.net) while it has no hierarchical namespace, since soft delete blocks that endpoint on such an account.')
+            $impl.Add(('Go back to Data management > Data protection. If Enable soft delete for blobs is not selected, select it and set its retention period to {0}. If Enable soft delete for containers is not selected, select it and set its retention period to {0}. Leave a setting that is already selected, and its retention period, as it is, and select Save.' -f $dayText))
+            Add-RepeatStep $impl $m 1 'storage account'
+            $testing = @(
+                ('In the Azure portal, open {0} and go to Data management > Data protection.' -f (Get-EachStep $m 'storage account'))
+                ('Confirm Enable soft delete for blobs and Enable soft delete for containers are both selected, each one the change turned on with a retention period of {0} and each one already on with the retention period recorded in implementation step 2, apart from any account left unchanged and noted in the change record.' -f $dayText))
+            $rollback = @(
+                'In the Azure portal, open the storage account to revert and go to Data management > Data protection.'
+                'Clear only the settings the change turned on, as recorded in implementation step 2, leave a setting the account had before as it is, and select Save.'
+                'A blob or container deleted before the rollback stays soft deleted, restorable and billed until its own retention period ends. Turning soft delete off does not remove it sooner.')
+
+            # The client email.
+            $effect = [System.Collections.Generic.List[string]]::new()
+            $effect.Add('Deleted data is billed as storage at the same rate as the rest of your data until its retention period ends, so the cost grows with the amount of data deleted or overwritten. An account where data is deleted or overwritten often, such as one that stages logs or backups, can cost noticeably more.')
+            if ($deleting.Count) { $effect.Add(('{0} lifecycle rules that delete blobs on a schedule. With soft delete on, each blob a rule deletes is kept for the retention period too, and billed until it ends.' -f $(if ($deleting.Count -eq $m) { Get-Pick $m 'The account has' 'Each of these accounts has' } else { '{0} of these accounts {1}' -f $deleting.Count, (Get-Pick $deleting.Count 'has' 'have') }))) }
+            if ($kept.Count) { $effect.Add(('Where an account already has one of the two settings on, it keeps that setting with its retention period and only the missing one is turned on, which applies to {0}.' -f $(if ($kept.Count -eq $m) { Get-Pick $m 'the account' 'every account listed' } else { Get-Count $kept.Count 'account' 'accounts' }))) }
+            $effect.Add('Applications that read and write these accounts keep working as they do today, and one that lists blobs including deleted ones will also see the deleted blobs during the retention period.')
+            if ($flat.Count) { $effect.Add(('On an account without a hierarchical namespace, which {0}, soft delete blocks requests made through the Data Lake Storage endpoint, dfs.core.windows.net, which then fail, and it blocks an upgrade of the account to a hierarchical namespace while it is on.' -f $(if ($flat.Count -eq $m) { Get-Pick $m 'this account is' 'all of these accounts are' } else { '{0} of these accounts {1}' -f $flat.Count, (Get-Pick $flat.Count 'is' 'are') }))) }
+            if ($cacheOut.Count) { $effect.Add(('I left out {0} that Azure Site Recovery uses as cache storage, since Microsoft does not support soft delete there.' -f (Get-Pick $cacheOut.Count 'the storage account' ('the {0} storage accounts' -f $cacheOut.Count)))) }
+            $effect.Add((Get-Pick $m 'Just before the change, I will check the account again and leave it unchanged if its settings have changed since my review.' 'Just before the change, I will check each account again and skip any whose settings have changed since my review.'))
+            $flatAsk = if ($flat.Count) { ' Could you also confirm that no application reaches {0} through the Data Lake Storage endpoint?' -f $(if ($flat.Count -eq $m) { Get-Pick $m 'the account' 'these accounts' } else { Get-Pick $flat.Count 'the account without a hierarchical namespace' 'the accounts without a hierarchical namespace' }) } else { '' }
+            $email = New-ApprovalEmail -Subject 'soft delete for Azure Blob Storage' `
+                -Change @(('I would like to turn on soft delete for blobs and containers on {0}, with a retention period of {1}.' -f (Get-Yours $m 'storage accounts'), $dayText), ('Soft delete keeps a deleted blob or container for the retention period, so it can be restored until the period ends.')) `
+                -Why ('I recommend this change because a blob or container deleted by mistake, by an application fault or by someone misusing access cannot be recovered from {0} today. Microsoft recommends turning on both, with a retention period of at least seven days.' -f (Get-Pick $m 'this account' 'these accounts')) `
+                -Effect $effect.ToArray() `
+                -Listed $(if ($m -eq 1) { 'The account is listed below with what it has on today and its lifecycle rules:' } else { 'The {0} accounts are listed below by subscription, with what each has on today and its lifecycle rules:' -f $m }) `
+                -Resources (Get-EmailResourceList $resources $settingLabel) `
+                -Reversal ('Soft delete can be turned off again at any time. Data deleted before then stays restorable, and billed, until its own retention period ends.') `
+                -Ask ('Before I schedule the change, could you confirm the retention period of {0}, or tell me the period you prefer, and tell me which accounts to leave out because data there is deleted or overwritten often, such as accounts that stage logs or backups?{1} With that confirmed, could you approve this change for {2}?' -f $dayText, $flatAsk, $proposedDay)
+            @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
+                    Number = 25; Key = 'blob-soft-delete'; Title = 'Turn on blob and container soft delete on storage accounts'
+                    Description = 'Turn on blob soft delete and container soft delete with a retention period of {0} on {1}. An account that already has one of them keeps it with its retention period and gets only the one it is missing.' -f $dayText, (Get-Listed $m 'storage account' 'storage accounts')
+                    Purpose = 'Soft delete keeps a deleted blob or container for the retention period, so it can be restored until the period ends. Deleted data is billed as storage at the same rate as active data until then.'
+                    ResourceIntro = '{0} below {1} blob soft delete, container soft delete or both off at collection. Each shows what it has on, its lifecycle rules, which decide how much deleted data soft delete keeps, and whether it has a hierarchical namespace.' -f $(if ($m -eq 1) { 'The storage account' } else { "The $m storage accounts" }), (Get-Pick $m 'has' 'have')
+                    ResourceLines = Format-ResourceList $resources
+                    Availability = 'No impact, since soft delete changes only what happens to data after it is deleted or overwritten.'
+                    UserExperience = $(if ($flat.Count) { 'None for people, while an application that lists deleted blobs sees them during the retention period and a request through the Data Lake Storage endpoint of an account without a hierarchical namespace fails.' } else { 'None for people, while an application that lists deleted blobs sees them during the retention period.' })
+                    Dependencies = $(if ($flat.Count) { 'Needs the client to confirm the retention period, the accounts to leave out and that no application uses the Data Lake Storage endpoint of an account without a hierarchical namespace.' } else { 'Needs the client to confirm the retention period and the accounts to leave out, such as ones that stage logs or backups.' })
+                    Implementation = $impl.ToArray()
+                    Testing = $testing
+                    Rollback = $rollback
+                    References = @(
+                        , @('Soft delete for blobs', 'https://learn.microsoft.com/azure/storage/blobs/soft-delete-blob-overview')
+                        , @('Enable soft delete for blobs', 'https://learn.microsoft.com/azure/storage/blobs/soft-delete-blob-enable')
+                        , @('Soft delete for containers', 'https://learn.microsoft.com/azure/storage/blobs/soft-delete-container-overview')
+                        , @('Enable and manage soft delete for containers', 'https://learn.microsoft.com/azure/storage/blobs/soft-delete-container-enable')
+                        , @('Lifecycle management policies that delete blobs', 'https://learn.microsoft.com/azure/storage/blobs/lifecycle-management-policy-delete')
+                        , @('Data protection overview', 'https://learn.microsoft.com/azure/storage/blobs/data-protection-overview')
+                        , @('Blob Storage feature support in Azure Storage accounts', 'https://learn.microsoft.com/azure/storage/blobs/storage-feature-support-in-storage-accounts')
+                        , @('Support matrix for Azure VM disaster recovery between Azure regions, cache storage', 'https://learn.microsoft.com/azure/site-recovery/azure-to-azure-support-matrix#cache-storage'))
+                    Csv = $resources
                     Email = $email
                 } } } }
 )
