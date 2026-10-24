@@ -4304,6 +4304,7 @@ $catalog = @(
             $sides = @(@{ Id = 'IA.17-RBAC'; Name = 'Azure' })
             $read = Test-RoleSides $sides $notes 'CR-26' 'enabled guests'
             # The Microsoft Entra roles guests hold are named for review and never changed here.
+            $entraRoles = @()
             if (Test-ResultRead 'IA.17-ENTRA') {
                 $entraRoles = @(Get-RoleRows 'IA.17-ENTRA' 'Microsoft Entra' $guests $true)
                 if ($entraRoles.Count) {
@@ -4334,7 +4335,24 @@ $catalog = @(
             }
             $azure = @($azureAll | Where-Object { (Get-Text $_.HeldThrough) -eq 'Direct' })
             $split = Get-RoleGroupSplit $azureAll
-            $memberships = $split.Memberships; $fixed = $split.Fixed
+            # Leaving a group takes away every role it gives, Microsoft Entra roles included, and CR-26 never changes an
+            # Entra role. A membership through which IA.17-ENTRA shows the guest holding an Entra role is held for a
+            # separate change, and so is every membership when the Entra roles were not read in full, since one could be
+            # missing.
+            $entraComplete = (Test-ResultRead 'IA.17-ENTRA') -and (Get-Status 'IA.17-ENTRA') -in 'OK', 'EMPTY'
+            $msKey = { param([string]$PrincipalId, [string]$GroupId) '{0}|{1}' -f $PrincipalId.ToLowerInvariant(), $GroupId.ToLowerInvariant() }
+            $entraThrough = @{}
+            foreach ($r in @($entraRoles | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' -and (Get-Text $_.MemberOfId) })) { $entraThrough[(& $msKey (Get-Text $r.PrincipalId) (Get-Text $r.MemberOfId))] = $true }
+            $heldMs = @($split.Memberships | Where-Object { -not $entraComplete -or $entraThrough.ContainsKey((& $msKey (Get-Text $_.Account.PrincipalId) $_.MemberOfId)) })
+            if ($heldMs.Count) {
+                $heldRows = @($heldMs | ForEach-Object { $_.Rows })
+                foreach ($r in $heldRows) { $r | Add-Member -NotePropertyName EntraHeld -NotePropertyValue $true -Force }
+                $split.Memberships = @($split.Memberships | Where-Object { $_ -notin $heldMs })
+                $split.Removable = @($split.Removable | Where-Object { $_ -notin $heldRows })
+                $split.K = @($split.Memberships | ForEach-Object { (Get-Text $_.Account.PrincipalId).ToLowerInvariant() } | Sort-Object -Unique).Count
+                $notes.Add(('CR-26 leaves {0} unchanged, since leaving the group would also take away {1}, which CR-26 does not change: {2}. Review {3} with the Microsoft Entra roles in a separate change.' -f (Get-Count $heldMs.Count 'group membership' 'group memberships'), $(if ($entraComplete) { 'a Microsoft Entra role the group gives the guest' } else { 'any Microsoft Entra role the group gives the guest, and IA.17-ENTRA was not read in full' }), (@($heldMs | ForEach-Object { '{0} from {1}' -f (Get-RoleHolder $_.Account), (Get-RoleMembershipWords $_) }) -join ' / '), (Get-Pick $heldMs.Count 'it' 'them')))
+            }
+            $memberships = $split.Memberships; $fixed = @($split.Fixed) + @($heldMs | ForEach-Object { $_.Rows })
             $inScope = @($azure) + @($split.Removable)
             Add-RoleGroupNotes $notes $split 'CR-26' 'guest' 'guests' 'guest'
             if ($read['IA.17-RBAC']) { Add-AzureRoleReadNotes $notes 'IA.17-RBAC' 'CR-26' 'guest' 'guests' }
@@ -4407,7 +4425,8 @@ $catalog = @(
                     [pscustomobject]@{
                         Guest = ConvertTo-SheetText (ConvertTo-CopyText $_.DisplayName); SignInName = ConvertTo-SheetText (ConvertTo-CopyText $_.UserPrincipalName); ObjectId = Get-Text $_.PrincipalId
                         Created = & $dayOf $g.CreatedDateUtc; LastSignIn = & $signInOf $g; Role = ConvertTo-SheetText (ConvertTo-CopyText $_.Role); Scope = ConvertTo-SheetText (Get-AzureRoleWhere $_)
-                        Detail = ConvertTo-SheetText (Get-RoleDetailWords $_); HeldThrough = ConvertTo-SheetText (Get-RoleHeldWords $_); IfRemoved = ConvertTo-SheetText (Get-RoleActionWords $_)
+                        Detail = ConvertTo-SheetText (Get-RoleDetailWords $_); HeldThrough = ConvertTo-SheetText (Get-RoleHeldWords $_)
+                        IfRemoved = ConvertTo-SheetText $(if ($_.PSObject.Properties['EntraHeld']) { 'None in this change, leaving group {0} would also take away a Microsoft Entra role' -f (ConvertTo-CopyText $_.MemberOfName) } else { Get-RoleActionWords $_ })
                         Decision = & $answerOf (Get-Text $_.PrincipalId).ToLowerInvariant() } } |
                     Sort-Object Guest, SignInName, Scope, Role, Detail)
             $emailCsv = @($emailRows | ConvertTo-Csv -NoTypeInformation)
@@ -4426,7 +4445,8 @@ $catalog = @(
                 ('A guest whose roles are removed can no longer reach the Azure resources listed for it, straight away, so any work it does there for you stops until a role is given back.')
                 ('{0} stays in your directory, since deleting a guest account is a separate decision, and so does anything it can use outside these Azure roles.' -f (Get-Pick $m 'The guest account itself' 'Each guest account itself'))
                 $(if ($memberships.Count) { 'Where a group gives a guest its role, I would remove the guest from the group rather than take the role away from the group, so its other members keep their access. Leaving the group also ends anything else the group gives that guest.' })
-                $(if ($fixed.Count) { '{0} a role through a group whose members come from a rule or from your on-premises directory, which I cannot change in the group itself, so I would leave {1} as {2}, marked in the attached file, for a separate review with you.' -f (Get-Count $split.FixedAccounts 'guest holds' 'guests hold'), (Get-Pick $split.FixedAccounts 'it' 'them'), (Get-Pick $split.FixedAccounts 'it is' 'they are') })
+                $(if ($heldMs.Count) { 'Where leaving a group would also take away a Microsoft Entra role the group gives a guest{0}, I would leave that membership as it is, marked in the attached file, so it can be reviewed with the Microsoft Entra roles in a separate change.' -f $(if ($entraComplete) { '' } else { ', which I could not fully check this time' }) })
+                $(if ($split.Fixed.Count) { '{0} a role through a group whose members come from a rule or from your on-premises directory, which I cannot change in the group itself, so I would leave {1} as {2}, marked in the attached file, for a separate review with you.' -f (Get-Count $split.FixedAccounts 'guest holds' 'guests hold'), (Get-Pick $split.FixedAccounts 'it' 'them'), (Get-Pick $split.FixedAccounts 'it is' 'they are') })
                 'Just before the change, I will check each guest again, confirm it is still a guest that holds the role, and skip any that has changed since my review.')
             $explainGuest = 'A guest account is an account for someone outside your organization, such as a vendor or partner, who usually signs in with an account their own organization or provider manages.'
             $email = New-ApprovalEmail -Subject 'removing the Azure roles held by guest accounts' `

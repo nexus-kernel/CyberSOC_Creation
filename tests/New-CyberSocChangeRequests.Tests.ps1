@@ -4857,6 +4857,33 @@ Describe 'Azure roles removed from guest accounts (CR-26, collector 1.21.0)' {
         $r.Index | Should -Match '- The Azure roles of the enabled guests are unknown, not a zero, because IA\.17-RBAC could not be used: it reads FAILED'
     }
 
+    It 'leaves a group membership unchanged when leaving the group would also take away a Microsoft Entra role, or the Entra roles were not read in full' {
+        $partner = Get-GrGuest 'Partner Analyst'
+        $azureRow = @($gr.Rbac | Where-Object PrincipalId -eq $partner.PrincipalId)[0]
+        $entraViaGroup = $azureRow | Select-Object * -ExcludeProperty subscriptionId, resourceGroup, ScopeLevel, Scope, Condition, ConditionVersion
+        $entraViaGroup | Add-Member -NotePropertyName DirectoryScope -NotePropertyValue '/'
+        $entraViaGroup | Add-Member -NotePropertyName AssignmentType -NotePropertyValue 'Standing'
+        $entraViaGroup | Add-Member -NotePropertyName EndDateUtc -NotePropertyValue ''
+        $entraViaGroup | Add-Member -NotePropertyName PimRead -NotePropertyValue 'Yes'
+        $entraViaGroup.Role = 'Directory Readers'; $entraViaGroup.RoleDefinitionId = '88d8e3e3-8f55-4a1e-953a-9b9898b8876b'; $entraViaGroup.AssignmentId = 'entra-through-ext-vendors'
+        $cases = @(
+            @{ Name = 'entra-group'; Before = { param($p) Set-PackResult $p 'IA.17-ENTRA' (@($gr.Entra) + @($entraViaGroup)) }; Why = 'a Microsoft Entra role the group gives the guest' }
+            @{ Name = 'entra-partial'; Before = { param($p) Set-PackResult $p 'IA.17-ENTRA' @($gr.Entra) -Status 'PARTIAL' -Detail 'Eligible assignments not visible, needs RoleManagement.Read.Directory.' }; Why = 'any Microsoft Entra role the group gives the guest, and IA.17-ENTRA was not read in full' })
+        foreach ($case in $cases) {
+            $r = New-GrPack $case.Name -Before $case.Before
+            $text = Get-Cr26 $r.Out
+            (Get-Section $text 'C) RESOURCES') -join "`n" | Should -Not -Match 'Group memberships removed' -Because "$($case.Name): the guest stays in the group"
+            (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n" | Should -Not -Match 'For each group membership listed' -Because $case.Name
+            $r.Index | Should -Match ('- CR-26 leaves 1 group membership unchanged, since leaving the group would also take away {0}, which CR-26 does not change: Partner Analyst \([^)]+\) from group ext-tier2 ' -f [regex]::Escape($case.Why))
+            $r.Index | Should -Not -Match 'CR-26 removes it from the group it sits in' -Because $case.Name
+            $email = Get-Cr26 $r.Out '.email.txt'
+            Assert-ApprovalEmail $email "CR-26 $($case.Name)"
+            $email | Should -Match 'Where leaving a group would also take away a Microsoft Entra role the group gives a guest'
+            $email | Should -Not -Match 'Where a group gives a guest its role, I would remove the guest from the group'
+            (@(Import-Csv (Join-Path $r.Out 'CR-26-guest-roles.email.csv')) | Where-Object Guest -eq 'Partner Analyst').IfRemoved | Should -Be 'None in this change, leaving group ext-tier2 would also take away a Microsoft Entra role'
+        }
+    }
+
     It 'says when the last sign-in could not be read' {
         $r = New-GrPack 'no-signin' -Before { param($p) Set-PackResult $p 'IA.17-GUESTS' @($gr.Guests | ForEach-Object { $g = $_ | Select-Object *; $g.SignInRead = 'No'; $g.LastSuccessfulSignInUtc = $null; $g }) }
         (Get-Section (Get-Cr26 $r.Out) 'C) RESOURCES') -join "`n" | Should -Match '- Vendor Support [^\n]+, created 2025-02-03, last sign-in not read\n'
