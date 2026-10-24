@@ -79,7 +79,8 @@ missing evidence never becomes a favorable zero.
    management, CR-22, turning on periodic assessment in Azure Update Manager on the virtual machines without it,
    CR-23, disabling, never deleting, the stale Microsoft Entra devices, CR-24, turning on blob and container soft
    delete on the storage accounts without them, CR-25, and removing the Azure roles held by guest accounts the client
-   no longer needs, CR-26), and a ready-to-send client email for
+   no longer needs, CR-26), a template that assigns the guardrail policies keeping those settings in place once a change
+   has nothing left to fix, CR-27, and a ready-to-send client email for
    every change request. The CR-19 email names the accounts and their roles in a CSV written beside it, to attach, since
    the list can be long, and the CR-24 and CR-26 emails name the devices and the guests the same way. Every email asks for the
    client's approval and reads as a letter, with no titles and each paragraph opening in its own words, in one order:
@@ -175,7 +176,15 @@ missing evidence never becomes a favorable zero.
    the Azure resources listed while its guest account stays in the directory, and asks Keep or Remove for each guest in
    the Decision column of the attached CSV. A guest without an answer stays out of the change. Run the generator again
    with `-GuestDecisions` and the returned file, saved outside `05-change-requests`, and CR-26 lists only the guests
-   marked Remove. The emergency access guests are never in the change. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
+   marked Remove. The emergency access guests are never in the change. CR-27 (collector 1.22.0) is the first tier 2
+   template: for each remediation change request that reads "No gaps found", with nothing left out and its results read
+   in full, it offers the built-in Azure Policy definition that keeps the setting in place on new and updated resources
+   (Deny or Audit, and Modify for anonymous blob access and periodic assessment), unless it is already enforced over
+   every subscription, with the scope, Deny or Audit and the non-compliance message left as placeholders,
+   `[DECISION: NAME]`, for the client's answers. Its email asks those before the approval, says a deployment pipeline that
+   creates a resource without the setting fails with Deny and how a team asks for an exception, and the index names the
+   resources that would still fail each policy it holds back, since a Deny assigned before the remediation blocks routine
+   updates. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
    account the collection read as disabled, after checking that the account still shows as disabled. Its email lists
    each account with its roles, the Azure roles by subscription and the Entra roles on their own, says nobody loses
    access today, since the accounts cannot sign in, offers to restore any role from the record, and asks whether any

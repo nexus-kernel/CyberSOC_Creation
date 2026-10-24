@@ -22,7 +22,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
   (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
 - **Emergency access accounts.** Every account with Atmosera in its UPN or in an Atmosera group (IA.16-ACCOUNTS and
   IA.16-GROUPS), which every Conditional Access change excludes. See the collector 1.12.0 notes below.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.21.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.22.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -341,6 +341,21 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.22.0 (October 24, 2026): `POS.9-GUARDRAILS` (engine `ARG`, phase P3 Posture) reads the
+  assignments of the built-in policy definitions that guard a remediation change request, for the guardrail template
+  CR-27. The ARG engine now sends a catalog item's `ScopeFilter` as the Resource Graph `authorizationScopeFilter`, and
+  this read uses `AtScopeAboveAndBelow`, so an assignment at a management group or the root above the subscriptions is
+  listed too. Internal, since it names assignments and scopes.
+  - One row per assignment and subscription it covers, joined with each subscription's management group chain:
+    `AssignmentId`, `AssignmentName`, `DisplayName`, `Definition`, `Scope`, `ScopeLevel`, `subscriptionId`,
+    `EnforcementMode`, `Effect` (empty at the definition default), `Parameters` (every parameter the assignment sets, as
+    JSON), `NotScopes` and `NonComplianceMessage`. The
+    definitions are secure transfer, storage minimum TLS, Azure SQL minimum TLS, Key Vault deletion protection,
+    storage account public access (Deny and Modify), App Service HTTPS only, encryption at host and periodic
+    assessment (Modify). An assignment of an initiative that holds one of them is not read.
+  - Through Lighthouse it reads PARTIAL, with a detail that says management groups are not delegated, so an empty
+    read never reads as no assignment. The `{{MRG}}` exclusion applies as on every Resource Graph query.
+  CR-27 asks for recollection on an earlier pack. The query is in section 6 of the CyberSOC Monthly Report Runbook.
 - CyberSOC collector 1.21.0 (October 24, 2026): `IA.17-GUESTS` (engine `GUEST-ROLES`, phase P2 Identity) reads the
   guest accounts that are still enabled, for change request CR-26, which removes the Azure roles guests no longer need.
   Disabled guests are already in IA.15. The engine of IA.15 moves into `Get-EbrUserRoles`, which both reads share, and
