@@ -4566,7 +4566,8 @@ $catalog = @(
                 @{ Crs = @(2); Name = 'Secure transfer to storage accounts should be enabled'; Id = '404c3081-a854-4457-ae30-26a93ef643f9'; Kind = 'Deny'; Sources = @('DP.1-DETAIL'); Noun = @('storage account', 'storage accounts')
                     Rows = { @(Get-Rows 'DP.1-DETAIL' | Where-Object { -not (Test-True $_.SecureTransfer) }) }; Email = 'for a storage account that does not require secure transfer, which all of yours require today'; Page = $storagePage }
                 @{ Crs = @(3); Name = 'Storage accounts should have the specified minimum TLS version'; Id = 'fe83a0eb-a853-422d-aac2-1bffd182c5d0'; Kind = 'Deny'; Sources = @('DP.1-DETAIL'); Noun = @('storage account', 'storage accounts')
-                    Rows = { @(Get-Rows 'DP.1-DETAIL' | Where-Object { (Get-Text $_.MinimumTlsVersion) -notin 'TLS1_2', 'TLS1_3' }) }; Email = 'for a storage account whose minimum TLS version is below 1.2, which none of yours is today'; Parameter = 'the minimum TLS version parameter set to TLS 1.2'; Page = $storagePage }
+                    Rows = { @(Get-Rows 'DP.1-DETAIL' | Where-Object { (Get-Text $_.MinimumTlsVersion) -notin 'TLS1_2', 'TLS1_3' }) }; Email = 'for a storage account whose minimum TLS version is below 1.2, which none of yours is today'; Parameter = 'the minimum TLS version parameter set to TLS 1.2'; Page = $storagePage
+                    Accept = @{ minimumTlsVersion = @('TLS1_2') } }
                 @{ Crs = @(5); Name = 'Azure SQL Database should be running TLS version 1.2 or newer'; Id = '32e6bbec-16b6-44c2-be37-c5b672d103cf'; Kind = 'Deny'; Sources = @('NB.6-DETAIL'); Noun = @('Azure SQL server', 'Azure SQL servers')
                     Rows = { @(Get-Rows 'NB.6-DETAIL') }; Email = 'for an Azure SQL server whose minimum TLS version is below 1.2, which none of yours is today'; Page = @('Azure Policy built-in definitions for Azure SQL Database and SQL Managed Instance', 'https://learn.microsoft.com/azure/azure-sql/database/policy-reference') }
                 @{ Crs = @(6); Name = 'Key vaults should have deletion protection enabled'; Id = '0b60c0b2-2dc2-4e1c-b5c9-abbed971de53'; Kind = 'Deny'; Sources = @('DP.2-DETAIL'); Noun = @('key vault', 'key vaults')
@@ -4591,21 +4592,68 @@ $catalog = @(
                 # parameter, so the client's Audit is Policy enforcement Disabled.
                 @{ Crs = @(23); Name = 'Configure periodic checking for missing system updates on azure virtual machines'; Id = '59efceea-0c96-497e-a4a1-4eb2290dac15'; Kind = 'Modify'; NoEffect = $true; Sources = @('EW.10-ASSESSMENT'); Noun = @('virtual machine', 'virtual machines')
                     Rows = { @(Get-Rows 'EW.10-ASSESSMENT' | Where-Object { (Get-Text $_.AssessmentMode) -ine 'AutomaticByPlatform' }) }; Email = 'which turns periodic assessment on for a new or updated virtual machine instead of refusing it, so a machine rebuilt from its image keeps it'; Parameter = 'one assignment with OS Type set to Windows and one with Linux, each with Assessment mode left at AutomaticByPlatform'; Page = $vmPage
+                    # Assessment mode is AutomaticByPlatform by default (Automate assessment at scale by using Azure Policy), and an
+                    # assignment narrowed to some locations or tags leaves the other machines out.
+                    Accept = @{ assessmentMode = @('', 'AutomaticByPlatform'); locations = @(''); tagValues = @(''); tagOperator = @('', 'Any', 'All') }; Variants = @{ Name = 'osType'; Values = @('Windows', 'Linux') }
                     Extra = , @('Automate assessment at scale by using Azure Policy', 'https://learn.microsoft.com/azure/update-manager/periodic-assessment-at-scale') })
             $notes = [System.Collections.Generic.List[string]]::new()
             $notes.Add('CR-04 has no guardrail: no built-in policy definition denies an App Service app whose minimum TLS version is below 1.2, since App Service apps should use the latest TLS version (f0e6e85b-9b9f-4a4b-b67b-f730d42f1b0b) only audits (AuditIfNotExists).')
             # The assignments the pack found. One is in force over a subscription when it covers it from the subscription or a
-            # management group above it, enforces, excludes nothing and sets the enforcing effect: Deny, or Modify, which a
-            # definition without an effect parameter always applies.
+            # management group above it, enforces, excludes nothing, sets the enforcing effect (Deny, or Modify, which a
+            # definition without an effect parameter always applies) and sets no other parameter to a value that narrows it:
+            # Accept lists the values each parameter may hold (empty for left at the default), and a parameter it does not list,
+            # or parameters that were not read, mean the assignment is not counted. A definition with Variants, such as the
+            # OS type of the periodic assessment policy, needs one such assignment for each value.
             $subscriptions = @($parameters.Subscriptions | ForEach-Object { (ConvertTo-CopyText $_).ToLowerInvariant() } | Where-Object { $_ } | Sort-Object -Unique)
             $assigned = @(Get-Rows 'POS.9-GUARDRAILS')
+            $paramsOf = { param($a)
+                if (-not $a.PSObject.Properties['Parameters']) { return $null }
+                $values = @{}
+                $text = Get-Text $a.Parameters
+                if (-not $text) { return $values }
+                try { $json = $text | ConvertFrom-Json } catch { return $null }
+                foreach ($p in @($json.PSObject.Properties)) {
+                    $v = if ($null -ne $p.Value -and $p.Value.PSObject.Properties['value']) { $p.Value.value } else { $p.Value }
+                    $values[$p.Name] = if ($null -eq $v) { '' } elseif ($v -is [string] -or $v -is [ValueType]) { [string]$v } elseif (@($v).Count -eq 0 -or ($v -is [pscustomobject] -and -not @($v.PSObject.Properties).Count)) { '' } else { ConvertTo-Json -InputObject $v -Compress -Depth 5 }
+                }
+                $values }
             $enforcing = { param($g, $a)
                 $effect = Get-Text $a.Effect
-                (Get-Text $a.ScopeLevel) -in 'ManagementGroup', 'Subscription' -and (Get-Text $a.EnforcementMode) -ine 'DoNotEnforce' -and -not (Get-Text $a.NotScopes) -and
-                $(if ($g.Kind -eq 'Deny') { $effect -ieq 'Deny' } elseif ($g.NoEffect) { -not $effect -or $effect -ieq 'Modify' } else { $effect -ieq 'Modify' }) }
+                if ((Get-Text $a.ScopeLevel) -notin 'ManagementGroup', 'Subscription' -or (Get-Text $a.EnforcementMode) -ieq 'DoNotEnforce' -or (Get-Text $a.NotScopes)) { return $false }
+                if (-not $(if ($g.Kind -eq 'Deny') { $effect -ieq 'Deny' } elseif ($g.NoEffect) { -not $effect -or $effect -ieq 'Modify' } else { $effect -ieq 'Modify' })) { return $false }
+                $accept = if ($g.Accept) { $g.Accept } else { @{} }
+                $values = & $paramsOf $a
+                if ($null -eq $values) { return -not $accept.Count -and -not $g.Variants }
+                foreach ($k in @($values.Keys)) {
+                    if ($k -ieq 'effect' -or ($g.Variants -and $k -ieq $g.Variants.Name)) { continue }
+                    $allowed = @($accept.Keys | Where-Object { $_ -ieq $k } | ForEach-Object { $accept[$_] })
+                    if (-not $allowed.Count -or $values[$k] -notin $allowed) { return $false }
+                }
+                foreach ($k in @($accept.Keys)) { if ('' -notin $accept[$k] -and -not @($values.Keys | Where-Object { $_ -ieq $k }).Count) { return $false } }
+                if ($g.Variants) {
+                    $variant = @($values.Keys | Where-Object { $_ -ieq $g.Variants.Name } | ForEach-Object { $values[$_] })
+                    if (-not $variant.Count -or $variant[0] -notin $g.Variants.Values) { return $false }
+                }
+                $true }
+            # The subscriptions an enforcing assignment covers, for every value a definition with Variants needs.
+            $coveredBy = { param($g, $mine)
+                $on = @($mine | Where-Object { & $enforcing $g $_ })
+                $groups = [System.Collections.Generic.List[object]]::new()
+                if ($g.Variants) {
+                    foreach ($value in $g.Variants.Values) {
+                        $groups.Add(@($on | Where-Object { $v = & $paramsOf $_; @($v.Keys | Where-Object { $_ -ieq $g.Variants.Name } | ForEach-Object { $v[$_] }) -icontains $value }))
+                    }
+                }
+                else { $groups.Add($on) }
+                @(foreach ($s in $subscriptions) {
+                        $all = $true
+                        foreach ($group in $groups) { if (-not @($group | Where-Object { (Get-Text $_.subscriptionId).ToLowerInvariant() -eq $s }).Count) { $all = $false } }
+                        if ($all) { $s } }) }
             $assignmentText = { param($a)
                 $mode = if ((Get-Text $a.EnforcementMode) -ieq 'DoNotEnforce') { 'enforcement Disabled' } else { 'enforcement Enabled' }
-                '{0} at {1}, effect {2}, {3}{4}' -f $(if (Get-Text $a.DisplayName) { ConvertTo-CopyText $a.DisplayName } else { ConvertTo-CopyText $a.AssignmentName }), (ConvertTo-CopyText $a.Scope), $(if (Get-Text $a.Effect) { ConvertTo-CopyText $a.Effect } else { 'the definition default' }), $mode, $(if (Get-Text $a.NotScopes) { ', excluding ' + (ConvertTo-CopyText $a.NotScopes) } else { '' }) }
+                $values = & $paramsOf $a
+                $others = if ($null -eq $values) { '' } else { @($values.Keys | Where-Object { $_ -ine 'effect' } | Sort-Object | ForEach-Object { '{0} {1}' -f $_, $(if ($values[$_]) { ConvertTo-CopyText $values[$_] } else { 'empty' }) }) -join ', ' }
+                '{0} at {1}, effect {2}, {3}{4}{5}' -f $(if (Get-Text $a.DisplayName) { ConvertTo-CopyText $a.DisplayName } else { ConvertTo-CopyText $a.AssignmentName }), (ConvertTo-CopyText $a.Scope), $(if (Get-Text $a.Effect) { ConvertTo-CopyText $a.Effect } else { 'the definition default' }), $mode, $(if ($others) { ', ' + $others } else { '' }), $(if (Get-Text $a.NotScopes) { ', excluding ' + (ConvertTo-CopyText $a.NotScopes) } else { '' }) }
             $offered = [System.Collections.Generic.List[object]]::new()
             $inForce = 0
             foreach ($g in $guardrails) {
@@ -4625,7 +4673,7 @@ $catalog = @(
                     if ($why) { $notes.Add(('{0} is not offered, since {1}. A Modify that turns anonymous access off on new and updated accounts waits until the container access levels are read in full and no container anyone can read remains.' -f $label, $why)); continue }
                 }
                 $mine = @($assigned | Where-Object { (Get-Text $_.Definition).ToLowerInvariant() -eq $g.Id })
-                $covered = @($mine | Where-Object { & $enforcing $g $_ } | ForEach-Object { (Get-Text $_.subscriptionId).ToLowerInvariant() } | Sort-Object -Unique)
+                $covered = @(& $coveredBy $g $mine)
                 $byAssignment = @($mine | Group-Object { (Get-Text $_.AssignmentId).ToLowerInvariant() } | ForEach-Object { $_.Group[0] } | Sort-Object Scope, AssignmentName)
                 if ($subscriptions.Count -and -not @($subscriptions | Where-Object { $_ -notin $covered }).Count) {
                     $inForce++
@@ -4668,7 +4716,7 @@ $catalog = @(
             $first = $impl.Count + 1
             $impl.Add(('In the Azure portal, go to Policy > Assignments and select Assign policy. Where the RESOURCES section lists an assignment of the definition at {0} already, open that assignment and select Edit assignment instead, so the definition is not assigned twice.' -f $scope))
             $impl.Add(('On the Basics tab, set Scope to {0}, select the first policy definition listed in the RESOURCES section by its name and definition ID, and name the assignment ATMO-MXDR-GUARD followed by the change request it follows, such as ATMO-MXDR-GUARD-CR-03.' -f $scope))
-            $impl.Add(('On the Parameters tab, clear Only show parameters that need input or review{0}{1}' -f $(if ($deny.Count) { (', set Effect to {0} on a Deny definition, and set any other parameter the RESOURCES section names for the definition.' -f $effect) } else { ' and set the parameters the RESOURCES section names for the definition.' }), $(if ($modify.Count) { (' For a Modify definition, leave Policy enforcement Enabled on the Basics tab where {0} reads Deny, or set it to Disabled where it reads Audit, so the assignment only reports.' -f $effect) } else { '' })))
+            $impl.Add(('On the Parameters tab, clear Only show parameters that need input or review{0}{1}{2}' -f $(if ($deny.Count) { (', set Effect to {0} on a Deny definition, and set any other parameter the RESOURCES section names for the definition.' -f $effect) } else { ' and set the parameters the RESOURCES section names for the definition.' }), $(if ($deny.Count) { ' For a Deny definition, set Policy enforcement on the Basics tab to Enabled, which an existing assignment may read as Disabled.' } else { '' }), $(if ($modify.Count) { (' For a Modify definition, set Policy enforcement on the Basics tab to Enabled where {0} reads Deny, or to Disabled where it reads Audit, so the assignment only reports.' -f $effect) } else { '' })))
             if ($modify.Count) { $impl.Add('For a Modify definition, on the Remediation tab select Create a Managed Identity with System assigned managed identity, which the portal grants the roles the definition names, and leave Create a remediation task cleared, since no resource in scope needs remediation.') }
             $impl.Add(('On the Non-compliance messages tab, enter {0} as the message.' -f $message))
             $impl.Add('Select Review + create, then Create.')
@@ -4704,7 +4752,7 @@ $catalog = @(
                     Implementation = $impl.ToArray()
                     Testing = @(
                         ('In the Azure portal, go to Policy > Assignments, set the scope to {0} and open each assignment the implementation plan made.' -f $scope)
-                        ('Confirm it names the definition listed in the RESOURCES section, with Effect {0} on the Parameters tab, or Policy enforcement as the implementation plan set it for a Modify definition, and the non-compliance message.' -f $effect)
+                        ('Confirm it names the definition listed in the RESOURCES section and the non-compliance message, and, for a Deny definition, Effect {0} on the Parameters tab with Policy enforcement Enabled, or, for a Modify definition, Policy enforcement as the implementation plan set it.' -f $effect)
                         'After the first compliance scan, which can take up to 30 minutes for a new assignment, open Policy > Compliance and confirm each assignment reads Compliant, since no resource in scope goes without the setting.')
                     Rollback = @(
                         'In the Azure portal, go to Policy > Assignments and open the assignment to revert.'

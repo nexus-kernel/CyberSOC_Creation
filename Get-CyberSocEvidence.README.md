@@ -348,7 +348,8 @@ in the pack (`results/<ID>.csv`).
   listed too. Internal, since it names assignments and scopes.
   - One row per assignment and subscription it covers, joined with each subscription's management group chain:
     `AssignmentId`, `AssignmentName`, `DisplayName`, `Definition`, `Scope`, `ScopeLevel`, `subscriptionId`,
-    `EnforcementMode`, `Effect` (empty at the definition default), `NotScopes` and `NonComplianceMessage`. The
+    `EnforcementMode`, `Effect` (empty at the definition default), `Parameters` (every parameter the assignment sets, as
+    JSON), `NotScopes` and `NonComplianceMessage`. The
     definitions are secure transfer, storage minimum TLS, Azure SQL minimum TLS, Key Vault deletion protection,
     storage account public access (Deny and Modify), App Service HTTPS only, encryption at host and periodic
     assessment (Modify). An assignment of an initiative that holds one of them is not read.
