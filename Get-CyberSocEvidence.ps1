@@ -57,6 +57,8 @@
       - GET  https://api.security.microsoft.com/api/deviceavinfo (the Microsoft Defender Antivirus mode of each device, EW.4-AVMODE)
       - GET  <workspace>/providers/Microsoft.SecurityInsights/alertRules
       - GET  <storage account>/blobServices/default/containers (container access levels, DP.1-CONTAINERS and DP.1-CONTAINERS-DETAIL)
+      - GET  <storage account>/blobServices/default and <storage account>/managementPolicies/default (blob and container soft delete and the lifecycle rules, DP.1-SOFTDELETE)
+      - GET  <Recovery Services vault>/replicationProtectedItems (the Site Recovery cache and log storage accounts, DP.1-SOFTDELETE)
       - GET  <App Service app>/basicPublishingCredentialsPolicies/ftp (FTP basic authentication, NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL)
       - GET  <MySQL flexible server>/configurations/audit_log_enabled, audit_log_events, audit_log_include_users and audit_log_exclude_users (audit parameters, DR.6-MYSQLAUDIT)
       - GET  <Azure Virtual Desktop host pool>/sessionHosts (the virtual machine of each session host, EW.10-ASSESSMENT)
@@ -245,7 +247,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.19.0, based on the EBR collector 1.14.0
+    Version: 1.20.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -295,7 +297,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.19.0'
+$script:EbrVersion = '1.20.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2478,13 +2480,13 @@ resources
 | order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
-    $q.Add((New-EbrQuery -Id 'DP.1-CONTAINERS' -Phase 'P2 Data protection' -Engine 'STORAGE-CONTAINERS' -Title 'Blob container anonymous access levels' -Notes 'Added in 1.11.0. Resource Graph does not index blob containers, so the collector lists them per storage account with a GET on the blobServices/default/containers path of each account (Reader is enough). One row per account: the account-level anonymous access setting, the containers, the containers whose own access level is Blob or Container, and how many of those are readable anonymously today because the account setting allows it. Containers are read in every account, so a public container under an account that blocks anonymous access still counts against the defense in depth control. Since CyberSOC 1.8.0 it also writes DP.1-CONTAINERS-DETAIL, one row per container set to Blob or Container with its subscription, resource group, account, name, access level, the account setting and whether it is readable anonymously today, for change request CR-18. Internal: names accounts and containers, the report embeds counts only.' -Query @'
+    $q.Add((New-EbrQuery -Id 'DP.1-CONTAINERS' -Phase 'P2 Data protection' -Engine 'STORAGE-CONTAINERS' -Title 'Blob container anonymous access levels' -Notes 'Added in 1.11.0. Resource Graph does not index blob containers, so the collector lists them per storage account with a GET on the blobServices/default/containers path of each account (Reader is enough). One row per account: the account-level anonymous access setting, the containers, the containers whose own access level is Blob or Container, and how many of those are readable anonymously today because the account setting allows it. Containers are read in every account, so a public container under an account that blocks anonymous access still counts against the defense in depth control. Since CyberSOC 1.8.0 it also writes DP.1-CONTAINERS-DETAIL, one row per container set to Blob or Container with its subscription, resource group, account, name, access level, the account setting and whether it is readable anonymously today, for change request CR-18. Since CyberSOC 1.20.0 it also writes DP.1-SOFTDELETE in the same pass, one row per storage account with blob soft delete and container soft delete (deleteRetentionPolicy and containerDeleteRetentionPolicy of blobServices/default, enabled and days), the lifecycle management rules (managementPolicies/default, a 404 read as no policy), whether a Recovery Services vault names the account as a Site Recovery cache or log storage account, and a read status, for change request CR-25. FileStorage accounts, which have no blob service, are listed there with no read and get no container listing. Internal: names accounts and containers, the report embeds counts only.' -Query @'
 resources
 | where type =~ "microsoft.storage/storageaccounts"
 | where id !contains "{{MRG}}"
-| where kind !~ "FileStorage"   // no blob service
-| project ResourceId = id, Account = name, resourceGroup, subscriptionId,
-          AllowBlobPublicAccess = tostring(properties.allowBlobPublicAccess)
+| project ResourceId = id, Account = name, resourceGroup, subscriptionId, Kind = kind,
+          AllowBlobPublicAccess = tostring(properties.allowBlobPublicAccess),
+          HnsEnabled = coalesce(tobool(properties.isHnsEnabled), false)
 | order by subscriptionId asc, Account asc
 '@))
 
@@ -4344,6 +4346,103 @@ function Get-EbrBlobContainerRow {
         $row.PublicContainerNames = (@($public | Select-Object -First $NameLimit) -join ', ') + $(if ($public.Count -gt $NameLimit) { ', and {0} more' -f ($public.Count - $NameLimit) } else { '' })
     }
     catch { $row.ReadStatus = [string]$_.Exception.Message }
+    [pscustomobject]$row
+}
+
+function Get-EbrSiteRecoveryStorage {
+    # DP.1-SOFTDELETE (CyberSOC 1.20.0): the storage accounts a Recovery Services vault names as a Site Recovery cache or
+    # log storage account, keyed by lowercase resource ID with the vault names. Site Recovery does not support soft delete
+    # on them, since it creates and deletes log files all the time (Support matrix for Azure VM disaster recovery between
+    # Azure regions, cache storage). Resource Graph lists the vaults, and each is read with a GET on its
+    # replicationProtectedItems, following nextLink. The account is named by primaryStagingAzureStorageAccountId (Azure to
+    # Azure, on each protected disk), recoveryAzureLogStorageAccountId (Hyper-V and the classic VMware provider) or
+    # logStorageAccountId (the modernized VMware and physical server provider). A vault that cannot be read is returned in
+    # Failed, so no account is read as not a cache account while one may be. The query keeps the {{MRG}} exclusion,
+    # expanded here with the run's -ManagedRgPattern as the catalog queries are, since it is not a catalog query.
+    param([string[]]$Subscriptions, [string]$Tenant, [AllowEmptyString()][string]$ManagedRgPattern)
+    $query = @'
+resources
+| where type =~ "microsoft.recoveryservices/vaults"
+| where id !contains "{{MRG}}"
+| project Name = name, resourceGroup, subscriptionId, ResourceId = id
+'@
+    $query = Expand-EbrQuery -Query $query -WindowStart ([datetime]::UtcNow) -WindowEnd ([datetime]::UtcNow) -ManagedRgPattern $ManagedRgPattern
+    $accounts = @{}
+    $failed = [System.Collections.Generic.List[string]]::new()
+    try { $vaults = @((Invoke-EbrArgQuery -Query $query -Subscriptions $Subscriptions -Tenant $Tenant).Rows | Where-Object { $_ -and [string]$_.ResourceId -match '/providers/Microsoft\.RecoveryServices/vaults/[^/]+$' }) }
+    catch { return [pscustomobject]@{ Accounts = $accounts; Failed = @('Resource Graph: ' + ($_.Exception.Message -replace '\s+', ' ')); Vaults = 0; Read = 0 } }
+    $keys = 'primaryStagingAzureStorageAccountId', 'recoveryAzureLogStorageAccountId', 'logStorageAccountId'
+    # Every storage account ID under one of those names, however deep the provider puts it.
+    $collect = { param($node, $found)
+        if ($null -eq $node -or $node -is [string] -or $node -is [ValueType]) { return }
+        if ($node -is [System.Collections.IEnumerable]) { foreach ($x in $node) { & $collect $x $found }; return }
+        foreach ($p in $node.PSObject.Properties) {
+            if ($p.Name -in $keys -and [string]$p.Value -match '/providers/Microsoft\.Storage/storageAccounts/[^/]+$') { $found.Add(([string]$p.Value).ToLowerInvariant()) }
+            elseif ($p.Value -isnot [string]) { & $collect $p.Value $found }
+        }
+    }
+    foreach ($v in $vaults) {
+        $uri = 'https://management.azure.com{0}/replicationProtectedItems?api-version=2023-08-01' -f $v.ResourceId
+        $found = [System.Collections.Generic.List[string]]::new()
+        try {
+            while ($uri) {
+                $resp = Invoke-EbrRest -Method GET -Uri $uri -Resource 'https://management.azure.com/' -Tenant $Tenant
+                foreach ($item in @($resp.value | Where-Object { $null -ne $_ })) { & $collect (Get-EbrProp (Get-EbrProp $item 'properties') 'providerSpecificDetails') $found }
+                $uri = Get-EbrProp $resp 'nextLink'
+            }
+        }
+        catch { $failed.Add(('{0}: {1}' -f $v.Name, ($_.Exception.Message -replace '\s+', ' '))); continue }
+        foreach ($id in @($found | Sort-Object -Unique)) {
+            if (-not $accounts.Contains($id)) { $accounts[$id] = [System.Collections.Generic.List[string]]::new() }
+            if ($accounts[$id] -notcontains [string]$v.Name) { $accounts[$id].Add([string]$v.Name) }
+        }
+    }
+    [pscustomobject]@{ Accounts = $accounts; Failed = $failed.ToArray(); Vaults = $vaults.Count; Read = $vaults.Count - $failed.Count }
+}
+
+function Get-EbrBlobSoftDeleteRow {
+    # DP.1-SOFTDELETE (CyberSOC 1.20.0): reads blob soft delete and container soft delete of one storage account through a
+    # GET on blobServices/default (deleteRetentionPolicy and containerDeleteRetentionPolicy, enabled and days), and its
+    # lifecycle management rules through a GET on managementPolicies/default, which answers 404 when the account has no
+    # policy. Reader can make both. A policy left out of the response reads Off, since the change then turns it on after
+    # the portal check. A response without properties, or any other failure, leaves the row unread and records why in
+    # ReadStatus, so the account is never read as having soft delete. A FileStorage account has no blob service and is
+    # not read. SiteRecovery is the result of Get-EbrSiteRecoveryStorage.
+    param($Account, [string]$Tenant, $SiteRecovery)
+    $row = [ordered]@{
+        subscriptionId = [string]$Account.subscriptionId; resourceGroup = [string]$Account.resourceGroup; Account = [string]$Account.Account; Kind = [string]$Account.Kind
+        HnsEnabled = [bool]($Account.HnsEnabled -eq $true -or [string]$Account.HnsEnabled -eq 'true'); BlobSoftDelete = ''; BlobRetentionDays = ''; ContainerSoftDelete = ''; ContainerRetentionDays = ''
+        LifecycleRules = ''; LifecycleDeleteRules = ''; SiteRecoveryCache = ''; SiteRecoveryVaults = ''; ReadStatus = 'OK'; ResourceId = [string]$Account.ResourceId
+    }
+    if ($row.Kind -ieq 'FileStorage') { $row.ReadStatus = 'Not read: a FileStorage account has no blob service.'; return [pscustomobject]$row }
+    $id = $row.ResourceId.ToLowerInvariant()
+    if ($SiteRecovery -and $SiteRecovery.Accounts.Contains($id)) { $row.SiteRecoveryCache = 'Yes'; $row.SiteRecoveryVaults = (@($SiteRecovery.Accounts[$id]) | Sort-Object) -join ', ' }
+    elseif ($SiteRecovery -and -not @($SiteRecovery.Failed).Count) { $row.SiteRecoveryCache = 'No' }
+    else { $row.SiteRecoveryCache = 'Unknown' }
+    try {
+        $props = Get-EbrProp (Invoke-EbrRest -Method GET -Uri ('https://management.azure.com{0}/blobServices/default?api-version=2023-05-01' -f $row.ResourceId) -Resource 'https://management.azure.com/' -Tenant $Tenant) 'properties'
+        if ($null -eq $props) { throw 'The blob service response carried no properties.' }
+        foreach ($p in @(@('deleteRetentionPolicy', 'BlobSoftDelete', 'BlobRetentionDays'), @('containerDeleteRetentionPolicy', 'ContainerSoftDelete', 'ContainerRetentionDays'))) {
+            $policy = Get-EbrProp $props $p[0]
+            $on = ([string](Get-EbrProp $policy 'enabled')).ToLowerInvariant() -eq 'true'
+            $row[$p[1]] = $(if ($on) { 'On' } else { 'Off' })
+            $row[$p[2]] = $(if ($on) { [string](Get-EbrProp $policy 'days') } else { '' })
+        }
+        $rules = @()
+        try {
+            $policy = Get-EbrProp (Get-EbrProp (Invoke-EbrRest -Method GET -Uri ('https://management.azure.com{0}/managementPolicies/default?api-version=2023-05-01' -f $row.ResourceId) -Resource 'https://management.azure.com/' -Tenant $Tenant) 'properties') 'policy'
+            $rules = @(Get-EbrProp $policy 'rules' | Where-Object { $null -ne $_ -and ([string](Get-EbrProp $_ 'enabled')).ToLowerInvariant() -ne 'false' })
+        }
+        catch { if ($_.Exception.Message -notmatch '^HTTP 404\b') { throw ('Lifecycle management policy: ' + $_.Exception.Message) } }
+        # A rule deletes when an action on the current blob, a snapshot or a previous version is delete.
+        $deletes = @($rules | Where-Object { $a = Get-EbrProp (Get-EbrProp $_ 'definition') 'actions'; @('baseBlob', 'snapshot', 'version' | Where-Object { $null -ne (Get-EbrProp (Get-EbrProp $a $_) 'delete') }).Count })
+        $row.LifecycleRules = $rules.Count
+        $row.LifecycleDeleteRules = $deletes.Count
+    }
+    catch {
+        foreach ($k in 'BlobSoftDelete', 'BlobRetentionDays', 'ContainerSoftDelete', 'ContainerRetentionDays', 'LifecycleRules', 'LifecycleDeleteRules') { $row[$k] = '' }
+        $row.ReadStatus = [string]$_.Exception.Message
+    }
     [pscustomobject]$row
 }
 
@@ -6352,29 +6451,40 @@ function Invoke-EbrCatalogItem {
             return New-EbrResult -ResultId $Item.Id -Status $status -Rows $summary -Columns @('Scope', 'Metric', 'Value') -Source ('Sentinel ARM API, {0} workspace(s)' -f $all.Count) -Detail $detail -DurationSec (& $elapsed)
         }
         'STORAGE-CONTAINERS' {
-            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the blobServices/default/containers path of each account, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
+            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the blobServices/default/containers, blobServices/default and managementPolicies/default paths of each account, and on the replicationProtectedItems of each Recovery Services vault, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
             $columns = @('subscriptionId', 'resourceGroup', 'Account', 'AccountAnonymousAccess', 'Containers', 'PublicContainers', 'ExposedContainers', 'PublicContainerNames', 'ReadStatus', 'ResourceId')
             # DP.1-CONTAINERS-DETAIL (CyberSOC 1.8.0): one row per container set to Blob or Container, for CR-18. It
             # is written with every outcome of DP.1-CONTAINERS, so a failed read never reads as needing a newer collector.
             $detailColumns = @('subscriptionId', 'resourceGroup', 'Account', 'Container', 'AccessLevel', 'AccountAnonymousAccess', 'ReadableToday', 'AccountId', 'ResourceId')
-            try { $accounts = @((Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant).Rows) }
+            # DP.1-SOFTDELETE (CyberSOC 1.20.0): one row per storage account with its blob and container soft delete, its
+            # lifecycle rules and whether Site Recovery uses it, for CR-25. It is written with every outcome too.
+            $softColumns = @('subscriptionId', 'resourceGroup', 'Account', 'Kind', 'HnsEnabled', 'BlobSoftDelete', 'BlobRetentionDays', 'ContainerSoftDelete', 'ContainerRetentionDays', 'LifecycleRules', 'LifecycleDeleteRules', 'SiteRecoveryCache', 'SiteRecoveryVaults', 'ReadStatus', 'ResourceId')
+            try { $all = @((Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant).Rows) }
             catch {
                 $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-CONTAINERS-DETAIL' -Status 'FAILED' -Columns $detailColumns -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed)))
+                $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-SOFTDELETE' -Status 'FAILED' -Columns $softColumns -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed)))
                 return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed)
             }
+            # A FileStorage account has no blob service, so it has no containers and nothing to read for soft delete.
+            $accounts = @($all | Where-Object { [string]$_.Kind -ne 'FileStorage' })
+            $softRows = [System.Collections.Generic.List[object]]::new()
+            foreach ($a in @($all | Where-Object { [string]$_.Kind -eq 'FileStorage' })) { $softRows.Add((Get-EbrBlobSoftDeleteRow -Account $a -Tenant $Ctx.ArmTenant)) }
             if ($accounts.Count -eq 0) {
                 $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-CONTAINERS-DETAIL' -Status 'EMPTY' -Columns $detailColumns -Source 'Resource Graph' -Detail 'No storage account with a blob service in scope.' -DurationSec (& $elapsed)))
+                $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-SOFTDELETE' -Status $(if ($softRows.Count) { 'OK' } else { 'EMPTY' }) -Rows $softRows.ToArray() -Columns $softColumns -Source 'Resource Graph' -Detail ('No storage account with a blob service in scope{0}.' -f $(if ($softRows.Count) { ', {0} FileStorage' -f $softRows.Count } else { '' })) -DurationSec (& $elapsed)))
                 return New-EbrResult -ResultId $Item.Id -Status 'EMPTY' -Columns $columns -Source 'Resource Graph' -Detail 'No storage account with a blob service in scope.' -DurationSec (& $elapsed)
             }
+            $siteRecovery = Get-EbrSiteRecoveryStorage -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant -ManagedRgPattern $Ctx.ManagedRgPattern
             $rows = [System.Collections.Generic.List[object]]::new()
             $details = [System.Collections.Generic.List[object]]::new()
             $i = 0
             foreach ($a in $accounts) {
                 $i++
-                Write-Progress -Id 2 -ParentId 1 -Activity 'Listing blob containers' -Status ('{0} ({1} of {2})' -f $a.Account, $i, $accounts.Count) -PercentComplete ([int](100 * $i / $accounts.Count))
+                Write-Progress -Id 2 -ParentId 1 -Activity 'Listing blob containers and reading soft delete' -Status ('{0} ({1} of {2})' -f $a.Account, $i, $accounts.Count) -PercentComplete ([int](100 * $i / $accounts.Count))
                 $rows.Add((Get-EbrBlobContainerRow -Account $a -Tenant $Ctx.ArmTenant -Details $details))
+                $softRows.Add((Get-EbrBlobSoftDeleteRow -Account $a -Tenant $Ctx.ArmTenant -SiteRecovery $siteRecovery))
             }
-            Write-Progress -Id 2 -ParentId 1 -Activity 'Listing blob containers' -Completed
+            Write-Progress -Id 2 -ParentId 1 -Activity 'Listing blob containers and reading soft delete' -Completed
             $failed = @($rows | Where-Object ReadStatus -ne 'OK')
             $read = @($rows | Where-Object ReadStatus -eq 'OK')
             $total = { param($f) [int](@($read | ForEach-Object { [int]$_.$f }) | Measure-Object -Sum).Sum }
@@ -6386,6 +6496,20 @@ function Invoke-EbrCatalogItem {
             $detailText = '{0} containers set to Blob or Container access in {1} of {2} storage accounts listed, {3} readable anonymously today.' -f $details.Count, $read.Count, $rows.Count, @($details | Where-Object ReadableToday).Count
             if ($failed.Count) { $detailText += ' Accounts not listed add no rows, see DP.1-CONTAINERS.' }
             $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-CONTAINERS-DETAIL' -Status $detailStatus -Rows $details.ToArray() -Columns $detailColumns -Source $source -Detail $detailText -DurationSec (& $elapsed)))
+            # DP.1-SOFTDELETE is partial when an account or a Recovery Services vault was not read, since an account in a
+            # vault not read may be a Site Recovery cache account, and failed when no account with a blob service was read.
+            $softBlob = @($softRows | Where-Object { [string]$_.Kind -ne 'FileStorage' })
+            $softRead = @($softBlob | Where-Object ReadStatus -eq 'OK')
+            $softFailed = @($softBlob | Where-Object ReadStatus -ne 'OK')
+            $softStatus = if ($softRead.Count -eq 0) { 'FAILED' } elseif ($softFailed.Count -or @($siteRecovery.Failed).Count) { 'PARTIAL' } else { 'OK' }
+            $softText = '{0} of {1} storage accounts with a blob service read: blob soft delete off in {2}, container soft delete off in {3}, lifecycle rules that delete in {4}.' -f $softRead.Count, $softBlob.Count, @($softRead | Where-Object BlobSoftDelete -eq 'Off').Count, @($softRead | Where-Object ContainerSoftDelete -eq 'Off').Count, @($softRead | Where-Object { [int]$_.LifecycleDeleteRules -gt 0 }).Count
+            $cache = @($softBlob | Where-Object SiteRecoveryCache -eq 'Yes').Count
+            $softText += ' {0} named as a Site Recovery cache or log storage account in the {1} of {2} Recovery Services vaults read.' -f $(if ($cache -eq 1) { '1 account' } else { "$cache accounts" }), $siteRecovery.Read, $siteRecovery.Vaults
+            $files = @($softRows | Where-Object { [string]$_.Kind -eq 'FileStorage' }).Count
+            if ($files) { $softText += ' {0} FileStorage, not read.' -f $files }
+            if ($softFailed.Count) { $softText += ' Not read: ' + ((@($softFailed | Select-Object -First 5) | ForEach-Object { '{0}: {1}' -f $_.Account, $_.ReadStatus }) -join ' / ') + $(if ($softFailed.Count -gt 5) { ' / and {0} more' -f ($softFailed.Count - 5) } else { '' }) }
+            if (@($siteRecovery.Failed).Count) { $softText += ' Recovery Services vaults not read, so SiteRecoveryCache reads Unknown: ' + (@($siteRecovery.Failed) -join ' / ') }
+            $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-SOFTDELETE' -Status $softStatus -Rows $softRows.ToArray() -Columns $softColumns -Source $source -Detail $softText -DurationSec (& $elapsed)))
             return New-EbrResult -ResultId $Item.Id -Status $status -Rows $rows.ToArray() -Columns $columns -Source $source -Detail $detail -DurationSec (& $elapsed)
         }
         'APPSERVICE-FTPAUTH' {

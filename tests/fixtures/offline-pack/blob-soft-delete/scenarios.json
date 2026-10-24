@@ -1,0 +1,534 @@
+{
+  "Description": "CR-25 (blob and container soft delete) fixtures, synthetic names and IDs. Arg is the storage account list of the DP.1-CONTAINERS query and Vaults the Recovery Services vault list, as Resource Graph returns them. Arm holds each GET the STORAGE-CONTAINERS engine makes, keyed by account or vault name and path, with a string standing for the error the request throws. Rows is DP.1-SOFTDELETE as collector 1.20.0 writes it from them: stbothoff with both settings off and no lifecycle policy (404), stcontaineron with container soft delete already on for 14 days and three lifecycle rules (one tiering, one deleting, one disabled), stblobon with blob soft delete already on for 30 days, stallon with both on, stlake a hierarchical namespace account with both off and a deleting rule, stsrcache01 the cache storage account a Recovery Services vault names for Azure to Azure replication, stdrcacheasrcache named like a Site Recovery cache account but named by no vault, stclientlogs a Blob storage account for -SoftDeleteExclude, stdenied whose read was refused and stpremfiles a FileStorage account.",
+  "Arg": [
+    {
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stbothoff",
+      "Account": "stbothoff",
+      "resourceGroup": "rg-data",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "Kind": "StorageV2",
+      "AllowBlobPublicAccess": "false",
+      "HnsEnabled": false
+    },
+    {
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stcontaineron",
+      "Account": "stcontaineron",
+      "resourceGroup": "rg-app",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "Kind": "StorageV2",
+      "AllowBlobPublicAccess": "false",
+      "HnsEnabled": false
+    },
+    {
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Storage/storageAccounts/stblobon",
+      "Account": "stblobon",
+      "resourceGroup": "rg-web",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "Kind": "StorageV2",
+      "AllowBlobPublicAccess": "false",
+      "HnsEnabled": false
+    },
+    {
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stallon",
+      "Account": "stallon",
+      "resourceGroup": "rg-app",
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "Kind": "StorageV2",
+      "AllowBlobPublicAccess": "false",
+      "HnsEnabled": false
+    },
+    {
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-analytics/providers/Microsoft.Storage/storageAccounts/stlake",
+      "Account": "stlake",
+      "resourceGroup": "rg-analytics",
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "Kind": "StorageV2",
+      "AllowBlobPublicAccess": "false",
+      "HnsEnabled": true
+    },
+    {
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-dr/providers/Microsoft.Storage/storageAccounts/stsrcache01",
+      "Account": "stsrcache01",
+      "resourceGroup": "rg-dr",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "Kind": "StorageV2",
+      "AllowBlobPublicAccess": "false",
+      "HnsEnabled": false
+    },
+    {
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-dr/providers/Microsoft.Storage/storageAccounts/stdrcacheasrcache",
+      "Account": "stdrcacheasrcache",
+      "resourceGroup": "rg-dr",
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "Kind": "StorageV2",
+      "AllowBlobPublicAccess": "false",
+      "HnsEnabled": false
+    },
+    {
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-logs/providers/Microsoft.Storage/storageAccounts/stclientlogs",
+      "Account": "stclientlogs",
+      "resourceGroup": "rg-logs",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "Kind": "BlobStorage",
+      "AllowBlobPublicAccess": "false",
+      "HnsEnabled": false
+    },
+    {
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stdenied",
+      "Account": "stdenied",
+      "resourceGroup": "rg-data",
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "Kind": "StorageV2",
+      "AllowBlobPublicAccess": "false",
+      "HnsEnabled": false
+    },
+    {
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-files/providers/Microsoft.Storage/storageAccounts/stpremfiles",
+      "Account": "stpremfiles",
+      "resourceGroup": "rg-files",
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "Kind": "FileStorage",
+      "AllowBlobPublicAccess": "false",
+      "HnsEnabled": false
+    }
+  ],
+  "Vaults": [
+    {
+      "Name": "rsv-dr",
+      "resourceGroup": "rg-dr",
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-dr/providers/Microsoft.RecoveryServices/vaults/rsv-dr"
+    },
+    {
+      "Name": "rsv-backup",
+      "resourceGroup": "rg-backup",
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-backup/providers/Microsoft.RecoveryServices/vaults/rsv-backup"
+    }
+  ],
+  "Arm": {
+    "stbothoff/blobServices/default/containers": {
+      "value": []
+    },
+    "stbothoff/blobServices/default": {
+      "id": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stbothoff/blobServices/default",
+      "name": "default",
+      "properties": {
+        "deleteRetentionPolicy": {
+          "enabled": false
+        },
+        "containerDeleteRetentionPolicy": {
+          "enabled": false
+        }
+      }
+    },
+    "stbothoff/managementPolicies/default": "HTTP 404: Not Found | ManagementPolicyNotFound",
+    "stcontaineron/blobServices/default/containers": {
+      "value": []
+    },
+    "stcontaineron/blobServices/default": {
+      "id": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stcontaineron/blobServices/default",
+      "name": "default",
+      "properties": {
+        "deleteRetentionPolicy": {
+          "enabled": false
+        },
+        "containerDeleteRetentionPolicy": {
+          "enabled": true,
+          "days": 14
+        }
+      }
+    },
+    "stcontaineron/managementPolicies/default": {
+      "properties": {
+        "policy": {
+          "rules": [
+            {
+              "name": "archive-old",
+              "enabled": true,
+              "type": "Lifecycle",
+              "definition": {
+                "filters": {
+                  "blobTypes": [
+                    "blockBlob"
+                  ]
+                },
+                "actions": {
+                  "baseBlob": {
+                    "tierToCool": {
+                      "daysAfterModificationGreaterThan": 30
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "expire-logs",
+              "enabled": true,
+              "type": "Lifecycle",
+              "definition": {
+                "filters": {
+                  "blobTypes": [
+                    "blockBlob"
+                  ]
+                },
+                "actions": {
+                  "baseBlob": {
+                    "delete": {
+                      "daysAfterModificationGreaterThan": 30
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "name": "disabled-rule",
+              "enabled": false,
+              "type": "Lifecycle",
+              "definition": {
+                "filters": {
+                  "blobTypes": [
+                    "blockBlob"
+                  ]
+                },
+                "actions": {
+                  "baseBlob": {
+                    "delete": {
+                      "daysAfterModificationGreaterThan": 30
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "stblobon/blobServices/default/containers": {
+      "value": []
+    },
+    "stblobon/blobServices/default": {
+      "id": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Storage/storageAccounts/stblobon/blobServices/default",
+      "name": "default",
+      "properties": {
+        "deleteRetentionPolicy": {
+          "enabled": true,
+          "days": 30
+        },
+        "containerDeleteRetentionPolicy": {
+          "enabled": false
+        }
+      }
+    },
+    "stblobon/managementPolicies/default": "HTTP 404: Not Found | ManagementPolicyNotFound",
+    "stallon/blobServices/default/containers": {
+      "value": []
+    },
+    "stallon/blobServices/default": {
+      "id": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stallon/blobServices/default",
+      "name": "default",
+      "properties": {
+        "deleteRetentionPolicy": {
+          "enabled": true,
+          "days": 7
+        },
+        "containerDeleteRetentionPolicy": {
+          "enabled": true,
+          "days": 7
+        }
+      }
+    },
+    "stallon/managementPolicies/default": "HTTP 404: Not Found | ManagementPolicyNotFound",
+    "stlake/blobServices/default/containers": {
+      "value": []
+    },
+    "stlake/blobServices/default": {
+      "id": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-analytics/providers/Microsoft.Storage/storageAccounts/stlake/blobServices/default",
+      "name": "default",
+      "properties": {
+        "deleteRetentionPolicy": {
+          "enabled": false
+        },
+        "containerDeleteRetentionPolicy": {
+          "enabled": false
+        }
+      }
+    },
+    "stlake/managementPolicies/default": {
+      "properties": {
+        "policy": {
+          "rules": [
+            {
+              "name": "expire-raw",
+              "enabled": true,
+              "type": "Lifecycle",
+              "definition": {
+                "filters": {
+                  "blobTypes": [
+                    "blockBlob"
+                  ]
+                },
+                "actions": {
+                  "baseBlob": {
+                    "delete": {
+                      "daysAfterModificationGreaterThan": 30
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "stsrcache01/blobServices/default/containers": {
+      "value": []
+    },
+    "stsrcache01/blobServices/default": {
+      "id": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-dr/providers/Microsoft.Storage/storageAccounts/stsrcache01/blobServices/default",
+      "name": "default",
+      "properties": {
+        "deleteRetentionPolicy": {
+          "enabled": false
+        },
+        "containerDeleteRetentionPolicy": {
+          "enabled": false
+        }
+      }
+    },
+    "stsrcache01/managementPolicies/default": "HTTP 404: Not Found | ManagementPolicyNotFound",
+    "stdrcacheasrcache/blobServices/default/containers": {
+      "value": []
+    },
+    "stdrcacheasrcache/blobServices/default": {
+      "id": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-dr/providers/Microsoft.Storage/storageAccounts/stdrcacheasrcache/blobServices/default",
+      "name": "default",
+      "properties": {
+        "deleteRetentionPolicy": {
+          "enabled": false
+        },
+        "containerDeleteRetentionPolicy": {
+          "enabled": false
+        }
+      }
+    },
+    "stdrcacheasrcache/managementPolicies/default": "HTTP 404: Not Found | ManagementPolicyNotFound",
+    "stclientlogs/blobServices/default/containers": {
+      "value": []
+    },
+    "stclientlogs/blobServices/default": {
+      "id": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-logs/providers/Microsoft.Storage/storageAccounts/stclientlogs/blobServices/default",
+      "name": "default",
+      "properties": {
+        "deleteRetentionPolicy": {
+          "enabled": false
+        },
+        "containerDeleteRetentionPolicy": {
+          "enabled": false
+        }
+      }
+    },
+    "stclientlogs/managementPolicies/default": "HTTP 404: Not Found | ManagementPolicyNotFound",
+    "stdenied/blobServices/default/containers": "HTTP 403: Forbidden | AuthorizationFailed",
+    "stdenied/blobServices/default": "HTTP 403: Forbidden | AuthorizationFailed",
+    "rsv-dr/replicationProtectedItems": {
+      "value": [
+        {
+          "name": "vm-app01",
+          "properties": {
+            "friendlyName": "vm-app01",
+            "providerSpecificDetails": {
+              "instanceType": "A2A",
+              "protectedManagedDisks": [
+                {
+                  "diskId": "d1",
+                  "primaryStagingAzureStorageAccountId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourcegroups/RG-DR/providers/Microsoft.Storage/storageAccounts/stsrcache01",
+                  "recoveryResourceGroupId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-app-asr"
+                },
+                {
+                  "diskId": "d2",
+                  "primaryStagingAzureStorageAccountId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourcegroups/RG-DR/providers/Microsoft.Storage/storageAccounts/stsrcache01"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "rsv-backup/replicationProtectedItems": {
+      "value": []
+    }
+  },
+  "Rows": [
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-data",
+      "Account": "stbothoff",
+      "Kind": "StorageV2",
+      "HnsEnabled": false,
+      "BlobSoftDelete": "Off",
+      "BlobRetentionDays": "",
+      "ContainerSoftDelete": "Off",
+      "ContainerRetentionDays": "",
+      "LifecycleRules": 0,
+      "LifecycleDeleteRules": 0,
+      "SiteRecoveryCache": "No",
+      "SiteRecoveryVaults": "",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stbothoff"
+    },
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-app",
+      "Account": "stcontaineron",
+      "Kind": "StorageV2",
+      "HnsEnabled": false,
+      "BlobSoftDelete": "Off",
+      "BlobRetentionDays": "",
+      "ContainerSoftDelete": "On",
+      "ContainerRetentionDays": "14",
+      "LifecycleRules": 2,
+      "LifecycleDeleteRules": 1,
+      "SiteRecoveryCache": "No",
+      "SiteRecoveryVaults": "",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stcontaineron"
+    },
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-web",
+      "Account": "stblobon",
+      "Kind": "StorageV2",
+      "HnsEnabled": false,
+      "BlobSoftDelete": "On",
+      "BlobRetentionDays": "30",
+      "ContainerSoftDelete": "Off",
+      "ContainerRetentionDays": "",
+      "LifecycleRules": 0,
+      "LifecycleDeleteRules": 0,
+      "SiteRecoveryCache": "No",
+      "SiteRecoveryVaults": "",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-web/providers/Microsoft.Storage/storageAccounts/stblobon"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-app",
+      "Account": "stallon",
+      "Kind": "StorageV2",
+      "HnsEnabled": false,
+      "BlobSoftDelete": "On",
+      "BlobRetentionDays": "7",
+      "ContainerSoftDelete": "On",
+      "ContainerRetentionDays": "7",
+      "LifecycleRules": 0,
+      "LifecycleDeleteRules": 0,
+      "SiteRecoveryCache": "No",
+      "SiteRecoveryVaults": "",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/stallon"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-analytics",
+      "Account": "stlake",
+      "Kind": "StorageV2",
+      "HnsEnabled": true,
+      "BlobSoftDelete": "Off",
+      "BlobRetentionDays": "",
+      "ContainerSoftDelete": "Off",
+      "ContainerRetentionDays": "",
+      "LifecycleRules": 1,
+      "LifecycleDeleteRules": 1,
+      "SiteRecoveryCache": "No",
+      "SiteRecoveryVaults": "",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-analytics/providers/Microsoft.Storage/storageAccounts/stlake"
+    },
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-dr",
+      "Account": "stsrcache01",
+      "Kind": "StorageV2",
+      "HnsEnabled": false,
+      "BlobSoftDelete": "Off",
+      "BlobRetentionDays": "",
+      "ContainerSoftDelete": "Off",
+      "ContainerRetentionDays": "",
+      "LifecycleRules": 0,
+      "LifecycleDeleteRules": 0,
+      "SiteRecoveryCache": "Yes",
+      "SiteRecoveryVaults": "rsv-dr",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-dr/providers/Microsoft.Storage/storageAccounts/stsrcache01"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-dr",
+      "Account": "stdrcacheasrcache",
+      "Kind": "StorageV2",
+      "HnsEnabled": false,
+      "BlobSoftDelete": "Off",
+      "BlobRetentionDays": "",
+      "ContainerSoftDelete": "Off",
+      "ContainerRetentionDays": "",
+      "LifecycleRules": 0,
+      "LifecycleDeleteRules": 0,
+      "SiteRecoveryCache": "No",
+      "SiteRecoveryVaults": "",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-dr/providers/Microsoft.Storage/storageAccounts/stdrcacheasrcache"
+    },
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-logs",
+      "Account": "stclientlogs",
+      "Kind": "BlobStorage",
+      "HnsEnabled": false,
+      "BlobSoftDelete": "Off",
+      "BlobRetentionDays": "",
+      "ContainerSoftDelete": "Off",
+      "ContainerRetentionDays": "",
+      "LifecycleRules": 0,
+      "LifecycleDeleteRules": 0,
+      "SiteRecoveryCache": "No",
+      "SiteRecoveryVaults": "",
+      "ReadStatus": "OK",
+      "ResourceId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-logs/providers/Microsoft.Storage/storageAccounts/stclientlogs"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-data",
+      "Account": "stdenied",
+      "Kind": "StorageV2",
+      "HnsEnabled": false,
+      "BlobSoftDelete": "",
+      "BlobRetentionDays": "",
+      "ContainerSoftDelete": "",
+      "ContainerRetentionDays": "",
+      "LifecycleRules": "",
+      "LifecycleDeleteRules": "",
+      "SiteRecoveryCache": "No",
+      "SiteRecoveryVaults": "",
+      "ReadStatus": "HTTP 403: Forbidden | AuthorizationFailed",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stdenied"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-files",
+      "Account": "stpremfiles",
+      "Kind": "FileStorage",
+      "HnsEnabled": false,
+      "BlobSoftDelete": "",
+      "BlobRetentionDays": "",
+      "ContainerSoftDelete": "",
+      "ContainerRetentionDays": "",
+      "LifecycleRules": "",
+      "LifecycleDeleteRules": "",
+      "SiteRecoveryCache": "",
+      "SiteRecoveryVaults": "",
+      "ReadStatus": "Not read: a FileStorage account has no blob service.",
+      "ResourceId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-files/providers/Microsoft.Storage/storageAccounts/stpremfiles"
+    }
+  ]
+}

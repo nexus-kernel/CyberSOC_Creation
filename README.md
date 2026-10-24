@@ -77,7 +77,8 @@ missing evidence never becomes a favorable zero.
    CR-20, blocking legacy authentication with ATMO-MXDR-CA-BLOCK-LEGACY, or removing the exclusions it no longer
    needs, CR-21, setting the attack surface reduction rules to Audit on the Windows servers through security settings
    management, CR-22, turning on periodic assessment in Azure Update Manager on the virtual machines without it,
-   CR-23, and disabling, never deleting, the stale Microsoft Entra devices, CR-24), and a ready-to-send client email for
+   CR-23, disabling, never deleting, the stale Microsoft Entra devices, CR-24, and turning on blob and container soft
+   delete on the storage accounts without them, CR-25), and a ready-to-send client email for
    every change request. The CR-19 email names the accounts and their roles in a CSV written beside it, to attach, since
    the list can be long, and the CR-24 email names the devices the same way. Every email asks for the
    client's approval and reads as a letter, with no titles and each paragraph opening in its own words, in one order:
@@ -159,7 +160,14 @@ missing evidence never becomes a favorable zero.
    manages, Windows Autopilot devices, printers, devices with a system label and devices with no sign-in recorded. Its
    email asks for approval of the attached list and of the threshold, says a disabled device fails any Conditional
    Access policy that requires a registered or compliant device and can be turned back on straight away, and asks which
-   devices should stay, such as kiosks, devices in storage or devices kept for someone on leave. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
+   devices should stay, such as kiosks, devices in storage or devices kept for someone on leave. CR-25 (collector
+   1.20.0) turns on blob soft delete and container soft delete with a 7-day retention (`-SoftDeleteRetentionDays` on the
+   generator) on each storage account that has either off, keeping a setting already on with its retention, and leaves
+   out FileStorage accounts, accounts not read, the Site Recovery cache storage a Recovery Services vault names, accounts
+   named like it and the accounts the client names (`-SoftDeleteExclude`). It names the lifecycle rules that delete blobs
+   beside each account. Its email explains soft delete once, says deleted data is billed as storage during the retention
+   period, and asks for approval of the retention period and which high-churn accounts, such as log or backup staging
+   accounts, to leave out. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
    account the collection read as disabled, after checking that the account still shows as disabled. Its email lists
    each account with its roles, the Azure roles by subscription and the Entra roles on their own, says nobody loses
    access today, since the accounts cannot sign in, offers to restore any role from the record, and asks whether any
