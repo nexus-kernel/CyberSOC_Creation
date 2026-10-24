@@ -1040,6 +1040,17 @@ Describe 'Blob and container soft delete (DP.1-SOFTDELETE, CyberSOC 1.20.0)' {
         (Get-SdResult $ctx).Status | Should -Be 'PARTIAL'
         @(Get-SdResult $ctx).Rows[0].SiteRecoveryCache | Should -Be 'Unknown'
     }
+    It 'expands the managed resource group exclusion in the vault query it submits, so a vault in that group is never read' {
+        Mock Invoke-EbrArgQuery { if ($Query -match 'microsoft\.recoveryservices/vaults') { [pscustomobject]@{ Rows = @(); Detail = '' } } else { [pscustomobject]@{ Rows = @($sd.Arg | Where-Object Account -eq 'stbothoff'); Detail = '' } } }
+        Mock Invoke-EbrRest { Get-SdAnswer $Uri }
+        $ctx = New-SdCtx
+        $null = Invoke-EbrCatalogItem -Ctx $ctx -Item $sdItem
+        Should -Invoke Invoke-EbrArgQuery -Times 1 -Exactly -ParameterFilter { $Query -match 'microsoft\.recoveryservices/vaults' -and $Query -match 'where id !contains "aznativesol0"' -and $Query -notmatch '\{\{' } -Because 'the vault query is not a catalog query, so the helper expands {{MRG}} itself'
+        @(Get-SdResult $ctx).Rows[0].SiteRecoveryCache | Should -Be 'No' -Because 'no vault outside the managed group was listed, so none could fail'
+        Mock Invoke-EbrArgQuery { $script:sdVaultQuery = $Query; [pscustomobject]@{ Rows = @(); Detail = '' } }
+        $null = Get-EbrSiteRecoveryStorage -Subscriptions @('s1') -Tenant 't' -ManagedRgPattern ''
+        $script:sdVaultQuery | Should -Not -Match 'MRG|!contains' -Because 'an empty pattern turns the exclusion off, as it does for the catalog queries'
+    }
     It 'reads a missing policy as Off, a 404 lifecycle read as no rules, and any other failure as unread' {
         $a = [pscustomobject]@{ ResourceId = '/subscriptions/s/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/a'; Account = 'a'; resourceGroup = 'rg'; subscriptionId = 's'; Kind = 'StorageV2'; HnsEnabled = $false }
         $ok = [pscustomobject]@{ Accounts = @{}; Failed = @(); Vaults = 0; Read = 0 }

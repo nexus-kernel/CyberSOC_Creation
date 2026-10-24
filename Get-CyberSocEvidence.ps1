@@ -4357,14 +4357,16 @@ function Get-EbrSiteRecoveryStorage {
     # replicationProtectedItems, following nextLink. The account is named by primaryStagingAzureStorageAccountId (Azure to
     # Azure, on each protected disk), recoveryAzureLogStorageAccountId (Hyper-V and the classic VMware provider) or
     # logStorageAccountId (the modernized VMware and physical server provider). A vault that cannot be read is returned in
-    # Failed, so no account is read as not a cache account while one may be.
-    param([string[]]$Subscriptions, [string]$Tenant)
+    # Failed, so no account is read as not a cache account while one may be. The query keeps the {{MRG}} exclusion,
+    # expanded here with the run's -ManagedRgPattern as the catalog queries are, since it is not a catalog query.
+    param([string[]]$Subscriptions, [string]$Tenant, [AllowEmptyString()][string]$ManagedRgPattern)
     $query = @'
 resources
 | where type =~ "microsoft.recoveryservices/vaults"
 | where id !contains "{{MRG}}"
 | project Name = name, resourceGroup, subscriptionId, ResourceId = id
 '@
+    $query = Expand-EbrQuery -Query $query -WindowStart ([datetime]::UtcNow) -WindowEnd ([datetime]::UtcNow) -ManagedRgPattern $ManagedRgPattern
     $accounts = @{}
     $failed = [System.Collections.Generic.List[string]]::new()
     try { $vaults = @((Invoke-EbrArgQuery -Query $query -Subscriptions $Subscriptions -Tenant $Tenant).Rows | Where-Object { $_ -and [string]$_.ResourceId -match '/providers/Microsoft\.RecoveryServices/vaults/[^/]+$' }) }
@@ -6472,7 +6474,7 @@ function Invoke-EbrCatalogItem {
                 $Ctx.Pending.Add((New-EbrResult -ResultId 'DP.1-SOFTDELETE' -Status $(if ($softRows.Count) { 'OK' } else { 'EMPTY' }) -Rows $softRows.ToArray() -Columns $softColumns -Source 'Resource Graph' -Detail ('No storage account with a blob service in scope{0}.' -f $(if ($softRows.Count) { ', {0} FileStorage' -f $softRows.Count } else { '' })) -DurationSec (& $elapsed)))
                 return New-EbrResult -ResultId $Item.Id -Status 'EMPTY' -Columns $columns -Source 'Resource Graph' -Detail 'No storage account with a blob service in scope.' -DurationSec (& $elapsed)
             }
-            $siteRecovery = Get-EbrSiteRecoveryStorage -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant
+            $siteRecovery = Get-EbrSiteRecoveryStorage -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant -ManagedRgPattern $Ctx.ManagedRgPattern
             $rows = [System.Collections.Generic.List[object]]::new()
             $details = [System.Collections.Generic.List[object]]::new()
             $i = 0
