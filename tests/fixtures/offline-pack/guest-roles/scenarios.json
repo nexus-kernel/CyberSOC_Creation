@@ -1,0 +1,400 @@
+{
+  "Description": "CR-26 (Azure roles held by guest accounts) fixtures, synthetic names and IDs, the real built-in role definition IDs. Guests is IA.17-GUESTS, Rbac IA.17-RBAC and Entra IA.17-ENTRA as collector 1.21.0 writes them, and EmergencyAccess the IA.16-ACCOUNTS and IA.16-GROUPS rows of a complete read. Vendor Support holds Contributor on a resource group and Reader at the root scope, directly, and the Microsoft Entra role Directory Readers. Partner Analyst reaches Contributor as a member of ext-tier2, nested in ext-vendors, and has not accepted its invitation. Audit Reviewer reaches Reader only through the dynamic group ext-guests-dynamic. Data Consultant holds Storage Blob Data Reader on a storage account with a condition, and its UPN starts with = as a spreadsheet formula would. Kept Contractor holds Owner on a subscription. Atmosera SOC (Atmosera in its UPN) and Night Shift Analyst (in the Atmosera group SOC-Atmosera-Responders) are emergency access guests and stay out. Decisions is the file the client returns: Remove for Vendor Support, Audit Reviewer and an object ID no longer a guest, remove in lower case for Partner Analyst, Keep for Kept Contractor and no answer for Data Consultant.",
+  "Guests": [
+    {
+      "PrincipalId": "418688e8-15a6-51a8-94ad-4e3f573e8a6d",
+      "PrincipalType": "User",
+      "DisplayName": "Vendor Support",
+      "UserPrincipalName": "support_vendor.example#EXT#@contoso.onmicrosoft.com",
+      "Mail": "support@vendor.example",
+      "UserType": "Guest",
+      "AccountEnabled": true,
+      "ExternalUserState": "Accepted",
+      "CreatedDateUtc": "2025-02-03T04:05:06Z",
+      "LastSuccessfulSignInUtc": "2026-10-01T08:00:00Z",
+      "LastSignInUtc": "2026-10-01T08:00:00Z",
+      "LastNonInteractiveSignInUtc": "2026-10-01T08:00:00Z",
+      "SignInRead": "Yes",
+      "OnPremisesSyncEnabled": false
+    },
+    {
+      "PrincipalId": "4e56be67-4621-546c-a753-e7c904c7bd36",
+      "PrincipalType": "User",
+      "DisplayName": "Partner Analyst",
+      "UserPrincipalName": "analyst_partner.example#EXT#@contoso.onmicrosoft.com",
+      "Mail": "analyst@partner.example",
+      "UserType": "Guest",
+      "AccountEnabled": true,
+      "ExternalUserState": "PendingAcceptance",
+      "CreatedDateUtc": "2026-06-01T00:00:00Z",
+      "LastSuccessfulSignInUtc": null,
+      "LastSignInUtc": null,
+      "LastNonInteractiveSignInUtc": null,
+      "SignInRead": "Yes",
+      "OnPremisesSyncEnabled": false
+    },
+    {
+      "PrincipalId": "f40eaaca-06be-52a3-ad80-e9bd12e531bc",
+      "PrincipalType": "User",
+      "DisplayName": "Audit Reviewer",
+      "UserPrincipalName": "reviewer_audit.example#EXT#@contoso.onmicrosoft.com",
+      "Mail": "reviewer@audit.example",
+      "UserType": "Guest",
+      "AccountEnabled": true,
+      "ExternalUserState": "Accepted",
+      "CreatedDateUtc": "2024-11-20T10:00:00Z",
+      "LastSuccessfulSignInUtc": "2026-08-14T12:30:00Z",
+      "LastSignInUtc": "2026-08-14T12:30:00Z",
+      "LastNonInteractiveSignInUtc": "2026-08-14T12:30:00Z",
+      "SignInRead": "Yes",
+      "OnPremisesSyncEnabled": false
+    },
+    {
+      "PrincipalId": "4320847b-cc84-5ce9-8e92-65327fb3efbc",
+      "PrincipalType": "User",
+      "DisplayName": "Data Consultant",
+      "UserPrincipalName": "=consult_data.example#EXT#@contoso.onmicrosoft.com",
+      "Mail": "consult@data.example",
+      "UserType": "Guest",
+      "AccountEnabled": true,
+      "ExternalUserState": "Accepted",
+      "CreatedDateUtc": "2025-09-09T09:09:09Z",
+      "LastSuccessfulSignInUtc": "2026-05-02T07:45:00Z",
+      "LastSignInUtc": "2026-05-02T07:45:00Z",
+      "LastNonInteractiveSignInUtc": "2026-05-02T07:45:00Z",
+      "SignInRead": "Yes",
+      "OnPremisesSyncEnabled": false
+    },
+    {
+      "PrincipalId": "556e076a-8877-591e-836c-7a0cb6794871",
+      "PrincipalType": "User",
+      "DisplayName": "Kept Contractor",
+      "UserPrincipalName": "build_contractor.example#EXT#@contoso.onmicrosoft.com",
+      "Mail": "build@contractor.example",
+      "UserType": "Guest",
+      "AccountEnabled": true,
+      "ExternalUserState": "Accepted",
+      "CreatedDateUtc": "2023-03-15T00:00:00Z",
+      "LastSuccessfulSignInUtc": "2026-10-10T16:20:00Z",
+      "LastSignInUtc": "2026-10-10T16:20:00Z",
+      "LastNonInteractiveSignInUtc": "2026-10-10T16:20:00Z",
+      "SignInRead": "Yes",
+      "OnPremisesSyncEnabled": false
+    },
+    {
+      "PrincipalId": "a8c98dc7-976b-56ec-8598-28116d3a4e3e",
+      "PrincipalType": "User",
+      "DisplayName": "Atmosera SOC",
+      "UserPrincipalName": "soc_atmosera.com#EXT#@contoso.onmicrosoft.com",
+      "Mail": "soc@atmosera.com",
+      "UserType": "Guest",
+      "AccountEnabled": true,
+      "ExternalUserState": "Accepted",
+      "CreatedDateUtc": "2026-01-05T00:00:00Z",
+      "LastSuccessfulSignInUtc": "2026-10-11T22:00:00Z",
+      "LastSignInUtc": "2026-10-11T22:00:00Z",
+      "LastNonInteractiveSignInUtc": "2026-10-11T22:00:00Z",
+      "SignInRead": "Yes",
+      "OnPremisesSyncEnabled": false
+    },
+    {
+      "PrincipalId": "e027fc85-c951-5164-9a85-e0f9319c240a",
+      "PrincipalType": "User",
+      "DisplayName": "Night Shift Analyst",
+      "UserPrincipalName": "nightshift_mssp.example#EXT#@contoso.onmicrosoft.com",
+      "Mail": "nightshift@mssp.example",
+      "UserType": "Guest",
+      "AccountEnabled": true,
+      "ExternalUserState": "Accepted",
+      "CreatedDateUtc": "2026-02-01T00:00:00Z",
+      "LastSuccessfulSignInUtc": "2026-10-11T23:00:00Z",
+      "LastSignInUtc": "2026-10-11T23:00:00Z",
+      "LastNonInteractiveSignInUtc": "2026-10-11T23:00:00Z",
+      "SignInRead": "Yes",
+      "OnPremisesSyncEnabled": false
+    }
+  ],
+  "Rbac": [
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "rg-app",
+      "ScopeLevel": "Resource group",
+      "Scope": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-app",
+      "Role": "Contributor",
+      "RoleDefinitionId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/microsoft.authorization/roledefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c",
+      "Condition": "",
+      "ConditionVersion": "",
+      "PrincipalId": "418688e8-15a6-51a8-94ad-4e3f573e8a6d",
+      "UserPrincipalName": "support_vendor.example#EXT#@contoso.onmicrosoft.com",
+      "DisplayName": "Vendor Support",
+      "OnPremisesSyncEnabled": false,
+      "HeldThrough": "Direct",
+      "GroupId": "",
+      "GroupName": "",
+      "MemberOfId": "",
+      "MemberOfName": "",
+      "MemberOfType": "",
+      "GroupPath": [],
+      "GroupPathIds": [],
+      "AssignmentId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/resourceGroups/rg-app/providers/Microsoft.Authorization/roleAssignments/89ec9f15-050a-5f30-a55c-4eaa73f7473d"
+    },
+    {
+      "subscriptionId": "",
+      "resourceGroup": "",
+      "ScopeLevel": "Root",
+      "Scope": "/",
+      "Role": "Reader",
+      "RoleDefinitionId": "/providers/microsoft.authorization/roledefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7",
+      "Condition": "",
+      "ConditionVersion": "",
+      "PrincipalId": "418688e8-15a6-51a8-94ad-4e3f573e8a6d",
+      "UserPrincipalName": "support_vendor.example#EXT#@contoso.onmicrosoft.com",
+      "DisplayName": "Vendor Support",
+      "OnPremisesSyncEnabled": false,
+      "HeldThrough": "Direct",
+      "GroupId": "",
+      "GroupName": "",
+      "MemberOfId": "",
+      "MemberOfName": "",
+      "MemberOfType": "",
+      "GroupPath": [],
+      "GroupPathIds": [],
+      "AssignmentId": "/providers/Microsoft.Authorization/roleAssignments/ee36d9da-ea69-580a-8fb5-acd916df4ec0"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-ops",
+      "ScopeLevel": "Resource group",
+      "Scope": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-ops",
+      "Role": "Contributor",
+      "RoleDefinitionId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/microsoft.authorization/roledefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c",
+      "Condition": "",
+      "ConditionVersion": "",
+      "PrincipalId": "4e56be67-4621-546c-a753-e7c904c7bd36",
+      "UserPrincipalName": "analyst_partner.example#EXT#@contoso.onmicrosoft.com",
+      "DisplayName": "Partner Analyst",
+      "OnPremisesSyncEnabled": false,
+      "HeldThrough": "Group",
+      "GroupId": "0d705775-c625-5283-94d2-fbf0541dd58d",
+      "GroupName": "ext-vendors",
+      "MemberOfId": "90395758-a9df-5cbe-87e4-a665017dc49f",
+      "MemberOfName": "ext-tier2",
+      "MemberOfType": "Assigned",
+      "GroupPath": [
+        "ext-vendors",
+        "ext-tier2"
+      ],
+      "GroupPathIds": [
+        "0d705775-c625-5283-94d2-fbf0541dd58d",
+        "90395758-a9df-5cbe-87e4-a665017dc49f"
+      ],
+      "AssignmentId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-ops/providers/Microsoft.Authorization/roleAssignments/ab3aae7d-2689-5823-9f91-9ad28f35de5d"
+    },
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "",
+      "ScopeLevel": "Subscription",
+      "Scope": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "Role": "Reader",
+      "RoleDefinitionId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/microsoft.authorization/roledefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7",
+      "Condition": "",
+      "ConditionVersion": "",
+      "PrincipalId": "f40eaaca-06be-52a3-ad80-e9bd12e531bc",
+      "UserPrincipalName": "reviewer_audit.example#EXT#@contoso.onmicrosoft.com",
+      "DisplayName": "Audit Reviewer",
+      "OnPremisesSyncEnabled": false,
+      "HeldThrough": "Group",
+      "GroupId": "fe46a222-22dc-5980-8089-5796add0b49e",
+      "GroupName": "ext-guests-dynamic",
+      "MemberOfId": "fe46a222-22dc-5980-8089-5796add0b49e",
+      "MemberOfName": "ext-guests-dynamic",
+      "MemberOfType": "Dynamic",
+      "GroupPath": [
+        "ext-guests-dynamic"
+      ],
+      "GroupPathIds": [
+        "fe46a222-22dc-5980-8089-5796add0b49e"
+      ],
+      "AssignmentId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/Microsoft.Authorization/roleAssignments/9af221f4-7256-51a1-ad06-c88c2ae37d15"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "rg-data",
+      "ScopeLevel": "Resource",
+      "Scope": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stexports",
+      "Role": "Storage Blob Data Reader",
+      "RoleDefinitionId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/microsoft.authorization/roledefinitions/2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
+      "Condition": "((!(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})) OR (@Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name] StringEquals 'exports'))",
+      "ConditionVersion": "2.0",
+      "PrincipalId": "4320847b-cc84-5ce9-8e92-65327fb3efbc",
+      "UserPrincipalName": "=consult_data.example#EXT#@contoso.onmicrosoft.com",
+      "DisplayName": "Data Consultant",
+      "OnPremisesSyncEnabled": false,
+      "HeldThrough": "Direct",
+      "GroupId": "",
+      "GroupName": "",
+      "MemberOfId": "",
+      "MemberOfName": "",
+      "MemberOfType": "",
+      "GroupPath": [],
+      "GroupPathIds": [],
+      "AssignmentId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/resourceGroups/rg-data/providers/Microsoft.Storage/storageAccounts/stexports/providers/Microsoft.Authorization/roleAssignments/6bc73e60-f798-5a60-abe5-822bab7a0c3c"
+    },
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "",
+      "ScopeLevel": "Subscription",
+      "Scope": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "Role": "Owner",
+      "RoleDefinitionId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/microsoft.authorization/roledefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+      "Condition": "",
+      "ConditionVersion": "",
+      "PrincipalId": "556e076a-8877-591e-836c-7a0cb6794871",
+      "UserPrincipalName": "build_contractor.example#EXT#@contoso.onmicrosoft.com",
+      "DisplayName": "Kept Contractor",
+      "OnPremisesSyncEnabled": false,
+      "HeldThrough": "Direct",
+      "GroupId": "",
+      "GroupName": "",
+      "MemberOfId": "",
+      "MemberOfName": "",
+      "MemberOfType": "",
+      "GroupPath": [],
+      "GroupPathIds": [],
+      "AssignmentId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/Microsoft.Authorization/roleAssignments/41dbd52d-7f06-5809-88f7-560a457a8f4e"
+    },
+    {
+      "subscriptionId": "a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "resourceGroup": "",
+      "ScopeLevel": "Subscription",
+      "Scope": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d",
+      "Role": "Owner",
+      "RoleDefinitionId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/microsoft.authorization/roledefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+      "Condition": "",
+      "ConditionVersion": "",
+      "PrincipalId": "a8c98dc7-976b-56ec-8598-28116d3a4e3e",
+      "UserPrincipalName": "soc_atmosera.com#EXT#@contoso.onmicrosoft.com",
+      "DisplayName": "Atmosera SOC",
+      "OnPremisesSyncEnabled": false,
+      "HeldThrough": "Direct",
+      "GroupId": "",
+      "GroupName": "",
+      "MemberOfId": "",
+      "MemberOfName": "",
+      "MemberOfType": "",
+      "GroupPath": [],
+      "GroupPathIds": [],
+      "AssignmentId": "/subscriptions/a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d/providers/Microsoft.Authorization/roleAssignments/00cf374b-b0ec-549f-a0df-0fb85b1481b5"
+    },
+    {
+      "subscriptionId": "5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "resourceGroup": "",
+      "ScopeLevel": "Subscription",
+      "Scope": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11",
+      "Role": "Reader",
+      "RoleDefinitionId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/microsoft.authorization/roledefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7",
+      "Condition": "",
+      "ConditionVersion": "",
+      "PrincipalId": "e027fc85-c951-5164-9a85-e0f9319c240a",
+      "UserPrincipalName": "nightshift_mssp.example#EXT#@contoso.onmicrosoft.com",
+      "DisplayName": "Night Shift Analyst",
+      "OnPremisesSyncEnabled": false,
+      "HeldThrough": "Direct",
+      "GroupId": "",
+      "GroupName": "",
+      "MemberOfId": "",
+      "MemberOfName": "",
+      "MemberOfType": "",
+      "GroupPath": [],
+      "GroupPathIds": [],
+      "AssignmentId": "/subscriptions/5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11/providers/Microsoft.Authorization/roleAssignments/38c5ecf8-0391-5640-aef0-10bfc178de06"
+    }
+  ],
+  "Entra": [
+    {
+      "Role": "Directory Readers",
+      "RoleDefinitionId": "88d8e3e3-8f55-4a1e-953a-9b9898b8876b",
+      "DirectoryScope": "/",
+      "AssignmentType": "Standing",
+      "PrincipalId": "418688e8-15a6-51a8-94ad-4e3f573e8a6d",
+      "UserPrincipalName": "support_vendor.example#EXT#@contoso.onmicrosoft.com",
+      "DisplayName": "Vendor Support",
+      "OnPremisesSyncEnabled": false,
+      "HeldThrough": "Direct",
+      "GroupId": "",
+      "GroupName": "",
+      "MemberOfId": "",
+      "MemberOfName": "",
+      "MemberOfType": "",
+      "GroupPath": [],
+      "GroupPathIds": [],
+      "EndDateUtc": "",
+      "AssignmentId": "842ad255-017e-5ffc-af00-b9401085f053",
+      "PimRead": "Yes"
+    }
+  ],
+  "EmergencyAccess": {
+    "Accounts": [
+      {
+        "PrincipalId": "a8c98dc7-976b-56ec-8598-28116d3a4e3e",
+        "UserPrincipalName": "soc_atmosera.com#EXT#@contoso.onmicrosoft.com",
+        "DisplayName": "Atmosera SOC",
+        "UserType": "Guest",
+        "AccountEnabled": true,
+        "MatchedBy": "UPN",
+        "Groups": [],
+        "GroupIds": []
+      },
+      {
+        "PrincipalId": "e027fc85-c951-5164-9a85-e0f9319c240a",
+        "UserPrincipalName": "nightshift_mssp.example#EXT#@contoso.onmicrosoft.com",
+        "DisplayName": "Night Shift Analyst",
+        "UserType": "Guest",
+        "AccountEnabled": true,
+        "MatchedBy": "Group",
+        "Groups": [
+          "SOC-Atmosera-Responders"
+        ],
+        "GroupIds": [
+          "1f909e43-7f3c-5d5c-aaea-85e32851d9f4"
+        ]
+      }
+    ],
+    "Groups": [
+      {
+        "GroupId": "1f909e43-7f3c-5d5c-aaea-85e32851d9f4",
+        "DisplayName": "SOC-Atmosera-Responders",
+        "Members": 1,
+        "Membership": "Assigned",
+        "MembersRead": true,
+        "MembershipRule": ""
+      }
+    ]
+  },
+  "Decisions": [
+    {
+      "ObjectId": "418688e8-15a6-51a8-94ad-4e3f573e8a6d",
+      "Decision": "Remove"
+    },
+    {
+      "ObjectId": "4e56be67-4621-546c-a753-e7c904c7bd36",
+      "Decision": "remove"
+    },
+    {
+      "ObjectId": "f40eaaca-06be-52a3-ad80-e9bd12e531bc",
+      "Decision": "Remove"
+    },
+    {
+      "ObjectId": "4320847b-cc84-5ce9-8e92-65327fb3efbc",
+      "Decision": ""
+    },
+    {
+      "ObjectId": "556e076a-8877-591e-836c-7a0cb6794871",
+      "Decision": "Keep"
+    },
+    {
+      "ObjectId": "3edb6fd6-8284-510b-9103-f3a3043e4d16",
+      "Decision": "Remove"
+    }
+  ]
+}

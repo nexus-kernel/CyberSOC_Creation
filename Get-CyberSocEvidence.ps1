@@ -38,7 +38,7 @@
 
     Microsoft Graph is read with GET requests only, on the instruction of Oct 11, 2026, for the
     measures that have no other source: IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, IA.16-ACCOUNTS,
-    POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS and LIC.4-DEVICES. The Graph token comes from the Azure CLI exactly as the Defender token
+    IA.17-GUESTS, POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS and LIC.4-DEVICES. The Graph token comes from the Azure CLI exactly as the Defender token
     does (az account get-access-token --resource https://graph.microsoft.com/). An endpoint the
     token cannot read makes that measure UNAVAILABLE with the permission it needs, never a zero,
     and the non-Graph substitute still runs. ATMOSERA_SCRIPT_REQUIREMENTS.md 1.4 still forbids
@@ -66,7 +66,7 @@
         domains/<id>/federationConfiguration, reports/authenticationMethods/
         userRegistrationDetails, roleManagement/directory/roleAssignments,
         roleDefinitions, roleAssignmentScheduleInstances and roleEligibilityScheduleInstances,
-        users (disabled accounts, IA.15-DISABLED, and every user, IA.16-ACCOUNTS), groups (IA.16-GROUPS),
+        users (disabled accounts, IA.15-DISABLED, every user, IA.16-ACCOUNTS, and the guests with their last sign-in, IA.17-GUESTS), groups (IA.16-GROUPS),
         groups/<id>, groups/<id>/members and groups/<id>/transitiveMembers/microsoft.graph.user,
         identity/conditionalAccess/policies,
         directory/onPremisesSynchronization, policies/authorizationPolicy,
@@ -247,7 +247,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.20.0, based on the EBR collector 1.14.0
+    Version: 1.21.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -297,7 +297,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.20.0'
+$script:EbrVersion = '1.21.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -1615,11 +1615,10 @@ authorizationresources
 | order by Role asc, Assignments desc
 '@))
 
-    # IA.15 (CyberSOC 1.9.0): the roles still held by disabled accounts, for change request CR-19. The engine reads
-    # the disabled users from Graph, then every Azure role assignment with this query, run with the Resource Graph
-    # authorizationScopeFilter AtScopeAboveAndBelow so assignments at the management groups and root above the
-    # subscriptions come back too, and the Entra role assignments through Graph.
-    $q.Add((New-EbrQuery -Id 'IA.15-DISABLED' -Phase 'P2 Identity' -Engine 'DISABLED-ROLES' -LighthouseIncomplete -Title 'Roles held by disabled accounts' -Notes ('Added in CyberSOC 1.9.0, the group each member sits in from 1.10.0. Writes IA.15-DISABLED (the disabled user accounts, GET /v1.0/users?$filter=accountEnabled eq false, needs User.Read.All), IA.15-RBAC (every Azure role assignment those accounts hold, directly or through a group, from authorizationresources with the query here) and IA.15-ENTRA (every Microsoft Entra role assignment they hold: GET /v1.0/roleManagement/directory/roleAssignments, roleDefinitions, roleAssignmentScheduleInstances and roleEligibilityScheduleInstances, needs RoleManagement.Read.Directory for the eligible ones). Roles held through a group are followed to the group''s disabled members through its direct members and those of each group nested in it (GroupMember.Read.All), with the group each member sits in and its membership type, so CR-19 can remove the account from that group. Through Lighthouse, Resource Graph shows the managing tenant''s delegations instead of the client''s role assignments, so IA.15-RBAC is incomplete there. Feeds change request CR-19. Internal: names accounts.') -Query @'
+    # The Azure role assignments the DISABLED-ROLES and GUEST-ROLES engines read (IA.15-RBAC and IA.17-RBAC), run with
+    # the Resource Graph authorizationScopeFilter AtScopeAboveAndBelow so assignments at the management groups and root
+    # above the subscriptions come back too.
+    $roleAssignmentQuery = @'
 authorizationresources
 | where type =~ "microsoft.authorization/roleassignments"
 | where id !contains "{{MRG}}"
@@ -1639,7 +1638,16 @@ authorizationresources
 | where PrincipalType !~ "ServicePrincipal"   // users and groups, and any assignment without a type
 | project AssignmentId = id, subscriptionId, Scope, RoleDefinitionId, Role, Condition, ConditionVersion, PrincipalId, PrincipalType
 | order by PrincipalId asc, Scope asc
-'@))
+'@
+    # IA.15 (CyberSOC 1.9.0): the roles still held by disabled accounts, for change request CR-19. The engine reads
+    # the disabled users from Graph, then every Azure role assignment with this query, run with the Resource Graph
+    # authorizationScopeFilter AtScopeAboveAndBelow so assignments at the management groups and root above the
+    # subscriptions come back too, and the Entra role assignments through Graph.
+    $q.Add((New-EbrQuery -Id 'IA.15-DISABLED' -Phase 'P2 Identity' -Engine 'DISABLED-ROLES' -LighthouseIncomplete -Title 'Roles held by disabled accounts' -Notes ('Added in CyberSOC 1.9.0, the group each member sits in from 1.10.0. Writes IA.15-DISABLED (the disabled user accounts, GET /v1.0/users?$filter=accountEnabled eq false, needs User.Read.All), IA.15-RBAC (every Azure role assignment those accounts hold, directly or through a group, from authorizationresources with the query here) and IA.15-ENTRA (every Microsoft Entra role assignment they hold: GET /v1.0/roleManagement/directory/roleAssignments, roleDefinitions, roleAssignmentScheduleInstances and roleEligibilityScheduleInstances, needs RoleManagement.Read.Directory for the eligible ones). Roles held through a group are followed to the group''s disabled members through its direct members and those of each group nested in it (GroupMember.Read.All), with the group each member sits in and its membership type, so CR-19 can remove the account from that group. Through Lighthouse, Resource Graph shows the managing tenant''s delegations instead of the client''s role assignments, so IA.15-RBAC is incomplete there. Feeds change request CR-19. Internal: names accounts.') -Query $roleAssignmentQuery))
+
+    # IA.17 (CyberSOC 1.21.0): the roles held by guest accounts that are still enabled, for change request CR-26. The
+    # same engine as IA.15 reads the guests from Graph, then the Azure and Entra roles they hold.
+    $q.Add((New-EbrQuery -Id 'IA.17-GUESTS' -Phase 'P2 Identity' -Engine 'GUEST-ROLES' -LighthouseIncomplete -Title 'Roles held by enabled guest accounts' -Notes ('Added in CyberSOC 1.21.0. Writes IA.17-GUESTS (the guest accounts that are still enabled, GET /v1.0/users?$filter=userType eq ''Guest'' with createdDateTime and signInActivity, needs User.Read.All, and AuditLog.Read.All with Microsoft Entra ID P1 or P2 for the last sign-in, without which the guests are read again without it and SignInRead reads No), IA.17-RBAC (every Azure role assignment those guests hold, directly or through a group, with the IA.15 query here) and IA.17-ENTRA (every Microsoft Entra role assignment they hold, read as IA.15-ENTRA is). Disabled guests are in IA.15. Roles held through a group are followed to the group''s guest members through its direct members and those of each group nested in it (GroupMember.Read.All), with the group each member sits in and its membership type, so CR-26 can remove the guest from that group. Through Lighthouse, Resource Graph shows the managing tenant''s delegations instead of the client''s role assignments, so IA.17-RBAC is incomplete there. Feeds change request CR-26, which changes the Azure roles only and names the Entra roles for review. Internal: names accounts.') -Query $roleAssignmentQuery))
 
     # IA.16 (CyberSOC 1.12.0): the emergency access accounts every Conditional Access change excludes. Graph takes no
     # contains on userPrincipalName or displayName, and $search matches whole words on displayName and starts with on
@@ -5427,6 +5435,9 @@ function Get-EbrScopeLevel {
     else { 'Other' }
 }
 
+$script:EbrRoleRbacColumns = @('subscriptionId', 'resourceGroup', 'ScopeLevel', 'Scope', 'Role', 'RoleDefinitionId', 'Condition', 'ConditionVersion', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'MemberOfId', 'MemberOfName', 'MemberOfType', 'GroupPath', 'GroupPathIds', 'AssignmentId')
+$script:EbrRoleEntraColumns = @('Role', 'RoleDefinitionId', 'DirectoryScope', 'AssignmentType', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'MemberOfId', 'MemberOfName', 'MemberOfType', 'GroupPath', 'GroupPathIds', 'EndDateUtc', 'AssignmentId', 'PimRead')
+
 function Invoke-EbrDisabledRoles {
     # IA.15 (CyberSOC 1.9.0), for change request CR-19. Returns three results: IA.15-DISABLED, the disabled user
     # accounts, IA.15-RBAC, every Azure role assignment they hold, and IA.15-ENTRA, every Microsoft Entra role
@@ -5439,15 +5450,13 @@ function Invoke-EbrDisabledRoles {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $elapsed = { $sw.Elapsed.TotalSeconds }
     $userColumns = @('PrincipalId', 'PrincipalType', 'DisplayName', 'UserPrincipalName', 'AccountEnabled', 'OnPremisesSyncEnabled')
-    $rbacColumns = @('subscriptionId', 'resourceGroup', 'ScopeLevel', 'Scope', 'Role', 'RoleDefinitionId', 'Condition', 'ConditionVersion', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'MemberOfId', 'MemberOfName', 'MemberOfType', 'GroupPath', 'GroupPathIds', 'AssignmentId')
-    $entraColumns = @('Role', 'RoleDefinitionId', 'DirectoryScope', 'AssignmentType', 'PrincipalId', 'UserPrincipalName', 'DisplayName', 'OnPremisesSyncEnabled', 'HeldThrough', 'GroupId', 'GroupName', 'MemberOfId', 'MemberOfName', 'MemberOfType', 'GroupPath', 'GroupPathIds', 'EndDateUtc', 'AssignmentId', 'PimRead')
     $graphFix = { param([string]$Permission) 'Fix: az login --tenant {0} --scope https://graph.microsoft.com/{1}, then rerun.' -f $Ctx.TenantGuid, $Permission }
     $all = {
         param([string]$Status, [string]$Detail)
         @{
             Disabled = New-EbrResult -ResultId 'IA.15-DISABLED' -Status $Status -Columns $userColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
-            Rbac     = New-EbrResult -ResultId 'IA.15-RBAC' -Status $Status -Columns $rbacColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
-            Entra    = New-EbrResult -ResultId 'IA.15-ENTRA' -Status $Status -Columns $entraColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
+            Rbac     = New-EbrResult -ResultId 'IA.15-RBAC' -Status $Status -Columns $script:EbrRoleRbacColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
+            Entra    = New-EbrResult -ResultId 'IA.15-ENTRA' -Status $Status -Columns $script:EbrRoleEntraColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
         }
     }
     if (-not $Ctx.GraphAvailable) {
@@ -5481,9 +5490,113 @@ function Invoke-EbrDisabledRoles {
         $r.Disabled.Detail = 'No disabled user account. Disabled service principals are not read.'
         return $r
     }
+    $roles = Get-EbrUserRoles -Ctx $Ctx -Query $Query -Users $disabled -Prefix 'IA.15' -One 'disabled account' -Many 'disabled accounts' -Elapsed $elapsed
+    $rbac = $roles.Rbac; $entra = $roles.Entra
+    $withAzure = @(@($rbac.Rows) | ForEach-Object PrincipalId | Sort-Object -Unique).Count
+    $withEntra = @(@($entra.Rows) | ForEach-Object PrincipalId | Sort-Object -Unique).Count
+    $userDetail = '{0}, {1} synced from on-premises. {2} hold an Azure role (IA.15-RBAC {3}) and {4} a Microsoft Entra role (IA.15-ENTRA {5}), directly or through a group. Disabled service principals are not read.' -f (Format-EbrCount $userRows.Count 'disabled user account' 'disabled user accounts'), @($userRows | Where-Object OnPremisesSyncEnabled).Count, $withAzure, $rbac.Status, $withEntra, $entra.Status
+    @{
+        Disabled = New-EbrResult -ResultId 'IA.15-DISABLED' -Status 'OK' -Rows $userRows -Columns $userColumns -Source 'Microsoft Graph' -Detail $userDetail -DurationSec (& $elapsed)
+        Rbac     = $rbac
+        Entra    = $entra
+    }
+}
 
-    # A row for each disabled account a role reaches: the account itself, or each disabled member of the group that
-    # holds it, with the group the member sits in, so CR-19 can remove the account from that group and leave the
+function Invoke-EbrGuestRoles {
+    # IA.17 (CyberSOC 1.21.0), for change request CR-26. Returns three results: IA.17-GUESTS, the guest accounts that are
+    # still enabled, with when each was created and last signed in, IA.17-RBAC, every Azure role assignment they hold,
+    # and IA.17-ENTRA, every Microsoft Entra role assignment they hold, directly or through a group, read by the same
+    # engine as IA.15. A disabled guest is already in IA.15, so a guest is kept only when Graph returns it with userType
+    # Guest and accountEnabled true. The last sign-in (signInActivity) needs AuditLog.Read.All and Microsoft Entra ID P1
+    # or P2, so when that read is refused the guests are read again without it, SignInRead reads No and the roles are
+    # still read: the client decides on each guest with or without it. When the guests cannot be read at all, the roles
+    # cannot be tied to anyone, so all three results are UNAVAILABLE or FAILED.
+    param($Ctx, [string]$Query)
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $elapsed = { $sw.Elapsed.TotalSeconds }
+    $guestColumns = @('PrincipalId', 'PrincipalType', 'DisplayName', 'UserPrincipalName', 'Mail', 'UserType', 'AccountEnabled', 'ExternalUserState', 'CreatedDateUtc', 'LastSuccessfulSignInUtc', 'LastSignInUtc', 'LastNonInteractiveSignInUtc', 'SignInRead', 'OnPremisesSyncEnabled')
+    $graphFix = { param([string]$Permission) 'Fix: az login --tenant {0} --scope https://graph.microsoft.com/{1}, then rerun.' -f $Ctx.TenantGuid, $Permission }
+    $all = {
+        param([string]$Status, [string]$Detail)
+        @{
+            Guests = New-EbrResult -ResultId 'IA.17-GUESTS' -Status $Status -Columns $guestColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
+            Rbac   = New-EbrResult -ResultId 'IA.17-RBAC' -Status $Status -Columns $script:EbrRoleRbacColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
+            Entra  = New-EbrResult -ResultId 'IA.17-ENTRA' -Status $Status -Columns $script:EbrRoleEntraColumns -Source 'Microsoft Graph' -Detail $Detail -DurationSec (& $elapsed)
+        }
+    }
+    if (-not $Ctx.GraphAvailable) {
+        $why = if ($Ctx.GraphReason) { $Ctx.GraphReason } else { 'Microsoft Graph was not initialised.' }
+        return & $all 'UNAVAILABLE' ('Not a zero: Microsoft Graph was not reachable, so the guest accounts, and the roles they hold, are unknown. ' + $why).Trim()
+    }
+
+    $select = 'id,displayName,userPrincipalName,mail,userType,accountEnabled,externalUserState,createdDateTime,onPremisesSyncEnabled'
+    $signInRead = 'Yes'; $signInWhy = ''
+    try { $users = @(Get-EbrGraphList -Ctx $Ctx -Complete -Path ('users?$filter=userType eq ''Guest''&$select={0},signInActivity&$top=500' -f $select)) }
+    catch {
+        $signInWhy = $_.Exception.Message -replace '\s+', ' '
+        $signInRead = 'No'
+        if ($signInWhy -match '^GRAPH-403') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'AuditLog.Read.All' -Partial 'IA.17-GUESTS (last sign-in)' }
+        try { $users = @(Get-EbrGraphList -Ctx $Ctx -Complete -Path ('users?$filter=userType eq ''Guest''&$select={0}&$top=999' -f $select)) }
+        catch {
+            $m = $_.Exception.Message -replace '\s+', ' '
+            if ($m -match '^GRAPH-403') {
+                Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'User.Read.All'
+                return & $all 'UNAVAILABLE' ('Not a zero: the Graph token cannot read user accounts, so the guest accounts, and the roles they hold, are unknown. Needs User.Read.All. {0} {1}' -f (& $graphFix 'User.Read.All'), $m)
+            }
+            return & $all 'FAILED' ('The guest accounts could not be read in full, so the roles they hold are unknown. ' + $m)
+        }
+    }
+    $guests = @{}
+    foreach ($u in $users) {
+        if ([string](Get-EbrProp $u 'userType') -ine 'Guest' -or [string](Get-EbrProp $u 'accountEnabled') -ine 'true') { continue }
+        $id = ([string](Get-EbrProp $u 'id')).ToLowerInvariant()
+        if (-not $id -or $guests.ContainsKey($id)) { continue }
+        $activity = Get-EbrProp $u 'signInActivity'
+        $guests[$id] = [pscustomobject]@{
+            PrincipalId = $id; PrincipalType = 'User'; DisplayName = [string](Get-EbrProp $u 'displayName'); UserPrincipalName = [string](Get-EbrProp $u 'userPrincipalName')
+            Mail = [string](Get-EbrProp $u 'mail'); UserType = 'Guest'; AccountEnabled = $true; ExternalUserState = [string](Get-EbrProp $u 'externalUserState')
+            CreatedDateUtc = Format-EbrUtc (Get-EbrProp $u 'createdDateTime')
+            # Microsoft Learn: lastSuccessfulSignInDateTime is the last successful sign-in, interactive or not, since December
+            # 2023. lastSignInDateTime and lastNonInteractiveSignInDateTime count failed attempts too.
+            LastSuccessfulSignInUtc = Format-EbrUtc (Get-EbrProp $activity 'lastSuccessfulSignInDateTime')
+            LastSignInUtc = Format-EbrUtc (Get-EbrProp $activity 'lastSignInDateTime')
+            LastNonInteractiveSignInUtc = Format-EbrUtc (Get-EbrProp $activity 'lastNonInteractiveSignInDateTime')
+            SignInRead = $signInRead; OnPremisesSyncEnabled = (Test-EbrTrue (Get-EbrProp $u 'onPremisesSyncEnabled'))
+        }
+    }
+    $guestRows = @($guests.Values | Sort-Object UserPrincipalName, PrincipalId)
+    $signInText = if ($signInRead -eq 'Yes') { '' } else { ' The last sign-in was not read (SignInRead No), since it needs AuditLog.Read.All and Microsoft Entra ID P1 or P2: {0}' -f $signInWhy }
+    if (-not $guestRows.Count) {
+        $r = & $all 'EMPTY' 'No enabled guest account, so no guest holds a role.'
+        $r.Guests.Detail = 'No enabled guest account. Disabled guests are in IA.15-DISABLED.'
+        return $r
+    }
+    $roles = Get-EbrUserRoles -Ctx $Ctx -Query $Query -Users $guests -Prefix 'IA.17' -One 'enabled guest' -Many 'enabled guests' -Elapsed $elapsed
+    $rbac = $roles.Rbac; $entra = $roles.Entra
+    $withAzure = @(@($rbac.Rows) | ForEach-Object PrincipalId | Sort-Object -Unique).Count
+    $withEntra = @(@($entra.Rows) | ForEach-Object PrincipalId | Sort-Object -Unique).Count
+    $guestDetail = '{0}. {1} hold an Azure role (IA.17-RBAC {2}) and {3} a Microsoft Entra role (IA.17-ENTRA {4}), directly or through a group. Disabled guests are in IA.15-DISABLED.{5}' -f (Format-EbrCount $guestRows.Count 'enabled guest account' 'enabled guest accounts'), $withAzure, $rbac.Status, $withEntra, $entra.Status, $signInText
+    @{
+        # A guest list without the last sign-in still names every guest, so it reads OK and the detail says what is missing.
+        Guests = New-EbrResult -ResultId 'IA.17-GUESTS' -Status 'OK' -Rows $guestRows -Columns $guestColumns -Source 'Microsoft Graph' -Detail $guestDetail -DurationSec (& $elapsed)
+        Rbac   = $rbac
+        Entra  = $entra
+    }
+}
+
+function Get-EbrUserRoles {
+    # The Azure and Microsoft Entra roles a set of user accounts holds, directly or through a group: the engine of IA.15
+    # (the disabled accounts, CR-19) and IA.17 (the enabled guests, CR-26). Users holds each account by its object ID in
+    # lower case. Returns @{ Rbac; Entra }, the results Prefix-RBAC and Prefix-ENTRA. One and Many name the accounts in
+    # the details. Elapsed is the caller's timer, so the durations run from the start of its read.
+    param($Ctx, [string]$Query, [hashtable]$Users, [string]$Prefix, [string]$One, [string]$Many, [scriptblock]$Elapsed)
+    $elapsed = $Elapsed
+    $rbacColumns = $script:EbrRoleRbacColumns
+    $entraColumns = $script:EbrRoleEntraColumns
+    $graphFix = { param([string]$Permission) 'Fix: az login --tenant {0} --scope https://graph.microsoft.com/{1}, then rerun.' -f $Ctx.TenantGuid, $Permission }
+
+    # A row for each account a role reaches: the account itself, or each member in Users of the group that holds it,
+    # with the group the member sits in, so the change request can remove the account from that group and leave the
     # role with the group. A group is read once: its properties, then its direct members (groups/{id}/members), and
     # a group nested in it is followed the same way, so a member of a nested group is listed with the nested group
     # and the path from the role group down to it. The membership type of the group the account sits in says whether
@@ -5509,13 +5622,13 @@ function Invoke-EbrDisabledRoles {
             # A group deleted since the role was given to it holds the role for no one.
             if ($m -notmatch '^HTTP 404\b|Request_ResourceNotFound') {
                 $g.Read = $false
-                if ($m -match '^GRAPH-403') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'GroupMember.Read.All' -Partial 'IA.15 (roles held through groups)' }
+                if ($m -match '^GRAPH-403') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'GroupMember.Read.All' -Partial ('{0} (roles held through groups)' -f $Prefix) }
             }
         }
         $groups[$GroupId] = $g
         $g
     }
-    # The disabled accounts a role group reaches, each with the path from the role group down to the group the
+    # The accounts in Users a role group reaches, each with the path from the role group down to the group the
     # account is a member of, and the groups on the way that could not be read. Walked once per role group, breadth
     # first, so a group nested at two depths, in the role group and in another group nested in it, is reached by its
     # shortest route, and a group already reached is not walked again, which also stops a loop.
@@ -5534,7 +5647,7 @@ function Invoke-EbrDisabledRoles {
             if (-not $group.Read) { if ($group.Id -notin $r.Unread) { $r.Unread.Add($group.Id) }; continue }
             foreach ($m in @($group.Members)) {
                 if ($m.Type -eq 'user') {
-                    if (-not $disabled.ContainsKey($m.Id)) { continue }
+                    if (-not $Users.ContainsKey($m.Id)) { continue }
                     if (-not $r.Paths.ContainsKey($m.Id)) { $r.Paths[$m.Id] = @() }
                     $r.Paths[$m.Id] += , $chain
                 }
@@ -5556,7 +5669,7 @@ function Invoke-EbrDisabledRoles {
             $o.PrincipalId = $u.PrincipalId; $o.UserPrincipalName = $u.UserPrincipalName; $o.DisplayName = $u.DisplayName; $o.OnPremisesSyncEnabled = $u.OnPremisesSyncEnabled
             foreach ($k in 'HeldThrough', 'GroupId', 'GroupName', 'MemberOfId', 'MemberOfName', 'MemberOfType', 'GroupPath', 'GroupPathIds') { $o[$k] = $Held[$k] }
             [pscustomobject]$o }
-        if ($disabled.ContainsKey($PrincipalId)) { & $rowFor $disabled[$PrincipalId] $empty }
+        if ($Users.ContainsKey($PrincipalId)) { & $rowFor $Users[$PrincipalId] $empty }
         elseif ($IsGroup -and $PrincipalId) {
             $g = & $groupReach $PrincipalId $GroupName
             foreach ($id in @($g.Unread)) { if ($id -notin $Unread) { $Unread.Add($id) } }
@@ -5569,7 +5682,7 @@ function Invoke-EbrDisabledRoles {
                 }
                 foreach ($last in @($byGroup.Keys)) {
                     $path = $byGroup[$last]
-                    & $rowFor $disabled[$member] @{
+                    & $rowFor $Users[$member] @{
                         HeldThrough = 'Group'; GroupId = $path[0].Id; GroupName = $path[0].Name
                         MemberOfId = $path[-1].Id; MemberOfName = $path[-1].Name; MemberOfType = $path[-1].Membership
                         GroupPath = @($path | ForEach-Object { $_.Name }); GroupPathIds = @($path | ForEach-Object { $_.Id }) }
@@ -5579,6 +5692,7 @@ function Invoke-EbrDisabledRoles {
     }
     $groupText = { param($Unread, [string]$Side)
         if ($Unread.Count) { ' The members of {0} could not be read, so {1} roles held through {2} are not listed: {3}.' -f (Format-EbrCount $Unread.Count 'group' 'groups'), $Side, $(if ($Unread.Count -eq 1) { 'it' } else { 'them' }), ($Unread -join ', ') } else { '' } }
+    $accounts = Format-EbrCount $Users.Count $One $Many
 
     # Microsoft Entra roles: the active assignments from roleAssignments, read once with IA.6, every directory role
     # rather than the 12 privileged ones, and the eligible ones from PIM when the token can read them.
@@ -5590,9 +5704,9 @@ function Invoke-EbrDisabledRoles {
         $m = $_.Exception.Message -replace '\s+', ' '
         if ($m -match '^GRAPH-403') {
             Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'RoleManagement.Read.Directory'
-            $entra = New-EbrResult -ResultId 'IA.15-ENTRA' -Status 'UNAVAILABLE' -Columns $entraColumns -Source 'Microsoft Graph' -Detail ('Not a zero: the Graph token cannot read Microsoft Entra role assignments, so the Entra roles held by the disabled accounts are unknown. Needs RoleManagement.Read.Directory. {0} {1}' -f (& $graphFix 'RoleManagement.Read.Directory'), $m) -DurationSec (& $elapsed)
+            $entra = New-EbrResult -ResultId "$Prefix-ENTRA" -Status 'UNAVAILABLE' -Columns $entraColumns -Source 'Microsoft Graph' -Detail ('Not a zero: the Graph token cannot read Microsoft Entra role assignments, so the Entra roles held by the {0} are unknown. Needs RoleManagement.Read.Directory. {1} {2}' -f $Many, (& $graphFix 'RoleManagement.Read.Directory'), $m) -DurationSec (& $elapsed)
         }
-        else { $entra = New-EbrResult -ResultId 'IA.15-ENTRA' -Status 'FAILED' -Columns $entraColumns -Source 'Microsoft Graph' -Detail ('The Microsoft Entra role assignments could not be read. ' + $m) -DurationSec (& $elapsed) }
+        else { $entra = New-EbrResult -ResultId "$Prefix-ENTRA" -Status 'FAILED' -Columns $entraColumns -Source 'Microsoft Graph' -Detail ('The Microsoft Entra role assignments could not be read. ' + $m) -DurationSec (& $elapsed) }
     }
     if (-not $entra) {
         $roleNames = @{}
@@ -5631,7 +5745,7 @@ function Invoke-EbrDisabledRoles {
                 $pimRead = & $classify $pimWhy
             }
         }
-        if ($pimRead -eq 'NoPermission') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'RoleManagement.Read.Directory' -Partial 'IA.15-ENTRA (eligible role assignments)' }
+        if ($pimRead -eq 'NoPermission') { Add-EbrGraphMissingScope -Ctx $Ctx -Permission 'RoleManagement.Read.Directory' -Partial ('{0}-ENTRA (eligible role assignments)' -f $Prefix) }
         $entraRow = {
             param($a, [string]$Kind, [string]$End)
             $p = Get-EbrProp $a 'principal'
@@ -5656,7 +5770,7 @@ function Invoke-EbrDisabledRoles {
             & $entraRow $e 'Eligible' (Format-EbrUtc (Get-EbrProp $e 'endDateTime'))
         }
         $rows = @($entraRows | Sort-Object UserPrincipalName, Role, AssignmentType)
-        $detail = '{0} held by {1} of the {2}, {3} through a group.' -f (Format-EbrCount $rows.Count 'Microsoft Entra role assignment' 'Microsoft Entra role assignments'), @($rows | ForEach-Object PrincipalId | Sort-Object -Unique).Count, (Format-EbrCount $userRows.Count 'disabled account' 'disabled accounts'), @($rows | Where-Object HeldThrough -eq 'Group').Count
+        $detail = '{0} held by {1} of the {2}, {3} through a group.' -f (Format-EbrCount $rows.Count 'Microsoft Entra role assignment' 'Microsoft Entra role assignments'), @($rows | ForEach-Object PrincipalId | Sort-Object -Unique).Count, $accounts, @($rows | Where-Object HeldThrough -eq 'Group').Count
         $partial = $false
         switch ($pimRead) {
             'NoPermission' { $partial = $true; $detail = 'Eligible assignments not visible, needs RoleManagement.Read.Directory, so only active assignments are listed{0}. ' -f $(if ($activeRead) { '' } else { ' and an activated one reads as Standing' }) + $detail }
@@ -5665,7 +5779,7 @@ function Invoke-EbrDisabledRoles {
         }
         if ($entraUnread.Count) { $partial = $true; $detail += & $groupText $entraUnread 'the Entra' }
         $status = if ($partial) { 'PARTIAL' } elseif ($rows.Count) { 'OK' } else { 'EMPTY' }
-        $entra = New-EbrResult -ResultId 'IA.15-ENTRA' -Status $status -Rows $rows -Columns $entraColumns -Source 'Microsoft Graph' -Detail $detail -DurationSec (& $elapsed)
+        $entra = New-EbrResult -ResultId "$Prefix-ENTRA" -Status $status -Rows $rows -Columns $entraColumns -Source 'Microsoft Graph' -Detail $detail -DurationSec (& $elapsed)
     }
 
     # Azure roles: every role assignment Resource Graph returns for the subscriptions and, through the
@@ -5694,24 +5808,16 @@ function Invoke-EbrDisabledRoles {
             foreach ($row in @(& $reach ([string](Get-EbrProp $a 'PrincipalId')).ToLowerInvariant() ([string](Get-EbrProp $a 'PrincipalType') -eq 'Group') '' $fields $rbacUnread)) { $rbacRows.Add($row) }
         }
         $rows = @($rbacRows | Sort-Object UserPrincipalName, Scope, Role)
-        $detail = '{0} held by {1} of the {2}, {3} through a group, read in the subscriptions of the pack and at the management groups and root scope above them.' -f (Format-EbrCount $rows.Count 'Azure role assignment' 'Azure role assignments'), @($rows | ForEach-Object PrincipalId | Sort-Object -Unique).Count, (Format-EbrCount $userRows.Count 'disabled account' 'disabled accounts'), @($rows | Where-Object HeldThrough -eq 'Group').Count
+        $detail = '{0} held by {1} of the {2}, {3} through a group, read in the subscriptions of the pack and at the management groups and root scope above them.' -f (Format-EbrCount $rows.Count 'Azure role assignment' 'Azure role assignments'), @($rows | ForEach-Object PrincipalId | Sort-Object -Unique).Count, $accounts, @($rows | Where-Object HeldThrough -eq 'Group').Count
         if ($arg.Detail) { $detail += ' ' + $arg.Detail }
         $partial = [bool]$arg.Detail
         if ($Ctx.AccessPath -eq 'Lighthouse') { $partial = $true; $detail += " Read through Lighthouse, which shows the managing tenant's delegations rather than the client's own role assignments, so this is incomplete. Sign in directly (az login --tenant followed by the client domain) and rerun." }
         if ($rbacUnread.Count) { $partial = $true; $detail += & $groupText $rbacUnread 'the Azure' }
         $status = if ($partial) { 'PARTIAL' } elseif ($rows.Count) { 'OK' } else { 'EMPTY' }
-        $rbac = New-EbrResult -ResultId 'IA.15-RBAC' -Status $status -Rows $rows -Columns $rbacColumns -Source $source -Detail $detail -DurationSec (& $elapsed)
+        $rbac = New-EbrResult -ResultId "$Prefix-RBAC" -Status $status -Rows $rows -Columns $rbacColumns -Source $source -Detail $detail -DurationSec (& $elapsed)
     }
-    catch { $rbac = New-EbrResult -ResultId 'IA.15-RBAC' -Status 'FAILED' -Columns $rbacColumns -Source $source -Detail ('The Azure role assignments could not be read. ' + ($_.Exception.Message -replace '\s+', ' ')) -DurationSec (& $elapsed) }
-
-    $withAzure = @(@($rbac.Rows) | ForEach-Object PrincipalId | Sort-Object -Unique).Count
-    $withEntra = @(@($entra.Rows) | ForEach-Object PrincipalId | Sort-Object -Unique).Count
-    $userDetail = '{0}, {1} synced from on-premises. {2} hold an Azure role (IA.15-RBAC {3}) and {4} a Microsoft Entra role (IA.15-ENTRA {5}), directly or through a group. Disabled service principals are not read.' -f (Format-EbrCount $userRows.Count 'disabled user account' 'disabled user accounts'), @($userRows | Where-Object OnPremisesSyncEnabled).Count, $withAzure, $rbac.Status, $withEntra, $entra.Status
-    @{
-        Disabled = New-EbrResult -ResultId 'IA.15-DISABLED' -Status 'OK' -Rows $userRows -Columns $userColumns -Source 'Microsoft Graph' -Detail $userDetail -DurationSec (& $elapsed)
-        Rbac     = $rbac
-        Entra    = $entra
-    }
+    catch { $rbac = New-EbrResult -ResultId "$Prefix-RBAC" -Status 'FAILED' -Columns $rbacColumns -Source $source -Detail ('The Azure role assignments could not be read. ' + ($_.Exception.Message -replace '\s+', ' ')) -DurationSec (& $elapsed) }
+    @{ Rbac = $rbac; Entra = $entra }
 }
 
 function Invoke-EbrEmergencyAccess {
@@ -6620,6 +6726,14 @@ function Invoke-EbrCatalogItem {
             $Ctx.Pending.Add($r.Rbac)
             $Ctx.Pending.Add($r.Entra)
             return $r.Disabled
+        }
+        'GUEST-ROLES' {
+            # IA.17-GUESTS, with IA.17-RBAC and IA.17-ENTRA as its detail (CyberSOC 1.21.0).
+            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Microsoft Graph, then Resource Graph with authorizationScopeFilter AtScopeAboveAndBelow, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
+            $r = Invoke-EbrGuestRoles -Ctx $Ctx -Query $text
+            $Ctx.Pending.Add($r.Rbac)
+            $Ctx.Pending.Add($r.Entra)
+            return $r.Guests
         }
         'EMERGENCY-ACCESS' {
             # IA.16-ACCOUNTS, with IA.16-GROUPS as its detail (CyberSOC 1.12.0).

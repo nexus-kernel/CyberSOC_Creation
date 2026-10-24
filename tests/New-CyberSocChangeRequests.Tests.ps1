@@ -239,7 +239,7 @@ BeforeAll {
     # Microsoft Entra directory roles, and for CR-20 and CR-21 the policies, sign-ins and exclusions, which belong to no
     # subscription, and for CR-22 the domain controllers, which the client confirms apart from the other servers, and for
     # CR-24 the sentence that introduces its count of the devices by operating system and join type.
-    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
+    $resourceHeading = '^(By subscription, then management group and root scope, the guests with a role are these|Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
     $dayPattern = '(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}'
     # Checks one client email against the shared structure and the copy rules. Every generated email goes through it.
     # The parts are found by what each paragraph says: the ask, why, what it means for the client, the resources by
@@ -1225,7 +1225,7 @@ Describe 'Change request variants' {
         $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
     }
 
-    It 'writes a client email for every change request, CR-01 to CR-25' {
+    It 'writes a client email for every change request, CR-01 to CR-26' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
         # written at least once. A change request written without its email, or with an email that does not
@@ -1236,6 +1236,9 @@ Describe 'Change request variants' {
         Set-PackResult $full 'LIC.4-DEVICES' @((Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/stale-devices/scenarios.json') -Raw | ConvertFrom-Json).Devices)
         # Storage accounts with soft delete off, so CR-25 is written too.
         Set-PackResult $full 'DP.1-SOFTDELETE' @((Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/blob-soft-delete/scenarios.json') -Raw | ConvertFrom-Json).Rows | Where-Object ReadStatus -eq 'OK')
+        # Enabled guests with Azure roles, so CR-26 is written too.
+        $guestFixture = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/guest-roles/scenarios.json') -Raw | ConvertFrom-Json
+        foreach ($p in @(@('IA.17-GUESTS', $guestFixture.Guests), @('IA.17-RBAC', $guestFixture.Rbac), @('IA.17-ENTRA', $guestFixture.Entra))) { Set-PackResult $full $p[0] @($p[1]) }
         $null = & $generator -EvidencePath $full
         $more = Join-Path $TestDrive 'every-more'
         New-ChangeFixture $more
@@ -1273,7 +1276,7 @@ Describe 'Change request variants' {
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
-        @($written | Sort-Object -Unique) | Should -Be @(1..25) -Because 'the two packs between them write every change request'
+        @($written | Sort-Object -Unique) | Should -Be @(1..26) -Because 'the two packs between them write every change request'
         $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
@@ -4688,5 +4691,205 @@ Describe 'Blob and container soft delete turned on for storage accounts (CR-25, 
         $r = New-BsPack 'failed' { param($p) Set-PackResult $p 'DP.1-SOFTDELETE' @() -Status 'FAILED' -Detail 'Resource Graph throttled' }
         $r.Index | Should -Match '\| 25 \| [^|]+ \|  \| Not collected \(DP\.1-SOFTDELETE FAILED\) \|' -Because 'a failed read is never no gaps'
         Test-Path (Join-Path $r.Out 'CR-25-blob-soft-delete.txt') | Should -BeFalse
+    }
+}
+
+Describe 'Azure roles removed from guest accounts (CR-26, collector 1.21.0)' {
+    BeforeAll {
+        $script:gr = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/guest-roles/scenarios.json') -Raw | ConvertFrom-Json
+        # A CR-26 scenario written into a pack as collector 1.21.0 writes it, with the emergency access read complete.
+        function New-GrPack([string]$Name, [scriptblock]$Before = $null, [hashtable]$Extra = @{}) {
+            $pack = Join-Path $TestDrive "gr-$Name"
+            New-ChangeFixture $pack
+            Set-PackResult $pack 'IA.17-GUESTS' @($gr.Guests)
+            Set-PackResult $pack 'IA.17-RBAC' @($gr.Rbac)
+            Set-PackResult $pack 'IA.17-ENTRA' @($gr.Entra)
+            Set-PackResult $pack 'IA.16-ACCOUNTS' @($gr.EmergencyAccess.Accounts)
+            Set-PackResult $pack 'IA.16-GROUPS' @($gr.EmergencyAccess.Groups)
+            if ($Before) { & $Before $pack }
+            Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -ClientContact 'Dana' -SenderName 'Scott Example' @Extra }
+            $out = Join-Path $pack '05-change-requests'
+            [pscustomobject]@{ Pack = $pack; Out = $out; Index = Get-Content (Join-Path $out '00-index.md') -Raw }
+        }
+        function Get-Cr26([string]$Out, [string]$Suffix = '.txt') { Get-Content (Join-Path $Out "CR-26-guest-roles$Suffix") -Raw }
+        function Get-GrGuest([string]$Name) { @($gr.Guests | Where-Object DisplayName -eq $Name)[0] }
+        # The file the client returns: the CR-26 CSV with the Decision column filled from the fixture's answers.
+        function New-GrDecisions([string]$Path, [hashtable]$Override = @{}) {
+            $rows = @(Import-Csv (Join-Path $grAsk.Out 'CR-26-guest-roles.email.csv'))
+            foreach ($row in $rows) {
+                $answer = @($gr.Decisions | Where-Object ObjectId -eq $row.ObjectId)[0]
+                $row.Decision = if ($Override.ContainsKey($row.ObjectId)) { $Override[$row.ObjectId] } elseif ($answer) { $answer.Decision } else { '' }
+            }
+            $rows += [pscustomobject]@{ Guest = 'Gone Guest'; SignInName = 'gone'; ObjectId = @($gr.Decisions)[-1].ObjectId; Created = ''; LastSignIn = ''; Role = 'Reader'; Scope = 'x'; Detail = ''; HeldThrough = ''; IfRemoved = ''; Decision = 'Remove' }
+            $rows | Export-Csv $Path -NoTypeInformation
+            $Path
+        }
+        $script:grAsk = New-GrPack 'ask'
+    }
+
+    It 'lists every guest with an Azure role, to be removed only where the client answers Remove, and leaves the emergency access guests out' {
+        $r = $grAsk
+        $r.Index | Should -Match '\| 26 \| Azure roles removed from guest accounts \| 5 \| Change request and client email \| CR-26-guest-roles\.txt, CR-26-guest-roles\.email\.txt, CR-26-guest-roles\.email\.csv \|'
+        $text = Get-Cr26 $r.Out
+        $text | Should -Match '^Title: Remove the Azure roles held by guest accounts'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the 4 Azure role assignments assigned directly to the 4 guest accounts listed below, each only where the client answers Remove for it, at the scope where each was made, and remove the guest concerned from the group that gives it more. The guest accounts stay in the directory.'
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match 'A guest is changed only where the client answers Remove for it\.'
+        $vendor = Get-GrGuest 'Vendor Support'
+        $res | Should -Match ('- Vendor Support \(support_vendor\.example#EXT#@contoso\.onmicrosoft\.com\), object ID {0}, created 2025-02-03, last successful sign-in 2026-10-01\n' -f $vendor.PrincipalId)
+        $res | Should -Match '- Partner Analyst \([^)]+\), object ID [0-9a-f-]{36}, created 2026-06-01, no successful sign-in recorded, invitation not accepted' -Because 'a guest that never signed in, or never accepted its invitation, is named as such for the client to decide'
+        $res | Should -Match "Subscription: Example Production \($s1\)\n- Kept Contractor [^\n]+: Owner on the subscription, role definition 8e3af657-a8ff-443c-a75c-2fe8c4bcb635, scope /subscriptions/$s1, assignment [0-9a-f-]{36}\n- Vendor Support [^\n]+: Contributor on resource group rg-app, " -Because 'a direct assignment is removed at its scope'
+        $res | Should -Match 'Root scope: /\n- Vendor Support [^\n]+: Reader on the root scope, role definition acdd72a7-3385-48ef-bd42-f606fba81ae7, scope /, ' -Because 'the root scope is read too'
+        $res | Should -Match ': Storage Blob Data Reader on resource stexports in resource group rg-data, role definition 2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, [^\n]+, with a condition \(version 2\.0\) kept exactly in change-requests\.csv: '
+        $res | Should -Match '- Partner Analyst [^\n]+: removed from group ext-tier2 \([0-9a-f-]{36}\), nested in ext-vendors \([0-9a-f-]{36}\), which holds Azure Contributor on /subscriptions/[^/]+/resourceGroups/rg-ops' -Because 'a role held through a nested group is taken away by removing the guest from the group it sits in'
+        foreach ($out in 'Audit Reviewer', 'Atmosera SOC', 'Night Shift Analyst') { $res | Should -Not -Match $out -Because "$out is not in the change" }
+        $impl = (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n"
+        $impl | Should -Match '^1\. In the Azure portal, go to Microsoft Entra ID > Users and open the first guest listed in the RESOURCES section\.'
+        $impl | Should -Match '\n2\. Find the guest by its object ID in the file the client returned\. Go on only where its Decision column reads Remove: a guest marked Keep, or with no answer, stays unchanged, so note it in the change record and skip the remaining steps for it\. On the Properties tab, confirm that User type reads Guest and Account enabled reads Yes\.[^\n]+Then select Azure role assignments and confirm the guest still holds each role listed for it\.' -Because 'nothing is removed without an answer, and the guest is checked first'
+        $impl | Should -Match '\n3\. For each Azure role assignment listed for the account below the root scope, open its scope'
+        $impl | Should -Match '\n5\. The portal cannot remove an assignment at the root scope \(/\)\.[^\n]+\n    az role assignment delete --assignee OBJECT-ID --role ROLE-DEFINITION-ID --scope "/"'
+        $impl | Should -Match '\n6\. For each group membership listed for the account, first confirm that it still gives the account a role on its line' -Because 'the group still holds the role and the chain of groups is intact before the guest leaves it'
+        $impl | Should -Match '\n7\. Repeat steps 1 to 6 for each remaining guest listed\.$'
+        $testing = (Get-Section $text 'B) TESTING PLAN') -join "`n"
+        $testing | Should -Match '^1\. For each Azure role assignment removed, open its scope in the Azure portal, go to Access control \(IAM\) > Role assignments and search for the guest\. Confirm the assignment no longer shows'
+        $rollback = (Get-Section $text 'C) ROLLBACK PLAN') -join "`n"
+        $rollback | Should -Match 'For an Azure role assignment recorded with a condition, recreate it with that condition, copied exactly from change-requests\.csv'
+        $rollback | Should -Match '--condition "\$\(cat condition\.txt\)" --condition-version VERSION'
+        $rollback | Should -Match 'For an assignment at the root scope recorded without a condition, run in Azure Cloud Shell'
+        $rollback | Should -Match 'For a group membership, go to Microsoft Entra ID > Groups > All groups, open the recorded group'
+        $refs = @(Get-Section $text 'A) REFERENCES')
+        $refs[0] | Should -Be '- Identity and access security recommendations, guest accounts with owner, read or write permissions on Azure resources should be removed: https://learn.microsoft.com/azure/defender-for-cloud/recommendations-reference-identity-access#azure-identity-and-access-recommendations'
+        foreach ($ref in $refs) { $ref | Should -Match ': https://learn\.microsoft\.com/' }
+        $refs | Should -Contain '- Elevate access to manage all Azure subscriptions and management groups, perform steps at root scope: https://learn.microsoft.com/azure/role-based-access-control/elevate-access-global-admin#perform-steps-at-root-scope'
+        $r.Index | Should -Match '- CR-26 leaves out 2 emergency access guests, so none of their Azure roles is removed and they are not removed from any group: Atmosera SOC \(soc_atmosera\.com#EXT#@contoso\.onmicrosoft\.com\), Atmosera in its UPN / Night Shift Analyst \([^)]+\), a member of the Atmosera group SOC-Atmosera-Responders\.'
+        $r.Index | Should -Match '- 1 guest holds Microsoft Entra roles, which CR-26 does not change: Vendor Support \([^)]+\), Directory Readers\. Review each with the client' -Because 'Entra roles are named for review, not changed'
+        $r.Index | Should -Match '- 1 guest holds roles through a group whose members CR-26 cannot change, so they stay as they are: Audit Reviewer \([^)]+\) through group ext-guests-dynamic \([0-9a-f-]{36}\), a dynamic membership group whose members a rule decides'
+        $r.Index | Should -Match '- CR-26 asks the client to answer Keep or Remove for each guest in the Decision column of CR-26-guest-roles\.email\.csv, attached to its email\. When the file comes back, save it outside 05-change-requests and run the generator again with -GuestDecisions'
+        $csv = @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-26')
+        $csv.Count | Should -Be 5
+        ($csv | Where-Object Resource -like '*Storage Blob Data Reader').CurrentSetting | Should -BeLike "*condition version 2.0: ((!(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})) OR (@Resource*" -Because 'the rollback recreates the condition exactly'
+        ($csv | Where-Object Resource -like '*member of group*').ResourceId | Should -Match '^/groups/[0-9a-f-]{36}/members/[0-9a-f-]{36}/\$ref$'
+    }
+
+    It 'writes a client email that explains a guest, names the guests by subscription and asks Keep or Remove for each before the approval' {
+        $email = Get-Cr26 $grAsk.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-26'
+        $email | Should -Match '^Subject: Approval requested: removing the Azure roles held by guest accounts\r?\n\r?\nHello Dana,'
+        $email | Should -Match 'I would like your approval to remove the Azure roles held by 4 guest accounts in your tenant, for each guest you tell me no longer needs that access\. A guest account is an account for someone outside your organization, such as a vendor or partner, who usually signs in with an account their own organization or provider manages\.'
+        $email | Should -Match 'I recommend reviewing these roles because Microsoft Defender for Cloud recommends removing guest accounts with owner, write or read permissions on Azure resources\.'
+        $email | Should -Match 'A guest whose roles are removed can no longer reach the Azure resources listed for it, straight away'
+        $email | Should -Match 'Each guest account itself stays in your directory, since deleting a guest account is a separate decision' -Because 'removing the guest account is a separate decision'
+        $email | Should -Match ("and where they hold their roles is set out below:\r?\n\r?\nBy subscription, then management group and root scope, the guests with a role are these:\r?\n\r?\n- Kept Contractor \(build@contractor\.example\), 1 role in the subscription Example Production \($s1\)\r?\n- Vendor Support \(support@vendor\.example\), 1 role in the subscription Example Production \($s1\)\r?\n- Data Consultant \(consult@data\.example\), 1 role in the subscription Example, Dev Test \($s2\)\r?\n- Partner Analyst \(analyst@partner\.example\), 1 role in the subscription Example, Dev Test \($s2\), held through a group\r?\n- Vendor Support \(support@vendor\.example\), 1 role at the root scope, above every subscription\r?\n\r?\nI can restore")
+        @([regex]::Matches($email, '(?m)^By subscription, then management group and root scope').Count) | Should -Be 1 -Because 'one sentence introduces one list, so no two paragraphs open alike however many subscriptions there are'
+        $email | Should -Not -Match '(?m)^(Subscription .+|Management group .+|Root scope):\r?$' -Because 'the email reads as a letter, with no heading lines'
+        $email | Should -Match 'I can restore any of these roles at any time from the record I keep of each one'
+        $email | Should -Match 'Before I schedule the change, could you tell me for each guest whether it still needs its access, by writing Keep or Remove in the Decision column of the attached file and sending it back\? I will remove the roles only of the guests you mark Remove, and a guest without an answer stays out of the change\. With that, could you approve this change for '
+        $email | Should -Not -Match '(?i)atmosera|Night Shift|Audit Reviewer \(' -Because 'the emergency access guests stay out, and a role through a dynamic group is in the file only'
+        $file = Join-Path $grAsk.Out 'CR-26-guest-roles.email.csv'
+        (Get-Content $file -Raw) | Should -Match '^﻿?"Guest","SignInName","ObjectId","Created","LastSignIn","Role","Scope","Detail","HeldThrough","IfRemoved","Decision"'
+        $rows = @(Import-Csv $file)
+        $rows.Count | Should -Be 6
+        @($rows | ForEach-Object Decision | Sort-Object -Unique) | Should -Be @('') -Because 'the client fills in the Decision column'
+        ($rows | Where-Object Guest -eq 'Data Consultant').SignInName | Should -Be "'=consult_data.example#EXT#@contoso.onmicrosoft.com" -Because 'a value a spreadsheet would read as a formula keeps an apostrophe in front'
+        ($rows | Where-Object Guest -eq 'Data Consultant').Detail | Should -Be 'with a condition that narrows what the role allows'
+        ($rows | Where-Object Guest -eq 'Audit Reviewer').IfRemoved | Should -Be 'None in this change, the members of group ext-guests-dynamic come from a rule'
+        ($rows | Where-Object Guest -eq 'Partner Analyst').HeldThrough | Should -Be 'Group ext-vendors, through the group ext-tier2 nested in it'
+        @($rows | Where-Object { $_.Role -eq 'Reader' -and $_.Guest -eq 'Vendor Support' }).Scope | Should -Be 'the root scope, above every subscription'
+    }
+
+    It 'with the file the client returned, lists only the guests marked Remove and names those kept, unanswered or unknown' {
+        $d = New-GrDecisions (Join-Path $TestDrive 'returned.csv')
+        $r = New-GrPack 'answered' -Extra @{ GuestDecisions = $d }
+        $r.Index | Should -Match '\| 26 \| Azure roles removed from guest accounts \| 3 \| Change request and client email \|'
+        $text = Get-Cr26 $r.Out
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Remove the 2 Azure role assignments assigned directly to the 2 guest accounts listed below, which the client marked Remove, at the scope where each was made, and remove the guest concerned from the group that gives it more. The guest accounts stay in the directory.'
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match 'Guests the client marked Remove:\n- Partner Analyst [^\n]+\n- Vendor Support '
+        foreach ($out in 'Kept Contractor', 'Data Consultant', 'Audit Reviewer') { $res | Should -Not -Match $out }
+        @(Get-Section $text 'A) IMPLEMENTATION PLAN')[1] | Should -Match '^2\. Leave the guest unchanged, and note it in the change record, if the client has since asked to keep it\. On the Properties tab'
+        $r.Index | Should -Match '- CR-26 leaves out 1 guest the client chose to keep, whose Azure roles stay as they are: Kept Contractor \('
+        $r.Index | Should -Match '- CR-26 leaves out 1 guest with no answer in the returned file, which stays out of the change until the client answers: Data Consultant \('
+        $r.Index | Should -Match ('- The returned file marks 1 object ID Remove that holds no Azure role in this pack, or is no longer an enabled guest, so CR-26 leaves it out: {0}\.' -f @($gr.Decisions)[-1].ObjectId)
+        $email = Get-Cr26 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-26 with -GuestDecisions'
+        $email | Should -Match 'I would like your approval to remove the Azure roles held by the 2 guest accounts you marked Remove in the file you returned\.'
+        $email | Should -Match 'Could you approve removing the roles of the guests you marked Remove for [^?]+\? The guests you marked Keep, and any guest without an answer, stay out of this change\.'
+        $rows = @(Import-Csv (Join-Path $r.Out 'CR-26-guest-roles.email.csv'))
+        @($rows | ForEach-Object Guest | Sort-Object -Unique) | Should -Be @('Audit Reviewer', 'Partner Analyst', 'Vendor Support')
+        @($rows | ForEach-Object Decision | Sort-Object -Unique) | Should -Be @('Remove') -Because 'the answers given are carried in the file, in one form'
+        Test-Path $d | Should -BeTrue -Because 'the returned file is read, never replaced'
+    }
+
+    It 'leaves out a guest whose lines disagree, and writes nothing when no guest is marked Remove' {
+        $d = New-GrDecisions (Join-Path $TestDrive 'mixed.csv')
+        $rows = @(Import-Csv $d)
+        @($rows | Where-Object Guest -eq 'Vendor Support')[0].Decision = 'Keep'
+        $rows | Export-Csv $d -NoTypeInformation
+        $r = New-GrPack 'mixed' -Extra @{ GuestDecisions = $d }
+        $r.Index | Should -Match '- CR-26 leaves out 1 guest whose answer in the returned file is not one Keep or Remove across its lines, so ask the client again: Vendor Support \('
+        (Get-Section (Get-Cr26 $r.Out) 'C) RESOURCES') -join "`n" | Should -Not -Match 'Vendor Support'
+        $none = Join-Path $TestDrive 'kept.csv'
+        @(Import-Csv $d) | ForEach-Object { $_.Decision = 'Keep'; $_ } | Export-Csv $none -NoTypeInformation
+        $r = New-GrPack 'kept' -Extra @{ GuestDecisions = $none }
+        $r.Index | Should -Match '\| 26 \| Azure roles removed from guest accounts \|  \| Not written, the client marked no guest Remove, 2 emergency access guests left out, see the notes \|  \|'
+        Test-Path (Join-Path $r.Out 'CR-26-guest-roles.txt') | Should -BeFalse
+        Test-Path (Join-Path $r.Out 'CR-26-guest-roles.email.csv') | Should -BeFalse
+    }
+
+    It 'refuses a returned file it would overwrite, and one without the Decision column' {
+        $pack = $grAsk.Pack
+        { & $generator -EvidencePath $pack -GuestDecisions (Join-Path $grAsk.Out 'CR-26-guest-roles.email.csv') } | Should -Throw '*points at CR-26-guest-roles.email.csv in the folder this run writes*'
+        Test-Path (Join-Path $grAsk.Out 'CR-26-guest-roles.email.csv') | Should -BeTrue
+        $bad = Join-Path $TestDrive 'bad.csv'
+        @([pscustomobject]@{ Guest = 'x'; ObjectId = 'y' }) | Export-Csv $bad -NoTypeInformation
+        { & $generator -EvidencePath $pack -GuestDecisions $bad } | Should -Throw '*has no ObjectId and Decision columns*'
+        { & $generator -EvidencePath $pack -GuestDecisions (Join-Path $TestDrive 'missing.csv') } | Should -Throw '*is not a file*'
+    }
+
+    It 'is held while the emergency access read is not complete, and needs recollection on an older pack' {
+        $r = New-GrPack 'ea-partial' -Before { param($p) Set-PackResult $p 'IA.16-ACCOUNTS' @($gr.EmergencyAccess.Accounts) -Status 'PARTIAL' -Detail 'The members of 1 Atmosera group could not be read.' }
+        $r.Index | Should -Match '\| 26 \| Azure roles removed from guest accounts \|  \| Not written, the emergency access read is not complete \(IA\.16-ACCOUNTS PARTIAL\) \|  \|'
+        $r.Index | Should -Match '- CR-26 is not written because the emergency access read is not complete \(IA\.16-ACCOUNTS PARTIAL\)\. CR-26 leaves out every emergency access guest'
+        $r = New-GrPack 'old' -Before { param($p) foreach ($id in 'IA.17-GUESTS', 'IA.17-RBAC', 'IA.17-ENTRA') { Remove-PackResult $p $id } }
+        $r.Index | Should -Match '\| 26 \| Azure roles removed from guest accounts \|  \| Needs recollection with CyberSOC collector 1\.21\.0 or later \|  \|'
+        $r = New-GrPack 'no-guests' -Before { param($p) foreach ($id in 'IA.17-GUESTS', 'IA.17-RBAC', 'IA.17-ENTRA') { Set-PackResult $p $id @() } }
+        $r.Index | Should -Match '\| 26 \| Azure roles removed from guest accounts \|  \| No gaps found \|  \|'
+        $r = New-GrPack 'rbac-failed' -Before { param($p) Set-PackResult $p 'IA.17-RBAC' @() 'FAILED' 'The Azure role assignments could not be read. HTTP 429' }
+        $r.Index | Should -Match '\| 26 \| Azure roles removed from guest accounts \|  \| Not collected \(IA\.17-RBAC FAILED\) \|  \|'
+        $r.Index | Should -Match '- The Azure roles of the enabled guests are unknown, not a zero, because IA\.17-RBAC could not be used: it reads FAILED'
+    }
+
+    It 'leaves a group membership unchanged when leaving the group would also take away a Microsoft Entra role, or the Entra roles were not read in full' {
+        $partner = Get-GrGuest 'Partner Analyst'
+        $azureRow = @($gr.Rbac | Where-Object PrincipalId -eq $partner.PrincipalId)[0]
+        $entraViaGroup = $azureRow | Select-Object * -ExcludeProperty subscriptionId, resourceGroup, ScopeLevel, Scope, Condition, ConditionVersion
+        $entraViaGroup | Add-Member -NotePropertyName DirectoryScope -NotePropertyValue '/'
+        $entraViaGroup | Add-Member -NotePropertyName AssignmentType -NotePropertyValue 'Standing'
+        $entraViaGroup | Add-Member -NotePropertyName EndDateUtc -NotePropertyValue ''
+        $entraViaGroup | Add-Member -NotePropertyName PimRead -NotePropertyValue 'Yes'
+        $entraViaGroup.Role = 'Directory Readers'; $entraViaGroup.RoleDefinitionId = '88d8e3e3-8f55-4a1e-953a-9b9898b8876b'; $entraViaGroup.AssignmentId = 'entra-through-ext-vendors'
+        $cases = @(
+            @{ Name = 'entra-group'; Before = { param($p) Set-PackResult $p 'IA.17-ENTRA' (@($gr.Entra) + @($entraViaGroup)) }; Why = 'a Microsoft Entra role the group gives the guest' }
+            @{ Name = 'entra-partial'; Before = { param($p) Set-PackResult $p 'IA.17-ENTRA' @($gr.Entra) -Status 'PARTIAL' -Detail 'Eligible assignments not visible, needs RoleManagement.Read.Directory.' }; Why = 'any Microsoft Entra role the group gives the guest, and IA.17-ENTRA was not read in full' })
+        foreach ($case in $cases) {
+            $r = New-GrPack $case.Name -Before $case.Before
+            $text = Get-Cr26 $r.Out
+            (Get-Section $text 'C) RESOURCES') -join "`n" | Should -Not -Match 'Group memberships removed' -Because "$($case.Name): the guest stays in the group"
+            (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n" | Should -Not -Match 'For each group membership listed' -Because $case.Name
+            $r.Index | Should -Match ('- CR-26 leaves 1 group membership unchanged, since leaving the group would also take away {0}, which CR-26 does not change: Partner Analyst \([^)]+\) from group ext-tier2 ' -f [regex]::Escape($case.Why))
+            $r.Index | Should -Not -Match 'CR-26 removes it from the group it sits in' -Because $case.Name
+            $email = Get-Cr26 $r.Out '.email.txt'
+            Assert-ApprovalEmail $email "CR-26 $($case.Name)"
+            $email | Should -Match 'Where leaving a group would also take away a Microsoft Entra role the group gives a guest'
+            $email | Should -Not -Match 'Where a group gives a guest its role, I would remove the guest from the group'
+            (@(Import-Csv (Join-Path $r.Out 'CR-26-guest-roles.email.csv')) | Where-Object Guest -eq 'Partner Analyst').IfRemoved | Should -Be 'None in this change, leaving group ext-tier2 would also take away a Microsoft Entra role'
+        }
+    }
+
+    It 'says when the last sign-in could not be read' {
+        $r = New-GrPack 'no-signin' -Before { param($p) Set-PackResult $p 'IA.17-GUESTS' @($gr.Guests | ForEach-Object { $g = $_ | Select-Object *; $g.SignInRead = 'No'; $g.LastSuccessfulSignInUtc = $null; $g }) }
+        (Get-Section (Get-Cr26 $r.Out) 'C) RESOURCES') -join "`n" | Should -Match '- Vendor Support [^\n]+, created 2025-02-03, last sign-in not read\n'
+        @(Import-Csv (Join-Path $r.Out 'CR-26-guest-roles.email.csv') | ForEach-Object LastSignIn | Sort-Object -Unique) | Should -Be @('not read')
+        $r.Index | Should -Match '- IA\.17-GUESTS could not read the last sign-in of the guests, which needs AuditLog\.Read\.All and Microsoft Entra ID P1 or P2'
     }
 }
