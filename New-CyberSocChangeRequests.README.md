@@ -464,8 +464,8 @@ order:
    account with its protocols, count and whether the policy excludes it today. CR-22 lists the servers by subscription and
    the domain controllers after them under `Domain controllers, included only if you confirm:`, since the client
    confirms them apart from the other servers. CR-23 lists the virtual machines by subscription. CR-24 counts the devices
-   by operating system and join type under `Devices by operating system and join type:`, since they belong to no
-   subscription, and names them in `CR-24-stale-devices.email.csv`, written beside the email to attach: one line per
+   by operating system and join type after the sentence `Counted by operating system and join type, the devices in the
+   file are these:`, a sentence rather than a label as in CR-21, since they belong to no subscription, and names them in `CR-24-stale-devices.email.csv`, written beside the email to attach: one line per
    device with its name, operating system and version, join type, last sign-in, days since then, registration date,
    device ID and object ID.
 7. How the change can be reversed, or that it cannot.

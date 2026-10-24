@@ -429,8 +429,8 @@ $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, 
 # which belong to no subscription, and CR-20 and CR-21 the Conditional Access policies, the accounts that signed in with
 # device code flow or legacy authentication and the exclusions removed, which belong to the tenant. CR-22 lists the
 # domain controllers on their own, since the client confirms them apart from the other servers. CR-24 counts the devices
-# by operating system and join type, which belong to no subscription.
-$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Devices by operating system and join type):$'
+# by operating system and join type, which belong to no subscription, after a sentence rather than a label, as CR-21 does.
+$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
 # A spreadsheet reads a cell that starts with =, +, - or @ as a formula, quoted or not, and a device, display or role name
 # comes from the directory, so the CSV an email attaches (CR-19, CR-24) and change-requests.csv put an apostrophe in
@@ -3932,7 +3932,7 @@ $catalog = @(
                         LastSignIn = & $day $_.Last; DaysSinceSignIn = $_.Days; Registered = & $day $_.Registered; DeviceId = $_.DeviceId; ObjectId = $_.Id } })
             $emailCsv = @($emailRows | ConvertTo-Csv -NoTypeInformation)
             $emailResources = [System.Collections.Generic.List[object]]::new()
-            $emailResources.Add('Devices by operating system and join type:')
+            $emailResources.Add(('Counted by operating system and join type, {0}:' -f (Get-Pick $n 'the device in the file is this' 'the devices in the file are these')))
             $emailResources.Add([string[]]@($inScope | Group-Object { '{0}, {1}' -f $(if ($_.OsName) { $_.OsName } else { 'Operating system not recorded' }), $_.Join } | Sort-Object Name | ForEach-Object { '{0}: {1}' -f $_.Name, (Get-Count $_.Count 'device' 'devices') }))
 
             $impl = [System.Collections.Generic.List[object]]::new()

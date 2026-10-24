@@ -238,8 +238,8 @@ BeforeAll {
     # The lines that head each group of resources: a subscription, for CR-19 a management group, the root scope and the
     # Microsoft Entra directory roles, and for CR-20 and CR-21 the policies, sign-ins and exclusions, which belong to no
     # subscription, and for CR-22 the domain controllers, which the client confirms apart from the other servers, and for
-    # CR-24 the devices by operating system and join type.
-    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Devices by operating system and join type):$'
+    # CR-24 the sentence that introduces its count of the devices by operating system and join type.
+    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
     $dayPattern = '(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}'
     # Checks one client email against the shared structure and the copy rules. Every generated email goes through it.
     # The parts are found by what each paragraph says: the ask, why, what it means for the client, the resources by
@@ -4462,7 +4462,7 @@ Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
         $email | Should -Match 'Nothing is deleted, so each device keeps what is stored with it in your directory, such as its BitLocker recovery keys'
         $email | Should -Match 'The list leaves out the devices your on-premises Active Directory manages'
         $email | Should -Match 'I will check each device again and skip any that has signed in since my review\.'
-        $email | Should -Match ("The devices are in the attached file CR-24-stale-devices\.email\.csv, one line for each with its name, operating system, join type, last sign-in and registration date, and they add up as follows:\r?\n\r?\nDevices by operating system and join type:\r?\n\r?\n- iOS, Microsoft Entra registered: 1 device\r?\n- Windows, Microsoft Entra joined: 2 devices\r?\n- Windows, Microsoft Entra registered: 1 device")
+        $email | Should -Match ("The devices are in the attached file CR-24-stale-devices\.email\.csv, one line for each with its name, operating system, join type, last sign-in and registration date, and they add up as follows:\r?\n\r?\nCounted by operating system and join type, the devices in the file are these:\r?\n\r?\n- iOS, Microsoft Entra registered: 1 device\r?\n- Windows, Microsoft Entra joined: 2 devices\r?\n- Windows, Microsoft Entra registered: 1 device")
         $email | Should -Match 'Each device can be turned back on straight away from the record I keep'
         $email | Should -Match 'could you tell me whether any of these devices should stay enabled, for example a kiosk, a device in storage or one kept for someone on leave\? I will leave any such device out of the change\. With that confirmed, could you approve the attached list, the 90-day threshold and this change for '
         $email | Should -Not -Match 'ws-old01|ws-edge01|ipad-lobby|HYPERLINK' -Because 'the devices are named in the attached file, not in the email'
@@ -4516,6 +4516,7 @@ Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
         Assert-ApprovalEmail $email 'CR-24 for one device'
         $email | Should -Match 'disable one of your devices in Microsoft Entra ID that has not signed in for more than 90 days\. Disabling keeps the device in your directory'
         $email | Should -Match 'The device is in the attached file CR-24-stale-devices\.email\.csv, one line for each with its name, operating system, join type, last sign-in and registration date, and it counts as follows:'
+        $email | Should -Match 'Counted by operating system and join type, the device in the file is this:\r?\n\r?\n- Windows, Microsoft Entra joined: 1 device'
         $email | Should -Match 'The device can be turned back on straight away'
         @(Get-Section (Get-Cr24 $r.Out) 'A) IMPLEMENTATION PLAN' | Where-Object { $_ -match '^\d+\. ' }).Count | Should -Be 7 -Because 'one device needs no repeat step'
     }
