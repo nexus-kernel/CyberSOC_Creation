@@ -482,8 +482,8 @@ $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, 
 # device code flow or legacy authentication and the exclusions removed, which belong to the tenant. CR-22 lists the
 # domain controllers on their own, since the client confirms them apart from the other servers. CR-24 counts the devices
 # by operating system and join type, which belong to no subscription, after a sentence rather than a label, as CR-21 does.
-# CR-26 introduces the guests of each subscription, management group and the root scope with a sentence too.
-$emailHeading = '^((In the (subscription|management group) .+|At the root scope, above every subscription), the guests with a role are these|Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
+# CR-26 introduces its one list of guests, each line naming where the guest holds its roles, with a sentence too.
+$emailHeading = '^(By subscription, then management group and root scope, the guests with a role are these|Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
 # A spreadsheet reads a cell that starts with =, +, - or @ as a formula, quoted or not, and a device, display or role name
 # comes from the directory, so the CSV an email attaches (CR-19, CR-24) and change-requests.csv put an apostrophe in
@@ -4431,21 +4431,19 @@ $catalog = @(
                         Decision = & $answerOf (Get-Text $_.PrincipalId).ToLowerInvariant() } } |
                     Sort-Object Guest, SignInName, Scope, Role, Detail)
             $emailCsv = @($emailRows | ConvertTo-Csv -NoTypeInformation)
-            # Each subscription, then the management groups and root scope, lists the guests with a role there.
-            $guestWords = { param($rows)
-                @($rows | Group-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Sort-Object { Get-RoleHolder $_.Group[0] } | ForEach-Object {
-                        $r = $_.Group[0]; $g = & $guestOf $r
-                        $roles = @(Get-DistinctRoles $_.Group).Count; $through = @(Get-DistinctRoles @($_.Group | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' })).Count
-                        '{0} ({1}), {2}{3}' -f (ConvertTo-CopyText $r.DisplayName), $(if (Get-Text $g.Mail) { ConvertTo-CopyText $g.Mail } else { ConvertTo-CopyText $r.UserPrincipalName }), (Get-Count $roles 'role' 'roles'), $(if (-not $through) { '' } elseif ($through -eq $roles) { ', held through a group' } else { ', {0} of them through a group' -f $through }) }) }
-            # Each place is introduced with a sentence rather than a heading line, since the email reads as a letter.
-            $placeLine = { param([string]$Heading)
-                if ($Heading -eq 'Root scope') { 'At the root scope, above every subscription, the guests with a role are these:' }
-                else { 'In the {0}, the guests with a role are these:' -f ($Heading -replace '^Subscription ', 'subscription ' -replace '^Management group ', 'management group ') } }
-            $emailResources = [System.Collections.Generic.List[object]]::new()
-            foreach ($g in @($inScope | Group-Object { Get-RoleHeading $_ } | Sort-Object { Get-RoleHeadingOrder $_.Name })) {
-                $emailResources.Add((& $placeLine $g.Name))
-                $emailResources.Add([string[]]@(& $guestWords $g.Group))
-            }
+            # One sentence introduces one list, so no line stands alone as a heading and no two paragraphs open alike. Each
+            # line names a guest, its roles and where it holds them: each subscription, then the management groups and the
+            # root scope above them.
+            $placeWords = { param([string]$Heading)
+                if ($Heading -eq 'Root scope') { 'at the root scope, above every subscription' }
+                else { 'in the {0}' -f ($Heading -replace '^Subscription ', 'subscription ' -replace '^Management group ', 'management group ') } }
+            $guestLines = @(foreach ($place in @($inScope | Group-Object { Get-RoleHeading $_ } | Sort-Object { Get-RoleHeadingOrder $_.Name })) {
+                    foreach ($held in @($place.Group | Group-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Sort-Object { Get-RoleHolder $_.Group[0] })) {
+                        $r = $held.Group[0]; $g = & $guestOf $r
+                        $roles = @(Get-DistinctRoles $held.Group).Count; $through = @(Get-DistinctRoles @($held.Group | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' })).Count
+                        '{0} ({1}), {2} {3}{4}' -f (ConvertTo-CopyText $r.DisplayName), $(if (Get-Text $g.Mail) { ConvertTo-CopyText $g.Mail } else { ConvertTo-CopyText $r.UserPrincipalName }), (Get-Count $roles 'role' 'roles'), (& $placeWords $place.Name), $(if (-not $through) { '' } elseif ($through -eq $roles) { ', held through a group' } else { ', {0} of them through a group' -f $through })
+                    } })
+            $emailResources = @('By subscription, then management group and root scope, the guests with a role are these:', [string[]]$guestLines)
             $effect = @(
                 ('A guest whose roles are removed can no longer reach the Azure resources listed for it, straight away, so any work it does there for you stops until a role is given back.')
                 ('{0} stays in your directory, since deleting a guest account is a separate decision, and so does anything it can use outside these Azure roles.' -f (Get-Pick $m 'The guest account itself' 'Each guest account itself'))
@@ -4460,7 +4458,7 @@ $catalog = @(
                 -Why 'I recommend reviewing these roles because Microsoft Defender for Cloud recommends removing guest accounts with owner, write or read permissions on Azure resources. Guest accounts are not managed to the same standards as your own accounts, and an attacker can use one to reach your data without being noticed.' `
                 -Effect @($effect | Where-Object { $_ }) `
                 -Listed ('{0} in the attached file {1}, one line for each role with when the guest was created and last signed in, the role, where it applies, how the guest holds it and a Decision column{2}, and where they hold their roles is set out below:' -f (Get-Pick $m 'The guest and its roles are' 'The guests and their roles are'), $attachment, $(if ($answered) { ' with your answers' } else { ' for your answer' })) `
-                -Resources $emailResources.ToArray() `
+                -Resources $emailResources `
                 -Reversal ('I can restore any of these roles at any time from the record I keep of each one, with its role, where it applies and the guest it belongs to{0}.' -f $(if ($memberships.Count) { ', and add a guest back to the group it was removed from' } else { '' })) `
                 -Ask $(if ($answered) { 'Could you approve removing the roles of the guests you marked Remove for {0}? The guests you marked Keep, and any guest without an answer, stay out of this change.' -f $proposedDay }
                     else { 'Before I schedule the change, could you tell me for each guest whether it still needs its access, by writing Keep or Remove in the Decision column of the attached file and sending it back? I will remove the roles only of the guests you mark Remove, and a guest without an answer stays out of the change. With that, could you approve this change for {0}?' -f $proposedDay })

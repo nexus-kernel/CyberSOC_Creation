@@ -500,9 +500,10 @@ order:
    file are these:`, a sentence rather than a label as in CR-21, since they belong to no subscription, and names them in `CR-24-stale-devices.email.csv`, written beside the email to attach: one line per
    device with its name, operating system and version, join type, last sign-in, days since then, registration date,
    device ID and object ID. CR-25 lists the storage accounts by subscription, each with what it has on today and its
-   lifecycle rules. CR-26 names the guests of each subscription, management group and the root scope after a sentence
-   rather than a label, such as `In the subscription <name>, the guests with a role are these:`, each guest with its
-   email address and how many roles it holds there, and lists the roles in `CR-26-guest-roles.email.csv`, written
+   lifecycle rules. CR-26 names the guests in one list after one sentence, `By subscription, then management group and
+   root scope, the guests with a role are these:`, so no line stands alone as a label and no two paragraphs open alike,
+   each line giving a guest with its email address, how many roles it holds and where, a subscription, a management
+   group or the root scope, and lists the roles in `CR-26-guest-roles.email.csv`, written
    beside the email to attach: one line per role with the guest, its sign-in name and object ID, when it was created and
    last signed in, the role, where it applies, how the guest holds it, what removing it would do (`IfRemoved`), and a
    Decision column for the client's Keep or Remove, filled in from the returned file when the generator ran with
