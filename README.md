@@ -74,8 +74,9 @@ missing evidence never becomes a favorable zero.
    authentication on App Service apps, setting the blob containers anyone can read today to private, and removing the Azure and Microsoft
    Entra roles that disabled accounts still hold, assigned to the account or reached through a group, from which the
    account is then removed, blocking device code flow with the Conditional Access policy ATMO-MXDR-CA-BLOCK-DEVICECODE,
-   CR-20, and blocking legacy authentication with ATMO-MXDR-CA-BLOCK-LEGACY, or removing the exclusions it no longer
-   needs, CR-21), and a ready-to-send client email for every change request. The CR-19 email names the
+   CR-20, blocking legacy authentication with ATMO-MXDR-CA-BLOCK-LEGACY, or removing the exclusions it no longer
+   needs, CR-21, and setting the attack surface reduction rules to Audit on the Windows servers through security settings
+   management, CR-22), and a ready-to-send client email for every change request. The CR-19 email names the
    accounts and their roles in a CSV written beside it, to attach, since the list can be long. Every email asks for the
    client's approval and reads as a letter, with no titles and each paragraph opening in its own words, in one order:
    what is to change, why, what it means for the client, the resources
@@ -135,7 +136,15 @@ missing evidence never becomes a favorable zero.
    1.16.0), leaves a policy that also blocks modern client apps unchanged, names an excluded group or role it cannot
    check for review, and asks the
    client before the approval which service accounts still use SMTP AUTH, POP or IMAP and whether each should move to
-   modern authentication. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
+   modern authentication. CR-22 (collector 1.17.0) creates one endpoint security policy, ATMO-MXDR-ASR-AUDIT-SERVERS, in the
+   Microsoft Defender portal, assigned to a dynamic device group of the Windows servers, ATMO-MXDR-ASR-SERVERS, so a new
+   server joins on its own, and excluding ATMO-MXDR-ASR-SERVERS-EXCLUDED. It sets to Audit the ASR rules no server in
+   scope has configured and leaves a configured rule as it is, so no rule in Block is lowered to Audit. It leaves out,
+   and excludes, each server whose Microsoft Defender Antivirus is not in Active mode or whose real-time or
+   cloud-delivered protection reads Off, for the antivirus server baseline first, names the servers not onboarded,
+   lists the domain controllers on their own for the client to confirm, and needs the server licenses and security
+   settings management (`MdeServers`, `MdeSecurityManagement`). Its email explains ASR rules once, says audit mode blocks
+   nothing and starts a review period, and that a later request will ask which rules move to block mode. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
    account the collection read as disabled, after checking that the account still shows as disabled. Its email lists
    each account with its roles, the Azure roles by subscription and the Entra roles on their own, says nobody loses
    access today, since the accounts cannot sign in, offers to restore any role from the record, and asks whether any

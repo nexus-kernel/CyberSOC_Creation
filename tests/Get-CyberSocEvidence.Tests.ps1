@@ -436,7 +436,7 @@ Describe 'Query catalog' {
     }
 
     It 'uses only known engines' {
-        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'APPSERVICE-FTPAUTH', 'MYSQL-AUDIT', 'DISABLED-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
+        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'APPSERVICE-FTPAUTH', 'MYSQL-AUDIT', 'DISABLED-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'DEFENDER-AVINFO', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
         $catalog | Where-Object { $_.Engine -notin $known } | Should -BeNullOrEmpty
     }
 
@@ -2500,6 +2500,80 @@ Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
         (Invoke-EbrCatalogItem -Ctx (New-LicCtx) -Item $item).Status | Should -Be 'EMPTY'
     }
 
+    It 'reads the Windows servers with their ASR rules and antivirus prerequisites, Azure virtual machines only, outside the managed resource group (1.17.0)' {
+        $item = $catalog | Where-Object Id -eq 'EW.4-SERVERS'
+        $item.Engine | Should -Be 'AH'
+        $item.Phase | Should -Be 'P2 Endpoint'
+        $item.Notes | Should -Match '^Added in CyberSOC 1\.17\.0\.'
+        $q = $item.Query
+        $q | Should -Match '(?m)^DeviceInfo$'
+        $q | Should -Match 'where OSPlatform startswith "WindowsServer"'
+        $q | Should -Match 'where isnotempty\(AzureResourceId\)' -Because 'every device query reads Azure virtual machines only'
+        $q | Should -Match 'AzureResourceId !contains "\{\{MRG\}\}"'
+        $q | Should -Not -Match 'where OnboardingStatus' -Because 'a server seen but not onboarded is listed, so the change request can name it'
+        $q | Should -Match 'join kind=leftouter \(\s+DeviceTvmSecureConfigurationAssessment' -Because 'a server without a configuration assessment stays listed'
+        $q | Should -Match 'ConfigurationSubcategory =~ "Antivirus" and ConfigurationName has "real-time protection"'
+        $q | Should -Match 'ConfigurationSubcategory =~ "Antivirus" and ConfigurationName has "cloud-delivered protection"'
+        $q | Should -Match 'case\(isnull\(RtpChecks\) or RtpChecks == 0, "", RtpOn == RtpChecks, "On", "Off"\)' -Because 'a check not assessed is never read as Off or On'
+        $q | Should -Match 'DomainController   = tostring\(DeviceRoles\) has_any \("DomainController", "Domain Controller"\)'
+        foreach ($rule in 'Block abuse of exploited vulnerable signed drivers', 'Block persistence through WMI event subscription', 'Block rebooting machine in Safe Mode', 'Block use of copied or impersonated system tools', 'Block Webshell creation for Servers', 'Use advanced protection against ransomware') { $q | Should -Match ([regex]::Escape(('"{0}"' -f $rule))) }
+        $q | Should -Not -Match 'Block Win32 API calls from Office macros' -Because 'it does not apply to Windows Server'
+        $q | Should -Match 'AsrApplicable = coalesce\(AsrApplicable, 0\), AsrConfigured = coalesce\(AsrConfigured, 0\), ConfiguredRules, MissingRules'
+        $expanded = Expand-EbrQuery -Query $q -WindowStart ([datetime]'2026-01-01') -WindowEnd ([datetime]'2026-06-30') -ManagedRgPattern 'aznativesol0'
+        $expanded | Should -Match 'AzureResourceId !contains "aznativesol0"'
+        $expanded | Should -Not -Match '\{\{'
+        [array]::IndexOf(@($catalog | ForEach-Object Id), 'EW.4-SERVERS') | Should -BeGreaterThan ([array]::IndexOf(@($catalog | ForEach-Object Id), 'EW.4'))
+    }
+
+    It 'pages the antivirus mode of each Windows device with top and skip, names each mode and reads a 404 as no device (1.17.0)' {
+        $item = $catalog | Where-Object Id -eq 'EW.4-AVMODE'
+        $item.Engine | Should -Be 'DEFENDER-AVINFO'
+        $item.Notes | Should -Match '^Added in CyberSOC 1\.17\.0\.'
+        $item.Notes | Should -Match '0 Active, 1 Passive, 2 Disabled, 3 or empty Other, 4 EDR in block mode, 5 Passive audit'
+        $script:avUris = [System.Collections.Generic.List[string]]::new()
+        Mock Invoke-EbrRest {
+            $script:avUris.Add($Uri)
+            $Method | Should -Be 'GET'
+            $Resource | Should -Be 'https://api.securitycenter.microsoft.com/'
+            if ($Uri -match 'skip=0$') { return [pscustomobject]@{ value = @(1..10000 | ForEach-Object { [pscustomobject]@{ machineId = "D$_"; computerDnsName = "srv-$_"; osKind = 'windows'; osPlatform = 'Windows Server 2022'; avMode = '0' } }) } }
+            if ($Uri -match 'skip=10000$') { return [pscustomobject]@{ value = @(
+                        [pscustomobject]@{ machineId = 'PASSIVE1'; computerDnsName = 'srv-legacy01'; osKind = 'windows'; osPlatform = 'Windows Server 2016'; avMode = '1'; dataRefreshTimestamp = '2026-10-07T10:00:00Z' }
+                        [pscustomobject]@{ machineId = 'blank'; computerDnsName = 'srv-unknown'; osKind = 'windows'; avMode = '' }
+                        [pscustomobject]@{ machineId = 'edr'; computerDnsName = 'srv-edr'; osKind = 'windows'; avMode = '4' }
+                        [pscustomobject]@{ machineId = 'mac'; computerDnsName = 'mac-01'; osKind = 'mac'; avMode = '0' }) } }
+            throw "unexpected $Uri"
+        }
+        $rows = @(Get-EbrDefenderAvInfo -Tenant 'client')
+        $script:avUris[0] | Should -Be 'https://api.security.microsoft.com/api/deviceavinfo?$top=10000&$skip=0'
+        $script:avUris.Count | Should -Be 2 -Because 'a full page is followed by the next'
+        $rows.Count | Should -Be 10003 -Because 'a device that is not Windows is left out'
+        ($rows | Where-Object MachineId -eq 'passive1').AvModeName | Should -Be 'Passive' -Because 'the machine ID is kept in lower case, as Advanced Hunting gives DeviceId'
+        ($rows | Where-Object MachineId -eq 'passive1').DataRefreshTimestamp | Should -Be '2026-10-07T10:00:00Z'
+        ($rows | Where-Object MachineId -eq 'blank').AvModeName | Should -Be 'Other' -Because 'an empty mode is never read as Active'
+        ($rows | Where-Object MachineId -eq 'edr').AvModeName | Should -Be 'EDRBlocked'
+        Mock Invoke-EbrRest { throw 'HTTP 404: Not Found' }
+        @(Get-EbrDefenderAvInfo -Tenant 'client').Count | Should -Be 0
+    }
+
+    It 'marks the antivirus mode UNAVAILABLE, never a zero, without the Defender API or without the permission (1.17.0)' {
+        $item = $catalog | Where-Object Id -eq 'EW.4-AVMODE'
+        $ctx = New-LicCtx
+        $ctx.DefenderAvailable = $false; $ctx.DefenderReason = 'No Defender API token.'
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $r.Status | Should -Be 'UNAVAILABLE'
+        $r.Detail | Should -Match 'Not a zero'
+        Mock Get-EbrDefenderAvInfo { throw 'HTTP 403: Forbidden | Missing application roles' }
+        $r = Invoke-EbrCatalogItem -Ctx (New-LicCtx) -Item $item
+        $r.Status | Should -Be 'UNAVAILABLE'
+        $r.Detail | Should -Match 'Needs Machine\.Read and the View Data role'
+        Mock Get-EbrDefenderAvInfo { throw 'HTTP 500: Internal Server Error' }
+        (Invoke-EbrCatalogItem -Ctx (New-LicCtx) -Item $item).Status | Should -Be 'FAILED'
+        Mock Get-EbrDefenderAvInfo { [pscustomobject]@{ MachineId = 'a'; ComputerDnsName = 'srv'; OsPlatform = ''; AvMode = '1'; AvModeName = 'Passive'; DataRefreshTimestamp = ''; LastSeenTime = '' } }
+        $r = Invoke-EbrCatalogItem -Ctx (New-LicCtx) -Item $item
+        $r.Status | Should -Be 'OK'
+        $r.Detail | Should -Be '1 Windows device listed, 0 in Active mode, 1 in another mode.'
+    }
+
     It 'reads the licenses with their service plans, and names LicenseAssignment.Read.All when Graph refuses' {
         Mock Invoke-EbrGraphGet {
             $Uri | Should -Match 'v1\.0/subscribedSkus\?\$select='
@@ -3014,6 +3088,8 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         (Get-Content (Join-Path $vaSource 'vuln_assessment_20260901_090000.csv') -Raw).Replace('5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11', $subs[0]) | Set-Content (Join-Path $vaDir "vuln_assessment_$vaStamp.csv") -NoNewline
         (Get-Content (Join-Path $vaSource 'run_metadata_20260901_090000.json') -Raw).Replace('5f1c2a9e-3b7d-4e21-9a6c-0d8e4f2b7c11', $subs[0]).Replace('2026-09-01T09:00:00', $vaMonth.ToString('yyyy-MM-dd') + 'T09:00:00') | Set-Content (Join-Path $vaDir "run_metadata_$vaStamp.json")
         Mock Get-EbrDefenderScores { [pscustomobject]@{ Rows = @([pscustomobject]@{ Metric = 'Exposure score'; Score = 30; Time = '' }); Detail = '' } }
+        # CR-22 reads the antivirus mode of each Windows device from the Defender API, never the network here (1.17.0)
+        Mock Get-EbrDefenderAvInfo { @([pscustomobject]@{ MachineId = 'm2'; ComputerDnsName = 'vm-app01'; OsPlatform = 'WindowsServer2022'; AvMode = '0'; AvModeName = 'Active'; DataRefreshTimestamp = ''; LastSeenTime = '' }) }
         # The licensing check: the device list comes from the Defender API, never the network here
         Mock Get-EbrDefenderMachines { @(
                 [pscustomobject]@{ MachineId = 'm1'; ComputerDnsName = 'ws-0101'; OsPlatform = 'Windows11'; DeviceClass = 'Client'; OnboardingStatus = 'Onboarded'; HealthStatus = 'Active'; MachineTags = @(); RbacGroupName = ''; LastSeen = ''; AzureResourceId = ''; subscriptionId = ''; TaggedPlan1 = $false }
@@ -3227,7 +3303,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
     }
 
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.16.0'
+        $params.ScriptVersion | Should -Be '1.17.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -3325,7 +3401,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.16.0'
+        $params2.ScriptVersion | Should -Be '1.17.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {
