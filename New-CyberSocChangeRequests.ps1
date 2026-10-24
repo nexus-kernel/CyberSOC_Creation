@@ -17,7 +17,8 @@
     resources (CR-20), and blocking legacy authentication with ATMO-MXDR-CA-BLOCK-LEGACY, or removing from the policy in
     force the excluded accounts with no legacy sign-in in the last 30 days (CR-21), and setting the attack surface reduction
     rules to Audit on the Windows servers through one endpoint security policy and security settings management (CR-22),
-    leaving every rule already configured on a server as it is. Every change request
+    leaving every rule already configured on a server as it is, and turning on periodic assessment in Azure Update Manager
+    on the virtual machines without it, changing the assessment mode only and never the patch mode (CR-23). Every change request
     also gets a client email, drafted and ready to send, that asks for the client's approval. The CR-19 email names
     the accounts and their roles in a CSV written beside it (CR-19-disabled-account-roles.email.csv), to attach,
     since the list can be long. Every email has the same parts in the
@@ -110,6 +111,10 @@
     1.17.0, and on an earlier pack says "needs recollection". It needs a server license for each server and security
     settings management (MdeServers and MdeSecurityManagement), and leaves out every server whose antivirus is not in
     Active mode or whose real-time or cloud-delivered protection reads Off.
+    CR-23 reads the virtual machines without periodic assessment (EW.10-ASSESSMENT), added in 1.18.0, and on an earlier
+    pack says "needs recollection". It leaves out network virtual appliances, AKS nodes, Windows client images, images the
+    last assessment read as unsupported, machines without the VM agent and machines tagged as patching waived or client
+    owned, and marks pooled Azure Virtual Desktop session hosts, which lose the setting when rebuilt from their image.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -157,6 +162,8 @@ $detailVersions['IA.8-SIGNINS-NONINTERACTIVE'] = '1.16.0'
 # CR-22 reads the Windows servers with their ASR rules (EW.4-SERVERS) and the Microsoft Defender Antivirus mode of each
 # (EW.4-AVMODE), added in 1.17.0.
 foreach ($id in 'EW.4-SERVERS', 'EW.4-AVMODE') { $detailVersions[$id] = '1.17.0' }
+# CR-23 reads the virtual machines without periodic assessment (EW.10-ASSESSMENT), added in 1.18.0.
+$detailVersions['EW.10-ASSESSMENT'] = '1.18.0'
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -3687,6 +3694,117 @@ $catalog = @(
                         , @('Manage rules for dynamic membership groups in Microsoft Entra ID, rules for devices', 'https://learn.microsoft.com/entra/identity/users/groups-dynamic-membership#rules-for-devices')
                         , @('Assign policies in Microsoft Intune, user groups vs. device groups', 'https://learn.microsoft.com/intune/device-configuration/assign-device-profile#user-groups-vs-device-groups')
                         , @('Sign in to a Windows virtual machine in Azure using Microsoft Entra ID', 'https://learn.microsoft.com/entra/identity/devices/howto-vm-sign-in-azure-ad-windows'))
+                    Csv = $csv
+                    Email = $email
+                } } } }
+
+    @{ Number = 23; Key = 'periodic-patch-assessment'; Change = 'Periodic patch assessment on virtual machines'; Sources = @('EW.10-ASSESSMENT')
+       Build = {
+            # EW.10-ASSESSMENT lists each Azure virtual machine whose patch assessment mode is not AutomaticByPlatform, so
+            # Azure Update Manager does not check it for missing updates every 24 hours and EW.10 leaves it out of its
+            # denominator when it was never assessed. CR-23 turns periodic assessment on, which sets assessmentMode alone.
+            # It never touches patchMode: Customer Managed Schedules (AutomaticByPlatform with schedule bypass) on a machine
+            # without a schedule stops it being patched (Microsoft Learn, Troubleshoot known issues with Azure Update Manager).
+            $notes = [System.Collections.Generic.List[string]]::new()
+            $partial = (Get-Status 'EW.10-ASSESSMENT') -eq 'PARTIAL'
+            $machines = @(foreach ($row in @(Get-Rows 'EW.10-ASSESSMENT')) {
+                    $mode = ConvertTo-CopyText $row.AssessmentMode
+                    if ($mode -ieq 'AutomaticByPlatform') { continue }
+                    $os = ConvertTo-CopyText $row.OsType
+                    $image = @(@($row.ImagePublisher, $row.ImageOffer, $row.ImageSku) | ForEach-Object { ConvertTo-CopyText $_ } | Where-Object { $_ }) -join ' '
+                    # Why a machine is left out, the first reason that applies. Update Manager supports server operating
+                    # systems only, so a Windows client image, Windows 10 or 11 multi-session on an Azure Virtual Desktop
+                    # session host included, is unsupported (Unsupported workloads for Azure Update Manager).
+                    $out = if (Test-True $row.Appliance) { 'appliance' }
+                    elseif (Test-True $row.Aks) { 'aks' }
+                    elseif (Test-True $row.WindowsClient) { 'client' }
+                    elseif ((Get-Text $row.GuestPatchSupport) -ieq 'Unsupported') { 'unsupported' }
+                    elseif ((Get-Text $row.ProvisionVmAgent) -ieq 'false') { 'agent' }
+                    elseif (Test-True $row.PatchExcluded) { 'tagged' }
+                    else { '' }
+                    [pscustomobject]@{
+                        Name = ConvertTo-CopyText $row.Name; ResourceGroup = ConvertTo-CopyText $row.resourceGroup; SubscriptionId = (ConvertTo-CopyText $row.subscriptionId).ToLowerInvariant()
+                        ResourceId = Get-Text $row.ResourceId; Os = $(if ($os) { $os } else { 'OS not recorded' }); OsName = ConvertTo-CopyText $row.OsName; Image = $image
+                        Mode = $mode; PatchMode = ConvertTo-CopyText $row.PatchMode; Running = (Get-Text $row.PowerState) -ieq 'PowerState/running'; Power = (Get-Text $row.PowerState) -replace '^PowerState/', ''
+                        Pool = ConvertTo-CopyText $row.HostPool; Pooled = (Get-Text $row.HostPoolType) -ieq 'Pooled'; Aks = ConvertTo-CopyText $row.AksCluster; Out = $out
+                    } })
+            $where = { param($m) '{0} (resource group {1}, subscription {2})' -f $m.Name, $m.ResourceGroup, (Format-Subscription $m.SubscriptionId) }
+            $modeText = { param($m) if ($m.Mode) { 'assessment mode {0}' -f $m.Mode } else { 'assessment mode not set' } }
+            $stateText = { param($m) '{0}, {1}, patch mode {2}{3}' -f $(if ($m.OsName) { $m.OsName } else { $m.Os }), (& $modeText $m), $(if ($m.PatchMode) { $m.PatchMode } else { 'not set' }), $(if ($m.Pooled) { ', pooled session host in host pool ' + $m.Pool } elseif ($m.Pool) { ', session host in host pool ' + $m.Pool } else { '' }) }
+            $leftNote = { param($key, $text)
+                $list = @($machines | Where-Object Out -eq $key)
+                if ($list.Count) { $notes.Add(($text -f (Get-Count $list.Count 'virtual machine' 'virtual machines'), (@($list | ForEach-Object { '{0}, {1}' -f (& $where $_), $(if ($_.Image) { 'image ' + $_.Image } else { $_.Os }) }) -join ' / '))) } }
+            & $leftNote 'appliance' '{0} without periodic assessment left out of CR-23 as network virtual appliances (P0.6-APPLIANCES), which are updated through the vendor''s own process: {1}.'
+            & $leftNote 'aks' '{0} without periodic assessment left out of CR-23 as AKS nodes, which Azure Update Manager does not support. Microsoft Learn points to the AKS node update guidance instead: {1}.'
+            & $leftNote 'client' '{0} without periodic assessment left out of CR-23 as Windows client images, Windows 10 or 11 multi-session on an Azure Virtual Desktop session host included, which Azure Update Manager does not support: {1}. Microsoft Learn recommends Microsoft Intune for Windows client updates, and image-based servicing for pooled session hosts.'
+            & $leftNote 'unsupported' '{0} without periodic assessment left out of CR-23 because the last assessment read the guest patch support state as Unsupported, so Azure Update Manager does not support the image: {1}. Review each with its owner.'
+            & $leftNote 'agent' '{0} without periodic assessment left out of CR-23 because the Azure VM agent is not provisioned (provisionVMAgent false), which periodic assessment needs: {1}.'
+            & $leftNote 'tagged' '{0} without periodic assessment left out of CR-23 because the tags record patching as waived or client owned (-PatchExclusionTagPattern, EW.10-EXCLUDED): {1}. Turn periodic assessment on there only if the client asks.'
+            $inScope = @($machines | Where-Object { -not $_.Out })
+            if (-not $inScope.Count) {
+                $state = if ($machines.Count) { 'Not written, every virtual machine without periodic assessment is left out, see the notes' } elseif ($partial) { 'No gaps found in the machines read, partial collection scope' } else { 'No gaps found' }
+                if ($partial) { $notes.Add(('EW.10-ASSESSMENT read in part ({0}), so a virtual machine left out of the read may still have periodic assessment off. Recollect the pack.' -f (Get-ResultDetail 'EW.10-ASSESSMENT').TrimEnd('.'))) }
+                return @{ State = $state; Notes = $notes.ToArray() }
+            }
+            $pooled = @($inScope | Where-Object Pooled)
+            $stopped = @($inScope | Where-Object { -not $_.Running })
+            if ($pooled.Count) { $notes.Add(('{0} in CR-23 {1} Azure Virtual Desktop session {2} in a pooled host pool: {3}. A pooled session host rebuilt from its image, by session host update or a new deployment, loses the setting, so periodic assessment is off again on the new machine. The lasting fixes are periodic assessment in the image itself, or the built-in Modify policy Configure periodic checking for missing system updates on Azure virtual machines (59efceea-0c96-497e-a4a1-4eb2290dac15), assigned with a remediation task, which fits the Deny guardrail template after a remediation change request (T2-11, #57).' -f (Get-Count $pooled.Count 'virtual machine' 'virtual machines'), (Get-Pick $pooled.Count 'is an' 'are'), (Get-Pick $pooled.Count 'host' 'hosts'), (@($pooled | ForEach-Object { '{0}, host pool {1}' -f (& $where $_), $_.Pool }) -join ' / '))) }
+            if ($stopped.Count) { $notes.Add(('{0} in CR-23 {1} not running at collection: {2}. Azure Update Manager assesses a machine only while it is running, so {3} is assessed once it starts.' -f (Get-Count $stopped.Count 'virtual machine' 'virtual machines'), (Get-Pick $stopped.Count 'was' 'were'), (@($stopped | ForEach-Object { '{0}, {1}' -f (& $where $_), $(if ($_.Power) { $_.Power } else { 'power state not recorded' }) }) -join ' / '), (Get-Pick $stopped.Count 'it' 'each'))) }
+            $notes.Add('Verify CR-23 with the next pack: EW.10-ASSESSMENT should no longer list the machines changed, and EW.10 should count them among the machines assessed.')
+            if ($partial) { $notes.Add(('EW.10-ASSESSMENT read in part ({0}), so a virtual machine left out of the read is not in CR-23, and a pooled session host may not be marked. Recollect the pack.' -f (Get-ResultDetail 'EW.10-ASSESSMENT').TrimEnd('.'))) }
+
+            $resources = @($inScope | Sort-Object { Format-Subscription $_.SubscriptionId }, ResourceGroup, Name | ForEach-Object { New-Resource $_.Name $_.ResourceGroup $_.SubscriptionId (& $stateText $_) $_.ResourceId })
+            $n = $inScope.Count
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add('Change only the periodic assessment setting in these steps. Leave Patch orchestration and Hotpatch as they are: setting Patch orchestration to Customer Managed Schedules on a machine with no schedule attached stops it being patched until a schedule is added, and Azure Managed - Safe Deployment installs updates and restarts the machine as required.')
+            $impl.Add((Get-OpenStep $n 'Virtual machines' 'virtual machine'))
+            $impl.Add('On the Overview page, select JSON View and read patchSettings under osProfile, in windowsConfiguration or linuxConfiguration. Record assessmentMode and patchMode in the change record for the rollback. If assessmentMode already reads AutomaticByPlatform, or the machine was removed or rebuilt since collection, leave it unchanged and note it in the change record.')
+            $impl.Add('Go to Operations > Updates and select Update settings. In Change update settings, set Periodic assessment to Enable, leave every other setting as it is and select Save.')
+            Add-RepeatStep $impl $n 2 'virtual machine'
+            $testing = @(
+                ('Open {0}, select JSON View on the Overview page and confirm patchSettings reads assessmentMode AutomaticByPlatform and patchMode as recorded in implementation step 3, unchanged.' -f (Get-EachStep $n 'virtual machine'))
+                'After about 24 hours, open Operations > Updates on one running machine in each subscription and confirm it shows the updates from a recent assessment. A machine that is stopped is assessed once it starts.')
+            $rollback = @(
+                'In the Azure portal, open the virtual machine to revert, go to Operations > Updates and select Update settings. Set Periodic assessment to Disable, leave every other setting as it is and select Save.'
+                'Select JSON View on the Overview page and confirm assessmentMode reads ImageDefault and patchMode still reads as recorded in implementation step 3.')
+
+            # The client email.
+            $effect = [System.Collections.Generic.List[string]]::new()
+            $effect.Add('Assessment only checks. It installs nothing and restarts nothing, and the way each machine is patched today stays exactly as it is.')
+            $effect.Add('Azure Update Manager is available at no extra charge for Azure virtual machines, so this change adds no cost.')
+            $effect.Add(('Once it is on, {0} the monthly patch reporting with {1} missing updates, so you can see where patching falls behind.' -f (Get-Pick $n 'the machine appears in' 'these machines appear in'), (Get-Pick $n 'its' 'their')))
+            if ($stopped.Count) { $effect.Add(('A machine that is stopped is only checked while it is running, so {0} that {1} stopped when I reviewed {2} will be checked once {3} started.' -f $(if ($stopped.Count -eq 1) { 'the one' } else { "the $($stopped.Count)" }), (Get-Pick $stopped.Count 'was' 'were'), (Get-Pick $n 'it' 'them'), (Get-Pick $stopped.Count 'it is' 'they are'))) }
+            if ($pooled.Count) { $effect.Add(('{0} in a pooled host pool. A session host rebuilt from its image loses the setting, so a later request will ask whether to turn it on in the image or through Azure Policy, which keeps it on for new session hosts.' -f $(if ($pooled.Count -eq 1) { 'One of these machines is an Azure Virtual Desktop session host' } else { "$($pooled.Count) of these machines are Azure Virtual Desktop session hosts" }))) }
+            $email = New-ApprovalEmail -Subject 'periodic patch assessment on your Azure virtual machines' `
+                -Change @(('I would like to turn on periodic assessment in Azure Update Manager for {0}.' -f (Get-Yours $n 'Azure virtual machines')), ('Periodic assessment has Azure check {0} for missing operating system updates about every 24 hours.' -f (Get-Pick $n 'the machine' 'each machine'))) `
+                -Why ('I recommend this change because {0} not checked for missing updates on a schedule today, so the monthly patch reporting leaves {1} out or shows an old result, and a missing security update can go unnoticed.' -f (Get-Pick $n 'this machine is' 'these machines are'), (Get-Pick $n 'it' 'them')) `
+                -Effect $effect.ToArray() `
+                -Listed ('The change covers {0}:' -f (Get-Pick $n 'the machine below' 'the machines below, by subscription')) `
+                -Resources (Get-EmailResourceList $resources $groupLabel) `
+                -Reversal ('Periodic assessment can be turned off again at any time, which puts {0} back as it is today.' -f (Get-Pick $n 'the machine' 'each machine'))
+            $csv = @($resources)
+            @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
+                    Number = 23; Key = 'periodic-patch-assessment'; Title = 'Turn on periodic patch assessment on virtual machines'
+                    Description = 'Turn on periodic assessment in Azure Update Manager for {0}, which sets the patch assessment mode (patchSettings.assessmentMode) to AutomaticByPlatform. The patch mode (patchSettings.patchMode) and Patch orchestration are left as they are.' -f (Get-Listed $n 'virtual machine' 'virtual machines')
+                    Purpose = 'Periodic assessment has Azure Update Manager check each machine for missing operating system updates about every 24 hours. It installs nothing and restarts nothing, and brings machines that were never assessed into the monthly patch reporting.'
+                    ResourceIntro = '{0} below {1} periodic assessment off, with the operating system, the assessment mode and patch mode recorded at collection, and the Azure Virtual Desktop host pool of a session host.' -f $(if ($n -eq 1) { 'The virtual machine' } else { "The $n virtual machines" }), (Get-Pick $n 'has' 'have')
+                    ResourceLines = Format-ResourceList $resources
+                    Availability = 'No impact, since periodic assessment only checks for missing updates and installs nothing.'
+                    UserExperience = 'None, since no update is installed and no machine restarts.'
+                    Dependencies = 'None, since each machine keeps its patch mode and any maintenance configuration it has.'
+                    Implementation = $impl.ToArray()
+                    Testing = $testing
+                    Rollback = $rollback
+                    References = @(
+                        , @('Assessment options in Update Manager, periodic assessment', 'https://learn.microsoft.com/azure/update-manager/assessment-options#periodic-assessment')
+                        , @('Manage update configuration settings, configure settings on a single VM', 'https://learn.microsoft.com/azure/update-manager/manage-update-settings#configure-settings-on-a-single-vm')
+                        , @('Microsoft.Compute virtualMachines, PatchSettings', 'https://learn.microsoft.com/azure/templates/microsoft.compute/virtualmachines')
+                        , @('Troubleshoot known issues with Azure Update Manager, change patch orchestration from automatic to manual', 'https://learn.microsoft.com/azure/update-manager/troubleshoot')
+                        , @('Support for Updates, One time Updates, Periodic assessments and Scheduled patching', 'https://learn.microsoft.com/azure/update-manager/support-matrix-updates')
+                        , @('Unsupported workloads for Azure Update Manager', 'https://learn.microsoft.com/azure/update-manager/unsupported-workloads')
+                        , @('Azure Update Manager frequently asked questions, pricing', 'https://learn.microsoft.com/azure/update-manager/update-manager-faq#pricing')
+                        , @('Automate assessment at scale by using Azure Policy', 'https://learn.microsoft.com/azure/update-manager/periodic-assessment-at-scale')
+                        , @('Session host update for Azure Virtual Desktop', 'https://learn.microsoft.com/azure/virtual-desktop/session-host-update'))
                     Csv = $csv
                     Email = $email
                 } } } }

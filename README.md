@@ -75,8 +75,9 @@ missing evidence never becomes a favorable zero.
    Entra roles that disabled accounts still hold, assigned to the account or reached through a group, from which the
    account is then removed, blocking device code flow with the Conditional Access policy ATMO-MXDR-CA-BLOCK-DEVICECODE,
    CR-20, blocking legacy authentication with ATMO-MXDR-CA-BLOCK-LEGACY, or removing the exclusions it no longer
-   needs, CR-21, and setting the attack surface reduction rules to Audit on the Windows servers through security settings
-   management, CR-22), and a ready-to-send client email for every change request. The CR-19 email names the
+   needs, CR-21, setting the attack surface reduction rules to Audit on the Windows servers through security settings
+   management, CR-22, and turning on periodic assessment in Azure Update Manager on the virtual machines without it,
+   CR-23), and a ready-to-send client email for every change request. The CR-19 email names the
    accounts and their roles in a CSV written beside it, to attach, since the list can be long. Every email asks for the
    client's approval and reads as a letter, with no titles and each paragraph opening in its own words, in one order:
    what is to change, why, what it means for the client, the resources
@@ -144,7 +145,14 @@ missing evidence never becomes a favorable zero.
    cloud-delivered protection reads Off, for the antivirus server baseline first, names the servers not onboarded,
    lists the domain controllers on their own for the client to confirm, and needs the server licenses and security
    settings management (`MdeServers`, `MdeSecurityManagement`). Its email explains ASR rules once, says audit mode blocks
-   nothing and starts a review period, and that a later request will ask which rules move to block mode. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
+   nothing and starts a review period, and that a later request will ask which rules move to block mode. CR-23
+   (collector 1.18.0) turns on periodic assessment on each Azure virtual machine whose patch assessment mode is not
+   AutomaticByPlatform, changing the assessment mode only and never the patch mode or Patch orchestration, and leaves
+   out network virtual appliances, AKS nodes, Windows client images, images the last assessment read as unsupported,
+   machines without the VM agent and machines tagged as patching waived or client owned. It names the pooled Azure
+   Virtual Desktop session hosts, which lose the setting when rebuilt from their image, with the lasting fixes. Its
+   email says assessment installs and restarts nothing, adds no cost on Azure virtual machines and brings the machines
+   into the monthly patch reporting. CR-19 removes each Azure and Microsoft Entra role assigned directly to an
    account the collection read as disabled, after checking that the account still shows as disabled. Its email lists
    each account with its roles, the Azure roles by subscription and the Entra roles on their own, says nobody loses
    access today, since the accounts cannot sign in, offers to restore any role from the record, and asks whether any

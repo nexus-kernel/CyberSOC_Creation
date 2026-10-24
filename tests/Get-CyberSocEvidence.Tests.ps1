@@ -327,6 +327,74 @@ Describe 'Query catalog' {
         $ctx.Pending[0].Detail | Should -Match 'throttled'
     }
 
+    It 'lists the virtual machines without periodic assessment, with what CR-23 leaves out, outside the managed resource group (1.18.0)' {
+        $item = $catalog | Where-Object Id -eq 'EW.10-ASSESSMENT'
+        $item.Engine | Should -Be 'PATCH-ASSESSMENT'
+        $item.Phase | Should -Be 'P2 Endpoint'
+        $item.Notes | Should -Match '^Added in CyberSOC 1\.18\.0\.'
+        $item.Notes | Should -Match 'PatchMode is kept for context only, since CR-23 changes the assessment mode alone'
+        $q = $item.Query
+        $q | Should -Match 'where type =~ "microsoft\.compute/virtualmachines"'
+        $q | Should -Match 'where id !contains "\{\{MRG\}\}"'
+        $q | Should -Match 'extend Os = iff\(OsType =~ "Linux", properties\.osProfile\.linuxConfiguration, properties\.osProfile\.windowsConfiguration\)' -Because 'Linux and Windows keep patchSettings apart'
+        $q | Should -Match 'extend AssessmentMode = tostring\(Os\.patchSettings\.assessmentMode\)\r?\n\| where AssessmentMode !~ "AutomaticByPlatform"' -Because 'an empty value is listed too'
+        $q | Should -Match 'PatchMode        = tostring\(Os\.patchSettings\.patchMode\)'
+        $q | Should -Match 'Appliance        = \{\{APPLIANCE\}\}'
+        $q | Should -Match 'Aks              = isnotempty\(AksCluster\) or tostring\(bag_keys\(tags\)\) contains "aks-managed-"'
+        $q | Should -Match 'WindowsClient = OsType =~ "Windows" and \(ImagePublisher =~ "microsoftwindowsdesktop" or OsName has_any \("Windows 10", "Windows 11"\)\)'
+        $q | Should -Match 'GuestPatchSupport = tostring\(properties\.configurationStatus\.vmGuestPatchReadiness\.detectedVMGuestPatchSupportState\)'
+        $q | Should -Match 'extend PatchExcluded = false\r?\n\| extend PatchExcluded = tolower\(tostring\(tags\)\) matches regex @"\{\{PATCH_EXCLUDED\}\}"'
+        $expanded = Expand-EbrQuery -Query $q -WindowStart ([datetime]'2026-01-01') -WindowEnd ([datetime]'2026-06-30') -ManagedRgPattern 'aznativesol0' -PatchExclusionTagPattern 'patch.*waived'
+        $expanded | Should -Match 'id !contains "aznativesol0"'
+        $expanded | Should -Match 'Appliance        = tolower\(strcat\('
+        $expanded | Should -Not -Match '\{\{'
+        $off = Expand-EbrQuery -Query $q -WindowStart ([datetime]'2026-01-01') -WindowEnd ([datetime]'2026-06-30') -ManagedRgPattern 'aznativesol0' -PatchExclusionTagPattern ''
+        $off | Should -Match 'extend PatchExcluded = false' -Because 'with the tag exclusion off, no machine reads as tagged'
+        $off | Should -Not -Match 'matches regex @""'
+    }
+
+    It 'marks the session hosts of each Azure Virtual Desktop host pool, and reads a host pool it cannot read as partial, never as no host pool (1.18.0)' {
+        { Assert-EbrReadOnlyRequest -Method GET -Uri 'https://management.azure.com/subscriptions/s1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hp1/sessionHosts?api-version=2024-04-03' } | Should -Not -Throw
+        New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force | Out-Null
+        $ctx = [pscustomobject]@{ WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; ManagedRgPattern = 'aznativesol0'; OutDir = $TestDrive; Subscriptions = @('s1'); ArmTenant = 't'; AccessPath = ''; Pending = [System.Collections.Generic.List[object]]::new() }
+        $item = Get-EbrQueryCatalog | Where-Object Id -eq 'EW.10-ASSESSMENT'
+        $vm = { param($n, $mode) [pscustomobject]@{ Name = $n; resourceGroup = 'rg-avd'; subscriptionId = 's1'; OsType = 'Windows'; AssessmentMode = $mode; PatchMode = 'AutomaticByOS'; Appliance = $false; Aks = $false; WindowsClient = $false; PatchExcluded = $false; ResourceId = "/subscriptions/s1/resourcegroups/rg-avd/providers/microsoft.compute/virtualmachines/$n" } }
+        $machines = @((& $vm 'avd-0' 'ImageDefault'), (& $vm 'avd-p0' ''), (& $vm 'vm-app01' 'ImageDefault'))
+        $pools = @([pscustomobject]@{ Name = 'hp-pooled'; resourceGroup = 'rg-avd'; subscriptionId = 's1'; HostPoolType = 'Pooled'; ResourceId = '/subscriptions/s1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hp-pooled' }
+            [pscustomobject]@{ Name = 'hp-personal'; resourceGroup = 'rg-avd'; subscriptionId = 's1'; HostPoolType = 'Personal'; ResourceId = '/subscriptions/s1/resourceGroups/rg-avd/providers/Microsoft.DesktopVirtualization/hostPools/hp-personal' })
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = $(if ($Query -match 'desktopvirtualization/hostpools') { $pools } else { $machines }); Detail = '' } }
+        Mock Invoke-EbrRest {
+            $Method | Should -Be 'GET'
+            if ($Uri -match 'hp-pooled/sessionHosts\?api-version=2024-04-03$') { return [pscustomobject]@{ value = @([pscustomobject]@{ name = 'hp-pooled/avd-0.corp'; properties = [pscustomobject]@{ resourceId = '/subscriptions/s1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/AVD-0' } }); nextLink = 'https://management.azure.com/next-page' } }
+            if ($Uri -eq 'https://management.azure.com/next-page') { return [pscustomobject]@{ value = @() } }
+            if ($Uri -match 'hp-personal/sessionHosts\?') { return [pscustomobject]@{ value = @([pscustomobject]@{ properties = [pscustomobject]@{ resourceId = '/subscriptions/s1/resourceGroups/rg-avd/providers/Microsoft.Compute/virtualMachines/avd-p0' } }) } }
+            throw "unexpected $Uri"
+        }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $res.Status | Should -Be 'OK'
+        $res.Detail | Should -Be '3 virtual machines without periodic assessment, 1 of them pooled Azure Virtual Desktop session hosts.'
+        ($res.Rows | Where-Object Name -eq 'avd-0').HostPool | Should -Be 'hp-pooled' -Because 'the session host resource ID is matched in lower case'
+        ($res.Rows | Where-Object Name -eq 'avd-0').HostPoolType | Should -Be 'Pooled'
+        ($res.Rows | Where-Object Name -eq 'avd-p0').HostPoolType | Should -Be 'Personal'
+        ($res.Rows | Where-Object Name -eq 'vm-app01').HostPool | Should -Be ''
+        @($res.Rows)[0].PSObject.Properties.Name | Should -Be @('subscriptionId', 'resourceGroup', 'Name', 'OsType', 'OsName', 'ImagePublisher', 'ImageOffer', 'ImageSku', 'PowerState', 'AssessmentMode', 'PatchMode', 'ProvisionVmAgent', 'Appliance', 'Aks', 'AksCluster', 'WindowsClient', 'GuestPatchSupport', 'LastAssessed', 'PatchExcluded', 'HostPool', 'HostPoolType', 'VmId', 'ResourceId')
+        Should -Invoke Invoke-EbrRest -ParameterFilter { $Uri -eq 'https://management.azure.com/next-page' } -Times 1 -Exactly -Because 'every page of session hosts is read'
+        Mock Invoke-EbrRest { if ($Uri -match 'hp-pooled/') { throw 'HTTP 403: Forbidden | AuthorizationFailed' }; [pscustomobject]@{ value = @() } }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $res.Status | Should -Be 'PARTIAL' -Because 'a session host of a pool not read could be pooled'
+        $res.Detail | Should -Match 'Session hosts not read: hp-pooled: HTTP 403'
+        Mock Invoke-EbrArgQuery { if ($Query -match 'desktopvirtualization/hostpools') { throw 'Resource Graph throttled' }; [pscustomobject]@{ Rows = $machines; Detail = '' } }
+        $res = Invoke-EbrCatalogItem -Ctx $ctx -Item $item
+        $res.Status | Should -Be 'PARTIAL'
+        $res.Detail | Should -Match 'The Azure Virtual Desktop host pools could not be listed: Resource Graph throttled'
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = $(if ($Query -match 'desktopvirtualization/hostpools') { @() } else { $machines }); Detail = 'Truncated at 1000 rows.' } }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'PARTIAL' -Because 'a truncated Resource Graph result leaves machines out'
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Rows = @(); Detail = '' } }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'EMPTY'
+        Mock Invoke-EbrArgQuery { throw 'HTTP 403: Forbidden' }
+        (Invoke-EbrCatalogItem -Ctx $ctx -Item $item).Status | Should -Be 'FAILED'
+    }
+
     It 'lists each App Service site that still allows plain FTP, read as NB.5-DETAIL reads its sites (1.7.0)' {
         $d = $catalog | Where-Object Id -eq 'NB.5-FTPS-DETAIL'
         $d.Engine | Should -Be 'ARG'
@@ -436,7 +504,7 @@ Describe 'Query catalog' {
     }
 
     It 'uses only known engines' {
-        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'APPSERVICE-FTPAUTH', 'MYSQL-AUDIT', 'DISABLED-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'DEFENDER-AVINFO', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
+        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'APPSERVICE-FTPAUTH', 'MYSQL-AUDIT', 'DISABLED-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'DEFENDER-AVINFO', 'PATCH-ASSESSMENT', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
         $catalog | Where-Object { $_.Engine -notin $known } | Should -BeNullOrEmpty
     }
 
@@ -3075,6 +3143,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         Mock Invoke-EbrAhQuery { throw 'HTTP 403: Forbidden' }
         Mock Invoke-EbrRest -ParameterFilter { $Uri -match '/basicPublishingCredentialsPolicies/ftp\?' } { throw 'HTTP 403: Forbidden' }
         Mock Invoke-EbrRest -ParameterFilter { $Uri -match '/configurations/audit_log_(enabled|events)\?' } { throw 'HTTP 403: Forbidden' }
+        Mock Invoke-EbrRest -ParameterFilter { $Uri -match '/sessionHosts\?' } { throw 'HTTP 403: Forbidden' }
         Mock Get-EbrSentinelRules { [pscustomobject]@{ RuleName = 'r1'; Kind = 'Scheduled'; Enabled = $true; Severity = 'High'; LastModifiedUtc = '2026-09-01T00:00:00Z'; Tactics = ''; TemplateName = ''; RuleId = 'id' } }
         Mock Test-EbrDirectAccess { [pscustomobject]@{ Ok = $false; Missing = @(); Error = 'no direct token' } }
         Mock Read-EbrInput { 'n' }
@@ -3303,7 +3372,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
     }
 
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.17.0'
+        $params.ScriptVersion | Should -Be '1.18.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -3401,7 +3470,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.17.0'
+        $params2.ScriptVersion | Should -Be '1.18.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

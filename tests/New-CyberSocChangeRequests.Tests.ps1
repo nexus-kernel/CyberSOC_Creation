@@ -1224,7 +1224,7 @@ Describe 'Change request variants' {
         $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
     }
 
-    It 'writes a client email for every change request, CR-01 to CR-22' {
+    It 'writes a client email for every change request, CR-01 to CR-23' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
         # written at least once. A change request written without its email, or with an email that does not
@@ -1248,6 +1248,8 @@ Describe 'Change request variants' {
         $asrFixture = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/asr-audit/scenarios.json') -Raw | ConvertFrom-Json
         Set-PackResult $more 'EW.4-SERVERS' @($asrFixture.Servers)
         Set-PackResult $more 'EW.4-AVMODE' @($asrFixture.AvMode)
+        # Virtual machines without periodic assessment, so CR-23 is written too.
+        Set-PackResult $more 'EW.10-ASSESSMENT' @((Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/patch-assessment/scenarios.json') -Raw | ConvertFrom-Json).Machines)
         $null = & $generator -EvidencePath $more -PurgeProtectionApproved
         $written = @()
         foreach ($pack in $full, $more) {
@@ -1266,7 +1268,7 @@ Describe 'Change request variants' {
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
-        @($written | Sort-Object -Unique) | Should -Be @(1..22) -Because 'the two packs between them write every change request'
+        @($written | Sort-Object -Unique) | Should -Be @(1..23) -Because 'the two packs between them write every change request'
         $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
@@ -4270,5 +4272,123 @@ Describe 'Attack surface reduction rules in audit mode on Windows servers (CR-22
         $r = New-AsrPack 'unlicensed' 'mixed' -Before { param($p) Set-EntraP1 $p $false }
         $r.Index | Should -Match '\| 22 \| [^|]+ \|  \| Not written, needs [^|]*Defender for Endpoint security settings management[^|]*, which reads Not licensed \|'
         Test-Path (Join-Path $r.Out 'CR-22-asr-audit-servers.txt') | Should -BeFalse
+    }
+}
+
+Describe 'Periodic patch assessment on virtual machines (CR-23, collector 1.18.0)' {
+    BeforeAll {
+        $script:pa = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/patch-assessment/scenarios.json') -Raw | ConvertFrom-Json
+        # A CR-23 scenario written into a pack as collector 1.18.0 writes it.
+        function New-PaPack([string]$Name, [string]$Scenario, [scriptblock]$Before = $null) {
+            $pack = Join-Path $TestDrive "pa-$Name"
+            New-ChangeFixture $pack
+            $sc = $pa.Scenarios.$Scenario
+            Set-PackResult $pack 'EW.10-ASSESSMENT' $(if ($sc.PSObject.Properties['Machines']) { @($sc.Machines) } else { @($pa.Machines) })
+            if ($Before) { & $Before $pack }
+            Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -ClientContact 'Dana' -SenderName 'Scott Example' }
+            $out = Join-Path $pack '05-change-requests'
+            [pscustomobject]@{ Pack = $pack; Out = $out; Index = Get-Content (Join-Path $out '00-index.md') -Raw }
+        }
+        function Get-Cr23([string]$Out, [string]$Suffix = '.txt') { Get-Content (Join-Path $Out "CR-23-periodic-patch-assessment$Suffix") -Raw }
+        $script:paMixed = New-PaPack 'mixed' 'mixed'
+    }
+
+    It 'turns on periodic assessment for the machines in scope, changing the assessment mode only and never the patch mode' {
+        $r = $paMixed
+        $r.Index | Should -Match '\| 23 \| Periodic patch assessment on virtual machines \| 4 \| Change request and client email \| CR-23-periodic-patch-assessment\.txt, CR-23-periodic-patch-assessment\.email\.txt \|'
+        $text = Get-Cr23 $r.Out
+        $text | Should -Match '^Title: Turn on periodic patch assessment on virtual machines'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Match '^Turn on periodic assessment in Azure Update Manager for the 4 virtual machines listed below, which sets the patch assessment mode \(patchSettings\.assessmentMode\) to AutomaticByPlatform\. The patch mode \(patchSettings\.patchMode\) and Patch orchestration are left as they are\.$'
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match ("Subscription: Example Production \($s1\)\n- vm-app01, resource group rg-app, Windows Server 2022 Datacenter, assessment mode ImageDefault, patch mode AutomaticByOS\n- avd-rds-0, resource group rg-avd, Windows Server 2022 Datacenter, assessment mode ImageDefault, patch mode AutomaticByOS, pooled session host in host pool hp-pooled-rds\n- vm-sql01, resource group rg-data, Windows Server 2019 Datacenter, assessment mode not set, patch mode not set")
+        $res | Should -Match '- vm-linux01, resource group rg-app, ubuntu 22\.04, assessment mode ImageDefault, patch mode ImageDefault' -Because 'a Linux machine is in scope too'
+        $res | Should -Not -Match 'vm-patched01' -Because 'a machine already on AutomaticByPlatform has nothing to change'
+        foreach ($out in 'fw-edge01', 'aks-nodepool1-0', 'avd-w11-0', 'vm-custom01', 'vm-noagent01', 'vm-clientowned01') { $res | Should -Not -Match $out -Because "$out is left out" }
+        $impl = (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n"
+        $impl | Should -Match '^1\. Change only the periodic assessment setting in these steps\. Leave Patch orchestration and Hotpatch as they are: setting Patch orchestration to Customer Managed Schedules on a machine with no schedule attached stops it being patched until a schedule is added' -Because 'the ticket that also moved patchMode stopped untagged machines patching'
+        $impl | Should -Match '\n2\. In the Azure portal, go to Virtual machines and open the first virtual machine listed in the RESOURCES section\.'
+        $impl | Should -Match '\n3\. On the Overview page, select JSON View and read patchSettings under osProfile, in windowsConfiguration or linuxConfiguration\. Record assessmentMode and patchMode in the change record for the rollback\.'
+        $impl | Should -Match '\n4\. Go to Operations > Updates and select Update settings\. In Change update settings, set Periodic assessment to Enable, leave every other setting as it is and select Save\.'
+        $impl | Should -Match '\n5\. Repeat steps 2 to 4 for each remaining virtual machine listed\.'
+        $text | Should -Not -Match '(?i)set patch ?mode|patchMode to AutomaticByPlatform|Customer Managed Schedules\.' -Because 'the change never sets the patch mode'
+        $testing = (Get-Section $text 'B) TESTING PLAN') -join "`n"
+        $testing | Should -Match 'confirm patchSettings reads assessmentMode AutomaticByPlatform and patchMode as recorded in implementation step 3, unchanged'
+        $rollback = (Get-Section $text 'C) ROLLBACK PLAN') -join "`n"
+        $rollback | Should -Match 'Set Periodic assessment to Disable, leave every other setting as it is and select Save'
+        $rollback | Should -Match 'confirm assessmentMode reads ImageDefault and patchMode still reads as recorded in implementation step 3'
+        foreach ($ref in @(Get-Section $text 'A) REFERENCES')) { $ref | Should -Match ': https://learn\.microsoft\.com/' -Because 'References list Microsoft Learn pages only' }
+        $text | Should -Match 'Assessment options in Update Manager, periodic assessment: https://learn\.microsoft\.com/azure/update-manager/assessment-options#periodic-assessment'
+        $text | Should -Match 'Microsoft\.Compute virtualMachines, PatchSettings: https://learn\.microsoft\.com/azure/templates/microsoft\.compute/virtualmachines'
+        $csv = @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-23')
+        $csv.Count | Should -Be 4
+        ($csv | Where-Object Resource -eq 'vm-sql01').CurrentSetting | Should -Be 'Windows Server 2019 Datacenter, assessment mode not set, patch mode not set'
+        ($csv | Where-Object Resource -eq 'vm-app01').ResourceId | Should -Match '/virtualmachines/vm-app01$'
+    }
+
+    It 'writes an email that says assessment installs and restarts nothing, adds no cost and brings the machines into the patch reporting' {
+        $email = Get-Cr23 $paMixed.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-23'
+        $email | Should -Match '^Subject: Approval requested: periodic patch assessment on your Azure virtual machines\r?\n\r?\nHello Dana,'
+        $email | Should -Match 'I would like your approval to turn on periodic assessment in Azure Update Manager for 4 of your Azure virtual machines\. Periodic assessment has Azure check each machine for missing operating system updates about every 24 hours\.'
+        $email | Should -Match 'I recommend this change because these machines are not checked for missing updates on a schedule today, so the monthly patch reporting leaves them out or shows an old result'
+        $email | Should -Match 'Assessment only checks\. It installs nothing and restarts nothing, and the way each machine is patched today stays exactly as it is\.'
+        $email | Should -Match 'Azure Update Manager is available at no extra charge for Azure virtual machines, so this change adds no cost\.'
+        $email | Should -Match 'Once it is on, these machines appear in the monthly patch reporting with their missing updates'
+        $email | Should -Match 'A machine that is stopped is only checked while it is running, so the one that was stopped when I reviewed them will be checked once it is started\.'
+        $email | Should -Match 'One of these machines is an Azure Virtual Desktop session host in a pooled host pool\. A session host rebuilt from its image loses the setting'
+        $email | Should -Match ("The change covers the machines below, by subscription:\r?\n\r?\nSubscription Example Production \($s1\):\r?\n\r?\n- vm-app01 \(resource group rg-app\)\r?\n- avd-rds-0 \(resource group rg-avd\)\r?\n- vm-sql01 \(resource group rg-data\)\r?\n\r?\nSubscription Example, Dev Test \($s2\):\r?\n\r?\n- vm-linux01 \(resource group rg-app\)")
+        $email | Should -Match 'Periodic assessment can be turned off again at any time, which puts each machine back as it is today\.'
+        $email | Should -Not -Match 'fw-edge01|aks-nodepool1-0|avd-w11-0|vm-custom01|vm-noagent01|vm-clientowned01' -Because 'the machines left out are named in the index, not in the email'
+    }
+
+    It 'names in the index each machine left out and why, the pooled session hosts with the lasting fixes, and the stopped machines' {
+        $index = $paMixed.Index
+        $index | Should -Match '- 1 virtual machine without periodic assessment left out of CR-23 as network virtual appliances \(P0\.6-APPLIANCES\), which are updated through the vendor''s own process: fw-edge01 \(resource group rg-network, '
+        $index | Should -Match '- 1 virtual machine without periodic assessment left out of CR-23 as AKS nodes, which Azure Update Manager does not support\. [^\n]*aks-nodepool1-0 '
+        $index | Should -Match '- 1 virtual machine without periodic assessment left out of CR-23 as Windows client images, Windows 10 or 11 multi-session on an Azure Virtual Desktop session host included, which Azure Update Manager does not support: avd-w11-0 ' -Because 'Update Manager supports server operating systems only'
+        $index | Should -Match '- 1 virtual machine without periodic assessment left out of CR-23 because the last assessment read the guest patch support state as Unsupported[^\n]*vm-custom01 '
+        $index | Should -Match '- 1 virtual machine without periodic assessment left out of CR-23 because the Azure VM agent is not provisioned \(provisionVMAgent false\), which periodic assessment needs: vm-noagent01 '
+        $index | Should -Match '- 1 virtual machine without periodic assessment left out of CR-23 because the tags record patching as waived or client owned \(-PatchExclusionTagPattern, EW\.10-EXCLUDED\): vm-clientowned01 '
+        $index | Should -Match '- 1 virtual machine in CR-23 is an Azure Virtual Desktop session host in a pooled host pool: avd-rds-0 [^\n]*host pool hp-pooled-rds\. A pooled session host rebuilt from its image, by session host update or a new deployment, loses the setting'
+        $index | Should -Match 'the built-in Modify policy Configure periodic checking for missing system updates on Azure virtual machines \(59efceea-0c96-497e-a4a1-4eb2290dac15\), assigned with a remediation task, which fits the Deny guardrail template after a remediation change request \(T2-11, #57\)\.' -Because 'the lasting fix is named for T2-11, not built here'
+        $index | Should -Match '- 1 virtual machine in CR-23 was not running at collection: vm-linux01 [^\n]*deallocated\. Azure Update Manager assesses a machine only while it is running'
+        $index | Should -Match '- Verify CR-23 with the next pack: EW\.10-ASSESSMENT should no longer list the machines changed'
+        $index | Should -Not -Match 'vm-patched01' -Because 'a machine already on AutomaticByPlatform is neither changed nor left out'
+    }
+
+    It 'writes the email for one machine in the singular, without the stopped and pooled paragraphs' {
+        $r = New-PaPack 'single' 'single'
+        $email = Get-Cr23 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-23 for one machine'
+        $email | Should -Match 'for one of your Azure virtual machines\. Periodic assessment has Azure check the machine for missing operating system updates about every 24 hours\.'
+        $email | Should -Match 'I recommend this change because this machine is not checked for missing updates on a schedule today, so the monthly patch reporting leaves it out'
+        $email | Should -Match 'The change covers the machine below:'
+        $email | Should -Not -Match 'session host|stopped' -Because 'neither applies to this machine'
+        $email | Should -Match 'which puts the machine back as it is today\.'
+        @(Get-Section (Get-Cr23 $r.Out) 'A) IMPLEMENTATION PLAN' | Where-Object { $_ -match '^\d+\. ' }).Count | Should -Be 4 -Because 'one machine needs no repeat step'
+    }
+
+    It 'reads no gaps when every machine has periodic assessment, and writes nothing when every machine is left out' {
+        $r = New-PaPack 'all-on' 'all-on'
+        $r.Index | Should -Match '\| 23 \| Periodic patch assessment on virtual machines \|  \| No gaps found \|  \|'
+        Test-Path (Join-Path $r.Out 'CR-23-periodic-patch-assessment.txt') | Should -BeFalse
+        $r = New-PaPack 'empty' 'all-on' -Before { param($p) Set-PackResult $p 'EW.10-ASSESSMENT' @() }
+        $r.Index | Should -Match '\| 23 \| [^|]+ \|  \| No gaps found \|  \|'
+        $r = New-PaPack 'left' 'only-left-out'
+        $r.Index | Should -Match '\| 23 \| [^|]+ \|  \| Not written, every virtual machine without periodic assessment is left out, see the notes \|'
+        $r.Index | Should -Match '- 1 virtual machine without periodic assessment left out of CR-23 as network virtual appliances'
+        Test-Path (Join-Path $r.Out 'CR-23-periodic-patch-assessment.txt') | Should -BeFalse
+    }
+
+    It 'needs recollection on a pack before 1.18.0, is not written when the read failed, and says when the read is partial' {
+        $r = New-PaPack 'old' 'mixed' -Before { param($p) Remove-PackResult $p 'EW.10-ASSESSMENT' }
+        $r.Index | Should -Match '\| 23 \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.18\.0 or later \|'
+        $r = New-PaPack 'failed' 'mixed' -Before { param($p) Set-PackResult $p 'EW.10-ASSESSMENT' @() -Status 'FAILED' -Detail 'HTTP 403: Forbidden' }
+        $r.Index | Should -Match '\| 23 \| [^|]+ \|  \| Not collected \(EW\.10-ASSESSMENT FAILED\) \|' -Because 'a failed read is never no gaps'
+        $r = New-PaPack 'partial' 'mixed' -Before { param($p) Set-PackResult $p 'EW.10-ASSESSMENT' @($pa.Machines) -Status 'PARTIAL' -Detail 'Session hosts not read: hp-pooled-rds: HTTP 403: Forbidden.' }
+        $r.Index | Should -Match '\| 23 \| [^|]+ \| 4 \| Change request and client email, partial collection scope \|'
+        $r.Index | Should -Match '- EW\.10-ASSESSMENT read in part \(Session hosts not read: hp-pooled-rds: HTTP 403: Forbidden\), so a virtual machine left out of the read is not in CR-23, and a pooled session host may not be marked\.'
+        $r = New-PaPack 'partial-none' 'all-on' -Before { param($p) Set-PackResult $p 'EW.10-ASSESSMENT' @() -Status 'PARTIAL' -Detail 'Truncated at 1000 rows.' }
+        $r.Index | Should -Match '\| 23 \| [^|]+ \|  \| No gaps found in the machines read, partial collection scope \|' -Because 'a partial read never reads as no gaps'
     }
 }
