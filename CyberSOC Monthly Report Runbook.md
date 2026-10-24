@@ -477,7 +477,7 @@ DeviceTvmSoftwareVulnerabilities
 
 ## 6. Change request inputs
 
-CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, 1.14.0 for NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, the FTP basic authentication setting of each App Service app that CR-17 turns off, 1.15.0 for DR.6-MYSQLAUDIT, the audit log parameters of each MySQL flexible server that CR-01 and CR-10 set, 1.16.0 for IA.8-SIGNINS-NONINTERACTIVE, the non-interactive legacy sign-ins CR-21 needs before it removes an exclusion or blocks legacy authentication, and 1.17.0 for EW.4-SERVERS and EW.4-AVMODE, the Windows servers with their attack surface reduction rules and the Microsoft Defender Antivirus mode CR-22 needs. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
+CyberSOC collector 1.1.0, 1.2.0 for NB.6-PAAS-DETAIL, 1.3.0 for DP.4-VMSS-ELIGIBILITY and the ScaleSet column of DP.4-ELIGIBILITY, 1.4.0 for the VmId column of DP.4-ELIGIBILITY and the UniqueId column of DP.4-VMSS-ELIGIBILITY, 1.6.0 for NB.2-DETAIL, 1.7.0 for NB.5-FTPS-DETAIL, 1.8.0 for DP.1-CONTAINERS-DETAIL, 1.9.0 for IA.15-DISABLED, IA.15-RBAC and IA.15-ENTRA, 1.10.0 for the group membership columns of IA.15-RBAC and IA.15-ENTRA (MemberOfId, MemberOfName, MemberOfType, GroupPath, GroupPathIds), which CR-19 needs to remove an account from its group, 1.11.0 for the licensing check (LIC.1-SKUS to LIC.5-MATRIX) and the Extensions column of P0.3, which gate the change requests on the licenses they need, 1.12.0 for the emergency access accounts (IA.16-ACCOUNTS and IA.16-GROUPS) that every Conditional Access change excludes, 1.13.0 for the ScmMinTlsVersion column of NB.5-DETAIL, the SCM (Kudu) site minimum TLS version CR-04 sets, 1.14.0 for NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL, the FTP basic authentication setting of each App Service app that CR-17 turns off, 1.15.0 for DR.6-MYSQLAUDIT, the audit log parameters of each MySQL flexible server that CR-01 and CR-10 set, 1.16.0 for IA.8-SIGNINS-NONINTERACTIVE, the non-interactive legacy sign-ins CR-21 needs before it removes an exclusion or blocks legacy authentication, 1.17.0 for EW.4-SERVERS and EW.4-AVMODE, the Windows servers with their attack surface reduction rules and the Microsoft Defender Antivirus mode CR-22 needs, and 1.18.0 for EW.10-ASSESSMENT, the virtual machines without periodic assessment CR-23 turns it on for. The per-resource lists behind the hardening counts, read by `New-CyberSocChangeRequests.ps1`
 to name the resources in each change request and its client email (see `New-CyberSocChangeRequests.README.md`).
 From collector 1.5.0 the collector runs `New-CyberSocChangeRequests.ps1` at the end of each collection, so the pack
 holds `05-change-requests` (`-SkipChangeRequests` turns it off). The report embeds counts only. These lists name
@@ -730,6 +730,63 @@ GET https://api.security.microsoft.com/api/deviceavinfo?$top=10000&$skip=0
 ```
 
 One row per Windows device: `MachineId` (lower case, as Advanced Hunting gives `DeviceId`), `ComputerDnsName`, `OsPlatform`, `AvMode`, `AvModeName`, `DataRefreshTimestamp` and `LastSeenTime`.
+
+### EW.10-ASSESSMENT Virtual machines without periodic assessment
+
+Engine PATCH-ASSESSMENT. CyberSOC collector 1.18.0. Names machines and stays internal. Feeds CR-23, which turns on periodic assessment in Azure Update Manager, so Azure checks each machine for missing updates every 24 hours (Assessment options in Update Manager). One row per Azure virtual machine whose `patchSettings.assessmentMode` (under `osProfile.windowsConfiguration`, or `linuxConfiguration` for Linux) is not AutomaticByPlatform, an empty value included, with the `{{MRG}}` exclusion. These are the machines EW.10 leaves out of its denominator when they were never assessed. `PatchMode` is kept for context only: CR-23 changes the assessment mode alone, since Patch orchestration set to Customer Managed Schedules on a machine with no schedule attached stops it being patched (Troubleshoot known issues with Azure Update Manager). Each row carries what CR-23 leaves out: `Appliance` (the P0.6-APPLIANCES pattern), `Aks` (a machine in the node resource group of an AKS cluster, or tagged `aks-managed-`, which Update Manager does not support), `WindowsClient` (an image from MicrosoftWindowsDesktop or an operating system name of Windows 10 or 11, which Update Manager does not support, Unsupported workloads for Azure Update Manager), `GuestPatchSupport` (the `detectedVMGuestPatchSupportState` of the last assessment, Unsupported for an image Update Manager does not support, Manage updates for customized images), `ProvisionVmAgent` (false when the VM agent periodic assessment needs is not provisioned) and `PatchExcluded` (the tag exclusion of EW.10-EXCLUDED, `-PatchExclusionTagPattern`). Then the Azure Virtual Desktop host pools are listed from Resource Graph and each one is read with a GET on `sessionHosts` (`api-version=2024-04-03`, following `nextLink`), whose `properties.resourceId` names the virtual machine of each session host, so `HostPool` and `HostPoolType` mark a session host, and CR-23 names a pooled one, which loses the setting when rebuilt from its image. A host pool that cannot be listed or read makes the result PARTIAL, never a session host read as outside a host pool.
+
+```kusto
+resources
+| where type =~ "microsoft.compute/virtualmachines"
+| where id !contains "{{MRG}}"
+| extend OsType = tostring(properties.storageProfile.osDisk.osType)
+| extend Os = iff(OsType =~ "Linux", properties.osProfile.linuxConfiguration, properties.osProfile.windowsConfiguration)
+| extend AssessmentMode = tostring(Os.patchSettings.assessmentMode)
+| where AssessmentMode !~ "AutomaticByPlatform"
+| extend VmKey = tolower(id), NodeRgKey = strcat(tolower(subscriptionId), "/", tolower(resourceGroup))
+// AKS creates the machines of each node pool in the node resource group of its cluster.
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.containerservice/managedclusters"
+    | project NodeRgKey = strcat(tolower(subscriptionId), "/", tolower(tostring(properties.nodeResourceGroup))), AksCluster = name
+  ) on NodeRgKey
+| join kind=leftouter (
+    patchassessmentresources
+    | where type =~ "microsoft.compute/virtualmachines/patchassessmentresults"
+    | extend VmKey = tostring(split(tolower(id), "/patchassessmentresults")[0]),
+             LastAssessed = todatetime(properties.lastModifiedDateTime),
+             GuestPatchSupport = tostring(properties.configurationStatus.vmGuestPatchReadiness.detectedVMGuestPatchSupportState)
+    | summarize arg_max(LastAssessed, GuestPatchSupport) by VmKey
+  ) on VmKey
+| extend PatchExcluded = false
+| extend PatchExcluded = tolower(tostring(tags)) matches regex @"{{PATCH_EXCLUDED}}"
+| extend ImagePublisher   = tostring(properties.storageProfile.imageReference.publisher),
+         ImageOffer       = tostring(properties.storageProfile.imageReference.offer),
+         ImageSku         = tostring(properties.storageProfile.imageReference.sku),
+         OsName           = tostring(properties.extended.instanceView.osName),
+         PatchMode        = tostring(Os.patchSettings.patchMode),
+         ProvisionVmAgent = tostring(Os.provisionVMAgent),
+         PowerState       = tostring(properties.extended.instanceView.powerState.code),
+         Appliance        = {{APPLIANCE}},   // network virtual appliances, see P0.6-APPLIANCES
+         Aks              = isnotempty(AksCluster) or tostring(bag_keys(tags)) contains "aks-managed-"
+| extend WindowsClient = OsType =~ "Windows" and (ImagePublisher =~ "microsoftwindowsdesktop" or OsName has_any ("Windows 10", "Windows 11"))
+| project Name = name, resourceGroup, subscriptionId, OsType, OsName, ImagePublisher, ImageOffer, ImageSku, PowerState,
+          AssessmentMode, PatchMode, ProvisionVmAgent, Appliance, Aks, AksCluster, WindowsClient, GuestPatchSupport,
+          LastAssessed, PatchExcluded, VmId = tostring(properties.vmId), ResourceId = tolower(id)
+| order by subscriptionId asc, resourceGroup asc, Name asc
+```
+
+The host pools, before the `sessionHosts` GET on each:
+
+```kusto
+resources
+| where type =~ "microsoft.desktopvirtualization/hostpools"
+| project Name = name, resourceGroup, subscriptionId, HostPoolType = tostring(properties.hostPoolType), ResourceId = id
+```
+
+```http
+GET https://management.azure.com/<host pool resource ID>/sessionHosts?api-version=2024-04-03
+```
 
 ### NB.2-DETAIL Internet-exposed management port rules with their properties and attachments
 

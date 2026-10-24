@@ -22,7 +22,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
   (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
 - **Emergency access accounts.** Every account with Atmosera in its UPN or in an Atmosera group (IA.16-ACCOUNTS and
   IA.16-GROUPS), which every Conditional Access change excludes. See the collector 1.12.0 notes below.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.17.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.18.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -192,6 +192,7 @@ ATMOSERA_SCRIPT_REQUIREMENTS.md 1.4 still forbids Graph; that standard has not b
 | Microsoft Defender Antivirus mode (EW.4-AVMODE) | `api.security.microsoft.com/api/deviceavinfo`, GET, `$top` 10,000 and `$skip` paging | same as Advanced Hunting. Needs Machine.Read and the View Data role, as LIC.2-MACHINES does. A 403 marks EW.4-AVMODE UNAVAILABLE |
 | Defender for Endpoint devices (LIC.2-MACHINES) | `api.security.microsoft.com/api/machines`, GET, `$top` 10,000 and `$skip` paging | same as Advanced Hunting. Needs Machine.Read and the View Data role. Not yet confirmed on a live run that the Azure CLI token carries Machine.Read: a 403 marks LIC.2-MACHINES UNAVAILABLE |
 | Sentinel rules (DR.9) | `{workspace}/providers/Microsoft.SecurityInsights/alertRules` | ARM |
+| Azure Virtual Desktop session hosts (EW.10-ASSESSMENT) | `{host pool}/sessionHosts?api-version=2024-04-03`, GET, `nextLink` paging, after Resource Graph lists the host pools | ARM. Reader on the host pools is enough. A host pool not read makes EW.10-ASSESSMENT PARTIAL |
 | Microsoft Graph (IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, IA.16-ACCOUNTS, POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS, LIC.4-DEVICES) | `graph.microsoft.com/v1.0`, GET only, `@odata.nextLink` paging | resource `https://graph.microsoft.com/`, client tenant, same reauth prompt as Defender |
 | Exchange Online and Purview (IA.9, DP.7-ZAP, DP.6) | `ExchangeOnlineManagement` module, browser sign-in | module |
 
@@ -339,6 +340,18 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.18.0 (October 24, 2026): `EW.10-ASSESSMENT` (engine PATCH-ASSESSMENT, phase P2 Endpoint) for
+  change request CR-23, which turns on periodic assessment in Azure Update Manager. One row per Azure virtual machine
+  whose `patchSettings.assessmentMode` is not AutomaticByPlatform, an empty value included, with the `{{MRG}}`
+  exclusion, the machines `EW.10` leaves out of its denominator when they were never assessed. Each row carries the
+  patch mode for context, the operating system, image, power state and resource ID, and what CR-23 leaves out: network
+  virtual appliances (`Appliance`, the `P0.6-APPLIANCES` pattern), AKS nodes (`Aks`), Windows client images
+  (`WindowsClient`), which Update Manager does not support, the guest patch support state of the last assessment
+  (`GuestPatchSupport`), the VM agent setting (`ProvisionVmAgent`) and the patching tag exclusion (`PatchExcluded`).
+  The Azure Virtual Desktop host pools are listed from Resource Graph and each is read with a GET on its
+  `sessionHosts`, so `HostPool` and `HostPoolType` mark each session host, and CR-23 names the pooled ones. A host pool
+  not read makes the result PARTIAL. CR-23 asks for recollection on an earlier pack. Internal, since it names
+  machines. The queries are in section 6 of the CyberSOC Monthly Report Runbook.
 - CyberSOC collector 1.17.0 (October 23, 2026): two results for change request CR-22, which sets the attack surface
   reduction (ASR) rules to Audit on the Windows servers. `EW.4-SERVERS` (engine AH, phase P2 Endpoint) lists each
   Windows Server Azure virtual machine Defender for Endpoint saw in the last 7 days, in any onboarding status, with the
@@ -626,6 +639,7 @@ example the NB.2 association verdicts.
 | Data | Role needed |
 |---|---|
 | Resource Graph, Defender for Cloud | Reader (or Security Reader) on the subscriptions |
+| Azure Virtual Desktop session hosts (EW.10-ASSESSMENT) | Reader on the subscriptions that hold the host pools |
 | Log Analytics, Sentinel rules | Microsoft Sentinel Reader or Log Analytics Reader on the workspace |
 | Advanced Hunting, Defender scores | Security Reader (Defender XDR) in the client tenant |
 | Microsoft Defender Antivirus mode (EW.4-AVMODE) | The View Data role in Defender for Endpoint, and the Machine.Read permission on the token, as for LIC.2-MACHINES |

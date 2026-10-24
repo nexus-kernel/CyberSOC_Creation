@@ -59,6 +59,7 @@
       - GET  <storage account>/blobServices/default/containers (container access levels, DP.1-CONTAINERS and DP.1-CONTAINERS-DETAIL)
       - GET  <App Service app>/basicPublishingCredentialsPolicies/ftp (FTP basic authentication, NB.5-FTPAUTH and NB.5-FTPAUTH-DETAIL)
       - GET  <MySQL flexible server>/configurations/audit_log_enabled, audit_log_events, audit_log_include_users and audit_log_exclude_users (audit parameters, DR.6-MYSQLAUDIT)
+      - GET  <Azure Virtual Desktop host pool>/sessionHosts (the virtual machine of each session host, EW.10-ASSESSMENT)
       - GET  https://graph.microsoft.com/v1.0/organization, domains,
         domains/<id>/federationConfiguration, reports/authenticationMethods/
         userRegistrationDetails, roleManagement/directory/roleAssignments,
@@ -244,7 +245,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.17.0, based on the EBR collector 1.14.0
+    Version: 1.18.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -294,7 +295,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.17.0'
+$script:EbrVersion = '1.18.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2100,6 +2101,47 @@ resources
 | where PatchExcluded
 | project Name = name, ResourceType = tolower(type), resourceGroup, subscriptionId, MatchedTag, ResourceId = tolower(id)
 | order by resourceGroup asc, Name asc
+'@))
+
+    $q.Add((New-EbrQuery -Id 'EW.10-ASSESSMENT' -Phase 'P2 Endpoint' -Engine 'PATCH-ASSESSMENT' -Title 'Virtual machines without periodic assessment' -Notes 'Added in CyberSOC 1.18.0. One row per Azure virtual machine whose patch assessment mode (osProfile windowsConfiguration or linuxConfiguration, patchSettings.assessmentMode) is not AutomaticByPlatform, so Azure Update Manager does not check it for missing updates every 24 hours and EW.10 leaves it out of its denominator when it was never assessed. AssessmentMode is empty when the property is not set. PatchMode is kept for context only, since CR-23 changes the assessment mode alone. Each row carries what CR-23 leaves out: network virtual appliances (Appliance, the P0.6-APPLIANCES pattern), AKS nodes (Aks), Windows client images (WindowsClient), which Update Manager does not support, a guest patch support state of Unsupported from the last assessment, a VM agent not provisioned (ProvisionVmAgent false), and machines whose tags record patching as waived or client owned (PatchExcluded). HostPool and HostPoolType name the Azure Virtual Desktop host pool of a session host, read with a GET on the sessionHosts of each host pool, so a pooled session host rebuilt from its image is marked. A host pool whose session hosts could not be read makes the result PARTIAL. Feeds CR-23. Internal: names machines.' -Query @'
+resources
+| where type =~ "microsoft.compute/virtualmachines"
+| where id !contains "{{MRG}}"
+| extend OsType = tostring(properties.storageProfile.osDisk.osType)
+| extend Os = iff(OsType =~ "Linux", properties.osProfile.linuxConfiguration, properties.osProfile.windowsConfiguration)
+| extend AssessmentMode = tostring(Os.patchSettings.assessmentMode)
+| where AssessmentMode !~ "AutomaticByPlatform"
+| extend VmKey = tolower(id), NodeRgKey = strcat(tolower(subscriptionId), "/", tolower(resourceGroup))
+// AKS creates the machines of each node pool in the node resource group of its cluster.
+| join kind=leftouter (
+    resources
+    | where type =~ "microsoft.containerservice/managedclusters"
+    | project NodeRgKey = strcat(tolower(subscriptionId), "/", tolower(tostring(properties.nodeResourceGroup))), AksCluster = name
+  ) on NodeRgKey
+| join kind=leftouter (
+    patchassessmentresources
+    | where type =~ "microsoft.compute/virtualmachines/patchassessmentresults"
+    | extend VmKey = tostring(split(tolower(id), "/patchassessmentresults")[0]),
+             LastAssessed = todatetime(properties.lastModifiedDateTime),
+             GuestPatchSupport = tostring(properties.configurationStatus.vmGuestPatchReadiness.detectedVMGuestPatchSupportState)
+    | summarize arg_max(LastAssessed, GuestPatchSupport) by VmKey
+  ) on VmKey
+| extend PatchExcluded = false
+| extend PatchExcluded = tolower(tostring(tags)) matches regex @"{{PATCH_EXCLUDED}}"
+| extend ImagePublisher   = tostring(properties.storageProfile.imageReference.publisher),
+         ImageOffer       = tostring(properties.storageProfile.imageReference.offer),
+         ImageSku         = tostring(properties.storageProfile.imageReference.sku),
+         OsName           = tostring(properties.extended.instanceView.osName),
+         PatchMode        = tostring(Os.patchSettings.patchMode),
+         ProvisionVmAgent = tostring(Os.provisionVMAgent),
+         PowerState       = tostring(properties.extended.instanceView.powerState.code),
+         Appliance        = {{APPLIANCE}},   // network virtual appliances, see P0.6-APPLIANCES
+         Aks              = isnotempty(AksCluster) or tostring(bag_keys(tags)) contains "aks-managed-"
+| extend WindowsClient = OsType =~ "Windows" and (ImagePublisher =~ "microsoftwindowsdesktop" or OsName has_any ("Windows 10", "Windows 11"))
+| project Name = name, resourceGroup, subscriptionId, OsType, OsName, ImagePublisher, ImageOffer, ImageSku, PowerState,
+          AssessmentMode, PatchMode, ProvisionVmAgent, Appliance, Aks, AksCluster, WindowsClient, GuestPatchSupport,
+          LastAssessed, PatchExcluded, VmId = tostring(properties.vmId), ResourceId = tolower(id)
+| order by subscriptionId asc, resourceGroup asc, Name asc
 '@))
 
     $q.Add((New-EbrQuery -Id 'EW.12' -Phase 'P2 Endpoint' -Engine 'AH' -Title 'Credential protection per device' -Notes 'LSA protection (scid-25, or scid-102 on Windows 11 22H2 and later) and WDigest credential caching off (scid-57). A device counts only when every applicable check passes.' -Query (New-EbrDeviceCheckQuery -ConfigurationIds 'scid-25', 'scid-102', 'scid-57')))
@@ -4326,6 +4368,37 @@ function Get-EbrFtpBasicAuthRow {
     [pscustomobject]$row
 }
 
+function Get-EbrAvdSessionHosts {
+    # EW.10-ASSESSMENT (CyberSOC 1.18.0): the Azure Virtual Desktop session hosts of every host pool in scope, keyed by the
+    # lowercase resource ID of the virtual machine (properties.resourceId of each session host). Resource Graph lists the
+    # host pools, and each one is read with a GET on its sessionHosts, following nextLink. A host pool that cannot be read
+    # is returned in Failed, so its session hosts are never read as machines outside a host pool.
+    param([string[]]$Subscriptions, [string]$Tenant)
+    $query = @'
+resources
+| where type =~ "microsoft.desktopvirtualization/hostpools"
+| project Name = name, resourceGroup, subscriptionId, HostPoolType = tostring(properties.hostPoolType), ResourceId = id
+'@
+    $arg = Invoke-EbrArgQuery -Query $query -Subscriptions $Subscriptions -Tenant $Tenant
+    $hosts = @{}
+    $failed = [System.Collections.Generic.List[string]]::new()
+    foreach ($pool in @($arg.Rows | Where-Object { $_ -and [string]$_.ResourceId })) {
+        $uri = 'https://management.azure.com{0}/sessionHosts?api-version=2024-04-03' -f $pool.ResourceId
+        try {
+            while ($uri) {
+                $resp = Invoke-EbrRest -Method GET -Uri $uri -Resource 'https://management.azure.com/' -Tenant $Tenant
+                foreach ($h in @($resp.value | Where-Object { $null -ne $_ })) {
+                    $vm = ([string](Get-EbrProp (Get-EbrProp $h 'properties') 'resourceId')).ToLowerInvariant()
+                    if ($vm) { $hosts[$vm] = [pscustomobject]@{ HostPool = [string]$pool.Name; HostPoolType = [string]$pool.HostPoolType } }
+                }
+                $uri = Get-EbrProp $resp 'nextLink'
+            }
+        }
+        catch { $failed.Add(('{0}: {1}' -f $pool.Name, ($_.Exception.Message -replace '\s+', ' '))) }
+    }
+    [pscustomobject]@{ Hosts = $hosts; Failed = $failed.ToArray(); Detail = [string]$arg.Detail }
+}
+
 function Get-EbrMySqlAuditRow {
     # Reads the audit log parameters of one MySQL flexible server, through a GET on each of its configurations that
     # Reader can make. properties.value is the setting, properties.isDynamicConfig says whether a change applies without
@@ -6348,6 +6421,41 @@ function Invoke-EbrCatalogItem {
             if ($failed.Count) { $detailText += ' Apps not read add no rows, see NB.5-FTPAUTH.' }
             $Ctx.Pending.Add((New-EbrResult -ResultId 'NB.5-FTPAUTH-DETAIL' -Status $detailStatus -Rows $details -Columns $detailColumns -Source $source -Detail $detailText -DurationSec (& $elapsed)))
             return New-EbrResult -ResultId $Item.Id -Status $status -Rows $rows.ToArray() -Columns $columns -Source $source -Detail $detail -DurationSec (& $elapsed)
+        }
+        'PATCH-ASSESSMENT' {
+            # EW.10-ASSESSMENT (CyberSOC 1.18.0). The virtual machines without periodic assessment, with the Azure Virtual
+            # Desktop host pool of each session host. A host pool read that fails leaves the read PARTIAL, never a machine
+            # read as outside a host pool.
+            Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then the Azure Virtual Desktop host pools and a GET on the sessionHosts of each, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
+            $columns = @('subscriptionId', 'resourceGroup', 'Name', 'OsType', 'OsName', 'ImagePublisher', 'ImageOffer', 'ImageSku', 'PowerState', 'AssessmentMode', 'PatchMode', 'ProvisionVmAgent', 'Appliance', 'Aks', 'AksCluster', 'WindowsClient', 'GuestPatchSupport', 'LastAssessed', 'PatchExcluded', 'HostPool', 'HostPoolType', 'VmId', 'ResourceId')
+            try { $arg = Invoke-EbrArgQuery -Query $text -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant }
+            catch { return New-EbrResult -ResultId $Item.Id -Status 'FAILED' -Source 'Resource Graph' -Detail $_.Exception.Message -DurationSec (& $elapsed) }
+            $machines = @($arg.Rows | Where-Object { $_ -and [string](Get-EbrProp $_ 'ResourceId') })
+            if ($machines.Count -eq 0) {
+                $empty = 'No virtual machine in scope without periodic assessment.' + $(if ($arg.Detail) { ' ' + $arg.Detail } else { '' })
+                return New-EbrResult -ResultId $Item.Id -Status $(if ($arg.Detail) { 'PARTIAL' } else { 'EMPTY' }) -Columns $columns -Source 'Resource Graph' -Detail $empty -DurationSec (& $elapsed)
+            }
+            $poolNote = ''
+            $avd = $null
+            try { $avd = Get-EbrAvdSessionHosts -Subscriptions $Ctx.Subscriptions -Tenant $Ctx.ArmTenant }
+            catch { $poolNote = ' The Azure Virtual Desktop host pools could not be listed: ' + ($_.Exception.Message -replace '\s+', ' ') }
+            if ($avd -and @($avd.Failed).Count) { $poolNote = ' Session hosts not read: ' + ((@($avd.Failed) | Select-Object -First 5) -join ' / ') + $(if (@($avd.Failed).Count -gt 5) { ' / and {0} more' -f (@($avd.Failed).Count - 5) } else { '' }) }
+            if ($avd -and $avd.Detail) { $poolNote += ' Host pools: ' + $avd.Detail }
+            $rows = @(foreach ($m in $machines) {
+                    $o = [ordered]@{}
+                    foreach ($c in $columns) { $o[$c] = Get-EbrProp $m $c }
+                    $pool = if ($avd) { $avd.Hosts[([string]$m.ResourceId).ToLowerInvariant()] } else { $null }
+                    $o.HostPool = $(if ($pool) { $pool.HostPool } else { '' }); $o.HostPoolType = $(if ($pool) { $pool.HostPoolType } else { '' })
+                    [pscustomobject]$o
+                })
+            $pooled = @($rows | Where-Object HostPoolType -eq 'Pooled').Count
+            $detail = '{0} without periodic assessment, {1} of them pooled Azure Virtual Desktop session hosts.' -f $(if ($rows.Count -eq 1) { '1 virtual machine' } else { "$($rows.Count) virtual machines" }), $pooled
+            if ($arg.Detail) { $detail += ' ' + $arg.Detail }
+            $detail += $poolNote
+            # A truncated Resource Graph result leaves machines out, and a host pool not read leaves session hosts unmarked.
+            $status = if ($arg.Detail -or $poolNote) { 'PARTIAL' } else { 'OK' }
+            $source = 'Resource Graph and the Desktop Virtualization resource provider ({0})' -f $(if ($Ctx.AccessPath) { $Ctx.AccessPath.ToLowerInvariant() } else { 'direct' })
+            return New-EbrResult -ResultId $Item.Id -Status $status -Rows $rows -Columns $columns -Source $source -Detail $detail -DurationSec (& $elapsed)
         }
         'MYSQL-AUDIT' {
             Write-EbrQueryFile -OutDir $Ctx.OutDir -Item $Item -Text $text -Target ('Resource Graph, then a GET on the configurations/audit_log_enabled, audit_log_events, audit_log_include_users and audit_log_exclude_users paths of each server, subscriptions: ' + ($Ctx.Subscriptions -join ', '))
