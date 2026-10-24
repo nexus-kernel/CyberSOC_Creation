@@ -4423,11 +4423,11 @@ Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
         $text | Should -Match '^Title: Disable stale Microsoft Entra devices'
         @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Disable the 4 devices listed below in Microsoft Entra ID, each enabled with no sign-in for more than 90 days at collection, by setting accountEnabled to false. No device is deleted.'
         $res = (Get-Section $text 'C) RESOURCES') -join "`n"
-        $res | Should -Match 'with no sign-in since before 2026-07-14, 90 days before the device read'
+        $res | Should -Match 'with no sign-in since before 2026-07-14T06:10:00Z, 90 days before the device read'
         $edge = Get-SdDevice 'ws-edge01'
-        $res | Should -Match ('- ws-edge01, Windows 10\.0\.22631\.4317, Microsoft Entra joined, last sign-in 2026-07-13, registered 2024-05-10, object ID {0}, device ID {1}' -f $edge.Id, $edge.DeviceId) -Because 'a device just over the threshold is stale'
+        $res | Should -Match ('- ws-edge01, Windows 10\.0\.22631\.4317, Microsoft Entra joined, last sign-in 2026-07-13T00:00:00Z, registered 2024-05-10, object ID {0}, device ID {1}' -f $edge.Id, $edge.DeviceId) -Because 'a device just over the threshold is stale'
         $res | Should -Match '- ipad-lobby, iOS 17\.6\.1, Microsoft Entra registered, last sign-in 2026-01-20'
-        $res | Should -Match '- ws-old01, '
+        $res | Should -Match '- ws-old01, Windows 10\.0\.22631\.4317, Microsoft Entra joined, last sign-in 2026-03-02T09:00:00Z, ' -Because 'step 5 compares the time, so an unchanged timestamp never reads as a sign-in since collection'
         $res | Should -Match '- =HYPERLINK\(1\), ' -Because 'the change request keeps the name as the directory has it'
         $res | Should -Not -Match 'ws-recent01' -Because 'a device just under the threshold is not stale'
         foreach ($kept in 'ws-active01', 'ws-new01', 'ws-disabled01', 'ws-hybrid01', 'ws-synced01', 'ws-intune01', 'srv-sense01', 'ws-autopilot01', 'prn-floor2', 'ws-labelled01', 'ws-blank01') { $res | Should -Not -Match $kept -Because "$kept is not in the change" }
@@ -4435,7 +4435,7 @@ Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
         $impl | Should -Match '^1\. Sign in to the Microsoft Entra admin center as at least a Cloud Device Administrator or an Intune Administrator, the roles that can disable a device\. Disable only, and never delete a device in this change: a deleted device cannot be restored, and deleting it also removes the BitLocker recovery keys stored with it\.'
         $impl | Should -Match '\n2\. Go to Entra ID > Devices > All devices, select Download devices with no filter applied, and keep the file in the change record as the device list before the change\.' -Because 'the list before the change is kept as evidence'
         $impl | Should -Match '\n3\. Compare the devices listed in the RESOURCES section with the list the client approved'
-        $impl | Should -Match '\n5\. Read the activity timestamp, Enabled, Join type and MDM\. If the activity timestamp is later than the last sign-in listed for the device, the device has signed in since collection, so leave it enabled' -Because 'a device that signed in after collection is skipped'
+        $impl | Should -Match '\n5\. Read the activity timestamp, Enabled, Join type and MDM\. If the activity timestamp is later than the last sign-in listed for the device, which is in UTC, the device has signed in since collection, so leave it enabled' -Because 'a device that signed in after collection is skipped'
         $impl | Should -Match '\n6\. Select Disable, then select Yes\.'
         $impl | Should -Match '\n7\. Repeat steps 4 to 6 for each remaining device listed\.'
         $impl | Should -Match '\n8\. Select Download devices again with no filter applied, and keep the file in the change record beside the one from step 2 as the device list after the change\.' -Because 'the list after the change is kept as evidence'
@@ -4450,6 +4450,7 @@ Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
         $csv.Count | Should -Be 4
         ($csv | Where-Object Resource -eq 'ws-edge01').ResourceId | Should -Be ('/devices/{0}' -f $edge.Id)
         ($csv | Where-Object Resource -eq 'ws-edge01').Subscription | Should -Be '' -Because 'a device belongs to no subscription'
+        ($csv | Where-Object Resource -eq 'ws-old01').CurrentSetting | Should -Match ', last sign-in 2026-03-02T09:00:00Z, ' -Because 'the tracking CSV keeps the time of the last sign-in too'
         ($csv | Where-Object ResourceId -eq ('/devices/{0}' -f (Get-SdDevice '=HYPERLINK(1)').Id)).Resource | Should -Be "'=HYPERLINK(1)" -Because 'the tracking CSV keeps a name a spreadsheet would read as a formula as text too'
     }
 
@@ -4460,7 +4461,7 @@ Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
         $email | Should -Match 'I would like your approval to disable 4 of your devices in Microsoft Entra ID that have not signed in for more than 90 days\. Disabling keeps each device in your directory, and I am asking you to approve both the list in the attached file and the 90-day threshold\.'
         $email | Should -Match 'A disabled device can no longer authenticate to Microsoft Entra ID, so it fails any Conditional Access policy that requires a registered or compliant device'
         $email | Should -Match 'Nothing is deleted, so each device keeps what is stored with it in your directory, such as its BitLocker recovery keys'
-        $email | Should -Match 'The list leaves out the devices your on-premises Active Directory manages'
+        $email | Should -Match 'The list leaves out the devices your on-premises Active Directory manages[^\r\n]*, Windows Autopilot devices, printers and any device with no sign-in recorded, which I will review with you separately\.'
         $email | Should -Match 'I will check each device again and skip any that has signed in since my review\.'
         $email | Should -Match ("The devices are in the attached file CR-24-stale-devices\.email\.csv, one line for each with its name, operating system, join type, last sign-in and registration date, and they add up as follows:\r?\n\r?\nCounted by operating system and join type, the devices in the file are these:\r?\n\r?\n- iOS, Microsoft Entra registered: 1 device\r?\n- Windows, Microsoft Entra joined: 2 devices\r?\n- Windows, Microsoft Entra registered: 1 device")
         $email | Should -Match 'Each device can be turned back on straight away from the record I keep'
@@ -4484,14 +4485,14 @@ Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
 
     It 'names in the index the threshold, each device left out and why, and the verification' {
         $index = $sdMixed.Index
-        $index | Should -Match '- CR-24 reads a device as stale when it is enabled and its last sign-in \(ApproximateLastSignInDateTime\) is before 2026-07-14, 90 days before the device read of 2026-10-12 \(-StaleDeviceDays, 90 by default\)\.'
+        $index | Should -Match '- CR-24 reads a device as stale when it is enabled and its last sign-in \(ApproximateLastSignInDateTime\) is before 2026-07-14T06:10:00Z, 90 days before the device read of 2026-10-12T06:10:00Z \(-StaleDeviceDays, 90 by default\)\.'
         $index | Should -Match '- 2 stale devices left out of CR-24 as Microsoft Entra hybrid joined or synced from on-premises Active Directory, whose sync would undo the change: ws-hybrid01 \([^)]*Microsoft Entra hybrid joined[^)]*\) / ws-synced01 '
         $index | Should -Match '- 1 stale device left out of CR-24 as managed by Intune or another MDM \(isManaged\): ws-intune01 '
         $index | Should -Match '- 1 stale device left out of CR-24 as managed by Defender for Endpoint security settings management \(managementType MicrosoftSense\): srv-sense01 '
         $index | Should -Match '- 1 stale device left out of CR-24 as Windows Autopilot devices \(a physicalIds entry starting with \[ZTDid\]\): ws-autopilot01 '
         $index | Should -Match '- 1 stale device left out of CR-24 as Universal Print printers \(profileType Printer\), which cannot be disabled in Microsoft Entra ID: prn-floor2 '
         $index | Should -Match '- 1 stale device left out of CR-24 for a system label \(systemLabels\)[^\n]*: ws-labelled01 '
-        $index | Should -Match '- 1 stale device left out of CR-24 with no sign-in recorded \(ApproximateLastSignInDateTime empty\) and registered before 2026-07-14, or with no registration date: ws-blank01 [^\n]*Microsoft Learn notes that some active devices have a blank activity timestamp'
+        $index | Should -Match '- 1 stale device left out of CR-24 with no sign-in recorded \(ApproximateLastSignInDateTime empty\) and registered before 2026-07-14T06:10:00Z, or with no registration date: ws-blank01 [^\n]*Microsoft Learn notes that some active devices have a blank activity timestamp'
         $index | Should -Not -Match 'ws-new01|ws-recent01|ws-active01|ws-disabled01' -Because 'a device that is not stale is neither changed nor left out'
         $index | Should -Match '- Verify CR-24 with the next pack: LIC\.4-DEVICES should read AccountEnabled false for each device disabled\. Deleting them is a later change request'
         $index | Should -Match '- CR-24 names the devices in CR-24-stale-devices\.email\.csv rather than in its email'
@@ -4506,7 +4507,7 @@ Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
         Assert-ApprovalEmail $email 'CR-24 at 60 days'
         $email | Should -Match 'that have not signed in for more than 60 days\.'
         $email | Should -Match 'the 60-day threshold and this change for '
-        $r.Index | Should -Match 'is before 2026-08-13, 60 days before the device read'
+        $r.Index | Should -Match 'is before 2026-08-13T06:10:00Z, 60 days before the device read'
         { & $generator -EvidencePath $r.Pack -StaleDeviceDays 20 } | Should -Throw -Because 'the activity timestamp updates only about every 14 days'
     }
 

@@ -3861,6 +3861,10 @@ $catalog = @(
             if (-not $readAt) { $readAt = $buildDate }
             $cutoff = $readAt.AddDays(-$StaleDeviceDays)
             $day = { param($d) if ($d) { $d.ToString('yyyy-MM-dd', $inv) } else { 'not recorded' } }
+            # The last sign-in and the threshold keep their time in UTC, so step 5 can tell an unchanged activity timestamp
+            # from a sign-in since collection. A date alone would read an unchanged timestamp of 09:00 as later than the day
+            # listed, and would misstate a threshold that falls at the time of the device read.
+            $stamp = { param($d) if ($d) { $d.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", $inv) } else { 'not recorded' } }
             $joinWords = { param($t) switch (Get-Text $t) { 'AzureAd' { 'Microsoft Entra joined' } 'Workplace' { 'Microsoft Entra registered' } 'ServerAd' { 'Microsoft Entra hybrid joined' } '' { 'join type not recorded' } default { ConvertTo-CopyText $t } } }
             $devices = @(foreach ($row in $rows) {
                     if (-not (Test-True $row.AccountEnabled)) { continue }
@@ -3901,9 +3905,9 @@ $catalog = @(
             & $leftNote 'autopilot' '{0} left out of CR-24 as Windows Autopilot devices (a physicalIds entry starting with [ZTDid]): {1}. Microsoft Learn says Windows Autopilot devices are managed from Intune and cannot be reprovisioned once deleted, so clean them up in Intune.'
             & $leftNote 'printer' '{0} left out of CR-24 as Universal Print printers (profileType Printer), which cannot be disabled in Microsoft Entra ID: {1}. Clean each up in Universal Print.'
             & $leftNote 'label' '{0} left out of CR-24 for a system label (systemLabels), which marks a device the system manages: {1}. Review each before any change.'
-            & $leftNote 'blank' ('{0} left out of CR-24 with no sign-in recorded (ApproximateLastSignInDateTime empty) and registered before {1}, or with no registration date: {{1}}. Microsoft Learn notes that some active devices have a blank activity timestamp, so review each with the client before any change.' -f '{0}', (& $day $cutoff))
+            & $leftNote 'blank' ('{0} left out of CR-24 with no sign-in recorded (ApproximateLastSignInDateTime empty) and registered before {1}, or with no registration date: {{1}}. Microsoft Learn notes that some active devices have a blank activity timestamp, so review each with the client before any change.' -f '{0}', (& $stamp $cutoff))
             $inScope = @($devices | Where-Object { -not $_.Out })
-            $thresholdNote = 'CR-24 reads a device as stale when it is enabled and its last sign-in (ApproximateLastSignInDateTime) is before {0}, {1} days before the device read of {2} (-StaleDeviceDays, 90 by default). Microsoft Entra ID updates that timestamp only about every 14 days, so the threshold is never under 21 days.' -f (& $day $cutoff), $StaleDeviceDays, (& $day $readAt)
+            $thresholdNote = 'CR-24 reads a device as stale when it is enabled and its last sign-in (ApproximateLastSignInDateTime) is before {0}, {1} days before the device read of {2} (-StaleDeviceDays, 90 by default). Microsoft Entra ID updates that timestamp only about every 14 days, so the threshold is never under 21 days.' -f (& $stamp $cutoff), $StaleDeviceDays, (& $stamp $readAt)
             $partialNote = if ($partial) { 'LIC.4-DEVICES read in part ({0}), so a device left out of the read is not in CR-24. Recollect the pack.' -f (Get-ResultDetail 'LIC.4-DEVICES').TrimEnd('.') }
             if (-not $inScope.Count) {
                 $state = if ($devices.Count) { 'Not written, every stale device is left out, see the notes' } elseif ($partial) { 'No gaps found in the devices read, partial collection scope' } else { 'No gaps found' }
@@ -3919,7 +3923,7 @@ $catalog = @(
 
             $n = $inScope.Count
             $sorted = @($inScope | Sort-Object Name, DeviceId)
-            $setting = { param($d) '{0}, {1}, last sign-in {2}, registered {3}, object ID {4}, device ID {5}' -f $d.Os, $d.Join, (& $day $d.Last), (& $day $d.Registered), $d.Id, $d.DeviceId }
+            $setting = { param($d) '{0}, {1}, last sign-in {2}, registered {3}, object ID {4}, device ID {5}' -f $d.Os, $d.Join, (& $stamp $d.Last), (& $day $d.Registered), $d.Id, $d.DeviceId }
             # A device belongs to no subscription. The resource ID is the Graph path that updates it, devices/{id}.
             $csv = @($sorted | ForEach-Object { New-Resource $_.Name '' '' (& $setting $_) ('/devices/{0}' -f $_.Id) })
             $lines = [System.Collections.Generic.List[string]]::new()
@@ -3940,7 +3944,7 @@ $catalog = @(
             $impl.Add('Go to Entra ID > Devices > All devices, select Download devices with no filter applied, and keep the file in the change record as the device list before the change.')
             $impl.Add('Compare the devices listed in the RESOURCES section with the list the client approved, and leave out every device the client asked to keep, such as a kiosk, a device in storage or one kept for someone on leave.')
             $impl.Add(('In All devices, search for the {0}device listed in the RESOURCES section by its device ID and open it.' -f $(if ($n -gt 1) { 'first ' } else { '' })))
-            $impl.Add(('Read the activity timestamp, Enabled, Join type and MDM. If the activity timestamp is later than the last sign-in listed for the device, the device has signed in since collection, so leave it enabled and note it in the change record. Leave it unchanged and note it too if it is already disabled, if Join type reads Microsoft Entra hybrid joined, or if MDM names Intune or another management service.'))
+            $impl.Add(('Read the activity timestamp, Enabled, Join type and MDM. If the activity timestamp is later than the last sign-in listed for the device, which is in UTC, the device has signed in since collection, so leave it enabled and note it in the change record. Leave it unchanged and note it too if it is already disabled, if Join type reads Microsoft Entra hybrid joined, or if MDM names Intune or another management service.'))
             $impl.Add('Select Disable, then select Yes.')
             Add-RepeatStep $impl $n 4 'device'
             $impl.Add('Select Download devices again with no filter applied, and keep the file in the change record beside the one from step 2 as the device list after the change.')
@@ -3956,7 +3960,7 @@ $catalog = @(
             $effect = @(
                 ('A disabled device can no longer authenticate to Microsoft Entra ID, so it fails any Conditional Access policy that requires a registered or compliant device and can no longer use Windows Hello for Business, and nobody can sign in to a Microsoft Entra joined device with their work account until it is turned back on.')
                 ('Nothing is deleted, so each device keeps what is stored with it in your directory, such as its BitLocker recovery keys, which deleting a device would remove.')
-                ('The list leaves out the devices your on-premises Active Directory manages, which are cleaned up there, the devices Intune or another device management service manages, the devices Microsoft Defender for Endpoint manages, Windows Autopilot devices and printers.')
+                ('The list leaves out the devices your on-premises Active Directory manages, which are cleaned up there, the devices Intune or another device management service manages, the devices Microsoft Defender for Endpoint manages, Windows Autopilot devices, printers and any device with no sign-in recorded, which I will review with you separately.')
                 ('Just before the change, I will check each device again and skip any that has signed in since my review.'))
             $email = New-ApprovalEmail -Subject 'disabling stale devices in Microsoft Entra ID' `
                 -Change @(('I would like to disable {0} in Microsoft Entra ID that {1} not signed in for more than {2} days.' -f (Get-Yours $n 'devices'), (Get-Pick $n 'has' 'have'), $StaleDeviceDays), ('Disabling keeps {0} in your directory, and I am asking you to approve both the list in the attached file and the {1}-day threshold.' -f (Get-Pick $n 'the device' 'each device'), $StaleDeviceDays)) `
@@ -3972,7 +3976,7 @@ $catalog = @(
                     Number = 24; Key = 'stale-devices'; Title = 'Disable stale Microsoft Entra devices'
                     Description = 'Disable {0} in Microsoft Entra ID, each enabled with no sign-in for more than {1} days at collection, by setting accountEnabled to false. No device is deleted.' -f (Get-Listed $n 'device' 'devices'), $StaleDeviceDays
                     Purpose = 'A device that is no longer used keeps its identity in the directory and could still authenticate to Microsoft Entra ID if it were found or reused. Disabling it for a grace period before any deletion keeps it recoverable, as Microsoft Learn advises.'
-                    ResourceIntro = '{0} below {1} enabled at collection with no sign-in since before {2}, {3} days before the device read, and none is hybrid joined, managed by Intune, another MDM or Defender for Endpoint security settings management, a Windows Autopilot device, a printer or carries a system label. Each shows its operating system, join type, last sign-in, registration date, object ID and device ID.' -f $(if ($n -eq 1) { 'The device' } else { "The $n devices" }), (Get-Pick $n 'was' 'were'), (& $day $cutoff), $StaleDeviceDays
+                    ResourceIntro = '{0} below {1} enabled at collection with no sign-in since before {2}, {3} days before the device read, and none is hybrid joined, managed by Intune, another MDM or Defender for Endpoint security settings management, a Windows Autopilot device, a printer or carries a system label. Each shows its operating system, join type, last sign-in in UTC, registration date, object ID and device ID.' -f $(if ($n -eq 1) { 'The device' } else { "The $n devices" }), (Get-Pick $n 'was' 'were'), (& $stamp $cutoff), $StaleDeviceDays
                     ResourceLines = $lines.ToArray()
                     Availability = ('No impact on any service, since only devices with no sign-in for more than {0} days are disabled.' -f $StaleDeviceDays)
                     UserExperience = 'A listed device still in use can no longer authenticate to Microsoft Entra ID, so its user cannot reach Microsoft Entra resources from it until it is enabled again.'
