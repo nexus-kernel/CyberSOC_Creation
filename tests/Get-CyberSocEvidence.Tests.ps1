@@ -2664,17 +2664,32 @@ Describe 'Licensing check (LIC, CyberSOC 1.11.0)' {
         @($ctx.GraphMissingScopes) | Should -Be @('LicenseAssignment.Read.All')
     }
 
-    It 'lists the Microsoft Entra devices with their management type' {
+    It 'lists the Microsoft Entra devices with their management type, and what the stale device change leaves out (1.19.0)' {
         Mock Invoke-EbrGraphGet {
             $Uri | Should -Match 'v1\.0/devices\?\$select=.*managementType.*approximateLastSignInDateTime'
-            , @([pscustomobject]@{ id = 'o1'; deviceId = 'd1'; displayName = 'srv-01'; accountEnabled = $true; operatingSystem = 'Windows Server'; managementType = 'MicrosoftSense'; approximateLastSignInDateTime = '2026-10-01T00:00:00Z' }
-                [pscustomobject]@{ id = 'o2'; deviceId = 'd2'; displayName = 'ws-01'; accountEnabled = $false; operatingSystem = 'Windows'; managementType = 'mdm' })
+            $Uri | Should -Match 'v1\.0/devices\?\$select=[^&]*,physicalIds,profileType,systemLabels&\$top=999$' -Because 'CR-24 leaves out Autopilot devices, printers and system-managed devices'
+            , @([pscustomobject]@{ id = 'o1'; deviceId = 'd1'; displayName = 'srv-01'; accountEnabled = $true; operatingSystem = 'Windows Server'; managementType = 'MicrosoftSense'; approximateLastSignInDateTime = '2026-10-01T00:00:00Z'; physicalIds = @(); profileType = 'RegisteredDevice'; systemLabels = @() }
+                [pscustomobject]@{ id = 'o2'; deviceId = 'd2'; displayName = 'ws-01'; accountEnabled = $false; operatingSystem = 'Windows'; managementType = 'mdm'; physicalIds = @('[ZTDId]:3f2c', '[HWID]:h:6896'); profileType = 'RegisteredDevice'; systemLabels = @() }
+                [pscustomobject]@{ id = 'o3'; deviceId = 'd3'; displayName = 'prn-01'; accountEnabled = $true; operatingSystem = 'Windows'; profileType = 'Printer'; systemLabels = @('M365Managed') })
         }
         $r = Invoke-EbrGraphCollector -Ctx (New-LicCtx) -Item ($catalog | Where-Object Id -eq 'LIC.4-DEVICES')
         $r.Status | Should -Be 'OK'
-        $r.Rows.Count | Should -Be 2
+        $r.Rows.Count | Should -Be 3
         ($r.Rows | Where-Object DisplayName -eq 'ws-01').AccountEnabled | Should -BeFalse
-        $r.Detail | Should -Match '2 devices, 1 managed by Defender for Endpoint security settings management'
+        $r.Detail | Should -Be '3 devices, 1 managed by Defender for Endpoint security settings management (managementType MicrosoftSense), 1 Windows Autopilot.' -Because 'the [ZTDid] prefix matches in any case'
+        @(($r.Rows | Where-Object DisplayName -eq 'ws-01').PhysicalIds) | Should -Be @('[ZTDId]:3f2c', '[HWID]:h:6896')
+        ($r.Rows | Where-Object DisplayName -eq 'prn-01').ProfileType | Should -Be 'Printer'
+        @(($r.Rows | Where-Object DisplayName -eq 'prn-01').SystemLabels) | Should -Be @('M365Managed')
+        @(($r.Rows | Where-Object DisplayName -eq 'prn-01').PhysicalIds).Count | Should -Be 0 -Because 'a missing property reads as an empty list'
+        @($r.Rows)[0].PSObject.Properties.Name | Should -Be @('Id', 'DeviceId', 'DisplayName', 'AccountEnabled', 'OperatingSystem', 'OperatingSystemVersion', 'TrustType', 'IsManaged', 'IsCompliant', 'ManagementType', 'ApproximateLastSignInDateTime', 'RegistrationDateTime', 'OnPremisesSyncEnabled', 'PhysicalIds', 'ProfileType', 'SystemLabels')
+        $item = $catalog | Where-Object Id -eq 'LIC.4-DEVICES'
+        $item.Notes | Should -Match 'PhysicalIds, ProfileType and SystemLabels added in CyberSOC 1\.19\.0'
+        $item.Query | Should -Match 'physicalIds,profileType,systemLabels&\$top=999' -Because 'the catalog query matches the read'
+        Mock Invoke-EbrGraphGet { throw 'GRAPH-403 https://graph.microsoft.com/v1.0/devices: HTTP 403: Forbidden' }
+        $ctx = New-LicCtx
+        $r = Invoke-EbrGraphCollector -Ctx $ctx -Item $item
+        $r.Status | Should -Be 'UNAVAILABLE' -Because 'a refused read is never an empty device list'
+        $r.Detail | Should -Match 'Needs Device\.Read\.All'
     }
 
     It 'derives the matrix from every scenario fixture as the fixture expects, with the servers as its detail' {
@@ -3372,7 +3387,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
     }
 
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.18.0'
+        $params.ScriptVersion | Should -Be '1.19.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -3470,7 +3485,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.18.0'
+        $params2.ScriptVersion | Should -Be '1.19.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

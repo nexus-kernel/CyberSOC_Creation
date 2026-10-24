@@ -237,8 +237,9 @@ BeforeAll {
     $oldEmailTitles = 'What I am asking to change', 'Why I recommend it', 'What it means for you', 'The resources', 'How it can be reversed', 'Your approval', 'Your approval and a maintenance window'
     # The lines that head each group of resources: a subscription, for CR-19 a management group, the root scope and the
     # Microsoft Entra directory roles, and for CR-20 and CR-21 the policies, sign-ins and exclusions, which belong to no
-    # subscription, and for CR-22 the domain controllers, which the client confirms apart from the other servers.
-    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm):$'
+    # subscription, and for CR-22 the domain controllers, which the client confirms apart from the other servers, and for
+    # CR-24 the sentence that introduces its count of the devices by operating system and join type.
+    $resourceHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
     $dayPattern = '(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (January|February|March|April|May|June|July|August|September|October|November|December) \d{1,2}, \d{4}'
     # Checks one client email against the shared structure and the copy rules. Every generated email goes through it.
     # The parts are found by what each paragraph says: the ask, why, what it means for the client, the resources by
@@ -1224,13 +1225,15 @@ Describe 'Change request variants' {
         $email | Should -Match 'initiative once at the management group Contoso Inc\. Production, which holds the subscriptions below\. An Azure Policy initiative is a set of rules'
     }
 
-    It 'writes a client email for every change request, CR-01 to CR-23' {
+    It 'writes a client email for every change request, CR-01 to CR-24' {
         # The full fixture writes every change but CR-05 and CR-10. This pack adds an Azure SQL server and a
         # resource the diagnostic logging initiative reports as not compliant, so between them every change is
         # written at least once. A change request written without its email, or with an email that does not
         # ask for approval in the shared structure, fails here, so a new change request is held to it too.
         $full = Join-Path $TestDrive 'every-full'
         New-ChangeFixture $full
+        # Microsoft Entra devices with stale ones among them, so CR-24 is written too.
+        Set-PackResult $full 'LIC.4-DEVICES' @((Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/stale-devices/scenarios.json') -Raw | ConvertFrom-Json).Devices)
         $null = & $generator -EvidencePath $full
         $more = Join-Path $TestDrive 'every-more'
         New-ChangeFixture $more
@@ -1268,7 +1271,7 @@ Describe 'Change request variants' {
             }
             $index | Should -Not -Match '\| Change request \|' -Because 'no change request is listed without its email'
         }
-        @($written | Sort-Object -Unique) | Should -Be @(1..23) -Because 'the two packs between them write every change request'
+        @($written | Sort-Object -Unique) | Should -Be @(1..24) -Because 'the two packs between them write every change request'
         $sql = Get-Content (Join-Path $more '05-change-requests/CR-05-sql-minimum-tls.email.txt') -Raw
         $sql | Should -Match '^Subject: Approval requested: minimum TLS 1\.2 for Azure SQL servers'
         $sql | Should -Match 'Azure SQL retired them on August 31, 2025, but this server does not enforce a minimum of 1\.2'
@@ -4390,5 +4393,163 @@ Describe 'Periodic patch assessment on virtual machines (CR-23, collector 1.18.0
         $r.Index | Should -Match '- EW\.10-ASSESSMENT read in part \(Session hosts not read: hp-pooled-rds: HTTP 403: Forbidden\), so a virtual machine left out of the read is not in CR-23, and a pooled session host may not be marked\.'
         $r = New-PaPack 'partial-none' 'all-on' -Before { param($p) Set-PackResult $p 'EW.10-ASSESSMENT' @() -Status 'PARTIAL' -Detail 'Truncated at 1000 rows.' }
         $r.Index | Should -Match '\| 23 \| [^|]+ \|  \| No gaps found in the machines read, partial collection scope \|' -Because 'a partial read never reads as no gaps'
+    }
+}
+
+Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
+    BeforeAll {
+        $script:sd = Get-Content (Join-Path $PSScriptRoot 'fixtures/offline-pack/stale-devices/scenarios.json') -Raw | ConvertFrom-Json
+        # A CR-24 scenario written into a pack as collector 1.19.0 writes it. Set-PackResult records the read at
+        # 2026-10-12T06:10:00Z, so the 90-day threshold falls on 2026-07-14T06:10:00Z.
+        function New-SdPack([string]$Name, [string]$Scenario = '', [scriptblock]$Before = $null, [hashtable]$Extra = @{}) {
+            $pack = Join-Path $TestDrive "sd-$Name"
+            New-ChangeFixture $pack
+            $rows = if ($Scenario) { @($sd.Scenarios.$Scenario.Devices) } else { @($sd.Devices) }
+            Set-PackResult $pack 'LIC.4-DEVICES' $rows
+            if ($Before) { & $Before $pack }
+            Invoke-WithWindowsPowerShellJson { $null = & $generator -EvidencePath $pack -ClientContact 'Dana' -SenderName 'Scott Example' @Extra }
+            $out = Join-Path $pack '05-change-requests'
+            [pscustomobject]@{ Pack = $pack; Out = $out; Index = Get-Content (Join-Path $out '00-index.md') -Raw }
+        }
+        function Get-Cr24([string]$Out, [string]$Suffix = '.txt') { Get-Content (Join-Path $Out "CR-24-stale-devices$Suffix") -Raw }
+        function Get-SdDevice([string]$Name) { @($sd.Devices | Where-Object DisplayName -eq $Name)[0] }
+        $script:sdMixed = New-SdPack 'mixed'
+    }
+
+    It 'disables the enabled devices with no sign-in for more than 90 days, and never deletes one' {
+        $r = $sdMixed
+        $r.Index | Should -Match '\| 24 \| Stale Microsoft Entra devices disabled \| 4 \| Change request and client email \| CR-24-stale-devices\.txt, CR-24-stale-devices\.email\.txt, CR-24-stale-devices\.email\.csv \|'
+        $text = Get-Cr24 $r.Out
+        $text | Should -Match '^Title: Disable stale Microsoft Entra devices'
+        @(Get-Section $text 'A) CHANGE DESCRIPTION')[0] | Should -Be 'Disable the 4 devices listed below in Microsoft Entra ID, each enabled with no sign-in for more than 90 days at collection, by setting accountEnabled to false. No device is deleted.'
+        $res = (Get-Section $text 'C) RESOURCES') -join "`n"
+        $res | Should -Match 'with no sign-in since before 2026-07-14T06:10:00Z, 90 days before the device read'
+        $edge = Get-SdDevice 'ws-edge01'
+        $res | Should -Match ('- ws-edge01, Windows 10\.0\.22631\.4317, Microsoft Entra joined, last sign-in 2026-07-13T00:00:00Z, registered 2024-05-10, object ID {0}, device ID {1}' -f $edge.Id, $edge.DeviceId) -Because 'a device just over the threshold is stale'
+        $res | Should -Match '- ipad-lobby, iOS 17\.6\.1, Microsoft Entra registered, last sign-in 2026-01-20'
+        $res | Should -Match '- ws-old01, Windows 10\.0\.22631\.4317, Microsoft Entra joined, last sign-in 2026-03-02T09:00:00Z, ' -Because 'step 5 compares the time, so an unchanged timestamp never reads as a sign-in since collection'
+        $res | Should -Match '- =HYPERLINK\(1\), ' -Because 'the change request keeps the name as the directory has it'
+        $res | Should -Not -Match 'ws-recent01' -Because 'a device just under the threshold is not stale'
+        foreach ($kept in 'ws-active01', 'ws-new01', 'ws-disabled01', 'ws-hybrid01', 'ws-synced01', 'ws-intune01', 'srv-sense01', 'ws-autopilot01', 'prn-floor2', 'ws-labelled01', 'ws-blank01') { $res | Should -Not -Match $kept -Because "$kept is not in the change" }
+        $impl = (Get-Section $text 'A) IMPLEMENTATION PLAN') -join "`n"
+        $impl | Should -Match '^1\. Sign in to the Microsoft Entra admin center as at least a Cloud Device Administrator or an Intune Administrator, the roles that can disable a device\. Disable only, and never delete a device in this change: a deleted device cannot be restored, and deleting it also removes the BitLocker recovery keys stored with it\.'
+        $impl | Should -Match '\n2\. Go to Entra ID > Devices > All devices, select Download devices with no filter applied, and keep the file in the change record as the device list before the change\.' -Because 'the list before the change is kept as evidence'
+        $impl | Should -Match '\n3\. Compare the devices listed in the RESOURCES section with the list the client approved'
+        $impl | Should -Match '\n5\. Read the activity timestamp, Enabled, Join type and MDM\. If the activity timestamp is later than the last sign-in listed for the device, which is in UTC, the device has signed in since collection, so leave it enabled' -Because 'a device that signed in after collection is skipped'
+        $impl | Should -Match '\n6\. Select Disable, then select Yes\.'
+        $impl | Should -Match '\n7\. Repeat steps 4 to 6 for each remaining device listed\.'
+        $impl | Should -Match '\n8\. Select Download devices again with no filter applied, and keep the file in the change record beside the one from step 2 as the device list after the change\.' -Because 'the list after the change is kept as evidence'
+        $text | Should -Not -Match '(?i)select delete|Remove-MgDevice|delete the device' -Because 'the change disables and never deletes'
+        (Get-Section $text 'B) TESTING PLAN') -join "`n" | Should -Match 'filter Enabled to No and confirm that each device disabled in the change is listed'
+        $rollback = (Get-Section $text 'C) ROLLBACK PLAN') -join "`n"
+        $rollback | Should -Match 'search for the device to turn back on by the device ID in the change record'
+        $rollback | Should -Match 'Select Enable, then select Yes, and confirm Enabled reads Yes\.'
+        foreach ($ref in @(Get-Section $text 'A) REFERENCES')) { $ref | Should -Match ': https://learn\.microsoft\.com/' -Because 'References list Microsoft Learn pages only' }
+        $text | Should -Match 'How To: Manage stale devices in Microsoft Entra ID: https://learn\.microsoft\.com/entra/identity/devices/manage-stale-devices'
+        $csv = @(Import-Csv (Join-Path $r.Out 'change-requests.csv') | Where-Object CR -eq 'CR-24')
+        $csv.Count | Should -Be 4
+        ($csv | Where-Object Resource -eq 'ws-edge01').ResourceId | Should -Be ('/devices/{0}' -f $edge.Id)
+        ($csv | Where-Object Resource -eq 'ws-edge01').Subscription | Should -Be '' -Because 'a device belongs to no subscription'
+        ($csv | Where-Object Resource -eq 'ws-old01').CurrentSetting | Should -Match ', last sign-in 2026-03-02T09:00:00Z, ' -Because 'the tracking CSV keeps the time of the last sign-in too'
+        ($csv | Where-Object ResourceId -eq ('/devices/{0}' -f (Get-SdDevice '=HYPERLINK(1)').Id)).Resource | Should -Be "'=HYPERLINK(1)" -Because 'the tracking CSV keeps a name a spreadsheet would read as a formula as text too'
+    }
+
+    It 'writes an email that asks for approval of the attached list and the threshold, and which devices should stay' {
+        $email = Get-Cr24 $sdMixed.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-24'
+        $email | Should -Match '^Subject: Approval requested: disabling stale devices in Microsoft Entra ID\r?\n\r?\nHello Dana,'
+        $email | Should -Match 'I would like your approval to disable 4 of your devices in Microsoft Entra ID that have not signed in for more than 90 days\. Disabling keeps each device in your directory, and I am asking you to approve both the list in the attached file and the 90-day threshold\.'
+        $email | Should -Match 'A disabled device can no longer authenticate to Microsoft Entra ID, so it fails any Conditional Access policy that requires a registered or compliant device'
+        $email | Should -Match 'Nothing is deleted, so each device keeps what is stored with it in your directory, such as its BitLocker recovery keys'
+        $email | Should -Match 'The list leaves out the devices your on-premises Active Directory manages[^\r\n]*, Windows Autopilot devices, printers and any device with no sign-in recorded, which I will review with you separately\.'
+        $email | Should -Match 'I will check each device again and skip any that has signed in since my review\.'
+        $email | Should -Match ("The devices are in the attached file CR-24-stale-devices\.email\.csv, one line for each with its name, operating system, join type, last sign-in and registration date, and they add up as follows:\r?\n\r?\nCounted by operating system and join type, the devices in the file are these:\r?\n\r?\n- iOS, Microsoft Entra registered: 1 device\r?\n- Windows, Microsoft Entra joined: 2 devices\r?\n- Windows, Microsoft Entra registered: 1 device")
+        $email | Should -Match 'Each device can be turned back on straight away from the record I keep'
+        $email | Should -Match 'could you tell me whether any of these devices should stay enabled, for example a kiosk, a device in storage or one kept for someone on leave\? I will leave any such device out of the change\. With that confirmed, could you approve the attached list, the 90-day threshold and this change for '
+        $email | Should -Not -Match 'ws-old01|ws-edge01|ipad-lobby|HYPERLINK' -Because 'the devices are named in the attached file, not in the email'
+    }
+
+    It 'attaches the devices as a CSV, with a value a spreadsheet would read as a formula kept as text' {
+        $file = Join-Path $sdMixed.Out 'CR-24-stale-devices.email.csv'
+        $raw = Get-Content $file -Raw
+        $raw | Should -Not -Match ';|>|<' -Because 'the file goes to the client with the email'
+        $rows = @(Import-Csv $file)
+        $rows.Count | Should -Be 4
+        $rows[0].PSObject.Properties.Name | Should -Be @('Device', 'OperatingSystem', 'Version', 'JoinType', 'LastSignIn', 'DaysSinceSignIn', 'Registered', 'DeviceId', 'ObjectId')
+        ($rows | Where-Object DeviceId -eq (Get-SdDevice '=HYPERLINK(1)').DeviceId).Device | Should -Be "'=HYPERLINK(1)" -Because 'a spreadsheet reads a cell that starts with = as a formula'
+        $edge = $rows | Where-Object Device -eq 'ws-edge01'
+        $edge.LastSignIn | Should -Be '2026-07-13'
+        $edge.DaysSinceSignIn | Should -Be '91'
+        $edge.JoinType | Should -Be 'Microsoft Entra joined'
+    }
+
+    It 'names in the index the threshold, each device left out and why, and the verification' {
+        $index = $sdMixed.Index
+        $index | Should -Match '- CR-24 reads a device as stale when it is enabled and its last sign-in \(ApproximateLastSignInDateTime\) is before 2026-07-14T06:10:00Z, 90 days before the device read of 2026-10-12T06:10:00Z \(-StaleDeviceDays, 90 by default\)\.'
+        $index | Should -Match '- 2 stale devices left out of CR-24 as Microsoft Entra hybrid joined or synced from on-premises Active Directory, whose sync would undo the change: ws-hybrid01 \([^)]*Microsoft Entra hybrid joined[^)]*\) / ws-synced01 '
+        $index | Should -Match '- 1 stale device left out of CR-24 as managed by Intune or another MDM \(isManaged\): ws-intune01 '
+        $index | Should -Match '- 1 stale device left out of CR-24 as managed by Defender for Endpoint security settings management \(managementType MicrosoftSense\): srv-sense01 '
+        $index | Should -Match '- 1 stale device left out of CR-24 as Windows Autopilot devices \(a physicalIds entry starting with \[ZTDid\]\): ws-autopilot01 '
+        $index | Should -Match '- 1 stale device left out of CR-24 as Universal Print printers \(profileType Printer\), which cannot be disabled in Microsoft Entra ID: prn-floor2 '
+        $index | Should -Match '- 1 stale device left out of CR-24 for a system label \(systemLabels\)[^\n]*: ws-labelled01 '
+        $index | Should -Match '- 1 stale device left out of CR-24 with no sign-in recorded \(ApproximateLastSignInDateTime empty\) and registered before 2026-07-14T06:10:00Z, or with no registration date: ws-blank01 [^\n]*Microsoft Learn notes that some active devices have a blank activity timestamp'
+        $index | Should -Not -Match 'ws-new01|ws-recent01|ws-active01|ws-disabled01' -Because 'a device that is not stale is neither changed nor left out'
+        $index | Should -Match '- Verify CR-24 with the next pack: LIC\.4-DEVICES should read AccountEnabled false for each device disabled\. Deleting them is a later change request'
+        $index | Should -Match '- CR-24 names the devices in CR-24-stale-devices\.email\.csv rather than in its email'
+        $index | Should -Match '\| Microsoft Intune Plan 1 \| [^|]+ \| [^|]* \| [^|]* \| CR-24 \(no gate\) \|' -Because 'CR-24 uses the Intune reading without needing Intune'
+        $index | Should -Not -Match 'before sending CR-24' -Because 'CR-24 requires no license'
+    }
+
+    It 'takes another threshold, never one under 21 days' {
+        $r = New-SdPack 'threshold' -Extra @{ StaleDeviceDays = 60 }
+        $r.Index | Should -Match '\| 24 \| [^|]+ \| 5 \| Change request and client email \|' -Because 'ws-recent01, 89 days without a sign-in, is stale at 60 days'
+        $email = Get-Cr24 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-24 at 60 days'
+        $email | Should -Match 'that have not signed in for more than 60 days\.'
+        $email | Should -Match 'the 60-day threshold and this change for '
+        $r.Index | Should -Match 'is before 2026-08-13T06:10:00Z, 60 days before the device read'
+        { & $generator -EvidencePath $r.Pack -StaleDeviceDays 20 } | Should -Throw -Because 'the activity timestamp updates only about every 14 days'
+    }
+
+    It 'writes the email for one device in the singular' {
+        $r = New-SdPack 'single' 'single'
+        $email = Get-Cr24 $r.Out '.email.txt'
+        Assert-ApprovalEmail $email 'CR-24 for one device'
+        $email | Should -Match 'disable one of your devices in Microsoft Entra ID that has not signed in for more than 90 days\. Disabling keeps the device in your directory'
+        $email | Should -Match 'The device is in the attached file CR-24-stale-devices\.email\.csv, one line for each with its name, operating system, join type, last sign-in and registration date, and it counts as follows:'
+        $email | Should -Match 'Counted by operating system and join type, the device in the file is this:\r?\n\r?\n- Windows, Microsoft Entra joined: 1 device'
+        $email | Should -Match 'The device can be turned back on straight away'
+        @(Get-Section (Get-Cr24 $r.Out) 'A) IMPLEMENTATION PLAN' | Where-Object { $_ -match '^\d+\. ' }).Count | Should -Be 7 -Because 'one device needs no repeat step'
+    }
+
+    It 'reads no gaps when no device is stale, and writes nothing when every stale device is left out' {
+        $r = New-SdPack 'none' 'none-stale'
+        $r.Index | Should -Match '\| 24 \| Stale Microsoft Entra devices disabled \|  \| No gaps found \|  \|'
+        Test-Path (Join-Path $r.Out 'CR-24-stale-devices.txt') | Should -BeFalse
+        $r = New-SdPack 'empty' 'none-stale' -Before { param($p) Set-PackResult $p 'LIC.4-DEVICES' @() }
+        $r.Index | Should -Match '\| 24 \| [^|]+ \|  \| No gaps found \|  \|'
+        $r = New-SdPack 'left' 'only-left-out'
+        $r.Index | Should -Match '\| 24 \| [^|]+ \|  \| Not written, every stale device is left out, see the notes \|'
+        $r.Index | Should -Match '- 1 stale device left out of CR-24 as managed by Intune or another MDM \(isManaged\): ws-intune01 ' -Because 'an MDM-managed device is left out whether or not Intune is licensed'
+        Test-Path (Join-Path $r.Out 'CR-24-stale-devices.txt') | Should -BeFalse
+        Test-Path (Join-Path $r.Out 'CR-24-stale-devices.email.csv') | Should -BeFalse
+    }
+
+    It 'needs recollection on a pack before 1.19.0, is not written when the read was refused, and says when the read is partial' {
+        $r = New-SdPack 'missing' -Before { param($p) Remove-PackResult $p 'LIC.4-DEVICES' }
+        $r.Index | Should -Match '\| 24 \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.19\.0 or later \|'
+        $old = @($sd.Devices | ForEach-Object { $_ | Select-Object * -ExcludeProperty PhysicalIds, ProfileType, SystemLabels })
+        $r = New-SdPack 'old' -Before { param($p) Set-PackResult $p 'LIC.4-DEVICES' $old }
+        $r.Index | Should -Match '\| 24 \| [^|]+ \|  \| Needs recollection with CyberSOC collector 1\.19\.0 or later \|' -Because 'a 1.11.0 to 1.18.0 pack cannot tell an Autopilot device or a printer from the others'
+        $r.Index | Should -Match 'LIC\.4-DEVICES in this pack does not record the physical IDs, profile type and system labels of each device'
+        $r = New-SdPack 'denied' -Before { param($p) Set-PackResult $p 'LIC.4-DEVICES' @() -Status 'UNAVAILABLE' -Detail 'Not a zero: the Graph token cannot read this. Needs Device.Read.All.' }
+        $r.Index | Should -Match '\| 24 \| [^|]+ \|  \| Not collected \(LIC\.4-DEVICES UNAVAILABLE\) \|' -Because 'a refused read is never no gaps'
+        $r = New-SdPack 'failed' -Before { param($p) Set-PackResult $p 'LIC.4-DEVICES' @() -Status 'FAILED' -Detail 'HTTP 500' }
+        $r.Index | Should -Match '\| 24 \| [^|]+ \|  \| Not collected \(LIC\.4-DEVICES FAILED\) \|'
+        $r = New-SdPack 'partial' -Before { param($p) Set-PackResult $p 'LIC.4-DEVICES' @($sd.Devices) -Status 'PARTIAL' -Detail 'Paging stopped early.' }
+        $r.Index | Should -Match '\| 24 \| [^|]+ \| 4 \| Change request and client email, partial collection scope \|'
+        $r.Index | Should -Match '- LIC\.4-DEVICES read in part \(Paging stopped early\), so a device left out of the read is not in CR-24\.'
+        $r = New-SdPack 'partial-none' 'none-stale' -Before { param($p) Set-PackResult $p 'LIC.4-DEVICES' @($sd.Scenarios.'none-stale'.Devices) -Status 'PARTIAL' -Detail 'Paging stopped early.' }
+        $r.Index | Should -Match '\| 24 \| [^|]+ \|  \| No gaps found in the devices read, partial collection scope \|' -Because 'a partial read never reads as no gaps'
     }
 }
