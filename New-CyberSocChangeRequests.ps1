@@ -18,10 +18,11 @@
     force the excluded accounts with no legacy sign-in in the last 30 days (CR-21), and setting the attack surface reduction
     rules to Audit on the Windows servers through one endpoint security policy and security settings management (CR-22),
     leaving every rule already configured on a server as it is, and turning on periodic assessment in Azure Update Manager
-    on the virtual machines without it, changing the assessment mode only and never the patch mode (CR-23). Every change request
+    on the virtual machines without it, changing the assessment mode only and never the patch mode (CR-23), and disabling,
+    never deleting, the Microsoft Entra devices with no sign-in for more than -StaleDeviceDays days (CR-24). Every change request
     also gets a client email, drafted and ready to send, that asks for the client's approval. The CR-19 email names
     the accounts and their roles in a CSV written beside it (CR-19-disabled-account-roles.email.csv), to attach,
-    since the list can be long. Every email has the same parts in the
+    since the list can be long, and the CR-24 email names the devices the same way (CR-24-stale-devices.email.csv). Every email has the same parts in the
     same order: what is to change, why it is recommended, what it means for the client, the resources by
     subscription, how it can be reversed, and the request, which asks for approval of the proposed date, or
     for a maintenance window where the change needs a restart, by a reply-by date a week before it. Nothing
@@ -71,6 +72,10 @@
     The Defender for Endpoint plan read in the Defender portal under Settings > Endpoints > Licenses: Plan1, Plan2,
     Business or Mixed. Overrides the reading the collection recorded (Licensing in 00-parameters.json). The licensing
     check takes it for the plan and names any disagreement with what the API reads show.
+.PARAMETER StaleDeviceDays
+    The days without a sign-in after which CR-24 reads an enabled Microsoft Entra device as stale, counted back from the
+    device read. Defaults to 90. Microsoft Entra ID updates the activity timestamp only about every 14 days, give or take
+    5, so it takes no value under 21. The CR-24 email asks the client to approve the threshold with the device list.
 .EXAMPLE
     ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000
 .EXAMPLE
@@ -115,6 +120,11 @@
     pack says "needs recollection". It leaves out network virtual appliances, AKS nodes, Windows client images, images the
     last assessment read as unsupported, machines without the VM agent and machines tagged as patching waived or client
     owned, and marks pooled Azure Virtual Desktop session hosts, which lose the setting when rebuilt from their image.
+    CR-24 reads the Microsoft Entra devices (LIC.4-DEVICES) with the PhysicalIds, ProfileType and SystemLabels columns added
+    in 1.19.0, and on an earlier pack says "needs recollection". It leaves out hybrid joined and synced devices, devices
+    Intune or another MDM manages (isManaged, whether or not Intune is licensed), devices Defender for Endpoint security
+    settings management manages, Windows Autopilot devices, printers, devices with a system label and devices with no
+    sign-in recorded, and names them in the index.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -130,7 +140,9 @@ param(
     [datetime]$ChangeDate,
     [string[]]$AdminRuleOpen,
     [ValidateSet('Plan1', 'Plan2', 'Business', 'Mixed')]
-    [string]$DefenderEndpointPlan
+    [string]$DefenderEndpointPlan,
+    [ValidateRange(21, 3650)]
+    [int]$StaleDeviceDays = 90
 )
 
 $ErrorActionPreference = 'Stop'
@@ -164,6 +176,11 @@ $detailVersions['IA.8-SIGNINS-NONINTERACTIVE'] = '1.16.0'
 foreach ($id in 'EW.4-SERVERS', 'EW.4-AVMODE') { $detailVersions[$id] = '1.17.0' }
 # CR-23 reads the virtual machines without periodic assessment (EW.10-ASSESSMENT), added in 1.18.0.
 $detailVersions['EW.10-ASSESSMENT'] = '1.18.0'
+# CR-24 reads LIC.4-DEVICES, added in 1.11.0, with the PhysicalIds, ProfileType and SystemLabels columns added in 1.19.0,
+# which tell a Windows Autopilot device, a printer and a system-managed device from the others. A pack without them, or
+# without LIC.4-DEVICES at all, needs recollection with 1.19.0 or later.
+$staleDeviceVersion = '1.19.0'
+$detailVersions['LIC.4-DEVICES'] = $staleDeviceVersion
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -192,6 +209,13 @@ Initialize-CyberSocPackReader -Pack $pack -Manifest $manifest
 function Get-Number($value) { $n = 0; if ([int]::TryParse((Get-Text $value), [ref]$n)) { $n } else { 0 } }
 # What the collector recorded about a result, such as the permission a read needed, cleaned to the copy rules.
 function Get-ResultDetail([string]$id) { ConvertTo-CopyText (@($manifest | Where-Object ResultId -eq $id) | Select-Object -First 1).Detail }
+# A time from the pack in UTC, or null. ConvertFrom-Json reads an ISO date as a DateTime on PowerShell 7 and leaves it a
+# string on Windows PowerShell 5.1, and the manifest holds strings.
+function ConvertTo-UtcDate($value) {
+    if ($value -is [datetime]) { return $value.ToUniversalTime() }
+    $d = [datetime]::MinValue
+    if ([datetime]::TryParse((Get-Text $value), [cultureinfo]::InvariantCulture, [Globalization.DateTimeStyles]'AdjustToUniversal, AssumeUniversal', [ref]$d)) { $d } else { $null }
+}
 
 # Copy rules: no semicolons, arrows, emoji or angle brackets, and the greater-than sign only in a
 # navigation step such as Settings > Configuration. A client email has no navigation step, so it has no
@@ -404,9 +428,14 @@ $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, 
 # CR-19 adds the management groups and root scope above the subscriptions and the Microsoft Entra directory roles,
 # which belong to no subscription, and CR-20 and CR-21 the Conditional Access policies, the accounts that signed in with
 # device code flow or legacy authentication and the exclusions removed, which belong to the tenant. CR-22 lists the
-# domain controllers on their own, since the client confirms them apart from the other servers.
-$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm):$'
+# domain controllers on their own, since the client confirms them apart from the other servers. CR-24 counts the devices
+# by operating system and join type, which belong to no subscription.
+$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Devices by operating system and join type):$'
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
+# A spreadsheet reads a cell that starts with =, +, - or @ as a formula, quoted or not, and a device, display or role name
+# comes from the directory, so the CSV an email attaches (CR-19, CR-24) puts an apostrophe in front of such a value,
+# which the spreadsheet hides and which keeps the text as it is.
+function ConvertTo-SheetText([string]$Value) { if ($Value -match '^[=+\-@]') { "'" + $Value } else { $Value } }
 $proposedDay = Format-Day $proposedDate
 $replyDay = Format-Day $replyDate
 $explainTls = 'TLS is the protocol that encrypts connections to a service, and versions 1.0 and 1.1 are its older versions.'
@@ -2943,16 +2972,13 @@ $catalog = @(
             $detailWords = { param($r)
                 if ($r.Side -eq 'Azure') { if (Get-Text $r.Condition) { 'with a condition that narrows what the role allows' } else { '' } }
                 else { @(& $entraParts $r | Where-Object { $_ -notmatch '^(in administrative unit |for the single application |at directory scope )' }) -join ', ' } }
-            # A spreadsheet reads a cell that starts with =, +, - or @ as a formula, quoted or not, and a display name or
-            # role name comes from the directory, so such a value gets an apostrophe in front, which the spreadsheet
-            # hides and which keeps the text as it is.
-            $cellSafe = { param([string]$v) if ($v -match '^[=+\-@]') { "'" + $v } else { $v } }
+            # Each value is made safe for a spreadsheet (ConvertTo-SheetText).
             $emailRows = @(@($inScopeAzure) + @($inScopeEntra) + @($fixed) | ForEach-Object {
                     [pscustomobject]@{
-                        Account = & $cellSafe (ConvertTo-CopyText $_.DisplayName); SignInName = & $cellSafe (ConvertTo-CopyText $_.UserPrincipalName)
-                        RoleType = $(if ($_.Side -eq 'Azure') { 'Azure' } else { 'Microsoft Entra' }); Role = & $cellSafe (ConvertTo-CopyText $_.Role)
-                        Scope = & $cellSafe $(if ($_.Side -eq 'Azure') { & $azureWhere $_ } else { & $entraWhere $_ })
-                        Detail = & $cellSafe (& $detailWords $_); HeldThrough = & $cellSafe (& $heldWords $_); Action = & $cellSafe (& $actionWords $_) } } |
+                        Account = ConvertTo-SheetText (ConvertTo-CopyText $_.DisplayName); SignInName = ConvertTo-SheetText (ConvertTo-CopyText $_.UserPrincipalName)
+                        RoleType = $(if ($_.Side -eq 'Azure') { 'Azure' } else { 'Microsoft Entra' }); Role = ConvertTo-SheetText (ConvertTo-CopyText $_.Role)
+                        Scope = ConvertTo-SheetText $(if ($_.Side -eq 'Azure') { & $azureWhere $_ } else { & $entraWhere $_ })
+                        Detail = ConvertTo-SheetText (& $detailWords $_); HeldThrough = ConvertTo-SheetText (& $heldWords $_); Action = ConvertTo-SheetText (& $actionWords $_) } } |
                     Sort-Object Account, SignInName, @{ Expression = { if ($_.RoleType -eq 'Azure') { 0 } else { 1 } } }, Scope, Role, Detail)
             $emailCsv = @('"Account","SignInName","RoleType","Role","Scope","Detail","HeldThrough","Action"')
             if ($emailRows.Count) { $emailCsv = @($emailRows | ConvertTo-Csv -NoTypeInformation) }
@@ -3805,6 +3831,161 @@ $catalog = @(
                         , @('Azure Update Manager frequently asked questions, pricing', 'https://learn.microsoft.com/azure/update-manager/update-manager-faq#pricing')
                         , @('Automate assessment at scale by using Azure Policy', 'https://learn.microsoft.com/azure/update-manager/periodic-assessment-at-scale')
                         , @('Session host update for Azure Virtual Desktop', 'https://learn.microsoft.com/azure/virtual-desktop/session-host-update'))
+                    Csv = $csv
+                    Email = $email
+                } } } }
+    @{ Number = 24; Key = 'stale-devices'; Change = 'Stale Microsoft Entra devices disabled'; Sources = @('LIC.4-DEVICES'); Uses = @('IntuneP1')
+       Build = {
+            # LIC.4-DEVICES lists every Microsoft Entra device. A device is stale when it is enabled and its last sign-in
+            # (approximateLastSignInDateTime, the activity timestamp) is more than -StaleDeviceDays before the device read.
+            # CR-24 disables it (accountEnabled false) and never deletes it: a deleted device cannot be restored and takes
+            # its BitLocker recovery keys with it, so Microsoft Learn advises disabling for a grace period first (How To:
+            # Manage stale devices in Microsoft Entra ID). Left out, the first reason that applies: a hybrid joined or
+            # synced device, whose on-premises sync overrides the change, a device Intune or another MDM manages
+            # (isManaged), whether or not Intune is licensed, since Learn says to retire it in the management system first,
+            # a device Defender for Endpoint security settings management manages (managementType MicrosoftSense), a
+            # Windows Autopilot device (a physicalIds entry starting with [ZTDid]), which cannot be reprovisioned once
+            # deleted, a Universal Print printer (profileType Printer), which cannot be disabled in Microsoft Entra ID, and
+            # a device carrying a system label. A device with no activity timestamp is never read as stale, since Learn
+            # notes that some active devices have a blank one, and the index names it for review.
+            $notes = [System.Collections.Generic.List[string]]::new()
+            $partial = (Get-Status 'LIC.4-DEVICES') -eq 'PARTIAL'
+            $rows = @(Get-Rows 'LIC.4-DEVICES')
+            if ($rows.Count -and $rows[0].PSObject.Properties.Name -notcontains 'PhysicalIds') {
+                return @{ State = Get-RecollectionState 'LIC.4-DEVICES'
+                    Notes = @(('LIC.4-DEVICES in this pack does not record the physical IDs, profile type and system labels of each device, so CR-24 cannot tell a Windows Autopilot device, a printer or a system-managed device from the others. Recollect with CyberSOC collector {0} or later.' -f $staleDeviceVersion)) }
+            }
+            # The device read is the moment the activity timestamps were true, so the threshold counts back from it.
+            $readAt = ConvertTo-UtcDate (@($manifest | Where-Object ResultId -eq 'LIC.4-DEVICES') | Select-Object -First 1).ReadTimeUtc
+            if (-not $readAt) { $readAt = ConvertTo-UtcDate $parameters.RunStartedUtc }
+            if (-not $readAt) { $readAt = $buildDate }
+            $cutoff = $readAt.AddDays(-$StaleDeviceDays)
+            $day = { param($d) if ($d) { $d.ToString('yyyy-MM-dd', $inv) } else { 'not recorded' } }
+            $joinWords = { param($t) switch (Get-Text $t) { 'AzureAd' { 'Microsoft Entra joined' } 'Workplace' { 'Microsoft Entra registered' } 'ServerAd' { 'Microsoft Entra hybrid joined' } '' { 'join type not recorded' } default { ConvertTo-CopyText $t } } }
+            $devices = @(foreach ($row in $rows) {
+                    if (-not (Test-True $row.AccountEnabled)) { continue }
+                    $last = ConvertTo-UtcDate $row.ApproximateLastSignInDateTime
+                    $registered = ConvertTo-UtcDate $row.RegistrationDateTime
+                    if ($last -and $last -ge $cutoff) { continue }
+                    # A blank timestamp on a device registered within the threshold is a new device, not a stale one.
+                    if (-not $last -and $registered -and $registered -ge $cutoff) { continue }
+                    $labels = @(@($row.SystemLabels) | ForEach-Object { ConvertTo-CopyText $_ } | Where-Object { $_ })
+                    $out = if (-not $last) { 'blank' }
+                    elseif ((Get-Text $row.TrustType) -ieq 'ServerAd' -or (Test-True $row.OnPremisesSyncEnabled)) { 'hybrid' }
+                    elseif (Test-True $row.IsManaged) { 'mdm' }
+                    elseif ((Get-Text $row.ManagementType) -ieq 'MicrosoftSense') { 'sense' }
+                    elseif (@(@($row.PhysicalIds) | Where-Object { (Get-Text $_) -match '^\[ZTDid\]' }).Count) { 'autopilot' }
+                    elseif ((Get-Text $row.ProfileType) -ieq 'Printer') { 'printer' }
+                    elseif ($labels.Count) { 'label' }
+                    else { '' }
+                    $name = ConvertTo-CopyText $row.DisplayName
+                    $os = @(@($row.OperatingSystem, $row.OperatingSystemVersion) | ForEach-Object { ConvertTo-CopyText $_ } | Where-Object { $_ }) -join ' '
+                    [pscustomobject]@{
+                        Name = $(if ($name) { $name } else { 'unnamed device' }); Id = (Get-Text $row.Id).ToLowerInvariant(); DeviceId = (Get-Text $row.DeviceId).ToLowerInvariant()
+                        Os = $(if ($os) { $os } else { 'operating system not recorded' }); OsName = ConvertTo-CopyText $row.OperatingSystem; OsVersion = ConvertTo-CopyText $row.OperatingSystemVersion
+                        Join = & $joinWords $row.TrustType; Last = $last; Registered = $registered; Labels = $labels; Out = $out
+                        Days = $(if ($last) { [int][math]::Floor(($readAt - $last).TotalDays) } else { $null })
+                    } })
+            $who = { param($d) '{0} ({1}, {2}, device ID {3})' -f $d.Name, $d.Os, $d.Join, $d.DeviceId }
+            # The index names up to 25 devices for each reason, since a tenant can hold hundreds of hybrid joined devices.
+            $nameList = { param($list)
+                $text = @($list | Sort-Object Name, DeviceId | Select-Object -First 25 | ForEach-Object { & $who $_ }) -join ' / '
+                if ($list.Count -gt 25) { $text += ' and {0} more, listed in LIC.4-DEVICES' -f ($list.Count - 25) }
+                $text }
+            $leftNote = { param($key, $text)
+                $list = @($devices | Where-Object Out -eq $key)
+                if ($list.Count) { $notes.Add(($text -f (Get-Count $list.Count 'stale device' 'stale devices'), (& $nameList $list))) } }
+            & $leftNote 'hybrid' '{0} left out of CR-24 as Microsoft Entra hybrid joined or synced from on-premises Active Directory, whose sync would undo the change: {1}. Microsoft Learn says to disable or delete them in Active Directory and let Microsoft Entra Connect carry the change across, so raise them with whoever manages Active Directory.'
+            & $leftNote 'mdm' '{0} left out of CR-24 as managed by Intune or another MDM (isManaged): {1}. Microsoft Learn says to retire such a device in its management system before disabling or deleting it.'
+            & $leftNote 'sense' '{0} left out of CR-24 as managed by Defender for Endpoint security settings management (managementType MicrosoftSense): {1}. Review each in the Microsoft Defender portal before any change.'
+            & $leftNote 'autopilot' '{0} left out of CR-24 as Windows Autopilot devices (a physicalIds entry starting with [ZTDid]): {1}. Microsoft Learn says Windows Autopilot devices are managed from Intune and cannot be reprovisioned once deleted, so clean them up in Intune.'
+            & $leftNote 'printer' '{0} left out of CR-24 as Universal Print printers (profileType Printer), which cannot be disabled in Microsoft Entra ID: {1}. Clean each up in Universal Print.'
+            & $leftNote 'label' '{0} left out of CR-24 for a system label (systemLabels), which marks a device the system manages: {1}. Review each before any change.'
+            & $leftNote 'blank' ('{0} left out of CR-24 with no sign-in recorded (ApproximateLastSignInDateTime empty) and registered before {1}, or with no registration date: {{1}}. Microsoft Learn notes that some active devices have a blank activity timestamp, so review each with the client before any change.' -f '{0}', (& $day $cutoff))
+            $inScope = @($devices | Where-Object { -not $_.Out })
+            $thresholdNote = 'CR-24 reads a device as stale when it is enabled and its last sign-in (ApproximateLastSignInDateTime) is before {0}, {1} days before the device read of {2} (-StaleDeviceDays, 90 by default). Microsoft Entra ID updates that timestamp only about every 14 days, so the threshold is never under 21 days.' -f (& $day $cutoff), $StaleDeviceDays, (& $day $readAt)
+            $partialNote = if ($partial) { 'LIC.4-DEVICES read in part ({0}), so a device left out of the read is not in CR-24. Recollect the pack.' -f (Get-ResultDetail 'LIC.4-DEVICES').TrimEnd('.') }
+            if (-not $inScope.Count) {
+                $state = if ($devices.Count) { 'Not written, every stale device is left out, see the notes' } elseif ($partial) { 'No gaps found in the devices read, partial collection scope' } else { 'No gaps found' }
+                if ($devices.Count) { $notes.Insert(0, $thresholdNote) }
+                if ($partialNote) { $notes.Add($partialNote) }
+                return @{ State = $state; Notes = $notes.ToArray() }
+            }
+            $notes.Insert(0, $thresholdNote)
+            $notes.Add('Verify CR-24 with the next pack: LIC.4-DEVICES should read AccountEnabled false for each device disabled. Deleting them is a later change request, once the disabled devices have stayed unused.')
+            if ($partialNote) { $notes.Add($partialNote) }
+            $attachment = 'CR-{0:00}-{1}.email.csv' -f 24, 'stale-devices'
+            $notes.Add(('CR-24 names the devices in {0} rather than in its email, since the list can be long. Attach the file to the email.' -f $attachment))
+
+            $n = $inScope.Count
+            $sorted = @($inScope | Sort-Object Name, DeviceId)
+            $setting = { param($d) '{0}, {1}, last sign-in {2}, registered {3}, object ID {4}, device ID {5}' -f $d.Os, $d.Join, (& $day $d.Last), (& $day $d.Registered), $d.Id, $d.DeviceId }
+            # A device belongs to no subscription. The resource ID is the Graph path that updates it, devices/{id}.
+            $csv = @($sorted | ForEach-Object { New-Resource $_.Name '' '' (& $setting $_) ('/devices/{0}' -f $_.Id) })
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add('Microsoft Entra devices, disabled and never deleted:')
+            foreach ($d in $sorted) { $lines.Add(('- {0}, {1}' -f $d.Name, (& $setting $d))) }
+            # The email names the devices in the attached CSV, each value made safe for a spreadsheet.
+            $emailRows = @($sorted | ForEach-Object {
+                    [pscustomobject]@{
+                        Device = ConvertTo-SheetText $_.Name; OperatingSystem = ConvertTo-SheetText $_.OsName; Version = ConvertTo-SheetText $_.OsVersion; JoinType = $_.Join
+                        LastSignIn = & $day $_.Last; DaysSinceSignIn = $_.Days; Registered = & $day $_.Registered; DeviceId = $_.DeviceId; ObjectId = $_.Id } })
+            $emailCsv = @($emailRows | ConvertTo-Csv -NoTypeInformation)
+            $emailResources = [System.Collections.Generic.List[object]]::new()
+            $emailResources.Add('Devices by operating system and join type:')
+            $emailResources.Add([string[]]@($inScope | Group-Object { '{0}, {1}' -f $(if ($_.OsName) { $_.OsName } else { 'Operating system not recorded' }), $_.Join } | Sort-Object Name | ForEach-Object { '{0}: {1}' -f $_.Name, (Get-Count $_.Count 'device' 'devices') }))
+
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add('Sign in to the Microsoft Entra admin center as at least a Cloud Device Administrator or an Intune Administrator, the roles that can disable a device. Disable only, and never delete a device in this change: a deleted device cannot be restored, and deleting it also removes the BitLocker recovery keys stored with it.')
+            $impl.Add('Go to Entra ID > Devices > All devices, select Download devices with no filter applied, and keep the file in the change record as the device list before the change.')
+            $impl.Add('Compare the devices listed in the RESOURCES section with the list the client approved, and leave out every device the client asked to keep, such as a kiosk, a device in storage or one kept for someone on leave.')
+            $impl.Add(('In All devices, search for the {0}device listed in the RESOURCES section by its device ID and open it.' -f $(if ($n -gt 1) { 'first ' } else { '' })))
+            $impl.Add(('Read the activity timestamp, Enabled, Join type and MDM. If the activity timestamp is later than the last sign-in listed for the device, the device has signed in since collection, so leave it enabled and note it in the change record. Leave it unchanged and note it too if it is already disabled, if Join type reads Microsoft Entra hybrid joined, or if MDM names Intune or another management service.'))
+            $impl.Add('Select Disable, then select Yes.')
+            Add-RepeatStep $impl $n 4 'device'
+            $impl.Add('Select Download devices again with no filter applied, and keep the file in the change record beside the one from step 2 as the device list after the change.')
+            $testing = @(
+                'In Entra ID > Devices > All devices, filter Enabled to No and confirm that each device disabled in the change is listed, against the change record.'
+                'Open Entra ID > Devices > Audit logs and confirm an update entry for each device disabled, with the account that made the change as the actor.')
+            $rollback = @(
+                'In the Microsoft Entra admin center, go to Entra ID > Devices > All devices, search for the device to turn back on by the device ID in the change record and open it.'
+                'Select Enable, then select Yes, and confirm Enabled reads Yes. The device can authenticate to Microsoft Entra ID again, though its users may need to sign in on it again, since disabling it revoked its Primary Refresh Token and refresh tokens.'
+                'change-requests.csv and the file attached to the client email carry each device with its object ID and device ID, so any device can be found again. A device left unchanged during the change needs no rollback.')
+
+            # The client email.
+            $effect = @(
+                ('A disabled device can no longer authenticate to Microsoft Entra ID, so it fails any Conditional Access policy that requires a registered or compliant device and can no longer use Windows Hello for Business, and nobody can sign in to a Microsoft Entra joined device with their work account until it is turned back on.')
+                ('Nothing is deleted, so each device keeps what is stored with it in your directory, such as its BitLocker recovery keys, which deleting a device would remove.')
+                ('The list leaves out the devices your on-premises Active Directory manages, which are cleaned up there, the devices Intune or another device management service manages, the devices Microsoft Defender for Endpoint manages, Windows Autopilot devices and printers.')
+                ('Just before the change, I will check each device again and skip any that has signed in since my review.'))
+            $email = New-ApprovalEmail -Subject 'disabling stale devices in Microsoft Entra ID' `
+                -Change @(('I would like to disable {0} in Microsoft Entra ID that {1} not signed in for more than {2} days.' -f (Get-Yours $n 'devices'), (Get-Pick $n 'has' 'have'), $StaleDeviceDays), ('Disabling keeps {0} in your directory, and I am asking you to approve both the list in the attached file and the {1}-day threshold.' -f (Get-Pick $n 'the device' 'each device'), $StaleDeviceDays)) `
+                -Why ('I recommend this change because a device that is no longer used keeps its identity in your directory, so if it were found or reused it could still sign in to Microsoft Entra ID as one of your devices. Microsoft recommends disabling stale devices for a grace period before deleting any, so that a device still in use can be turned back on.') `
+                -Effect $effect `
+                -Listed ('{0} in the attached file {1}, one line for each with its name, operating system, join type, last sign-in and registration date, and {2} as follows:' -f (Get-Pick $n 'The device is' 'The devices are'), $attachment, (Get-Pick $n 'it counts' 'they add up')) `
+                -Resources $emailResources.ToArray() `
+                -Reversal ('{0} can be turned back on straight away from the record I keep, and it can then authenticate again, though its users may need to sign in on it again.' -f (Get-Pick $n 'The device' 'Each device')) `
+                -Ask ('Before I schedule the change, could you tell me whether {0} should stay enabled, for example a kiosk, a device in storage or one kept for someone on leave? I will leave any such device out of the change. With that confirmed, could you approve the attached list, the {1}-day threshold and this change for {2}?' -f (Get-Pick $n 'the device' 'any of these devices'), $StaleDeviceDays, $proposedDay)
+            # The CSV is written beside the email, under the name the email gives, for the sender to attach.
+            $email.Attachments = @(@{ Name = $attachment; Lines = $emailCsv })
+            @{ Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
+                    Number = 24; Key = 'stale-devices'; Title = 'Disable stale Microsoft Entra devices'
+                    Description = 'Disable {0} in Microsoft Entra ID, each enabled with no sign-in for more than {1} days at collection, by setting accountEnabled to false. No device is deleted.' -f (Get-Listed $n 'device' 'devices'), $StaleDeviceDays
+                    Purpose = 'A device that is no longer used keeps its identity in the directory and could still authenticate to Microsoft Entra ID if it were found or reused. Disabling it for a grace period before any deletion keeps it recoverable, as Microsoft Learn advises.'
+                    ResourceIntro = '{0} below {1} enabled at collection with no sign-in since before {2}, {3} days before the device read, and none is hybrid joined, managed by Intune, another MDM or Defender for Endpoint security settings management, a Windows Autopilot device, a printer or carries a system label. Each shows its operating system, join type, last sign-in, registration date, object ID and device ID.' -f $(if ($n -eq 1) { 'The device' } else { "The $n devices" }), (Get-Pick $n 'was' 'were'), (& $day $cutoff), $StaleDeviceDays
+                    ResourceLines = $lines.ToArray()
+                    Availability = ('No impact on any service, since only devices with no sign-in for more than {0} days are disabled.' -f $StaleDeviceDays)
+                    UserExperience = 'A listed device still in use can no longer authenticate to Microsoft Entra ID, so its user cannot reach Microsoft Entra resources from it until it is enabled again.'
+                    Dependencies = ('Needs the client to approve the device list and the {0}-day threshold, and to name any device to keep, such as a kiosk, a device in storage or one kept for someone on leave.' -f $StaleDeviceDays)
+                    Implementation = $impl.ToArray()
+                    Testing = $testing
+                    Rollback = $rollback
+                    References = @(
+                        , @('How To: Manage stale devices in Microsoft Entra ID', 'https://learn.microsoft.com/entra/identity/devices/manage-stale-devices')
+                        , @('Manage device identities using the Microsoft Entra admin center, enable or disable a Microsoft Entra device', 'https://learn.microsoft.com/entra/identity/devices/manage-device-identities#enable-or-disable-a-microsoft-entra-device')
+                        , @('Manage device identities using the Microsoft Entra admin center, download devices', 'https://learn.microsoft.com/entra/identity/devices/manage-device-identities#download-devices')
+                        , @('Microsoft Graph device resource type', 'https://learn.microsoft.com/graph/api/resources/device')
+                        , @('Create device groups for Windows Autopilot', 'https://learn.microsoft.com/autopilot/enrollment-autopilot'))
                     Csv = $csv
                     Email = $email
                 } } } }

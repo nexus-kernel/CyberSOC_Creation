@@ -245,7 +245,7 @@
 .NOTES
     Author: Atmosera Automation
     Created: 2026-10-07 (EBR collector), 2026-10-19 (CyberSOC copy)
-    Version: 1.18.0, based on the EBR collector 1.14.0
+    Version: 1.19.0, based on the EBR collector 1.14.0
     Read-Only: YES
     Requires: Azure CLI 2.50+, PowerShell 5.1 or 7.x (7.x recommended for large result sets),
               ExchangeOnlineManagement (auto-installed unless -SkipExchange).
@@ -295,7 +295,7 @@ param(
     [switch]$LoadFunctionsOnly
 )
 
-$script:EbrVersion = '1.18.0'
+$script:EbrVersion = '1.19.0'
 # The EBR collector this copy was taken from. Recorded in 00-parameters.json as EbrBaseVersion.
 $script:EbrBaseVersion = '1.14.0'
 # Full months in the trend window: the report month and the two before it, about 90 days.
@@ -2195,10 +2195,11 @@ Devices
 '@))
 
     $q.Add((New-EbrQuery -Id 'LIC.4-DEVICES' -Phase 'P2 Licensing' -Engine 'GRAPH' -Title 'Microsoft Entra devices and their management type' -Query @'
-GET /v1.0/devices?$select=id,deviceId,displayName,accountEnabled,operatingSystem,operatingSystemVersion,trustType,isManaged,isCompliant,managementType,approximateLastSignInDateTime,registrationDateTime,onPremisesSyncEnabled&$top=999
+GET /v1.0/devices?$select=id,deviceId,displayName,accountEnabled,operatingSystem,operatingSystemVersion,trustType,isManaged,isCompliant,managementType,approximateLastSignInDateTime,registrationDateTime,onPremisesSyncEnabled,physicalIds,profileType,systemLabels&$top=999
 Permission: Device.Read.All
 One row per device. A device managed by Defender for Endpoint security settings management has managementType MicrosoftSense.
-'@ -Notes 'Added in CyberSOC 1.11.0. Counts the devices security settings management manages, and lists every Microsoft Entra device for the stale device change request. Internal: names devices. Portal fallback: Microsoft Entra admin center > Devices > All devices.'))
+A Windows Autopilot device has a physicalIds entry that starts with [ZTDid]. A Universal Print printer has profileType Printer.
+'@ -Notes 'Added in CyberSOC 1.11.0. Counts the devices security settings management manages, and lists every Microsoft Entra device for the stale device change request (CR-24). PhysicalIds, ProfileType and SystemLabels added in CyberSOC 1.19.0, so CR-24 can leave out Windows Autopilot devices (a physicalIds entry starting with [ZTDid]), Universal Print printers (profileType Printer, which cannot be disabled in Microsoft Entra ID) and devices carrying a system label, and asks for recollection on an earlier pack. Internal: names devices. Portal fallback: Microsoft Entra admin center > Devices > All devices.'))
 
     $q.Add((New-EbrQuery -Id 'LIC.5-MATRIX' -Phase 'P2 Licensing' -Engine 'DERIVED' -Title 'Licensing capability matrix' -Notes 'Added in CyberSOC 1.11.0. Built from LIC.1-SKUS, LIC.2-MACHINES, LIC.3-TVM, LIC.4-DEVICES and P0.3 by report/Get-CyberSocLicensing.ps1, no query. The Defender for Endpoint plan (the Licenses page reading from -DefenderEndpointPlan when given, otherwise the API reads, with any disagreement named), the devices (onboarded clients and servers, the clients tagged License MDE P1, the servers without a server license, the devices security settings management manages) and each capability a change request can depend on: Licensed, Partly licensed, Not licensed or Unknown with its source and seats. A read that failed, was refused or is partial reads Unknown, never Not licensed. Also writes LIC.5-SERVERS, each onboarded server with the license that covers it. New-CyberSocChangeRequests.ps1 gates its change requests on it.' -Derive { param($Ctx) New-EbrLicensingResult -Ctx $Ctx }))
 
@@ -6002,8 +6003,10 @@ function Get-EbrGraphLic1 {
 function Get-EbrGraphLic4 {
     # LIC.4-DEVICES (CyberSOC 1.11.0): every Microsoft Entra device, with the management type that marks one managed by
     # Defender for Endpoint security settings management (MicrosoftSense) and the sign-in dates a stale device read needs.
+    # CyberSOC 1.19.0 adds what CR-24 leaves out besides: the physical IDs, where a [ZTDid] entry marks a Windows Autopilot
+    # device, the profile type, Printer for Universal Print, and the system labels.
     param($Ctx)
-    $devices = @(Get-EbrGraphList -Ctx $Ctx -Path 'devices?$select=id,deviceId,displayName,accountEnabled,operatingSystem,operatingSystemVersion,trustType,isManaged,isCompliant,managementType,approximateLastSignInDateTime,registrationDateTime,onPremisesSyncEnabled&$top=999')
+    $devices = @(Get-EbrGraphList -Ctx $Ctx -Path 'devices?$select=id,deviceId,displayName,accountEnabled,operatingSystem,operatingSystemVersion,trustType,isManaged,isCompliant,managementType,approximateLastSignInDateTime,registrationDateTime,onPremisesSyncEnabled,physicalIds,profileType,systemLabels&$top=999')
     $rows = foreach ($d in $devices) {
         [pscustomobject][ordered]@{
             Id = [string](Get-EbrProp $d 'id'); DeviceId = [string](Get-EbrProp $d 'deviceId'); DisplayName = [string](Get-EbrProp $d 'displayName')
@@ -6011,10 +6014,13 @@ function Get-EbrGraphLic4 {
             TrustType = [string](Get-EbrProp $d 'trustType'); IsManaged = Get-EbrProp $d 'isManaged'; IsCompliant = Get-EbrProp $d 'isCompliant'; ManagementType = [string](Get-EbrProp $d 'managementType')
             ApproximateLastSignInDateTime = Format-EbrUtc (Get-EbrProp $d 'approximateLastSignInDateTime'); RegistrationDateTime = Format-EbrUtc (Get-EbrProp $d 'registrationDateTime')
             OnPremisesSyncEnabled = (Test-EbrTrue (Get-EbrProp $d 'onPremisesSyncEnabled'))
+            PhysicalIds = @(@(Get-EbrProp $d 'physicalIds') | Where-Object { $_ } | ForEach-Object { [string]$_ }); ProfileType = [string](Get-EbrProp $d 'profileType')
+            SystemLabels = @(@(Get-EbrProp $d 'systemLabels') | Where-Object { $_ } | ForEach-Object { [string]$_ })
         }
     }
     $rows = @($rows | Sort-Object DisplayName, Id)
-    New-EbrGraphResult -Rows $rows -Columns @('Id', 'DeviceId', 'DisplayName', 'AccountEnabled', 'OperatingSystem', 'OperatingSystemVersion', 'TrustType', 'IsManaged', 'IsCompliant', 'ManagementType', 'ApproximateLastSignInDateTime', 'RegistrationDateTime', 'OnPremisesSyncEnabled') -Detail ('{0}, {1} managed by Defender for Endpoint security settings management (managementType MicrosoftSense).' -f $(if ($rows.Count -eq 1) { '1 device' } else { "$($rows.Count) devices" }), @($rows | Where-Object { $_.ManagementType -ieq 'MicrosoftSense' }).Count)
+    $autopilot = @($rows | Where-Object { @($_.PhysicalIds | Where-Object { $_ -match '^\[ZTDid\]' }).Count }).Count
+    New-EbrGraphResult -Rows $rows -Columns @('Id', 'DeviceId', 'DisplayName', 'AccountEnabled', 'OperatingSystem', 'OperatingSystemVersion', 'TrustType', 'IsManaged', 'IsCompliant', 'ManagementType', 'ApproximateLastSignInDateTime', 'RegistrationDateTime', 'OnPremisesSyncEnabled', 'PhysicalIds', 'ProfileType', 'SystemLabels') -Detail ('{0}, {1} managed by Defender for Endpoint security settings management (managementType MicrosoftSense), {2} Windows Autopilot.' -f $(if ($rows.Count -eq 1) { '1 device' } else { "$($rows.Count) devices" }), @($rows | Where-Object { $_.ManagementType -ieq 'MicrosoftSense' }).Count, $autopilot)
 }
 
 function Invoke-EbrGraphCollector {

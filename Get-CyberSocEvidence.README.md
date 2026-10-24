@@ -22,7 +22,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
   (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
 - **Emergency access accounts.** Every account with Atmosera in its UPN or in an Atmosera group (IA.16-ACCOUNTS and
   IA.16-GROUPS), which every Conditional Access change excludes. See the collector 1.12.0 notes below.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.18.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.19.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -293,7 +293,7 @@ Details:
 | DP.10 Disk encryption | `deviceManagement/managedDevices` | DeviceManagementManagedDevices.Read.All | The BitLocker row of EW.3, used by the HTML report |
 | DR.11 Defender for Identity sensors | `security/identities/sensors` | SecurityIdentitiesSensors.Read.All | DR.4 domain controller events |
 | LIC.1-SKUS Licenses in the tenant (CyberSOC 1.11.0) | `subscribedSkus` with `$select`, one row per SKU with its state, seats (`prepaidUnits`), assigned (`consumedUnits`) and every service plan with its provisioning status | LicenseAssignment.Read.All (Directory.Read.All or Organization.Read.All also work) | Microsoft 365 admin center > Billing > Licenses |
-| LIC.4-DEVICES Microsoft Entra devices (CyberSOC 1.11.0) | `devices` with `$select` and `$top=999`, one row per device with its management type, trust type, compliance and sign-in dates. A device managed by Defender for Endpoint security settings management has management type `MicrosoftSense` (the value Intune documents for it, which the Graph device reference does not list), and the list also serves the stale device change request | Device.Read.All | Microsoft Entra admin center > Devices > All devices |
+| LIC.4-DEVICES Microsoft Entra devices (CyberSOC 1.11.0) | `devices` with `$select` and `$top=999`, one row per device with its management type, trust type, compliance and sign-in dates, and from CyberSOC 1.19.0 its physical IDs, profile type and system labels. A device managed by Defender for Endpoint security settings management has management type `MicrosoftSense` (the value Intune documents for it, which the Graph device reference does not list), and the list also serves the stale device change request, CR-24 | Device.Read.All | Microsoft Entra admin center > Devices > All devices |
 | EW.13 App Control policies | `beta/deviceManagement/configurationPolicies` filtered to the App Control template family (beta only; v1.0 has no settings catalog) | DeviceManagementConfiguration.Read.All | Intune admin center, or the ThreatLocker portal |
 
 Results carry counts and flags into the HTML report. Names, UPNs, domains and policy titles stay
@@ -340,6 +340,14 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.19.0 (October 24, 2026): `LIC.4-DEVICES` gains `PhysicalIds`, `ProfileType` and `SystemLabels`
+  (`physicalIds`, `profileType` and `systemLabels` in the same Graph `devices` read, with Device.Read.All as before) for
+  change request CR-24, which disables the stale Microsoft Entra devices and never deletes them. A `physicalIds` entry
+  starting with `[ZTDid]` marks a Windows Autopilot device, `profileType` Printer a Universal Print printer, which cannot
+  be disabled in Microsoft Entra ID, and a system label a device the system manages, and CR-24 leaves each out. Its
+  detail adds the count of Windows Autopilot devices. A refused read (403) stays UNAVAILABLE, never an empty list. CR-24
+  asks for recollection on an earlier pack. Internal, since it names devices. The query is in section 6 of the CyberSOC
+  Monthly Report Runbook.
 - CyberSOC collector 1.18.0 (October 24, 2026): `EW.10-ASSESSMENT` (engine PATCH-ASSESSMENT, phase P2 Endpoint) for
   change request CR-23, which turns on periodic assessment in Azure Update Manager. One row per Azure virtual machine
   whose `patchSettings.assessmentMode` is not AutomaticByPlatform, an empty value included, with the `{{MRG}}`
@@ -445,7 +453,8 @@ in the pack (`results/<ID>.csv`).
     `DeviceDynamicTags`). The managed resource group is excluded. Plan 1 and Defender for Business include no Advanced
     Hunting, so a refused read is no Plan 1 reading on its own, and an answer from the Sentinel workspace fallback, which
     holds no vulnerability tables, is never used.
-  - `LIC.4-DEVICES` (Graph `devices`): every Microsoft Entra device with its management type.
+  - `LIC.4-DEVICES` (Graph `devices`): every Microsoft Entra device with its management type, and from 1.19.0 the
+    columns the stale device change request CR-24 needs.
   - `LIC.5-MATRIX` (derived by `report/Get-CyberSocLicensing.ps1`, no query) and `LIC.5-SERVERS`. PARTIAL when one of its
     reads is not OK or EMPTY, and what that read feeds reads Unknown.
   - `P0.3` gains `Extensions`, the plan components of each Defender for Cloud plan (`properties.extensions`, each with
