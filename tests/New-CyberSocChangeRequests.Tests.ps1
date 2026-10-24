@@ -4450,6 +4450,7 @@ Describe 'Stale Microsoft Entra devices disabled (CR-24, collector 1.19.0)' {
         $csv.Count | Should -Be 4
         ($csv | Where-Object Resource -eq 'ws-edge01').ResourceId | Should -Be ('/devices/{0}' -f $edge.Id)
         ($csv | Where-Object Resource -eq 'ws-edge01').Subscription | Should -Be '' -Because 'a device belongs to no subscription'
+        ($csv | Where-Object ResourceId -eq ('/devices/{0}' -f (Get-SdDevice '=HYPERLINK(1)').Id)).Resource | Should -Be "'=HYPERLINK(1)" -Because 'the tracking CSV keeps a name a spreadsheet would read as a formula as text too'
     }
 
     It 'writes an email that asks for approval of the attached list and the threshold, and which devices should stay' {

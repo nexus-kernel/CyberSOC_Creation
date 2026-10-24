@@ -433,8 +433,8 @@ $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, 
 $emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Devices by operating system and join type):$'
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
 # A spreadsheet reads a cell that starts with =, +, - or @ as a formula, quoted or not, and a device, display or role name
-# comes from the directory, so the CSV an email attaches (CR-19, CR-24) puts an apostrophe in front of such a value,
-# which the spreadsheet hides and which keeps the text as it is.
+# comes from the directory, so the CSV an email attaches (CR-19, CR-24) and change-requests.csv put an apostrophe in
+# front of such a value, which the spreadsheet hides and which keeps the text as it is.
 function ConvertTo-SheetText([string]$Value) { if ($Value -match '^[=+\-@]') { "'" + $Value } else { $Value } }
 $proposedDay = Format-Day $proposedDate
 $replyDay = Format-Day $replyDate
@@ -4147,10 +4147,12 @@ if ((Get-Status 'P0.7') -notin 'OK', 'PARTIAL' -or (Test-Unreadable 'P0.7')) { $
 if ($notes.Count) { $md.Add(''); $md.Add('## Notes'); $md.Add(''); foreach ($n in $notes) { $md.Add("- $n") } }
 Add-Output '00-index.md' $md.ToArray() "`n"
 
-# CSV: one row per resource in each change request, for tracking the work.
+# CSV: one row per resource in each change request, for tracking the work. A name read from the pack, such as a device
+# name CR-24 lists, is made safe for a spreadsheet (ConvertTo-SheetText). The resource ID is kept exactly as Azure or
+# Graph has it, and always starts with a slash.
 $csvRows = foreach ($r in $results | Where-Object Cr) {
     foreach ($res in @($r.Cr.Csv)) {
-        [pscustomobject]@{ CR = 'CR-{0:00}' -f $r.Item.Number; Change = $r.Cr.Title; Subscription = Format-Subscription $res.SubscriptionId; ResourceGroup = $res.ResourceGroup; Resource = $res.Name; CurrentSetting = $res.Setting; ResourceId = $res.ResourceId }
+        [pscustomobject]@{ CR = 'CR-{0:00}' -f $r.Item.Number; Change = $r.Cr.Title; Subscription = ConvertTo-SheetText (Format-Subscription $res.SubscriptionId); ResourceGroup = ConvertTo-SheetText $res.ResourceGroup; Resource = ConvertTo-SheetText $res.Name; CurrentSetting = ConvertTo-SheetText $res.Setting; ResourceId = $res.ResourceId }
     }
 }
 $csvLines = @('"CR","Change","Subscription","ResourceGroup","Resource","CurrentSetting","ResourceId"')
