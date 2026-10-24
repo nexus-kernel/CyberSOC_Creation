@@ -20,7 +20,9 @@
     leaving every rule already configured on a server as it is, and turning on periodic assessment in Azure Update Manager
     on the virtual machines without it, changing the assessment mode only and never the patch mode (CR-23), and disabling,
     never deleting, the Microsoft Entra devices with no sign-in for more than -StaleDeviceDays days (CR-24), and turning on blob
-    and container soft delete on the storage accounts without them, with -SoftDeleteRetentionDays (CR-25). Every change request
+    and container soft delete on the storage accounts without them, with -SoftDeleteRetentionDays (CR-25), and removing the
+    Azure roles held by guest accounts the client no longer needs, from the answers the client gives in the attached file
+    (CR-26). Every change request
     also gets a client email, drafted and ready to send, that asks for the client's approval. The CR-19 email names
     the accounts and their roles in a CSV written beside it (CR-19-disabled-account-roles.email.csv), to attach,
     since the list can be long, and the CR-24 email names the devices the same way (CR-24-stale-devices.email.csv). Every email has the same parts in the
@@ -85,6 +87,12 @@
     The storage accounts the client asked to keep out of CR-25, each by name or resource ID, such as an account that stages
     logs or backups, where deleted data would be kept and billed. The index names each one left out, and any name that
     matches no account in the pack.
+.PARAMETER GuestDecisions
+    The CR-26 file the client returned (CR-26-guest-roles.email.csv) with Keep or Remove in the Decision column for each
+    guest. CR-26 then lists only the guests marked Remove, and the index names the guests kept and those without an answer,
+    which stay out of the change. Save the returned file outside 05-change-requests first, since each run writes that file
+    again. Without it, CR-26 lists every guest and its email asks for the answers, and the implementation removes only the
+    roles of the guests the client marks Remove.
 .EXAMPLE
     ./New-CyberSocChangeRequests.ps1 -EvidencePath ./CyberSOC-Evidence_Contoso_2026-09_20261003-090000
 .EXAMPLE
@@ -139,6 +147,11 @@
     account kinds without soft delete, accounts that were not read, the Site Recovery cache and log storage a Recovery
     Services vault names, accounts named like Site Recovery cache storage, accounts a vault not read may use, and the accounts
     -SoftDeleteExclude names, and names them in the index.
+    CR-26 reads the enabled guest accounts with when each was created and last signed in (IA.17-GUESTS) and the Azure and
+    Microsoft Entra roles they hold (IA.17-RBAC and IA.17-ENTRA), added in 1.21.0, and on an earlier pack says "needs
+    recollection". It changes the Azure roles only, names the Entra roles for review, leaves out the emergency access
+    guests, and is written only when the emergency access read is complete, as CR-19 is. A guest is removed only with the
+    client's answer: -GuestDecisions takes the file the client returned.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -159,7 +172,8 @@ param(
     [int]$StaleDeviceDays = 90,
     [ValidateRange(1, 365)]
     [int]$SoftDeleteRetentionDays = 7,
-    [string[]]$SoftDeleteExclude
+    [string[]]$SoftDeleteExclude,
+    [string]$GuestDecisions
 )
 
 $ErrorActionPreference = 'Stop'
@@ -200,6 +214,8 @@ $staleDeviceVersion = '1.19.0'
 $detailVersions['LIC.4-DEVICES'] = $staleDeviceVersion
 # CR-25 reads blob and container soft delete of each storage account (DP.1-SOFTDELETE), added in 1.20.0.
 $detailVersions['DP.1-SOFTDELETE'] = '1.20.0'
+# CR-26 reads the enabled guest accounts and the roles they hold (IA.17-GUESTS, IA.17-RBAC and IA.17-ENTRA), added in 1.21.0.
+foreach ($id in 'IA.17-GUESTS', 'IA.17-RBAC', 'IA.17-ENTRA') { $detailVersions[$id] = '1.21.0' }
 # The latest collector among the results given, so a pack missing several asks for the one that has them all.
 function Get-RecollectionState([string[]]$Ids) {
     $version = @($Ids | ForEach-Object { $detailVersions[$_] } | Where-Object { $_ } | Sort-Object { [version]$_ })[-1]
@@ -225,6 +241,23 @@ $mysqlAuditVersion = $detailVersions['DR.6-MYSQLAUDIT']
 # read as no gaps found and leave a change out without saying so.
 . (Join-Path $PSScriptRoot 'report/Read-CyberSocPackResult.ps1')
 Initialize-CyberSocPackReader -Pack $pack -Manifest $manifest
+# The answers the client gave in the returned CR-26 file (-GuestDecisions): Keep or Remove for each guest, by its object
+# ID. A guest with one answer across its lines has that answer. One with no answer, or with lines that disagree or say
+# something else, has none, so it stays out of the change.
+$guestAnswers = $null
+$guestDecisionsPath = ''
+if ($GuestDecisions) {
+    if (-not (Test-Path -LiteralPath $GuestDecisions -PathType Leaf)) { throw "-GuestDecisions $GuestDecisions is not a file. Pass the CR-26 file the client returned." }
+    $guestDecisionsPath = (Resolve-Path -LiteralPath $GuestDecisions).Path
+    $returned = @(Import-Csv -LiteralPath $guestDecisionsPath)
+    $columns = @(if ($returned.Count) { $returned[0].PSObject.Properties.Name })
+    if (-not $returned.Count -or 'ObjectId' -notin $columns -or 'Decision' -notin $columns) { throw "-GuestDecisions $GuestDecisions has no ObjectId and Decision columns. Pass the CR-26 file (CR-26-guest-roles.email.csv) the client returned, with Keep or Remove in the Decision column." }
+    $guestAnswers = @{}
+    foreach ($g in @($returned | Group-Object { ([string]$_.ObjectId).Trim().TrimStart("'").ToLowerInvariant() } | Where-Object Name)) {
+        $said = @($g.Group | ForEach-Object { ([string]$_.Decision).Trim().TrimStart("'").Trim() } | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique)
+        $guestAnswers[$g.Name] = if (-not $said.Count) { '' } elseif ($said.Count -eq 1 -and $said[0] -in 'keep', 'remove') { (Get-Culture).TextInfo.ToTitleCase($said[0]) } else { 'Unclear' }
+    }
+}
 function Get-Number($value) { $n = 0; if ([int]::TryParse((Get-Text $value), [ref]$n)) { $n } else { 0 } }
 # What the collector recorded about a result, such as the permission a read needed, cleaned to the copy rules.
 function Get-ResultDetail([string]$id) { ConvertTo-CopyText (@($manifest | Where-Object ResultId -eq $id) | Select-Object -First 1).Detail }
@@ -1144,6 +1177,337 @@ function Get-SecurityDefaults {
     $row = @(Get-Rows 'IA.8-DEFAULTS') | Select-Object -First 1
     if ($null -eq $row -or (Get-Text $row.SecurityDefaults) -eq '') { return $null }
     Test-True $row.SecurityDefaults
+}
+
+# Role removal, shared by CR-19 (the roles of disabled accounts, IA.15) and CR-26 (the Azure roles of enabled guests,
+# IA.17), which the same collector engine reads. Each role is a row of IA.15-RBAC, IA.15-ENTRA, IA.17-RBAC or
+# IA.17-ENTRA with a Side of Azure or Microsoft Entra. A role assigned to the account itself is removed at the scope where
+# it was made, from Azure Cloud Shell at the root scope. A role held through a group is taken away by removing the
+# account from the group it sits in, the role group or a group nested in it (MemberOfId, collector 1.10.0), after
+# checking that the group still holds the role and the chain of groups is intact, so the group and its other members
+# keep it. A group whose members a rule or on-premises Active Directory decides cannot lose a member here, so its roles
+# stay and the index names them. The rollback recreates each assignment with any ABAC condition.
+function Get-RoleHolder($r) {
+    $upn = ConvertTo-CopyText $r.UserPrincipalName; $name = ConvertTo-CopyText $r.DisplayName
+    if ($upn -and $name) { '{0} ({1})' -f $name, $upn } elseif ($upn) { $upn } elseif ($name) { $name } else { 'object ID ' + (Get-Text $r.PrincipalId) }
+}
+function Get-RoleScopeWords($r) {
+    $scope = ConvertTo-CopyText $r.Scope
+    switch (Get-Text $r.ScopeLevel) {
+        'Root' { 'the root scope' }
+        'Management group' { 'the management group' }
+        'Subscription' { 'the subscription' }
+        'Resource group' { 'resource group ' + (ConvertTo-CopyText $r.resourceGroup) }
+        'Resource' { 'resource {0} in resource group {1}' -f ($scope -split '/')[-1], (ConvertTo-CopyText $r.resourceGroup) }
+        default { 'scope ' + $scope } }
+}
+function Get-RoleHeading($r) {
+    $level = Get-Text $r.ScopeLevel
+    if ($level -eq 'Root') { 'Root scope' }
+    elseif ($level -eq 'Management group') { 'Management group ' + ((ConvertTo-CopyText $r.Scope) -split '/')[-1] }
+    elseif (Get-Text $r.subscriptionId) { 'Subscription ' + (Format-Subscription $r.subscriptionId) }
+    else { 'Management group ' + (ConvertTo-CopyText $r.Scope) }
+}
+# Subscriptions first, then the management groups and the root scope above them.
+function Get-RoleHeadingOrder([string]$h) { if ($h -like 'Subscription *') { "1 $h" } elseif ($h -like 'Management group *') { "2 $h" } else { "3 $h" } }
+# ConvertFrom-Json reads an ISO date as a DateTime, so an end date is written back in ISO form.
+function Get-RoleEnd($r, [switch]$Day) {
+    $v = $r.EndDateUtc
+    if ($v -is [datetime]) { $v.ToUniversalTime().ToString($(if ($Day) { 'yyyy-MM-dd' } else { "yyyy-MM-dd'T'HH:mm:ss'Z'" }), $inv) }
+    elseif ($Day) { $t = Get-Text $v; $t.Substring(0, [Math]::Min(10, $t.Length)) }
+    else { Get-Text $v }
+}
+# Azure takes 2.0 when a condition is given without a version.
+function Get-RoleConditionVersion($r) { $v = Get-Text $r.ConditionVersion; if ($v) { $v } else { '2.0' } }
+# What an Entra assignment is beyond its role: its type, its end and its scope, in plain words.
+function Get-EntraRoleParts($r) {
+    $parts = @(switch (Get-Text $r.AssignmentType) {
+            'Eligible' { 'eligible in Privileged Identity Management' }
+            'Activated' { 'activated from an eligible assignment' }
+            'Time-bound' { 'active' }
+            default { } })
+    $end = Get-RoleEnd $r -Day
+    if ($end -and (Get-Text $r.AssignmentType) -ne 'Activated') { $parts += 'until ' + $end }
+    $scope = ConvertTo-CopyText $r.DirectoryScope
+    if ($scope -match '^/administrativeUnits/(.+)$') { $parts += 'in administrative unit ' + $Matches[1] }
+    elseif ($scope -match '^/([^/]+)$') { $parts += 'for the single application or other Microsoft Entra object with ID ' + $Matches[1] }
+    elseif ($scope -and $scope -ne '/') { $parts += 'at directory scope ' + $scope }
+    $parts
+}
+function Get-EntraRoleKind($r) {
+    $parts = @(Get-EntraRoleParts $r)
+    $role = ConvertTo-CopyText $r.Role
+    if ($parts.Count) { '{0} ({1})' -f $role, ($parts -join ', ') } else { $role }
+}
+function Get-RoleGroupPath($r) { @(@($r.GroupPath) | ForEach-Object { ConvertTo-CopyText $_ } | Where-Object { $_ }) }
+function Get-RoleGroupLabel($r) { '{0} ({1})' -f (ConvertTo-CopyText $r.GroupName), (Get-Text $r.GroupId) }
+function Get-RoleMemberOfLabel($r) { '{0} ({1})' -f (ConvertTo-CopyText $r.MemberOfName), (Get-Text $r.MemberOfId) }
+function Get-RoleWords($r) { if ($r.Side -eq 'Azure') { 'Azure {0} on {1}' -f (ConvertTo-CopyText $r.Role), (ConvertTo-CopyText $r.Scope) } else { 'Microsoft Entra {0}' -f (Get-EntraRoleKind $r) } }
+# An account that reaches one assignment through two groups has a row for each group, one removal each, but holds one
+# role, so the roles are counted by assignment and account, never by row.
+function Get-RoleKey($r) { '{0}|{1}|{2}' -f $r.Side, $(if (Get-Text $r.AssignmentId) { (Get-Text $r.AssignmentId).ToLowerInvariant() } else { '{0}|{1}|{2}|{3}' -f (Get-Text $r.Role), (Get-Text $r.Scope), (Get-Text $r.DirectoryScope), (Get-Text $r.AssignmentType) }), (Get-Text $r.PrincipalId).ToLowerInvariant() }
+function Get-DistinctRoles($rows) { @($rows | Group-Object { Get-RoleKey $_ } | ForEach-Object { $_.Group[0] }) }
+# ", nested in platform-operators (id) through ops-tier2" for a member of a nested group, else nothing.
+function Get-RoleNestedWords($r) {
+    if ((Get-Text $r.GroupId).ToLowerInvariant() -eq (Get-Text $r.MemberOfId).ToLowerInvariant()) { return '' }
+    $path = Get-RoleGroupPath $r
+    $via = @(if ($path.Count -gt 2) { $path[1..($path.Count - 2)] })
+    ', nested in {0}{1}' -f (Get-RoleGroupLabel $r), $(if ($via.Count) { ' through ' + (Join-Words $via) } else { '' })
+}
+function Get-RoleFixedWhy($r) { if ((Get-Text $r.MemberOfType) -eq 'Dynamic') { 'a dynamic membership group whose members a rule decides' } else { 'synced from on-premises Active Directory, where its members are managed' } }
+# "group ops-tier2 (id), nested in platform-operators (id), which holds Azure Contributor on /subscriptions/... and
+# Microsoft Entra Helpdesk Administrator"; a group nested in more than one role group names each.
+function Get-RoleMembershipWords($ms) {
+    $parts = @(foreach ($g in @($ms.Rows | Group-Object { (Get-Text $_.GroupId).ToLowerInvariant() } | Sort-Object { ConvertTo-CopyText $_.Group[0].GroupName })) {
+            $r = $g.Group[0]
+            $roles = Join-Words @($g.Group | ForEach-Object { Get-RoleWords $_ } | Sort-Object -Unique)
+            if ((Get-Text $r.GroupId).ToLowerInvariant() -eq $ms.MemberOfId.ToLowerInvariant()) { 'which holds {0}' -f $roles }
+            else { '{0}, which holds {1}' -f (Get-RoleNestedWords $r).TrimStart(', '), $roles } })
+    'group {0}, {1}' -f $ms.Label, ($parts -join ', and ')
+}
+# The roles of the accounts given (keyed by object ID in lower case) from one side, each marked with that side. A side
+# that was not read gives none.
+function Get-RoleRows([string]$Id, [string]$Side, [hashtable]$Accounts, [bool]$Read) {
+    if ($Read) {
+        foreach ($r in @(Get-Rows $Id | Where-Object { $Accounts.ContainsKey((Get-Text $_.PrincipalId).ToLowerInvariant()) })) {
+            $r | Add-Member -NotePropertyName Side -NotePropertyValue $Side -Force -PassThru
+        } }
+}
+# Whether each side was read, with a note for a side that could not be used or was read in part, so a side that could
+# not be read never reads as no gaps.
+function Test-RoleSides($Sides, $Notes, [string]$Cr, [string]$Many) {
+    $read = @{}
+    foreach ($side in $Sides) {
+        $read[$side.Id] = Test-ResultRead $side.Id
+        $status = Get-Status $side.Id
+        if (-not $read[$side.Id]) {
+            $why = if (Test-Unreadable $side.Id) { 'its result file is unreadable, so recollect or restore the pack' } elseif ($status -eq 'MISSING') { 'it was not collected' } else { 'it reads {0}: {1}' -f $status, (Get-ResultDetail $side.Id) }
+            $Notes.Add(('The {0} roles of the {1} are unknown, not a zero, because {2} could not be used: {3}' -f $side.Name, $Many, $side.Id, $why).TrimEnd('.') + '.')
+        }
+        elseif ($status -eq 'PARTIAL') { $Notes.Add(('{0} was read in part, so {1} may miss some {2} roles: {3}' -f $side.Id, $Cr, $side.Name, (Get-ResultDetail $side.Id)).TrimEnd('.') + '.') }
+    }
+    $read
+}
+# No change removes the access of an emergency access account (decision 4 of the Oct 21 review), so an account with
+# Atmosera in its UPN, or one IA.16-ACCOUNTS lists, is taken out of Accounts before any role is read: none of its roles
+# is removed and it is not removed from any group. Returns each one left out with why, for the index.
+function Remove-EmergencyAccessAccounts([hashtable]$Accounts) {
+    $leftOut = @(foreach ($id in @($Accounts.Keys | Sort-Object { Get-RoleHolder $Accounts[$_] })) {
+            $u = $Accounts[$id]
+            $byUpn = Test-CyberSocEmergencyAccessUpn (Get-Text $u.UserPrincipalName)
+            if (-not $byUpn -and -not (Test-CyberSocEmergencyAccessId $emergencyAccess $id)) { continue }
+            $row = @($emergencyAccess.Accounts | Where-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() -eq $id }) | Select-Object -First 1
+            $inGroups = @(if ($row) { @($row.Groups) | ForEach-Object { ConvertTo-CopyText $_ } | Where-Object { $_ } })
+            $why = @(
+                if ($byUpn) { 'Atmosera in its UPN' }
+                if ($inGroups.Count) { '{0} {1}' -f (Get-Pick $inGroups.Count 'a member of the Atmosera group' 'a member of the Atmosera groups'), (Join-Words $inGroups) })
+            if (-not $why.Count) { $why = @('listed in IA.16-ACCOUNTS') }
+            [pscustomobject]@{ Id = $id; Text = '{0}, {1}' -f (Get-RoleHolder $u), ($why -join ' and ') }
+        })
+    foreach ($x in $leftOut) { $Accounts.Remove($x.Id) }
+    $leftOut
+}
+# The roles held through a group. From collector 1.10.0 each row names the group the account sits in (MemberOfId), the
+# role group itself or a group nested in it, with the path between them (GroupPath) and whether a member can be removed
+# from it (MemberOfType Assigned, Dynamic or On-premises). The account is removed from that group, which takes away every
+# role the group holds, directly or through the groups it is nested in. A dynamic membership group takes its members from
+# a rule and a synced group from Active Directory, so neither can lose a member here, and their roles are named for a
+# separate review. One removal per account and group it sits in, whatever roles that takes away.
+function Get-RoleGroupSplit($rows) {
+    $viaGroup = @($rows | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' })
+    $pathKnown = -not @($viaGroup | Where-Object { -not (Get-Text $_.MemberOfId) }).Count
+    $removable = @(if ($pathKnown) { $viaGroup | Where-Object { (Get-Text $_.MemberOfType) -eq 'Assigned' } })
+    $fixed = @(if ($pathKnown) { $viaGroup | Where-Object { (Get-Text $_.MemberOfType) -ne 'Assigned' } })
+    $memberships = @($removable | Group-Object { '{0}|{1}' -f (Get-Text $_.PrincipalId).ToLowerInvariant(), (Get-Text $_.MemberOfId).ToLowerInvariant() } | ForEach-Object {
+            $first = $_.Group[0]
+            [pscustomobject]@{ Account = $first; MemberOfId = Get-Text $first.MemberOfId; MemberOfName = ConvertTo-CopyText $first.MemberOfName; Label = (Get-RoleMemberOfLabel $first); Rows = @($_.Group) } } |
+            Sort-Object { Get-RoleHolder $_.Account }, MemberOfName, MemberOfId)
+    @{
+        ViaGroup = $viaGroup; PathKnown = $pathKnown; Removable = $removable; Fixed = $fixed; Memberships = $memberships
+        # The accounts removed from a group, and those holding a role through a group the change cannot alter.
+        K = @($memberships | ForEach-Object { (Get-Text $_.Account.PrincipalId).ToLowerInvariant() } | Sort-Object -Unique).Count
+        FixedAccounts = @($fixed | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Sort-Object -Unique).Count
+    }
+}
+# The index notes on the roles held through groups. One and Many name the accounts, such as disabled account and
+# disabled accounts, and Kind the members, such as disabled.
+function Add-RoleGroupNotes($Notes, $Split, [string]$Cr, [string]$One, [string]$Many, [string]$Kind) {
+    $viaGroup = $Split.ViaGroup
+    if ($viaGroup.Count -and -not $Split.PathKnown) {
+        $groupLines = @(foreach ($g in @($viaGroup | Group-Object { (Get-Text $_.GroupId).ToLowerInvariant() })) {
+                $first = $g.Group[0]
+                $roles = @($g.Group | ForEach-Object { Get-RoleWords $_ } | Sort-Object -Unique)
+                $members = @($g.Group | ForEach-Object { Get-RoleHolder $_ } | Sort-Object -Unique)
+                'group {0}, which holds {1}, with the {2} {3} {4}' -f (Get-RoleGroupLabel $first), ($roles -join ' and '), $Kind, (Get-Pick $members.Count 'member' 'members'), ($members -join ', ')
+            })
+        $Notes.Add(('{0} roles through group membership, which {1} leaves unchanged because the pack does not record the group each account sits in: {2}. Collect again with CyberSOC collector 1.10.0 or later, and {1} removes each account from its group.' -f (Get-Count @($viaGroup | ForEach-Object PrincipalId | Sort-Object -Unique).Count "$One holds" "$Many hold"), $Cr, (@($groupLines | Sort-Object) -join ' / ')))
+    }
+    $k = $Split.K
+    if ($Split.Memberships.Count) {
+        $Notes.Add(('{0} roles through group membership, and {1} removes {2} from the group it sits in: {3}.' -f (Get-Count $k "$One holds" "$Many hold"), $Cr, (Get-Pick $k 'it' 'each one'), (@($Split.Memberships | ForEach-Object { '{0} from {1}' -f (Get-RoleHolder $_.Account), (Get-RoleMembershipWords $_) }) -join ' / ')))
+    }
+    if ($Split.Fixed.Count) {
+        $fixedLines = @($Split.Fixed | Group-Object { '{0}|{1}' -f (Get-Text $_.PrincipalId).ToLowerInvariant(), (Get-Text $_.MemberOfId).ToLowerInvariant() } | ForEach-Object {
+                $r = $_.Group[0]
+                '{0} through group {1}, {2}{3}, which holds {4}' -f (Get-RoleHolder $r), (Get-RoleMemberOfLabel $r), (Get-RoleFixedWhy $r), (Get-RoleNestedWords $r), (Join-Words @($_.Group | ForEach-Object { Get-RoleWords $_ } | Sort-Object -Unique)) } | Sort-Object)
+        $Notes.Add(('{0} roles through a group whose members {1} cannot change, so they stay as they are: {2}. Review each with the group owner, who can change the membership rule, or remove the account from the group in Active Directory so that the next sync takes the role away.' -f (Get-Count $Split.FixedAccounts "$One holds" "$Many hold"), $Cr, ($fixedLines -join ' / ')))
+    }
+}
+# The index notes on what the Azure role read covers: Lighthouse, the subscriptions in the pack, and the eligible
+# assignments of Privileged Identity Management for Azure resources, which Resource Graph does not hold.
+function Add-AzureRoleReadNotes($Notes, [string]$Id, [string]$Cr, [string]$One, [string]$Many) {
+    if ((Get-Text $parameters.AccessPath) -eq 'Lighthouse' -or (Get-ResultDetail $Id) -match 'Lighthouse') {
+        $Notes.Add(("The Azure role assignments were read through Azure Lighthouse, where Resource Graph shows the managing tenant's delegations instead of the client's own role assignments, so {0} may miss Azure roles the {1} hold. Collect the pack again with a direct sign-in to the client tenant before sending {0}." -f $Cr, $Many))
+    }
+    $Notes.Add(('{0} reads the subscriptions in the pack and the management groups and root scope above them, so a role in another subscription of the tenant is not listed. Resource Graph also holds the active Azure role assignments only, not the eligible assignments of Privileged Identity Management for Azure resources, so {1} does not list those. Where the client uses it, check Privileged Identity Management > Azure resources for each {2} before sending.' -f $Id, $Cr, $One))
+}
+# RESOURCES: the Azure role assignments by subscription, then the management groups and root scope above them, one line
+# each with its role, scope and assignment.
+function Add-AzureRoleLines($Lines, $Azure) {
+    if (-not @($Azure).Count) { return }
+    $Lines.Add('Azure role assignments, removed at the scope where each was made:')
+    foreach ($g in @($Azure | Group-Object { Get-RoleHeading $_ } | Sort-Object { Get-RoleHeadingOrder $_.Name })) {
+        $Lines.Add(''); $Lines.Add($(if ($g.Name -eq 'Root scope') { 'Root scope: /' } else { $g.Name -replace '^(Subscription|Management group) ', '$1: ' }))
+        foreach ($r in @($g.Group | Sort-Object { Get-RoleHolder $_ }, { Get-Text $_.Scope }, { Get-Text $_.Role })) {
+            $Lines.Add(('- {0}, object ID {1}: {2} on {3}, role definition {4}, scope {5}, assignment {6}{7}' -f (Get-RoleHolder $r), (Get-Text $r.PrincipalId), (ConvertTo-CopyText $r.Role), (Get-RoleScopeWords $r), ((Get-Text $r.RoleDefinitionId) -split '/')[-1], (ConvertTo-CopyText $r.Scope), ((Get-Text $r.AssignmentId) -split '/')[-1], $(if (Get-Text $r.Condition) { ', with a condition (version {0}) kept exactly in change-requests.csv: {1}' -f (Get-RoleConditionVersion $r), (ConvertTo-CopyText $r.Condition) } else { '' })))
+        }
+    }
+}
+# RESOURCES: the group memberships removed, each with the group the account sits in and the roles the group holds.
+function Add-RoleMembershipLines($Lines, $Memberships) {
+    if (-not @($Memberships).Count) { return }
+    if ($Lines.Count) { $Lines.Add('') }
+    $Lines.Add('Group memberships removed, which take the roles the group holds away from the account:')
+    foreach ($ms in $Memberships) {
+        $Lines.Add(('- {0}, object ID {1}: removed from {2}' -f (Get-RoleHolder $ms.Account), (Get-Text $ms.Account.PrincipalId), (Get-RoleMembershipWords $ms)))
+    }
+}
+# change-requests.csv keeps each assignment in full, role, role definition, scope and account, for the rollback, and each
+# group membership with the group the account is removed from.
+function New-AzureRoleCsv($Azure) {
+    foreach ($r in @($Azure | Sort-Object { Get-RoleHolder $_ }, { Get-Text $_.Scope })) {
+        $row = New-Resource ('{0}, {1}' -f (Get-Text $r.UserPrincipalName), (Get-Text $r.Role)) $r.resourceGroup $r.subscriptionId '' $r.AssignmentId
+        # The CSV is data, so a condition is kept exactly as Azure has it, angle brackets and all.
+        $row.Setting = 'Azure role {0} ({1}) at {2} scope {3}, assigned to {4} (object ID {5}){6}' -f (Get-Text $r.Role), (Get-Text $r.RoleDefinitionId), (Get-Text $r.ScopeLevel).ToLowerInvariant(), (Get-Text $r.Scope), (Get-Text $r.UserPrincipalName), (Get-Text $r.PrincipalId), $(if (Get-Text $r.Condition) { ', condition version {0}: {1}' -f (Get-RoleConditionVersion $r), [string]$r.Condition } else { '' })
+        $row
+    }
+}
+function New-RoleMembershipCsv($Memberships) {
+    foreach ($ms in $Memberships) {
+        # The resource ID is the Graph path that removes the member, groups/{group}/members/{account}/$ref.
+        New-Resource ('{0}, member of group {1}' -f (Get-Text $ms.Account.UserPrincipalName), $ms.MemberOfName) '' '' ('Membership of {0}, held by {1} (object ID {2})' -f (Get-RoleMembershipWords $ms), (Get-Text $ms.Account.UserPrincipalName), (Get-Text $ms.Account.PrincipalId)) ('/groups/{0}/members/{1}/$ref' -f $ms.MemberOfId, (Get-Text $ms.Account.PrincipalId))
+    }
+}
+# The implementation steps that remove the Azure role assignments listed for one account. Returns the number of the step
+# that records the end of a time-bound assignment, which the rollback refers to, or 0 when every assignment is at the root.
+function Add-AzureRoleRemoveSteps($Impl, $Azure) {
+    $rootAzure = @($Azure | Where-Object { (Get-Text $_.ScopeLevel) -eq 'Root' })
+    $removeStep = 0
+    if (@($Azure).Count - $rootAzure.Count) {
+        $removeStep = $Impl.Count + 2
+        $Impl.Add(('For each Azure role assignment listed for the account{0}, open its scope in the Azure portal, the management group, subscription, resource group or resource named in the RESOURCES section, go to Access control (IAM) and select the Role assignments tab.' -f $(if ($rootAzure.Count) { ' below the root scope' } else { '' })))
+        # Resource Graph holds no schedule, so a time-bound assignment or a Privileged Identity Management activation
+        # reads like a permanent one. Its end is read from the portal first, for the rollback.
+        $Impl.Add('Search for the account and find the assignment of the listed role whose Scope column reads This resource. Where the tab shows a State column and it reads Active time-bound, record in the change record the end time of the assignment, shown by selecting Edit columns and then End time, since the collection does not hold it and the rollback restores the assignment as time-bound with that end. A resource scope shows no State column, so for an assignment on a resource, where the client uses Privileged Identity Management, read its end on the Active roles tab of Privileged Identity Management > Azure resources > the resource > Roles > the role instead. Select Remove and then Yes. An assignment shown as Inherited was made at a parent scope and is removed there, under its own line in the RESOURCES section.')
+    }
+    if ($rootAzure.Count) {
+        $Impl.Add(@('The portal cannot remove an assignment at the root scope (/). As a Global Administrator with elevated access, remove each one listed for the account from Azure Cloud Shell, with the object ID and role definition listed for it, then read the assignments left at the root scope:'
+                'az role assignment delete --assignee OBJECT-ID --role ROLE-DEFINITION-ID --scope "/"'
+                'az role assignment list --assignee OBJECT-ID --scope "/"'))
+    }
+    $removeStep
+}
+# The account leaves the group it sits in, which the RESOURCES line names first: the role group itself, or a group nested
+# in it. The group keeps its roles and its other members. A membership whose every recorded role is gone since
+# collection, or whose chain to every role group is broken, no longer carries a role, so it stays, since leaving the group
+# would take away whatever else the group gives. One that still carries a role on its line is removed, however many of the
+# others are gone.
+$roleMembershipRemoveStep = 'For each group membership listed for the account, first confirm that it still gives the account a role on its line: go to Microsoft Entra ID > Groups > All groups, open each group the line says holds a role and check under Azure role assignments or Assigned roles that it still holds the roles listed, then, where the line says the account sits in a group nested in it, open that nested group and each group named between them and confirm under Group memberships that each is still a member of the one above it. Where the membership still carries at least one of the roles listed, remove it as follows, and note in the change record any role on the line that was already gone. Only where every role on the line is gone, or the chain to every group holding one is broken, does the membership no longer give the account a role, so leave it unchanged and note it in the change record. To remove it, open the group the account is removed from, the first group named on its line, which is the group that holds the role or a group nested in it. Select Members, find the account, select it, select Remove and then Yes. If Membership type on the group reads Dynamic User or Dynamic Device, or Source reads Windows server AD, a member cannot be removed here, so leave the membership unchanged and note it in the change record for a review with the group owner.'
+$roleMembershipRollbackStep = 'For a group membership, go to Microsoft Entra ID > Groups > All groups, open the recorded group, select Members, select Add members, find the account by its object ID, select it and select Select. Every role the group holds, itself or through the groups it is nested in, reaches the account again at once.'
+# The rollback steps that recreate the Azure role assignments. Each assignment matches one step only: recorded without a
+# condition below the root, with a condition at any scope, or without a condition at the root. RemoveStep is the step
+# that recorded the end of a time-bound assignment (Add-AzureRoleRemoveSteps).
+function Add-AzureRoleRollback($Rollback, $Azure, [int]$RemoveStep) {
+    $rootAzure = @($Azure | Where-Object { (Get-Text $_.ScopeLevel) -eq 'Root' })
+    $conditioned = @($Azure | Where-Object { Get-Text $_.Condition })
+    $plainAzure = @($Azure | Where-Object { (Get-Text $_.ScopeLevel) -ne 'Root' -and -not (Get-Text $_.Condition) })
+    # A time-bound assignment is given its end on the Assignment type tab, before Review + assign creates it.
+    $timeBound = 'Where step {0} recorded the assignment in the change record as Active time-bound, select Active on the Assignment type tab and set Assignment duration to Time bound with the recorded end date and time, never Permanent, so the role is not restored for longer than it was held. A resource scope has no Assignment type tab, so recreate a time-bound assignment on a resource from Privileged Identity Management > Azure resources > the resource > Roles > Add assignments instead, as Active with the recorded end date and time.' -f $RemoveStep
+    $plainRoot = @($rootAzure | Where-Object { -not (Get-Text $_.Condition) })
+    if ($plainAzure.Count) { $Rollback.Add(('For an Azure role assignment{0}, open the scope recorded for it in the RESOURCES section, go to Access control (IAM) > Add > Add role assignment, select the recorded role, select User, group, or service principal and select the account by its object ID. {1} Then select Review + assign.' -f $(if ($conditioned.Count) { ' recorded without a condition' } else { '' }), $timeBound)) }
+    if ($conditioned.Count) {
+        # A condition narrows what the role grants, so recreating the assignment without it would grant more. The command
+        # reads the condition from a file, since a shell would expand a token such as $key_case_sensitive$ written inside
+        # double quotes, and Bash does not expand the output of a command substitution again.
+        $Rollback.Add(@(('For an Azure role assignment recorded with a condition, recreate it with that condition, copied exactly from change-requests.csv, since without it the role grants more than it did. At a subscription, resource group or resource, open the recorded scope, go to Access control (IAM) > Add > Add role assignment, select the recorded role, select User, group, or service principal and the account by its object ID, then on the Conditions tab select Add condition, set Editor type to Code, paste the condition and select Save.{0} The portal cannot add a condition at a management group or root scope, so recreate one there from Azure Cloud Shell in Bash, as a Global Administrator with elevated access for the root scope: run code condition.txt, paste the condition, save the file, then run the command below with the recorded object ID, role definition ID, scope and condition version. The condition is read from the file, so the shell changes none of its characters.{1}:' -f $(if ($RemoveStep) { ' Where step {0} recorded it as Active time-bound, set it to Active and Time bound with the recorded end date and time on the Assignment type tab, then select Review + assign. A resource scope has no Assignment type tab, so recreate a time-bound one on a resource from Privileged Identity Management > Azure resources > the resource > Roles > Add assignments instead, as Active with the recorded end date and time and the condition added with Add condition.' -f $RemoveStep } else { ' Then select Review + assign.' }), $(if ($RemoveStep) { ' Where step {0} recorded the assignment at a management group as Active time-bound, open Access control (IAM) on the management group afterwards, select the State link of the new assignment on the Role assignments tab, set Assignment duration to Time bound with the recorded end date and time and select Save' -f $RemoveStep } else { '' }))
+                'az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope SCOPE --condition "$(cat condition.txt)" --condition-version VERSION'))
+    }
+    if ($plainRoot.Count) { $Rollback.Add(('For an assignment at the root scope{0}, run in Azure Cloud Shell, as a Global Administrator with elevated access: az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope "/"' -f $(if ($conditioned.Count) { ' recorded without a condition' } else { '' }))) }
+}
+# The Microsoft Learn pages behind the Azure role steps, in the order the change request cites them.
+function Get-AzureRoleReferences($Azure, [string]$Part) {
+    $below = @($Azure | Where-Object { (Get-Text $_.ScopeLevel) -ne 'Root' }).Count
+    $root = @($Azure).Count - $below
+    switch ($Part) {
+        'Remove' {
+            if ($below) {
+                , @('Remove Azure role assignments, Azure portal', 'https://learn.microsoft.com/azure/role-based-access-control/role-assignments-remove#azure-portal')
+                , @('Assign Azure roles using the Azure portal', 'https://learn.microsoft.com/azure/role-based-access-control/role-assignments-portal') }
+            if ($root) { , @('Elevate access to manage all Azure subscriptions and management groups, perform steps at root scope', 'https://learn.microsoft.com/azure/role-based-access-control/elevate-access-global-admin#perform-steps-at-root-scope') }
+        }
+        'Membership' {
+            , @('Manage Microsoft Entra groups and group membership, remove members or owners of a group', 'https://learn.microsoft.com/entra/fundamentals/how-to-manage-groups#remove-members-or-owners-of-a-group')
+            , @('Manage Microsoft Entra groups and group membership, add members or owners of a group', 'https://learn.microsoft.com/entra/fundamentals/how-to-manage-groups#add-members-or-owners-of-a-group')
+        }
+        'Restore' {
+            if ($below) {
+                , @('List Azure role assignments using the Azure portal, list role assignments at a scope', 'https://learn.microsoft.com/azure/role-based-access-control/role-assignments-list-portal#list-role-assignments-at-a-scope')
+                , @('Assign Azure roles using the Azure portal, select assignment type and edit assignment', 'https://learn.microsoft.com/azure/role-based-access-control/role-assignments-portal#step-6-select-assignment-type')
+                , @('Assign Azure resource roles in Privileged Identity Management, assign a role', 'https://learn.microsoft.com/entra/id-governance/privileged-identity-management/pim-resource-roles-assign-roles#assign-a-role') }
+        }
+    }
+}
+# The words the client email and its CSV use for a role: where an Azure role applies, how the account holds it and what
+# the change does about it.
+function Get-AzureRoleWhere($r) {
+    switch (Get-Text $r.ScopeLevel) {
+        'Root' { 'the root scope, above every subscription' }
+        'Management group' { 'the management group ' + (((ConvertTo-CopyText $r.Scope) -split '/')[-1]) }
+        'Subscription' { 'the subscription ' + (Format-Subscription $r.subscriptionId) }
+        'Resource group' { 'resource group {0} in the subscription {1}' -f (ConvertTo-CopyText $r.resourceGroup), (Format-Subscription $r.subscriptionId) }
+        'Resource' { 'resource {0} in resource group {1} in the subscription {2}' -f (((ConvertTo-CopyText $r.Scope) -split '/')[-1]), (ConvertTo-CopyText $r.resourceGroup), (Format-Subscription $r.subscriptionId) }
+        default { 'scope ' + (ConvertTo-CopyText $r.Scope) } }
+}
+function Get-EntraRoleWhere($r) {
+    $scope = ConvertTo-CopyText $r.DirectoryScope
+    if ($scope -match '^/administrativeUnits/(.+)$') { 'administrative unit ' + $Matches[1] }
+    elseif ($scope -match '^/([^/]+)$') { 'the single application or other Microsoft Entra object with ID ' + $Matches[1] }
+    elseif ($scope -and $scope -ne '/') { 'directory scope ' + $scope }
+    else { 'the whole directory' }
+}
+function Get-RoleHeldWords($r) {
+    if ((Get-Text $r.HeldThrough) -ne 'Group') { return 'Assigned to the account' }
+    $path = Get-RoleGroupPath $r
+    if ($path.Count -le 1) { return 'Group ' + (ConvertTo-CopyText $r.GroupName) }
+    $nested = Join-Words @($path | Select-Object -Skip 1)
+    'Group {0}, through {1} {2} nested in it' -f (ConvertTo-CopyText $r.GroupName), (Get-Pick ($path.Count - 1) 'the group' 'the groups'), $nested
+}
+function Get-RoleActionWords($r) {
+    if ((Get-Text $r.HeldThrough) -ne 'Group') { 'Remove the role assignment' }
+    elseif ((Get-Text $r.MemberOfType) -eq 'Assigned') { 'Remove the account from group ' + (ConvertTo-CopyText $r.MemberOfName) }
+    elseif ((Get-Text $r.MemberOfType) -eq 'Dynamic') { 'None in this change, the members of group {0} come from a rule' -f (ConvertTo-CopyText $r.MemberOfName) }
+    else { 'None in this change, group {0} is synced from on-premises Active Directory' -f (ConvertTo-CopyText $r.MemberOfName) }
+}
+function Get-RoleDetailWords($r) {
+    if ($r.Side -eq 'Azure') { if (Get-Text $r.Condition) { 'with a condition that narrows what the role allows' } else { '' } }
+    else { @(Get-EntraRoleParts $r | Where-Object { $_ -notmatch '^(in administrative unit |for the single application |at directory scope )' }) -join ', ' }
+}
+# "2 accounts holding 3 roles, 1 of them through a group", for the email's count of the roles by subscription.
+function Get-RoleSummary($rows, [string]$One, [string]$Many) {
+    $holders = @($rows | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Sort-Object -Unique).Count
+    $roles = @(Get-DistinctRoles $rows).Count
+    $through = @(Get-DistinctRoles @($rows | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' })).Count
+    '{0} holding {1}{2}' -f (Get-Count $holders $One $Many), (Get-Count $roles 'role' 'roles'), $(if (-not $through) { '' } elseif ($through -eq $roles) { Get-Pick $roles ', held through a group' ', all held through a group' } else { ', {0} of them through a group' -f $through })
 }
 
 $catalog = @(
@@ -2598,14 +2962,10 @@ $catalog = @(
        Build = {
             # IA.15-DISABLED lists the disabled user accounts, IA.15-RBAC their Azure role assignments at every scope and
             # IA.15-ENTRA their Microsoft Entra role assignments. A role is listed only for an account IA.15-DISABLED
-            # records as disabled, whatever the role results hold. A role assigned to the account itself is removed. A
-            # role held through a group is taken away by removing the account from the group it sits in, the role group
-            # or a group nested in it (MemberOfId, collector 1.10.0), so the group and its other members keep the role.
-            # A group whose members a rule or on-premises Active Directory decides cannot lose a member here, so its
-            # roles stay and the index names them, as it names every group role on a pack that does not record the
-            # group each account sits in. Each side is written when it was read, and the index says which side is
-            # missing and why, so a side that could not be read never reads as no gaps. The client email names the
-            # accounts in an attached CSV rather than in its text, since the list can be long.
+            # records as disabled, whatever the role results hold. The removal itself is shared with CR-26 (the role
+            # removal functions above). Each side is written when it was read, and the index says which side is missing
+            # and why, so a side that could not be read never reads as no gaps. The client email names the accounts in an
+            # attached CSV rather than in its text, since the list can be long.
             $accounts = @{}
             foreach ($u in @(Get-Rows 'IA.15-DISABLED' | Where-Object { (Get-Text $_.AccountEnabled) -ieq 'false' })) {
                 $id = (Get-Text $u.PrincipalId).ToLowerInvariant()
@@ -2622,161 +2982,24 @@ $catalog = @(
             }
             $sides = @(@{ Id = 'IA.15-RBAC'; Name = 'Azure' }, @{ Id = 'IA.15-ENTRA'; Name = 'Microsoft Entra' })
             $notes = [System.Collections.Generic.List[string]]::new()
-            # No change removes the access of an emergency access account (decision 4 of the Oct 21 review), so a
-            # disabled account with Atmosera in its UPN, or one IA.16-ACCOUNTS lists, is left out before any role is
-            # read: none of its roles is removed and it is not removed from any group.
-            $eaWho = { param($u)
-                $upn = ConvertTo-CopyText $u.UserPrincipalName; $name = ConvertTo-CopyText $u.DisplayName
-                if ($upn -and $name) { '{0} ({1})' -f $name, $upn } elseif ($upn) { $upn } elseif ($name) { $name } else { 'object ID ' + (Get-Text $u.PrincipalId) } }
-            $leftOut = @(foreach ($id in @($accounts.Keys | Sort-Object { & $eaWho $accounts[$_] })) {
-                    $u = $accounts[$id]
-                    $byUpn = Test-CyberSocEmergencyAccessUpn (Get-Text $u.UserPrincipalName)
-                    if (-not $byUpn -and -not (Test-CyberSocEmergencyAccessId $emergencyAccess $id)) { continue }
-                    $row = @($emergencyAccess.Accounts | Where-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() -eq $id }) | Select-Object -First 1
-                    $inGroups = @(if ($row) { @($row.Groups) | ForEach-Object { ConvertTo-CopyText $_ } | Where-Object { $_ } })
-                    $why = @(
-                        if ($byUpn) { 'Atmosera in its UPN' }
-                        if ($inGroups.Count) { '{0} {1}' -f (Get-Pick $inGroups.Count 'a member of the Atmosera group' 'a member of the Atmosera groups'), (Join-Words $inGroups) })
-                    if (-not $why.Count) { $why = @('listed in IA.16-ACCOUNTS') }
-                    [pscustomobject]@{ Id = $id; Text = '{0}, {1}' -f (& $eaWho $u), ($why -join ' and ') }
-                })
-            foreach ($x in $leftOut) { $accounts.Remove($x.Id) }
+            $leftOut = @(Remove-EmergencyAccessAccounts $accounts)
             if ($leftOut.Count) {
                 $notes.Add(('CR-19 leaves out {0}, so none of {1} roles is removed and {2} not removed from any group: {3}. A disabled emergency access account cannot sign in when it is needed, so confirm with the client that {4} meant to be disabled.' -f (Get-Count $leftOut.Count 'disabled emergency access account' 'disabled emergency access accounts'), (Get-Pick $leftOut.Count 'its' 'their'), (Get-Pick $leftOut.Count 'it is' 'they are'), (@($leftOut | ForEach-Object Text) -join ' / '), (Get-Pick $leftOut.Count 'it is' 'each one is')))
             }
-            $read = @{}
-            foreach ($side in $sides) {
-                $read[$side.Id] = Test-ResultRead $side.Id
-                $status = Get-Status $side.Id
-                if (-not $read[$side.Id]) {
-                    $why = if (Test-Unreadable $side.Id) { 'its result file is unreadable, so recollect or restore the pack' } elseif ($status -eq 'MISSING') { 'it was not collected' } else { 'it reads {0}: {1}' -f $status, (Get-ResultDetail $side.Id) }
-                    $notes.Add(('The {0} roles of the disabled accounts are unknown, not a zero, because {1} could not be used: {2}' -f $side.Name, $side.Id, $why).TrimEnd('.') + '.')
-                }
-                elseif ($status -eq 'PARTIAL') { $notes.Add(('{0} was read in part, so CR-19 may miss some {1} roles: {2}' -f $side.Id, $side.Name, (Get-ResultDetail $side.Id)).TrimEnd('.') + '.') }
-            }
-            $rowsOf = { param([string]$Id, [string]$Side)
-                if ($read[$Id]) {
-                    foreach ($r in @(Get-Rows $Id | Where-Object { $accounts.ContainsKey((Get-Text $_.PrincipalId).ToLowerInvariant()) })) {
-                        $r | Add-Member -NotePropertyName Side -NotePropertyValue $Side -Force -PassThru
-                    } } }
-            $azureAll = @(& $rowsOf 'IA.15-RBAC' 'Azure')
-            $entraAll = @(& $rowsOf 'IA.15-ENTRA' 'Microsoft Entra')
+            $read = Test-RoleSides $sides $notes 'CR-19' 'disabled accounts'
+            $azureAll = @(Get-RoleRows 'IA.15-RBAC' 'Azure' $accounts $read['IA.15-RBAC'])
+            $entraAll = @(Get-RoleRows 'IA.15-ENTRA' 'Microsoft Entra' $accounts $read['IA.15-ENTRA'])
             $azure = @($azureAll | Where-Object { (Get-Text $_.HeldThrough) -eq 'Direct' })
             $entra = @($entraAll | Where-Object { (Get-Text $_.HeldThrough) -eq 'Direct' })
-            $who = { param($r)
-                $upn = ConvertTo-CopyText $r.UserPrincipalName; $name = ConvertTo-CopyText $r.DisplayName
-                if ($upn -and $name) { '{0} ({1})' -f $name, $upn } elseif ($upn) { $upn } elseif ($name) { $name } else { 'object ID ' + (Get-Text $r.PrincipalId) } }
-            $scopeWords = { param($r)
-                $scope = ConvertTo-CopyText $r.Scope
-                switch (Get-Text $r.ScopeLevel) {
-                    'Root' { 'the root scope' }
-                    'Management group' { 'the management group' }
-                    'Subscription' { 'the subscription' }
-                    'Resource group' { 'resource group ' + (ConvertTo-CopyText $r.resourceGroup) }
-                    'Resource' { 'resource {0} in resource group {1}' -f ($scope -split '/')[-1], (ConvertTo-CopyText $r.resourceGroup) }
-                    default { 'scope ' + $scope } } }
-            $heading = { param($r)
-                $level = Get-Text $r.ScopeLevel
-                if ($level -eq 'Root') { 'Root scope' }
-                elseif ($level -eq 'Management group') { 'Management group ' + ((ConvertTo-CopyText $r.Scope) -split '/')[-1] }
-                elseif (Get-Text $r.subscriptionId) { 'Subscription ' + (Format-Subscription $r.subscriptionId) }
-                else { 'Management group ' + (ConvertTo-CopyText $r.Scope) } }
-            # Subscriptions first, then the management groups and the root scope above them.
-            $headingOrder = { param([string]$h) if ($h -like 'Subscription *') { "1 $h" } elseif ($h -like 'Management group *') { "2 $h" } else { "3 $h" } }
-            # ConvertFrom-Json reads an ISO date as a DateTime, so an end date is written back in ISO form.
-            $endOf = { param($r, [switch]$Day)
-                $v = $r.EndDateUtc
-                if ($v -is [datetime]) { $v.ToUniversalTime().ToString($(if ($Day) { 'yyyy-MM-dd' } else { "yyyy-MM-dd'T'HH:mm:ss'Z'" }), $inv) }
-                elseif ($Day) { $t = Get-Text $v; $t.Substring(0, [Math]::Min(10, $t.Length)) }
-                else { Get-Text $v } }
-            # Azure takes 2.0 when a condition is given without a version.
-            $conditionVersion = { param($r) $v = Get-Text $r.ConditionVersion; if ($v) { $v } else { '2.0' } }
-            # What an Entra assignment is beyond its role: its type, its end and its scope, in plain words.
-            $entraParts = { param($r)
-                $parts = @(switch (Get-Text $r.AssignmentType) {
-                        'Eligible' { 'eligible in Privileged Identity Management' }
-                        'Activated' { 'activated from an eligible assignment' }
-                        'Time-bound' { 'active' }
-                        default { } })
-                $end = & $endOf $r -Day
-                if ($end -and (Get-Text $r.AssignmentType) -ne 'Activated') { $parts += 'until ' + $end }
-                $scope = ConvertTo-CopyText $r.DirectoryScope
-                if ($scope -match '^/administrativeUnits/(.+)$') { $parts += 'in administrative unit ' + $Matches[1] }
-                elseif ($scope -match '^/([^/]+)$') { $parts += 'for the single application or other Microsoft Entra object with ID ' + $Matches[1] }
-                elseif ($scope -and $scope -ne '/') { $parts += 'at directory scope ' + $scope }
-                $parts }
-            $entraKind = { param($r)
-                $parts = @(& $entraParts $r)
-                $role = ConvertTo-CopyText $r.Role
-                if ($parts.Count) { '{0} ({1})' -f $role, ($parts -join ', ') } else { $role } }
 
-            # Roles held through a group. From collector 1.10.0 each row names the group the account sits in
-            # (MemberOfId), the role group itself or a group nested in it, with the path between them (GroupPath) and
-            # whether a member can be removed from it (MemberOfType Assigned, Dynamic or On-premises). The account is
-            # removed from that group, which takes away every role the group holds, directly or through the groups it is
-            # nested in. A dynamic membership group takes its members from a rule and a synced group from Active
-            # Directory, so neither can lose a member here, and their roles are named for a separate review.
-            $viaGroup = @(@($azureAll) + @($entraAll) | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' })
-            $pathKnown = -not @($viaGroup | Where-Object { -not (Get-Text $_.MemberOfId) }).Count
-            $removable = @(if ($pathKnown) { $viaGroup | Where-Object { (Get-Text $_.MemberOfType) -eq 'Assigned' } })
-            $fixed = @(if ($pathKnown) { $viaGroup | Where-Object { (Get-Text $_.MemberOfType) -ne 'Assigned' } })
-            $pathOf = { param($r) @(@($r.GroupPath) | ForEach-Object { ConvertTo-CopyText $_ } | Where-Object { $_ }) }
-            $groupLabel = { param($r) '{0} ({1})' -f (ConvertTo-CopyText $r.GroupName), (Get-Text $r.GroupId) }
-            $memberOfLabel = { param($r) '{0} ({1})' -f (ConvertTo-CopyText $r.MemberOfName), (Get-Text $r.MemberOfId) }
-            $roleWords = { param($r) if ($r.Side -eq 'Azure') { 'Azure {0} on {1}' -f (ConvertTo-CopyText $r.Role), (ConvertTo-CopyText $r.Scope) } else { 'Microsoft Entra {0}' -f (& $entraKind $r) } }
-            # An account that reaches one assignment through two groups has a row for each group, one removal each, but
-            # holds one role, so the roles are counted by assignment and account, never by row.
-            $roleKey = { param($r) '{0}|{1}|{2}' -f $r.Side, $(if (Get-Text $r.AssignmentId) { (Get-Text $r.AssignmentId).ToLowerInvariant() } else { '{0}|{1}|{2}|{3}' -f (Get-Text $r.Role), (Get-Text $r.Scope), (Get-Text $r.DirectoryScope), (Get-Text $r.AssignmentType) }), (Get-Text $r.PrincipalId).ToLowerInvariant() }
-            $distinctRoles = { param($rows) @($rows | Group-Object { & $roleKey $_ } | ForEach-Object { $_.Group[0] }) }
-            # ", nested in platform-operators (id) through ops-tier2" for a member of a nested group, else nothing.
-            $nestedWords = { param($r)
-                if ((Get-Text $r.GroupId).ToLowerInvariant() -eq (Get-Text $r.MemberOfId).ToLowerInvariant()) { return '' }
-                $path = & $pathOf $r
-                $via = @(if ($path.Count -gt 2) { $path[1..($path.Count - 2)] })
-                ', nested in {0}{1}' -f (& $groupLabel $r), $(if ($via.Count) { ' through ' + (Join-Words $via) } else { '' }) }
-            $fixedWhy = { param($r) if ((Get-Text $r.MemberOfType) -eq 'Dynamic') { 'a dynamic membership group whose members a rule decides' } else { 'synced from on-premises Active Directory, where its members are managed' } }
-            # One removal per account and group it sits in, whatever roles that takes away.
-            $memberships = @($removable | Group-Object { '{0}|{1}' -f (Get-Text $_.PrincipalId).ToLowerInvariant(), (Get-Text $_.MemberOfId).ToLowerInvariant() } | ForEach-Object {
-                    $first = $_.Group[0]
-                    [pscustomobject]@{ Account = $first; MemberOfId = Get-Text $first.MemberOfId; MemberOfName = ConvertTo-CopyText $first.MemberOfName; Label = (& $memberOfLabel $first); Rows = @($_.Group) } } |
-                    Sort-Object { & $who $_.Account }, MemberOfName, MemberOfId)
-            # "group ops-tier2 (id), nested in platform-operators (id), which holds Azure Contributor on /subscriptions/...
-            # and Microsoft Entra Helpdesk Administrator"; a group nested in more than one role group names each.
-            $membershipWords = { param($ms)
-                $parts = @(foreach ($g in @($ms.Rows | Group-Object { (Get-Text $_.GroupId).ToLowerInvariant() } | Sort-Object { ConvertTo-CopyText $_.Group[0].GroupName })) {
-                        $r = $g.Group[0]
-                        $roles = Join-Words @($g.Group | ForEach-Object { & $roleWords $_ } | Sort-Object -Unique)
-                        if ((Get-Text $r.GroupId).ToLowerInvariant() -eq $ms.MemberOfId.ToLowerInvariant()) { 'which holds {0}' -f $roles }
-                        else { '{0}, which holds {1}' -f (& $nestedWords $r).TrimStart(', '), $roles } })
-                'group {0}, {1}' -f $ms.Label, ($parts -join ', and ') }
+            # Roles held through a group, Azure and Entra together, since leaving a group takes away both.
+            $split = Get-RoleGroupSplit (@($azureAll) + @($entraAll))
+            $viaGroup = $split.ViaGroup; $pathKnown = $split.PathKnown; $removable = $split.Removable; $fixed = $split.Fixed
+            $memberships = $split.Memberships; $k = $split.K; $fixedAccounts = $split.FixedAccounts
             $inScopeAzure = @($azure) + @($removable | Where-Object Side -eq 'Azure')
             $inScopeEntra = @($entra) + @($removable | Where-Object Side -eq 'Microsoft Entra')
-            if ($viaGroup.Count -and -not $pathKnown) {
-                $groupLines = @(foreach ($g in @($viaGroup | Group-Object { (Get-Text $_.GroupId).ToLowerInvariant() })) {
-                        $first = $g.Group[0]
-                        $roles = @($g.Group | ForEach-Object { & $roleWords $_ } | Sort-Object -Unique)
-                        $members = @($g.Group | ForEach-Object { & $who $_ } | Sort-Object -Unique)
-                        'group {0}, which holds {1}, with the disabled {2} {3}' -f (& $groupLabel $first), ($roles -join ' and '), (Get-Pick $members.Count 'member' 'members'), ($members -join ', ')
-                    })
-                $notes.Add(('{0} roles through group membership, which CR-19 leaves unchanged because the pack does not record the group each account sits in: {1}. Collect again with CyberSOC collector 1.10.0 or later, and CR-19 removes each account from its group.' -f (Get-Count @($viaGroup | ForEach-Object PrincipalId | Sort-Object -Unique).Count 'disabled account holds' 'disabled accounts hold'), (@($groupLines | Sort-Object) -join ' / ')))
-            }
-            $k = @($memberships | ForEach-Object { (Get-Text $_.Account.PrincipalId).ToLowerInvariant() } | Sort-Object -Unique).Count
-            if ($memberships.Count) {
-                $notes.Add(('{0} roles through group membership, and CR-19 removes {1} from the group it sits in: {2}.' -f (Get-Count $k 'disabled account holds' 'disabled accounts hold'), (Get-Pick $k 'it' 'each one'), (@($memberships | ForEach-Object { '{0} from {1}' -f (& $who $_.Account), (& $membershipWords $_) }) -join ' / ')))
-            }
-            $fixedAccounts = @($fixed | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Sort-Object -Unique).Count
-            if ($fixed.Count) {
-                $fixedLines = @($fixed | Group-Object { '{0}|{1}' -f (Get-Text $_.PrincipalId).ToLowerInvariant(), (Get-Text $_.MemberOfId).ToLowerInvariant() } | ForEach-Object {
-                        $r = $_.Group[0]
-                        '{0} through group {1}, {2}{3}, which holds {4}' -f (& $who $r), (& $memberOfLabel $r), (& $fixedWhy $r), (& $nestedWords $r), (Join-Words @($_.Group | ForEach-Object { & $roleWords $_ } | Sort-Object -Unique)) } | Sort-Object)
-                $notes.Add(('{0} roles through a group whose members CR-19 cannot change, so they stay as they are: {1}. Review each with the group owner, who can change the membership rule, or remove the account from the group in Active Directory so that the next sync takes the role away.' -f (Get-Count $fixedAccounts 'disabled account holds' 'disabled accounts hold'), ($fixedLines -join ' / ')))
-            }
-            if ($read['IA.15-RBAC']) {
-                if ((Get-Text $parameters.AccessPath) -eq 'Lighthouse' -or (Get-ResultDetail 'IA.15-RBAC') -match 'Lighthouse') {
-                    $notes.Add("The Azure role assignments were read through Azure Lighthouse, where Resource Graph shows the managing tenant's delegations instead of the client's own role assignments, so CR-19 may miss Azure roles the disabled accounts hold. Collect the pack again with a direct sign-in to the client tenant before sending CR-19.")
-                }
-                $notes.Add('IA.15-RBAC reads the subscriptions in the pack and the management groups and root scope above them, so a role in another subscription of the tenant is not listed. Resource Graph also holds the active Azure role assignments only, not the eligible assignments of Privileged Identity Management for Azure resources, so CR-19 does not list those. Where the client uses it, check Privileged Identity Management > Azure resources for each disabled account before sending.')
-            }
+            Add-RoleGroupNotes $notes $split 'CR-19' 'disabled account' 'disabled accounts' 'disabled'
+            if ($read['IA.15-RBAC']) { Add-AzureRoleReadNotes $notes 'IA.15-RBAC' 'CR-19' 'disabled account' 'disabled accounts' }
             # An Activated role is removed through the eligible assignment behind it, which is restored from the record
             # only when IA.15-ENTRA holds it as an Eligible row of the same account, role and directory scope. Any other
             # Activated row has its eligibility schedule recorded from Privileged Identity Management before removal.
@@ -2817,15 +3040,15 @@ $catalog = @(
                 if ($state -ne 'No gaps found') { $state += ', see the notes' }
                 return @{ State = $state; Notes = $notes.ToArray() }
             }
-            $people = @(@($inScopeAzure) + @($inScopeEntra) | Group-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | ForEach-Object { $_.Group[0] } | Sort-Object { & $who $_ })
+            $people = @(@($inScopeAzure) + @($inScopeEntra) | Group-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | ForEach-Object { $_.Group[0] } | Sort-Object { Get-RoleHolder $_ })
             $m = $people.Count
-            $synced = @($people | Where-Object { Test-True $accounts[(Get-Text $_.PrincipalId).ToLowerInvariant()].OnPremisesSyncEnabled } | ForEach-Object { & $who $_ })
+            $synced = @($people | Where-Object { Test-True $accounts[(Get-Text $_.PrincipalId).ToLowerInvariant()].OnPremisesSyncEnabled } | ForEach-Object { Get-RoleHolder $_ })
             if ($synced.Count) {
                 $notes.Add(('{0} in CR-19 {1} synced from on-premises Active Directory: {2}. {3} disabled state comes from Active Directory, so re-enabling {4} there turns {4} back on in Microsoft Entra ID at the next sync. Removing the roles still applies, and whoever manages Active Directory should know that an account turned back on starts without them.' -f (Get-Count $synced.Count 'account' 'accounts'), (Get-Pick $synced.Count 'is' 'are'), ($synced -join ', '), (Get-Pick $synced.Count 'Its' 'Their'), (Get-Pick $synced.Count 'it' 'them')))
             }
             # An account with the most powerful roles may be one kept for emergency access, so it is named before sending.
             $top = @(@($inScopeEntra | Where-Object { (Get-Text $_.RoleDefinitionId) -in '62e90394-69f5-4237-9190-012177145e10', 'e8611ab8-c189-46e8-94e1-60213ab1f814', '7be44c8a-adaf-4e2a-84d6-ab2649e08a13' }) + @($inScopeAzure | Where-Object { (Get-Text $_.ScopeLevel) -eq 'Root' }) |
-                    ForEach-Object { & $who $_ } | Sort-Object -Unique)
+                    ForEach-Object { Get-RoleHolder $_ } | Sort-Object -Unique)
             if ($top.Count) {
                 $notes.Add(('{0} in CR-19 {1} Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator or a role at the Azure root scope: {2}. Ask the client whether any of them is an emergency access account before sending, and leave it out of the change if it is. Privileged Identity Management does not remove the last Global Administrator assignment.' -f (Get-Count $top.Count 'account' 'accounts'), (Get-Pick $top.Count 'holds' 'hold'), ($top -join ', ')))
             }
@@ -2834,71 +3057,35 @@ $catalog = @(
             $notes.Add(('CR-19 names the accounts and their roles in {0} rather than in its email, since the list can be long. Attach the file to the email.' -f $attachment))
 
             # RESOURCES: the Azure role assignments by subscription, then the management groups and root scope above them,
-            # one line each with its role, scope and assignment, then the Microsoft Entra role assignments, then the
-            # group memberships removed, each with the group the account sits in and the roles the group holds.
+            # then the Microsoft Entra role assignments, then the group memberships removed.
             $lines = [System.Collections.Generic.List[string]]::new()
-            if ($azure.Count) {
-                $lines.Add('Azure role assignments, removed at the scope where each was made:')
-                foreach ($g in @($azure | Group-Object { & $heading $_ } | Sort-Object { & $headingOrder $_.Name })) {
-                    $lines.Add(''); $lines.Add($(if ($g.Name -eq 'Root scope') { 'Root scope: /' } else { $g.Name -replace '^(Subscription|Management group) ', '$1: ' }))
-                    foreach ($r in @($g.Group | Sort-Object { & $who $_ }, { Get-Text $_.Scope }, { Get-Text $_.Role })) {
-                        $lines.Add(('- {0}, object ID {1}: {2} on {3}, role definition {4}, scope {5}, assignment {6}{7}' -f (& $who $r), (Get-Text $r.PrincipalId), (ConvertTo-CopyText $r.Role), (& $scopeWords $r), ((Get-Text $r.RoleDefinitionId) -split '/')[-1], (ConvertTo-CopyText $r.Scope), ((Get-Text $r.AssignmentId) -split '/')[-1], $(if (Get-Text $r.Condition) { ', with a condition (version {0}) kept exactly in change-requests.csv: {1}' -f (& $conditionVersion $r), (ConvertTo-CopyText $r.Condition) } else { '' })))
-                    }
-                }
-            }
+            Add-AzureRoleLines $lines $azure
             if ($entra.Count) {
                 if ($lines.Count) { $lines.Add('') }
                 $lines.Add('Microsoft Entra role assignments:')
-                foreach ($r in @($entra | Sort-Object { & $who $_ }, { Get-Text $_.Role }, { Get-Text $_.AssignmentType })) {
-                    $lines.Add(('- {0}, object ID {1}: {2}, {3}, role definition {4}, directory scope {5}, assignment {6}{7}' -f (& $who $r), (Get-Text $r.PrincipalId), (ConvertTo-CopyText $r.Role), (Get-Text $r.AssignmentType), (Get-Text $r.RoleDefinitionId), (ConvertTo-CopyText $r.DirectoryScope), (ConvertTo-CopyText $r.AssignmentId), $(if ($r -in $unmatched) { ', with no Eligible line, so its eligibility schedule is recorded before removal' } else { '' })))
+                foreach ($r in @($entra | Sort-Object { Get-RoleHolder $_ }, { Get-Text $_.Role }, { Get-Text $_.AssignmentType })) {
+                    $lines.Add(('- {0}, object ID {1}: {2}, {3}, role definition {4}, directory scope {5}, assignment {6}{7}' -f (Get-RoleHolder $r), (Get-Text $r.PrincipalId), (ConvertTo-CopyText $r.Role), (Get-Text $r.AssignmentType), (Get-Text $r.RoleDefinitionId), (ConvertTo-CopyText $r.DirectoryScope), (ConvertTo-CopyText $r.AssignmentId), $(if ($r -in $unmatched) { ', with no Eligible line, so its eligibility schedule is recorded before removal' } else { '' })))
                 }
             }
-            if ($memberships.Count) {
-                if ($lines.Count) { $lines.Add('') }
-                $lines.Add('Group memberships removed, which take the roles the group holds away from the account:')
-                foreach ($ms in $memberships) {
-                    $lines.Add(('- {0}, object ID {1}: removed from {2}' -f (& $who $ms.Account), (Get-Text $ms.Account.PrincipalId), (& $membershipWords $ms)))
-                }
-            }
-            # The CSV keeps each assignment in full, role, role definition, scope and account, for the rollback, and each
-            # group membership with the group the account is removed from.
+            Add-RoleMembershipLines $lines $memberships
+            # The CSV keeps each assignment in full for the rollback, and each group membership with the group the account
+            # is removed from.
             $csv = @(
-                foreach ($r in @($azure | Sort-Object { & $who $_ }, { Get-Text $_.Scope })) {
-                    $row = New-Resource ('{0}, {1}' -f (Get-Text $r.UserPrincipalName), (Get-Text $r.Role)) $r.resourceGroup $r.subscriptionId '' $r.AssignmentId
-                    # The CSV is data, so a condition is kept exactly as Azure has it, angle brackets and all.
-                    $row.Setting = 'Azure role {0} ({1}) at {2} scope {3}, assigned to {4} (object ID {5}){6}' -f (Get-Text $r.Role), (Get-Text $r.RoleDefinitionId), (Get-Text $r.ScopeLevel).ToLowerInvariant(), (Get-Text $r.Scope), (Get-Text $r.UserPrincipalName), (Get-Text $r.PrincipalId), $(if (Get-Text $r.Condition) { ', condition version {0}: {1}' -f (& $conditionVersion $r), [string]$r.Condition } else { '' })
-                    $row
+                New-AzureRoleCsv $azure
+                foreach ($r in @($entra | Sort-Object { Get-RoleHolder $_ }, { Get-Text $_.Role })) {
+                    New-Resource ('{0}, {1}' -f (Get-Text $r.UserPrincipalName), (Get-Text $r.Role)) '' '' ('Microsoft Entra role {0} ({1}), {2}{3}, directory scope {4}, assigned to {5} (object ID {6}){7}' -f (Get-Text $r.Role), (Get-Text $r.RoleDefinitionId), (Get-Text $r.AssignmentType), $(if (Get-RoleEnd $r) { ' until ' + (Get-RoleEnd $r) } else { '' }), (Get-Text $r.DirectoryScope), (Get-Text $r.UserPrincipalName), (Get-Text $r.PrincipalId), $(if ($r -in $unmatched) { ', eligible assignment not collected, its schedule is recorded in the change record before removal' } else { '' })) $r.AssignmentId
                 }
-                foreach ($r in @($entra | Sort-Object { & $who $_ }, { Get-Text $_.Role })) {
-                    New-Resource ('{0}, {1}' -f (Get-Text $r.UserPrincipalName), (Get-Text $r.Role)) '' '' ('Microsoft Entra role {0} ({1}), {2}{3}, directory scope {4}, assigned to {5} (object ID {6}){7}' -f (Get-Text $r.Role), (Get-Text $r.RoleDefinitionId), (Get-Text $r.AssignmentType), $(if (& $endOf $r) { ' until ' + (& $endOf $r) } else { '' }), (Get-Text $r.DirectoryScope), (Get-Text $r.UserPrincipalName), (Get-Text $r.PrincipalId), $(if ($r -in $unmatched) { ', eligible assignment not collected, its schedule is recorded in the change record before removal' } else { '' })) $r.AssignmentId
-                }
-                foreach ($ms in $memberships) {
-                    # The resource ID is the Graph path that removes the member, groups/{group}/members/{account}/$ref.
-                    New-Resource ('{0}, member of group {1}' -f (Get-Text $ms.Account.UserPrincipalName), $ms.MemberOfName) '' '' ('Membership of {0}, held by {1} (object ID {2})' -f (& $membershipWords $ms), (Get-Text $ms.Account.UserPrincipalName), (Get-Text $ms.Account.PrincipalId)) ('/groups/{0}/members/{1}/$ref' -f $ms.MemberOfId, (Get-Text $ms.Account.PrincipalId))
-                })
+                New-RoleMembershipCsv $memberships)
             $activeEntra = @($entra | Where-Object { (Get-Text $_.AssignmentType) -in 'Standing', 'Time-bound' })
             $eligibleEntra = @($entra | Where-Object { (Get-Text $_.AssignmentType) -eq 'Eligible' })
             $pimEntra = @($entra | Where-Object { (Get-Text $_.AssignmentType) -in 'Eligible', 'Activated' })
             $unsureStanding = @(if ($activeUnsure) { $entra | Where-Object { (Get-Text $_.AssignmentType) -eq 'Standing' } })
             $rootAzure = @($azure | Where-Object { (Get-Text $_.ScopeLevel) -eq 'Root' })
-            $conditioned = @($azure | Where-Object { Get-Text $_.Condition })
             # Each account is read again first. One turned back on since collection keeps every role, and is noted.
             $impl = [System.Collections.Generic.List[object]]::new()
             $impl.Add((Get-OpenStep $m 'Microsoft Entra ID > Users' 'account'))
             $impl.Add('On the Overview page, read Account status, shown as Account enabled under Settings on the Properties tab. If it shows the account as enabled, the account has been turned back on since collection, so leave every role it holds unchanged, note it in the change record for the next pack and skip the remaining steps for it. Leave out too any account the client asked to keep out of the change.')
-            $azureRemoveStep = 0
-            if ($azure.Count - $rootAzure.Count) {
-                $azureRemoveStep = $impl.Count + 2
-                $impl.Add(('For each Azure role assignment listed for the account{0}, open its scope in the Azure portal, the management group, subscription, resource group or resource named in the RESOURCES section, go to Access control (IAM) and select the Role assignments tab.' -f $(if ($rootAzure.Count) { ' below the root scope' } else { '' })))
-                # Resource Graph holds no schedule, so a time-bound assignment or a Privileged Identity Management activation
-                # reads like a permanent one. Its end is read from the portal first, for the rollback.
-                $impl.Add('Search for the account and find the assignment of the listed role whose Scope column reads This resource. Where the tab shows a State column and it reads Active time-bound, record in the change record the end time of the assignment, shown by selecting Edit columns and then End time, since the collection does not hold it and the rollback restores the assignment as time-bound with that end. A resource scope shows no State column, so for an assignment on a resource, where the client uses Privileged Identity Management, read its end on the Active roles tab of Privileged Identity Management > Azure resources > the resource > Roles > the role instead. Select Remove and then Yes. An assignment shown as Inherited was made at a parent scope and is removed there, under its own line in the RESOURCES section.')
-            }
-            if ($rootAzure.Count) {
-                $impl.Add(@('The portal cannot remove an assignment at the root scope (/). As a Global Administrator with elevated access, remove each one listed for the account from Azure Cloud Shell, with the object ID and role definition listed for it, then read the assignments left at the root scope:'
-                        'az role assignment delete --assignee OBJECT-ID --role ROLE-DEFINITION-ID --scope "/"'
-                        'az role assignment list --assignee OBJECT-ID --scope "/"'))
-            }
+            $azureRemoveStep = Add-AzureRoleRemoveSteps $impl $azure
             $activeStep = 0; $pimStep = 0
             if ($activeEntra.Count) {
                 $activeStep = $impl.Count + 1
@@ -2915,14 +3102,7 @@ $catalog = @(
                         # The CSV holds only the activation's expiry, so the eligibility is recorded before it is removed.
                         if ($unmatched.Count) { 'For each Microsoft Entra role listed as Activated with no Eligible line for the same role and directory scope, the eligible assignment it comes from was not collected, so its schedule is not in this change request. Go to Privileged Identity Management > Microsoft Entra roles > Roles, open the role and find the account on the Eligible assignments tab, with the scope listed for the role. Before removing it, record in the change record its start time, end time, role and directory scope as the tab shows them, then select Remove. Where the eligible assignment is held by a group rather than the account, leave it in place and note it in the change record, since removing it changes access for the group. Where the Active assignments tab still lists the activation with a Remove link, select it as well.' }) -join ' ')
             }
-            if ($memberships.Count) {
-                # The account leaves the group it sits in, which the RESOURCES line names first: the role group itself, or
-                # a group nested in it. The group keeps its roles and its other members. A membership whose every recorded
-                # role is gone since collection, or whose chain to every role group is broken, no longer carries a role, so
-                # it stays, since leaving the group would take away whatever else the group gives. One that still carries
-                # a role on its line is removed, however many of the others are gone.
-                $impl.Add('For each group membership listed for the account, first confirm that it still gives the account a role on its line: go to Microsoft Entra ID > Groups > All groups, open each group the line says holds a role and check under Azure role assignments or Assigned roles that it still holds the roles listed, then, where the line says the account sits in a group nested in it, open that nested group and each group named between them and confirm under Group memberships that each is still a member of the one above it. Where the membership still carries at least one of the roles listed, remove it as follows, and note in the change record any role on the line that was already gone. Only where every role on the line is gone, or the chain to every group holding one is broken, does the membership no longer give the account a role, so leave it unchanged and note it in the change record. To remove it, open the group the account is removed from, the first group named on its line, which is the group that holds the role or a group nested in it. Select Members, find the account, select it, select Remove and then Yes. If Membership type on the group reads Dynamic User or Dynamic Device, or Source reads Windows server AD, a member cannot be removed here, so leave the membership unchanged and note it in the change record for a review with the group owner.')
-            }
+            if ($memberships.Count) { $impl.Add($roleMembershipRemoveStep) }
             Add-RepeatStep $impl $m 1 'account'
             $testing = [System.Collections.Generic.List[object]]::new()
             $testing.Add(('In the Azure portal, go to Microsoft Entra ID > Users and open {0}.' -f (Get-EachStep $m 'account')))
@@ -2931,21 +3111,7 @@ $catalog = @(
             if ($entra.Count) { $testing.Add('Select Assigned roles and confirm that none of the Microsoft Entra roles recorded for the account appears under Active assignments or Eligible assignments, apart from any left unchanged and noted in the change record.') }
             if ($memberships.Count) { $testing.Add('Select Groups and confirm that no group recorded for the account under group memberships is listed, apart from any left unchanged and noted in the change record, then confirm under Azure role assignments and Assigned roles that the roles those groups hold no longer reach the account.') }
             $rollback = [System.Collections.Generic.List[object]]::new()
-            # Each Azure assignment matches one rollback step only: recorded without a condition below the root, with a
-            # condition at any scope, or without a condition at the root.
-            $plainAzure = @($azure | Where-Object { (Get-Text $_.ScopeLevel) -ne 'Root' -and -not (Get-Text $_.Condition) })
-            # A time-bound assignment is given its end on the Assignment type tab, before Review + assign creates it.
-            $timeBound = 'Where step {0} recorded the assignment in the change record as Active time-bound, select Active on the Assignment type tab and set Assignment duration to Time bound with the recorded end date and time, never Permanent, so the role is not restored for longer than it was held. A resource scope has no Assignment type tab, so recreate a time-bound assignment on a resource from Privileged Identity Management > Azure resources > the resource > Roles > Add assignments instead, as Active with the recorded end date and time.' -f $azureRemoveStep
-            $plainRoot = @($rootAzure | Where-Object { -not (Get-Text $_.Condition) })
-            if ($plainAzure.Count) { $rollback.Add(('For an Azure role assignment{0}, open the scope recorded for it in the RESOURCES section, go to Access control (IAM) > Add > Add role assignment, select the recorded role, select User, group, or service principal and select the account by its object ID. {1} Then select Review + assign.' -f $(if ($conditioned.Count) { ' recorded without a condition' } else { '' }), $timeBound)) }
-            if ($conditioned.Count) {
-                # A condition narrows what the role grants, so recreating the assignment without it would grant more. The
-                # command reads the condition from a file, since a shell would expand a token such as $key_case_sensitive$
-                # written inside double quotes, and Bash does not expand the output of a command substitution again.
-                $rollback.Add(@(('For an Azure role assignment recorded with a condition, recreate it with that condition, copied exactly from change-requests.csv, since without it the role grants more than it did. At a subscription, resource group or resource, open the recorded scope, go to Access control (IAM) > Add > Add role assignment, select the recorded role, select User, group, or service principal and the account by its object ID, then on the Conditions tab select Add condition, set Editor type to Code, paste the condition and select Save.{0} The portal cannot add a condition at a management group or root scope, so recreate one there from Azure Cloud Shell in Bash, as a Global Administrator with elevated access for the root scope: run code condition.txt, paste the condition, save the file, then run the command below with the recorded object ID, role definition ID, scope and condition version. The condition is read from the file, so the shell changes none of its characters.{1}:' -f $(if ($azureRemoveStep) { ' Where step {0} recorded it as Active time-bound, set it to Active and Time bound with the recorded end date and time on the Assignment type tab, then select Review + assign. A resource scope has no Assignment type tab, so recreate a time-bound one on a resource from Privileged Identity Management > Azure resources > the resource > Roles > Add assignments instead, as Active with the recorded end date and time and the condition added with Add condition.' -f $azureRemoveStep } else { ' Then select Review + assign.' }), $(if ($azureRemoveStep) { ' Where step {0} recorded the assignment at a management group as Active time-bound, open Access control (IAM) on the management group afterwards, select the State link of the new assignment on the Role assignments tab, set Assignment duration to Time bound with the recorded end date and time and select Save' -f $azureRemoveStep } else { '' }))
-                        'az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope SCOPE --condition "$(cat condition.txt)" --condition-version VERSION'))
-            }
-            if ($plainRoot.Count) { $rollback.Add(('For an assignment at the root scope{0}, run in Azure Cloud Shell, as a Global Administrator with elevated access: az role assignment create --assignee-object-id OBJECT-ID --assignee-principal-type User --role ROLE-DEFINITION-ID --scope "/"' -f $(if ($conditioned.Count) { ' recorded without a condition' } else { '' }))) }
+            Add-AzureRoleRollback $rollback $azure $azureRemoveStep
             if ($activeEntra.Count) { $rollback.Add('For a Microsoft Entra role recorded as Standing or Time-bound, go to Microsoft Entra ID > Roles and administrators, open the recorded role, select Add assignments, select the account and assign it, as active with the recorded end date where one is recorded{0}. A role recorded with an administrative unit is assigned from that unit, and one recorded for a single application or other object (a directory scope of the form /OBJECT-ID) from that object, such as App registrations > the application > Roles and administrators, never from the tenant-wide list, which would grant the role across the tenant.' -f $(if ($unsureStanding.Count) { ', or, for a role listed as Standing, with the end time step {0} recorded in the change record, never as permanent where it recorded one' -f $activeStep } else { '' })) }
             if ($pimEntra.Count) {
                 $rollback.Add(@(
@@ -2954,74 +3120,41 @@ $catalog = @(
                         # The schedule recorded in the change record is the only record of that eligibility.
                         if ($unmatched.Count) { 'For a role recorded as Activated with no Eligible line, restore the eligible assignment it came from with the schedule recorded in the change record at step {0}, never from change-requests.csv, which holds only the activation''s expiry: go to Privileged Identity Management > Microsoft Entra roles > Roles, open the recorded role, select Add assignments, select the account and, for a role recorded with an administrative unit or a single application, that scope and the recorded unit or application. Select Next, set Assignment type to Eligible, clear Permanently eligible, set the recorded end date and time and select Assign. Never restore it as permanent, unless the change record shows that it had no end date, in which case leave Permanently eligible selected. An eligible assignment left in place because a group holds it needs no rollback.' -f $pimStep }) -join ' ')
             }
-            if ($memberships.Count) { $rollback.Add('For a group membership, go to Microsoft Entra ID > Groups > All groups, open the recorded group, select Members, select Add members, find the account by its object ID, select it and select Select. Every role the group holds, itself or through the groups it is nested in, reaches the account again at once.') }
+            if ($memberships.Count) { $rollback.Add($roleMembershipRollbackStep) }
             $rollback.Add(('change-requests.csv carries each assignment in full, with the role, role definition ID, scope, any condition and the account object ID{0}{1}. An account left unchanged during the change needs no rollback.' -f $(if ($memberships.Count) { ', and each group membership with the group the account is removed from and the roles it holds' } else { '' }), $(if ($unmatched.Count -or $unsureStanding.Count -or ($azure.Count - $rootAzure.Count)) { ', and the change record carries each end time or schedule recorded before removal' } else { '' })))
             if ($unmatched.Count) {
-                $notes.Add(('{0} listed as Activated in CR-19 {1} no Eligible line for the same account, role and directory scope, {2}: {3}. Step {4} of the implementation records the schedule of the eligible assignment behind {5} from Privileged Identity Management in the change record before removing it, and the rollback restores it from that record.' -f (Get-Count $unmatched.Count 'Microsoft Entra role' 'Microsoft Entra roles'), (Get-Pick $unmatched.Count 'has' 'have'), $(if ($pimBlind) { 'since eligible assignments were not visible to the collection' } else { 'since the collection holds no eligible assignment for it' }), (@($unmatched | Sort-Object { & $who $_ }, { Get-Text $_.Role } | ForEach-Object { '{0}, {1} at directory scope {2}' -f (& $who $_), (ConvertTo-CopyText $_.Role), (ConvertTo-CopyText $_.DirectoryScope) }) -join ' / '), $pimStep, (Get-Pick $unmatched.Count 'it' 'each')))
+                $notes.Add(('{0} listed as Activated in CR-19 {1} no Eligible line for the same account, role and directory scope, {2}: {3}. Step {4} of the implementation records the schedule of the eligible assignment behind {5} from Privileged Identity Management in the change record before removing it, and the rollback restores it from that record.' -f (Get-Count $unmatched.Count 'Microsoft Entra role' 'Microsoft Entra roles'), (Get-Pick $unmatched.Count 'has' 'have'), $(if ($pimBlind) { 'since eligible assignments were not visible to the collection' } else { 'since the collection holds no eligible assignment for it' }), (@($unmatched | Sort-Object { Get-RoleHolder $_ }, { Get-Text $_.Role } | ForEach-Object { '{0}, {1} at directory scope {2}' -f (Get-RoleHolder $_), (ConvertTo-CopyText $_.Role), (ConvertTo-CopyText $_.DirectoryScope) }) -join ' / '), $pimStep, (Get-Pick $unmatched.Count 'it' 'each')))
             }
 
             # The email names the accounts in an attached CSV, one line per role in plain words, and counts them by
             # subscription, then the management groups and root scope, then the Microsoft Entra roles. The roles a group
             # the change cannot alter holds are in the CSV too, marked as left unchanged, so the client sees every role.
-            $azureWhere = { param($r)
-                switch (Get-Text $r.ScopeLevel) {
-                    'Root' { 'the root scope, above every subscription' }
-                    'Management group' { 'the management group ' + (((ConvertTo-CopyText $r.Scope) -split '/')[-1]) }
-                    'Subscription' { 'the subscription ' + (Format-Subscription $r.subscriptionId) }
-                    'Resource group' { 'resource group {0} in the subscription {1}' -f (ConvertTo-CopyText $r.resourceGroup), (Format-Subscription $r.subscriptionId) }
-                    'Resource' { 'resource {0} in resource group {1} in the subscription {2}' -f (((ConvertTo-CopyText $r.Scope) -split '/')[-1]), (ConvertTo-CopyText $r.resourceGroup), (Format-Subscription $r.subscriptionId) }
-                    default { 'scope ' + (ConvertTo-CopyText $r.Scope) } } }
-            $entraWhere = { param($r)
-                $scope = ConvertTo-CopyText $r.DirectoryScope
-                if ($scope -match '^/administrativeUnits/(.+)$') { 'administrative unit ' + $Matches[1] }
-                elseif ($scope -match '^/([^/]+)$') { 'the single application or other Microsoft Entra object with ID ' + $Matches[1] }
-                elseif ($scope -and $scope -ne '/') { 'directory scope ' + $scope }
-                else { 'the whole directory' } }
-            $heldWords = { param($r)
-                if ((Get-Text $r.HeldThrough) -ne 'Group') { return 'Assigned to the account' }
-                $path = & $pathOf $r
-                if ($path.Count -le 1) { return 'Group ' + (ConvertTo-CopyText $r.GroupName) }
-                $nested = Join-Words @($path | Select-Object -Skip 1)
-                'Group {0}, through {1} {2} nested in it' -f (ConvertTo-CopyText $r.GroupName), (Get-Pick ($path.Count - 1) 'the group' 'the groups'), $nested }
-            $actionWords = { param($r)
-                if ((Get-Text $r.HeldThrough) -ne 'Group') { 'Remove the role assignment' }
-                elseif ((Get-Text $r.MemberOfType) -eq 'Assigned') { 'Remove the account from group ' + (ConvertTo-CopyText $r.MemberOfName) }
-                elseif ((Get-Text $r.MemberOfType) -eq 'Dynamic') { 'None in this change, the members of group {0} come from a rule' -f (ConvertTo-CopyText $r.MemberOfName) }
-                else { 'None in this change, group {0} is synced from on-premises Active Directory' -f (ConvertTo-CopyText $r.MemberOfName) } }
-            $detailWords = { param($r)
-                if ($r.Side -eq 'Azure') { if (Get-Text $r.Condition) { 'with a condition that narrows what the role allows' } else { '' } }
-                else { @(& $entraParts $r | Where-Object { $_ -notmatch '^(in administrative unit |for the single application |at directory scope )' }) -join ', ' } }
             # Each value is made safe for a spreadsheet (ConvertTo-SheetText).
             $emailRows = @(@($inScopeAzure) + @($inScopeEntra) + @($fixed) | ForEach-Object {
                     [pscustomobject]@{
                         Account = ConvertTo-SheetText (ConvertTo-CopyText $_.DisplayName); SignInName = ConvertTo-SheetText (ConvertTo-CopyText $_.UserPrincipalName)
                         RoleType = $(if ($_.Side -eq 'Azure') { 'Azure' } else { 'Microsoft Entra' }); Role = ConvertTo-SheetText (ConvertTo-CopyText $_.Role)
-                        Scope = ConvertTo-SheetText $(if ($_.Side -eq 'Azure') { & $azureWhere $_ } else { & $entraWhere $_ })
-                        Detail = ConvertTo-SheetText (& $detailWords $_); HeldThrough = ConvertTo-SheetText (& $heldWords $_); Action = ConvertTo-SheetText (& $actionWords $_) } } |
+                        Scope = ConvertTo-SheetText $(if ($_.Side -eq 'Azure') { Get-AzureRoleWhere $_ } else { Get-EntraRoleWhere $_ })
+                        Detail = ConvertTo-SheetText (Get-RoleDetailWords $_); HeldThrough = ConvertTo-SheetText (Get-RoleHeldWords $_); Action = ConvertTo-SheetText (Get-RoleActionWords $_) } } |
                     Sort-Object Account, SignInName, @{ Expression = { if ($_.RoleType -eq 'Azure') { 0 } else { 1 } } }, Scope, Role, Detail)
             $emailCsv = @('"Account","SignInName","RoleType","Role","Scope","Detail","HeldThrough","Action"')
             if ($emailRows.Count) { $emailCsv = @($emailRows | ConvertTo-Csv -NoTypeInformation) }
-            $summary = { param($rows)
-                $holders = @($rows | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Sort-Object -Unique).Count
-                $roles = @(& $distinctRoles $rows).Count
-                $through = @(& $distinctRoles @($rows | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' })).Count
-                '{0} holding {1}{2}' -f (Get-Count $holders 'account' 'accounts'), (Get-Count $roles 'role' 'roles'), $(if (-not $through) { '' } elseif ($through -eq $roles) { Get-Pick $roles ', held through a group' ', all held through a group' } else { ', {0} of them through a group' -f $through }) }
             # A role that reaches an account through two groups is on a line for each, since each names a group to leave.
             $emailLines = @($inScopeAzure) + @($inScopeEntra) + @($fixed)
-            $multiPath = $emailLines.Count -ne @(& $distinctRoles $emailLines).Count
+            $multiPath = $emailLines.Count -ne @(Get-DistinctRoles $emailLines).Count
             # The file also lists a role that stays, through a group the change cannot alter, so the email then speaks of
             # the roles marked for removal rather than of every role in the file, and, where such a role belongs to an
             # account outside the change, of every disabled account in the file rather than of the accounts in the change.
             $inChange = @($people | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() })
             $others = @($fixed | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Where-Object { $_ -notin $inChange } | Sort-Object -Unique).Count
             $emailResources = [System.Collections.Generic.List[object]]::new()
-            foreach ($g in @($inScopeAzure | Group-Object { & $heading $_ } | Sort-Object { & $headingOrder $_.Name })) {
+            foreach ($g in @($inScopeAzure | Group-Object { Get-RoleHeading $_ } | Sort-Object { Get-RoleHeadingOrder $_.Name })) {
                 $emailResources.Add("$($g.Name):")
-                $emailResources.Add([string[]]@(& $summary $g.Group))
+                $emailResources.Add([string[]]@(Get-RoleSummary $g.Group 'account' 'accounts'))
             }
             if ($inScopeEntra.Count) {
                 $emailResources.Add('Microsoft Entra ID directory roles:')
-                $emailResources.Add([string[]]@(& $summary $inScopeEntra))
+                $emailResources.Add([string[]]@(Get-RoleSummary $inScopeEntra 'account' 'accounts'))
             }
             $kinds = @(if ($inScopeAzure.Count) { 'Azure' }; if ($inScopeEntra.Count) { 'Microsoft Entra' }) -join ' and '
             $ask = if (-not $memberships.Count) { 'I would like to remove the {0} roles still assigned to {1} in your tenant.' -f $kinds, (Get-Count $m 'disabled account' 'disabled accounts') }
@@ -3046,7 +3179,7 @@ $catalog = @(
             $email.Attachments = @(@{ Name = $attachment; Lines = $emailCsv })
             $what = @(if ($azure.Count) { Get-Count $azure.Count 'Azure role assignment' 'Azure role assignments' }; if ($entra.Count) { Get-Count $entra.Count 'Microsoft Entra role assignment' 'Microsoft Entra role assignments' }) -join ' and '
             $groupsTouched = @($memberships | ForEach-Object { $_.MemberOfId.ToLowerInvariant() } | Sort-Object -Unique).Count
-            $groupRoles = @(& $distinctRoles $removable).Count
+            $groupRoles = @(Get-DistinctRoles $removable).Count
             $description = if (-not $memberships.Count) { 'Remove the {0} held by {1}, at the scope where each was made.' -f $what, (Get-Listed $m 'disabled user account' 'disabled user accounts') }
             elseif (-not $direct) { 'Remove {0} from the {1} through which {2} {3} {4}.' -f (Get-Listed $m 'disabled user account' 'disabled user accounts'), (Get-Count $groupsTouched 'group' 'groups'), (Get-Pick $m 'it' 'they'), (Get-Pick $m 'holds' 'hold'), (Get-Count $groupRoles 'role assignment' 'role assignments') }
             else { 'Remove the {0} assigned directly to {1}, at the scope where each was made, and remove {2} from {3} through which {4} {5} {6}.' -f $what, (Get-Listed $m 'disabled user account' 'disabled user accounts'), $(if ($k -eq $m) { Get-Pick $m 'it' 'each of them' } else { "$k of them" }), (Get-Count $groupsTouched 'group' 'groups'), (Get-Pick $k 'it' 'they'), (Get-Pick $k 'holds' 'hold'), (Get-Count $groupRoles 'more role assignment' 'more role assignments') }
@@ -3069,19 +3202,11 @@ $catalog = @(
                     Testing = $testing.ToArray()
                     Rollback = $rollback.ToArray()
                     References = @(
-                        if ($azure.Count - $rootAzure.Count) {
-                            , @('Remove Azure role assignments, Azure portal', 'https://learn.microsoft.com/azure/role-based-access-control/role-assignments-remove#azure-portal')
-                            , @('Assign Azure roles using the Azure portal', 'https://learn.microsoft.com/azure/role-based-access-control/role-assignments-portal') }
-                        if ($rootAzure.Count) { , @('Elevate access to manage all Azure subscriptions and management groups, perform steps at root scope', 'https://learn.microsoft.com/azure/role-based-access-control/elevate-access-global-admin#perform-steps-at-root-scope') }
+                        Get-AzureRoleReferences $azure 'Remove'
                         if ($activeEntra.Count) { , @('Remove Microsoft Entra role assignments', 'https://learn.microsoft.com/entra/identity/role-based-access-control/groups-remove-assignment') }
                         if ($pimEntra.Count) { , @('Assign Microsoft Entra roles in Privileged Identity Management, update or remove an existing role assignment', 'https://learn.microsoft.com/entra/id-governance/privileged-identity-management/pim-how-to-add-role-to-user#update-or-remove-an-existing-role-assignment') }
-                        if ($memberships.Count) {
-                            , @('Manage Microsoft Entra groups and group membership, remove members or owners of a group', 'https://learn.microsoft.com/entra/fundamentals/how-to-manage-groups#remove-members-or-owners-of-a-group')
-                            , @('Manage Microsoft Entra groups and group membership, add members or owners of a group', 'https://learn.microsoft.com/entra/fundamentals/how-to-manage-groups#add-members-or-owners-of-a-group') }
-                        if ($azure.Count - $rootAzure.Count) {
-                            , @('List Azure role assignments using the Azure portal, list role assignments at a scope', 'https://learn.microsoft.com/azure/role-based-access-control/role-assignments-list-portal#list-role-assignments-at-a-scope')
-                            , @('Assign Azure roles using the Azure portal, select assignment type and edit assignment', 'https://learn.microsoft.com/azure/role-based-access-control/role-assignments-portal#step-6-select-assignment-type')
-                            , @('Assign Azure resource roles in Privileged Identity Management, assign a role', 'https://learn.microsoft.com/entra/id-governance/privileged-identity-management/pim-resource-roles-assign-roles#assign-a-role') }
+                        if ($memberships.Count) { Get-AzureRoleReferences $azure 'Membership' }
+                        Get-AzureRoleReferences $azure 'Restore'
                         if ($unmatched.Count -or $unsureStanding.Count) { , @('Assign Microsoft Entra roles in Privileged Identity Management, assign a role with a start and end date', 'https://learn.microsoft.com/entra/id-governance/privileged-identity-management/pim-how-to-add-role-to-user#assign-a-role') }
                         , @('Manage emergency access admin accounts in Microsoft Entra ID', 'https://learn.microsoft.com/entra/identity/role-based-access-control/security-emergency-access'))
                     Csv = $csv
@@ -4150,6 +4275,206 @@ $catalog = @(
                     Csv = $resources
                     Email = $email
                 } } } }
+    @{ Number = 26; Key = 'guest-roles'; Change = 'Azure roles removed from guest accounts'; Sources = @('IA.17-GUESTS')
+       Build = {
+            # IA.17-GUESTS lists the guest accounts still enabled at collection, IA.17-RBAC their Azure role assignments at
+            # every scope and IA.17-ENTRA their Microsoft Entra role assignments, read by the engine of IA.15. CR-26 changes
+            # the Azure roles only, as the Defender for Cloud recommendations on guest accounts cover, with CR-19's removal
+            # (the role removal functions above), and names the Entra roles for review. A guest is an active identity, so
+            # nothing is removed without the client's answer: the email asks Keep or Remove for every guest in the attached
+            # CSV, and a guest without an answer stays out of the change. With -GuestDecisions, the file the client
+            # returned, CR-26 lists only the guests marked Remove.
+            $guests = @{}
+            foreach ($u in @(Get-Rows 'IA.17-GUESTS' | Where-Object { (Get-Text $_.AccountEnabled) -ieq 'true' })) {
+                $id = (Get-Text $u.PrincipalId).ToLowerInvariant()
+                if ($id) { $guests[$id] = $u }
+            }
+            # Written only when the emergency access read is complete, as CR-19 is: a guest that sits in an Atmosera group
+            # is an emergency access account, and without a complete read it cannot be told apart from the others.
+            if ($guests.Count -and -not $emergencyAccess.Complete) {
+                $missingEa = $emergencyAccess.Why -eq 'Missing'
+                return @{ State = $(if ($missingEa) { Get-RecollectionState 'IA.16-ACCOUNTS', 'IA.16-GROUPS' } else { 'Not written, {0}' -f $emergencyAccess.Why })
+                    Notes = @('CR-26 is not written because {0}. CR-26 leaves out every emergency access guest, and without a complete read a guest that sits in an Atmosera group cannot be told apart from the others. Collect again with CyberSOC collector 1.12.0 or later, so that IA.16-ACCOUNTS and IA.16-GROUPS read in full.' -f $(if ($missingEa) { 'the pack was collected before the emergency access read' } else { $emergencyAccess.Why })) }
+            }
+            $notes = [System.Collections.Generic.List[string]]::new()
+            $leftOut = @(Remove-EmergencyAccessAccounts $guests)
+            if ($leftOut.Count) {
+                $notes.Add(('CR-26 leaves out {0}, so none of {1} Azure roles is removed and {2} not removed from any group: {3}. No change removes the access of an emergency access account.' -f (Get-Count $leftOut.Count 'emergency access guest' 'emergency access guests'), (Get-Pick $leftOut.Count 'its' 'their'), (Get-Pick $leftOut.Count 'it is' 'they are'), (@($leftOut | ForEach-Object Text) -join ' / ')))
+            }
+            $sides = @(@{ Id = 'IA.17-RBAC'; Name = 'Azure' })
+            $read = Test-RoleSides $sides $notes 'CR-26' 'enabled guests'
+            # The Microsoft Entra roles guests hold are named for review and never changed here.
+            if (Test-ResultRead 'IA.17-ENTRA') {
+                $entraRoles = @(Get-RoleRows 'IA.17-ENTRA' 'Microsoft Entra' $guests $true)
+                if ($entraRoles.Count) {
+                    $notes.Add(('{0} Microsoft Entra roles, which CR-26 does not change: {1}. Review each with the client, and remove a role the guest no longer needs in a separate change.' -f (Get-Count @($entraRoles | ForEach-Object PrincipalId | Sort-Object -Unique).Count 'guest holds' 'guests hold'), (@($entraRoles | Sort-Object { Get-RoleHolder $_ }, { Get-Text $_.Role } | ForEach-Object { '{0}, {1}{2}' -f (Get-RoleHolder $_), (Get-EntraRoleKind $_), $(if ((Get-Text $_.HeldThrough) -eq 'Group') { ' through group ' + (ConvertTo-CopyText $_.GroupName) } else { '' }) }) -join ' / ')))
+                }
+                if ((Get-Status 'IA.17-ENTRA') -eq 'PARTIAL') { $notes.Add(('IA.17-ENTRA was read in part, so a guest may hold a Microsoft Entra role it does not list: {0}' -f (Get-ResultDetail 'IA.17-ENTRA')).TrimEnd('.') + '.') }
+            }
+            elseif ((Get-Status 'IA.17-ENTRA') -ne 'MISSING') { $notes.Add(('The Microsoft Entra roles of the guests are unknown, not a zero, because IA.17-ENTRA reads {0}: {1}' -f (Get-Status 'IA.17-ENTRA'), (Get-ResultDetail 'IA.17-ENTRA')).TrimEnd('.') + '.') }
+            $azureAll = @(Get-RoleRows 'IA.17-RBAC' 'Azure' $guests $read['IA.17-RBAC'])
+
+            # The client's answers. Without -GuestDecisions every guest with a role is in the change, to be removed only
+            # where the client answers Remove. With it, a guest marked Keep, or without an answer, stays out.
+            $answered = $null -ne $guestAnswers
+            $answerOf = { param([string]$Id) if ($answered -and $guestAnswers.ContainsKey($Id)) { $guestAnswers[$Id] } else { '' } }
+            if ($answered) {
+                $byAnswer = @{ Keep = @(); '' = @(); Unclear = @() }
+                foreach ($id in @(@($azureAll | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() }) | Sort-Object -Unique)) {
+                    $answer = & $answerOf $id
+                    if ($answer -ne 'Remove') { $byAnswer[$answer] += , $guests[$id]; $guests.Remove($id) }
+                }
+                $listOf = { param($list) (@($list | Sort-Object { Get-RoleHolder $_ } | ForEach-Object { Get-RoleHolder $_ }) -join ' / ') }
+                if ($byAnswer.Keep.Count) { $notes.Add(('CR-26 leaves out {0} the client chose to keep, whose Azure roles stay as they are: {1}.' -f (Get-Count $byAnswer.Keep.Count 'guest' 'guests'), (& $listOf $byAnswer.Keep))) }
+                if ($byAnswer[''].Count) { $notes.Add(('CR-26 leaves out {0} with no answer in the returned file, which {1} out of the change until the client answers: {2}.' -f (Get-Count $byAnswer[''].Count 'guest' 'guests'), (Get-Pick $byAnswer[''].Count 'stays' 'stay'), (& $listOf $byAnswer['']))) }
+                if ($byAnswer.Unclear.Count) { $notes.Add(('CR-26 leaves out {0} whose answer in the returned file is not one Keep or Remove across {1} lines, so ask the client again: {2}.' -f (Get-Count $byAnswer.Unclear.Count 'guest' 'guests'), (Get-Pick $byAnswer.Unclear.Count 'its' 'their'), (& $listOf $byAnswer.Unclear))) }
+                $unknown = @($guestAnswers.Keys | Where-Object { $_ -notin @($azureAll | ForEach-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() }) -and $guestAnswers[$_] -eq 'Remove' } | Sort-Object)
+                if ($unknown.Count) { $notes.Add(('The returned file marks {0} Remove that {1} no Azure role in this pack, or {2} no longer an enabled guest, so CR-26 leaves {3} out: {4}.' -f (Get-Count $unknown.Count 'object ID' 'object IDs'), (Get-Pick $unknown.Count 'holds' 'hold'), (Get-Pick $unknown.Count 'is' 'are'), (Get-Pick $unknown.Count 'it' 'them'), ($unknown -join ', '))) }
+                $azureAll = @($azureAll | Where-Object { $guests.ContainsKey((Get-Text $_.PrincipalId).ToLowerInvariant()) })
+            }
+            $azure = @($azureAll | Where-Object { (Get-Text $_.HeldThrough) -eq 'Direct' })
+            $split = Get-RoleGroupSplit $azureAll
+            $memberships = $split.Memberships; $fixed = $split.Fixed
+            $inScope = @($azure) + @($split.Removable)
+            Add-RoleGroupNotes $notes $split 'CR-26' 'guest' 'guests' 'guest'
+            if ($read['IA.17-RBAC']) { Add-AzureRoleReadNotes $notes 'IA.17-RBAC' 'CR-26' 'guest' 'guests' }
+
+            $n = $azure.Count + $memberships.Count
+            if (-not $n) {
+                if (-not $read['IA.17-RBAC']) { return @{ State = 'Not collected (IA.17-RBAC {0})' -f (Get-Status 'IA.17-RBAC'); Notes = $notes.ToArray() } }
+                $state = if ((Get-Status 'IA.17-RBAC') -eq 'PARTIAL') { 'No Azure roles found in what was read, IA.17-RBAC read in part' }
+                elseif ($answered -and @($guestAnswers.Values | Where-Object { $_ -eq 'Remove' }).Count -eq 0) { 'Not written, the client marked no guest Remove' }
+                elseif ($split.ViaGroup.Count) { 'Only roles held through groups whose members cannot be changed here remain' }
+                elseif ($answered) { 'Not written, no guest marked Remove holds an Azure role' }
+                else { 'No gaps found' }
+                if ($leftOut.Count) { $state = $(if ($state -eq 'No gaps found') { 'No gaps found in the guests that remain' } else { $state }) + (', {0} left out' -f (Get-Count $leftOut.Count 'emergency access guest' 'emergency access guests')) }
+                if ($state -ne 'No gaps found') { $state += ', see the notes' }
+                return @{ State = $state; Notes = $notes.ToArray() }
+            }
+            $people = @($inScope | Group-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | ForEach-Object { $_.Group[0] } | Sort-Object { Get-RoleHolder $_ })
+            $m = $people.Count
+            $k = $split.K
+            $rootAzure = @($azure | Where-Object { (Get-Text $_.ScopeLevel) -eq 'Root' })
+            $guestOf = { param($r) $guests[(Get-Text $r.PrincipalId).ToLowerInvariant()] }
+            $dayOf = { param($v) $d = ConvertTo-UtcDate $v; if ($d) { $d.ToString('yyyy-MM-dd', $inv) } else { '' } }
+            $signInOf = { param($g)
+                if ((Get-Text $g.SignInRead) -eq 'No') { 'not read' }
+                elseif (& $dayOf $g.LastSuccessfulSignInUtc) { & $dayOf $g.LastSuccessfulSignInUtc }
+                else { 'none recorded' } }
+            $unread = @($people | Where-Object { (Get-Text (& $guestOf $_).SignInRead) -eq 'No' })
+            if ($unread.Count) { $notes.Add('IA.17-GUESTS could not read the last sign-in of the guests, which needs AuditLog.Read.All and Microsoft Entra ID P1 or P2, so the CR-26 file says not read. Grant the permission and collect again to give the client the date, or read it in Microsoft Entra ID > Users > the guest > Overview.') }
+            $attachment = 'CR-{0:00}-{1}.email.csv' -f 26, 'guest-roles'
+            $notes.Add($(if ($answered) { 'CR-26 lists the guests the client marked Remove in the file returned with -GuestDecisions. {0} carries the answers given, so attach it to the email.' -f $attachment }
+                    else { 'CR-26 asks the client to answer Keep or Remove for each guest in the Decision column of {0}, attached to its email. When the file comes back, save it outside 05-change-requests and run the generator again with -GuestDecisions and that file, so CR-26 lists only the guests marked Remove. A guest without an answer stays out of the change.' -f $attachment }))
+
+            # RESOURCES: the guests, each with when it was created and last signed in, then the Azure role assignments by
+            # subscription and the group memberships removed.
+            $lines = [System.Collections.Generic.List[string]]::new()
+            $lines.Add($(if ($answered) { 'Guests the client marked Remove:' } else { 'Guests, each removed only where the client answers Remove:' }))
+            foreach ($p in $people) {
+                $g = & $guestOf $p
+                $lines.Add(('- {0}, object ID {1}, created {2}, {3}{4}' -f (Get-RoleHolder $p), (Get-Text $p.PrincipalId), $(if (& $dayOf $g.CreatedDateUtc) { & $dayOf $g.CreatedDateUtc } else { 'on a date not recorded' }), $(switch (& $signInOf $g) { 'not read' { 'last sign-in not read' } 'none recorded' { 'no successful sign-in recorded' } default { 'last successful sign-in ' + $_ } }), $(if (((Get-Text $g.ExternalUserState) -replace '\s', '') -eq 'PendingAcceptance') { ', invitation not accepted' } else { '' })))
+            }
+            $lines.Add('')
+            Add-AzureRoleLines $lines $azure
+            Add-RoleMembershipLines $lines $memberships
+            $csv = @(New-AzureRoleCsv $azure; New-RoleMembershipCsv $memberships)
+
+            $impl = [System.Collections.Generic.List[object]]::new()
+            $impl.Add((Get-OpenStep $m 'Microsoft Entra ID > Users' 'guest'))
+            $impl.Add(@(
+                    if ($answered) { 'Leave the guest unchanged, and note it in the change record, if the client has since asked to keep it.' }
+                    else { 'Find the guest by its object ID in the file the client returned. Go on only where its Decision column reads Remove: a guest marked Keep, or with no answer, stays unchanged, so note it in the change record and skip the remaining steps for it.' }
+                    'On the Properties tab, confirm that User type reads Guest and Account enabled reads Yes. If the account is no longer a guest, has been disabled or is not found, leave it unchanged, note it in the change record and skip the remaining steps for it.'
+                    'Then select Azure role assignments and confirm the guest still holds each role listed for it. A role no longer listed there needs no change, so note it in the change record.') -join ' ')
+            $removeStep = Add-AzureRoleRemoveSteps $impl $azure
+            if ($memberships.Count) { $impl.Add($roleMembershipRemoveStep) }
+            Add-RepeatStep $impl $m 1 'guest'
+            $testing = [System.Collections.Generic.List[object]]::new()
+            if ($azure.Count - $rootAzure.Count) { $testing.Add('For each Azure role assignment removed, open its scope in the Azure portal, go to Access control (IAM) > Role assignments and search for the guest. Confirm the assignment no longer shows, apart from any left unchanged and noted in the change record.') }
+            if ($rootAzure.Count) { $testing.Add('Confirm that the list of assignments left at the root scope, read in the implementation, no longer shows the guest.') }
+            if ($memberships.Count) { $testing.Add('For each group membership removed, go to Microsoft Entra ID > Groups > All groups, open the group, select Members and confirm the guest is no longer listed, then open Access control (IAM) > Role assignments at the scope of each role the group holds and confirm the guest no longer shows through it.') }
+            $rollback = [System.Collections.Generic.List[object]]::new()
+            Add-AzureRoleRollback $rollback $azure $removeStep
+            if ($memberships.Count) { $rollback.Add($roleMembershipRollbackStep) }
+            $rollback.Add(('change-requests.csv carries each assignment in full, with the role, role definition ID, scope, any condition and the guest object ID{0}{1}. A guest left unchanged during the change needs no rollback, and no guest account is deleted, so none needs to be invited again.' -f $(if ($memberships.Count) { ', and each group membership with the group the guest is removed from and the roles it holds' } else { '' }), $(if ($azure.Count - $rootAzure.Count) { ', and the change record carries each end time recorded before removal' } else { '' })))
+
+            # The client email names the guests by subscription, with the roles in an attached CSV that has a Decision
+            # column for the client's answer on each guest. Every role a guest holds is in the CSV, a role held through a
+            # group the change cannot alter too, marked as left unchanged.
+            $emailRows = @(@($inScope) + @($fixed) | ForEach-Object {
+                    $g = & $guestOf $_
+                    [pscustomobject]@{
+                        Guest = ConvertTo-SheetText (ConvertTo-CopyText $_.DisplayName); SignInName = ConvertTo-SheetText (ConvertTo-CopyText $_.UserPrincipalName); ObjectId = Get-Text $_.PrincipalId
+                        Created = & $dayOf $g.CreatedDateUtc; LastSignIn = & $signInOf $g; Role = ConvertTo-SheetText (ConvertTo-CopyText $_.Role); Scope = ConvertTo-SheetText (Get-AzureRoleWhere $_)
+                        Detail = ConvertTo-SheetText (Get-RoleDetailWords $_); HeldThrough = ConvertTo-SheetText (Get-RoleHeldWords $_); IfRemoved = ConvertTo-SheetText (Get-RoleActionWords $_)
+                        Decision = & $answerOf (Get-Text $_.PrincipalId).ToLowerInvariant() } } |
+                    Sort-Object Guest, SignInName, Scope, Role, Detail)
+            $emailCsv = @($emailRows | ConvertTo-Csv -NoTypeInformation)
+            # Each subscription, then the management groups and root scope, lists the guests with a role there.
+            $guestWords = { param($rows)
+                @($rows | Group-Object { (Get-Text $_.PrincipalId).ToLowerInvariant() } | Sort-Object { Get-RoleHolder $_.Group[0] } | ForEach-Object {
+                        $r = $_.Group[0]; $g = & $guestOf $r
+                        $roles = @(Get-DistinctRoles $_.Group).Count; $through = @(Get-DistinctRoles @($_.Group | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' })).Count
+                        '{0} ({1}), {2}{3}' -f (ConvertTo-CopyText $r.DisplayName), $(if (Get-Text $g.Mail) { ConvertTo-CopyText $g.Mail } else { ConvertTo-CopyText $r.UserPrincipalName }), (Get-Count $roles 'role' 'roles'), $(if (-not $through) { '' } elseif ($through -eq $roles) { ', held through a group' } else { ', {0} of them through a group' -f $through }) }) }
+            $emailResources = [System.Collections.Generic.List[object]]::new()
+            foreach ($g in @($inScope | Group-Object { Get-RoleHeading $_ } | Sort-Object { Get-RoleHeadingOrder $_.Name })) {
+                $emailResources.Add("$($g.Name):")
+                $emailResources.Add([string[]]@(& $guestWords $g.Group))
+            }
+            $effect = @(
+                ('A guest whose roles are removed can no longer reach the Azure resources listed for it, straight away, so any work it does there for you stops until a role is given back.')
+                ('{0} stays in your directory, since deleting a guest account is a separate decision, and so does anything it can use outside these Azure roles.' -f (Get-Pick $m 'The guest account itself' 'Each guest account itself'))
+                $(if ($memberships.Count) { 'Where a group gives a guest its role, I would remove the guest from the group rather than take the role away from the group, so its other members keep their access. Leaving the group also ends anything else the group gives that guest.' })
+                $(if ($fixed.Count) { '{0} a role through a group whose members come from a rule or from your on-premises directory, which I cannot change in the group itself, so I would leave {1} as {2}, marked in the attached file, for a separate review with you.' -f (Get-Count $split.FixedAccounts 'guest holds' 'guests hold'), (Get-Pick $split.FixedAccounts 'it' 'them'), (Get-Pick $split.FixedAccounts 'it is' 'they are') })
+                'Just before the change, I will check each guest again, confirm it is still a guest that holds the role, and skip any that has changed since my review.')
+            $explainGuest = 'A guest account is an account for someone outside your organization, such as a vendor or partner, who usually signs in with an account their own organization or provider manages.'
+            $email = New-ApprovalEmail -Subject 'removing the Azure roles held by guest accounts' `
+                -Change $(if ($answered) { @(('I would like to remove the Azure roles held by {0} you marked Remove in the file you returned.' -f (Get-Pick $m 'the guest account' ('the {0} guest accounts' -f $m))), $explainGuest) }
+                    else { @(('I would like to remove the Azure roles held by {0} in your tenant, for each guest you tell me no longer needs that access.' -f (Get-Count $m 'guest account' 'guest accounts')), $explainGuest) }) `
+                -Why 'I recommend reviewing these roles because Microsoft Defender for Cloud recommends removing guest accounts with owner, write or read permissions on Azure resources. Guest accounts are not managed to the same standards as your own accounts, and an attacker can use one to reach your data without being noticed.' `
+                -Effect @($effect | Where-Object { $_ }) `
+                -Listed ('{0} in the attached file {1}, one line for each role with when the guest was created and last signed in, the role, where it applies, how the guest holds it and a Decision column{2}, and by subscription they are these:' -f (Get-Pick $m 'The guest and its roles are' 'The guests and their roles are'), $attachment, $(if ($answered) { ' with your answers' } else { ' for your answer' })) `
+                -Resources $emailResources.ToArray() `
+                -Reversal ('I can restore any of these roles at any time from the record I keep of each one, with its role, where it applies and the guest it belongs to{0}.' -f $(if ($memberships.Count) { ', and add a guest back to the group it was removed from' } else { '' })) `
+                -Ask $(if ($answered) { 'Could you approve removing the roles of the guests you marked Remove for {0}? The guests you marked Keep, and any guest without an answer, stay out of this change.' -f $proposedDay }
+                    else { 'Before I schedule the change, could you tell me for each guest whether it still needs its access, by writing Keep or Remove in the Decision column of the attached file and sending it back? I will remove the roles only of the guests you mark Remove, and a guest without an answer stays out of the change. With that, could you approve this change for {0}?' -f $proposedDay })
+            # The CSV is written beside the email, under the name the email gives, for the sender to attach.
+            $email.Attachments = @(@{ Name = $attachment; Lines = $emailCsv })
+            $groupsTouched = @($memberships | ForEach-Object { $_.MemberOfId.ToLowerInvariant() } | Sort-Object -Unique).Count
+            $what = Get-Count $azure.Count 'Azure role assignment' 'Azure role assignments'
+            $whom = if ($answered) { '{0}, which the client marked Remove' -f (Get-Listed $m 'guest account' 'guest accounts') } else { '{0}, each only where the client answers Remove for it' -f (Get-Listed $m 'guest account' 'guest accounts') }
+            $description = if (-not $memberships.Count) { 'Remove the {0} held by {1}, at the scope where each was made.' -f $what, $whom }
+            elseif (-not $azure.Count) { 'Remove {0} from the {1} through which {2} {3} an Azure role.' -f $whom, (Get-Count $groupsTouched 'group' 'groups'), (Get-Pick $m 'it' 'they'), (Get-Pick $m 'holds' 'hold') }
+            else { 'Remove the {0} assigned directly to {1}, at the scope where each was made, and remove {2} from {3} that {4} {5} more.' -f $what, $whom, (Get-Pick $k 'the guest concerned' 'each guest concerned'), (Get-Pick $groupsTouched 'the group' "the $groupsTouched groups"), (Get-Pick $groupsTouched 'gives' 'give'), (Get-Pick $k 'it' 'them') }
+            $description += ' The guest accounts stay in the directory.'
+            $intro = '{0} enabled at collection.' -f (Get-Pick $m 'The guest account below was' "The $m guest accounts below were")
+            $intro += $(if ($azure.Count -and $memberships.Count) { ' Each role listed is assigned directly to a guest, or reaches it through the group it is removed from.' } elseif ($azure.Count) { ' Each role listed is assigned directly to a guest.' } else { ' Each role listed reaches the guest through the group it is removed from.' })
+            if (-not $answered) { $intro += ' A guest is changed only where the client answers Remove for it.' }
+            if ($fixed.Count) { $intro += ' Roles held through a group the change cannot alter are left out and named in the index.' }
+            $intro += ' The CSV carries every assignment{0} in full for the rollback.' -f $(if ($memberships.Count) { ' and membership' } else { '' })
+            @{ Used = @('IA.17-RBAC'); Notes = $notes.ToArray(); Cr = New-ChangeRequest @{
+                    Number = 26; Key = 'guest-roles'; Title = 'Remove the Azure roles held by guest accounts'
+                    Description = $description
+                    Purpose = 'Microsoft Defender for Cloud recommends removing guest accounts with owner, write or read permissions on Azure resources, since guest accounts are not managed to the same standards as the tenant''s own identities. Removing the roles a guest no longer needs ends that access, and each one can be assigned again from the record.'
+                    ResourceIntro = $intro
+                    ResourceLines = $lines.ToArray()
+                    Availability = 'No impact on any service, while a guest whose roles are removed can no longer reach the Azure resources listed for it.'
+                    UserExperience = 'A guest whose roles are removed loses its access to the Azure resources listed for it, and its guest account stays in the directory.'
+                    Dependencies = $(if ($answered) { 'Needs the client''s approval of the removals, with the Keep or Remove answers the client gave for each guest.' } else { 'Needs the client to answer Keep or Remove for each guest in the attached file, and a guest without an answer stays out of the change.' })
+                    Implementation = $impl.ToArray()
+                    Testing = $testing.ToArray()
+                    Rollback = $rollback.ToArray()
+                    References = @(
+                        , @('Identity and access security recommendations, guest accounts with owner, read or write permissions on Azure resources should be removed', 'https://learn.microsoft.com/azure/defender-for-cloud/recommendations-reference-identity-access#azure-identity-and-access-recommendations')
+                        , @('Understand and manage the properties of B2B guest users', 'https://learn.microsoft.com/entra/external-id/user-properties')
+                        Get-AzureRoleReferences $azure 'Remove'
+                        if ($memberships.Count) { Get-AzureRoleReferences $azure 'Membership' }
+                        Get-AzureRoleReferences $azure 'Restore'
+                        , @('Manage emergency access admin accounts in Microsoft Entra ID', 'https://learn.microsoft.com/entra/identity/role-based-access-control/security-emergency-access'))
+                    Csv = $csv
+                    Email = $email
+                } } } }
 )
 #endregion
 
@@ -4202,6 +4527,10 @@ $results = foreach ($item in $catalog) {
 # Every file is built and checked against the copy rules before anything is written, so a run that stops
 # leaves the earlier files as they were.
 $folder = if ($OutputPath) { $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputPath) } else { Join-Path $pack '05-change-requests' }
+# The returned CR-26 file is never overwritten or removed by the run that reads it.
+if ($guestDecisionsPath -and [IO.Path]::GetFullPath($guestDecisionsPath) -ieq [IO.Path]::GetFullPath((Join-Path $folder 'CR-26-guest-roles.email.csv'))) {
+    throw "-GuestDecisions points at CR-26-guest-roles.email.csv in the folder this run writes, which it would replace. Save the returned file elsewhere, such as beside the pack, and pass that path."
+}
 $fileBase = { param($item) 'CR-{0:00}-{1}' -f $item.Number, $item.Key }
 $outputs = [System.Collections.Generic.List[object]]::new()
 function Add-Output([string]$Name, [string[]]$Lines, [string]$NewLine = "`r`n", [bool]$Bom = $false, [bool]$Prose = $true, [bool]$Email = $false) {

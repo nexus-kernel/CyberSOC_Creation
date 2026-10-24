@@ -504,7 +504,7 @@ Describe 'Query catalog' {
     }
 
     It 'uses only known engines' {
-        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'APPSERVICE-FTPAUTH', 'MYSQL-AUDIT', 'DISABLED-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'DEFENDER-AVINFO', 'PATCH-ASSESSMENT', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
+        $known = 'ARG', 'LA', 'AH', 'SENTINEL-RULES', 'STORAGE-CONTAINERS', 'APPSERVICE-FTPAUTH', 'MYSQL-AUDIT', 'DISABLED-ROLES', 'GUEST-ROLES', 'EMERGENCY-ACCESS', 'COMPUTE-SKUS', 'DEFENDER-SCORES', 'DEFENDER-MACHINES', 'DEFENDER-AVINFO', 'PATCH-ASSESSMENT', 'EXO', 'IPPS', 'GRAPH', 'MANUAL', 'DERIVED'
         $catalog | Where-Object { $_.Engine -notin $known } | Should -BeNullOrEmpty
     }
 
@@ -2418,6 +2418,150 @@ Describe 'Roles held by disabled accounts (IA.15, CyberSOC 1.9.0)' {
     }
 }
 
+Describe 'Roles held by enabled guest accounts (IA.17, CyberSOC 1.21.0)' {
+    BeforeAll {
+        # Synthetic guests with the real built-in role definition IDs of Owner, Contributor and Reader. Vendor is a guest
+        # with Owner at the root scope and a sign-in, Partner reaches Contributor as a member of ext-tier2, nested in
+        # ext-vendors, and Former is a disabled guest, already in IA.15. Staff is a member account, which the filter keeps
+        # out, standing for a filter Graph ignored.
+        $script:gx = @{
+            S1 = '3f6a1c2e-8b4d-4e7a-9c1f-2d5b8e0a4c61'
+            Vendor = '1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e51'; Partner = '2d3e4f5a-6b7c-4d8e-9fa0-1b2c3d4e5f62'; Former = '3e4f5a6b-7c8d-4e9f-a0b1-2c3d4e5f6a73'; Staff = '4f5a6b7c-8d9e-4fa0-b1c2-3d4e5f6a7b84'
+            Vendors = '5a6b7c8d-9eaf-40b1-c2d3-4e5f6a7b8c95'; Tier2 = '6b7c8d9e-afb0-41c2-d3e4-5f6a7b8c9da6'
+            Owner = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'; Contributor = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+        }
+        $g = $script:gx
+        $activity = [pscustomobject]@{ lastSignInDateTime = '2026-09-30T10:00:00Z'; lastNonInteractiveSignInDateTime = '2026-10-01T08:00:00Z'; lastSuccessfulSignInDateTime = '2026-10-01T08:00:00Z' }
+        $script:gxUsers = @(
+            [pscustomobject]@{ id = $g.Vendor.ToUpperInvariant(); displayName = 'Vendor Support'; userPrincipalName = 'support_vendor.example#EXT#@contoso.onmicrosoft.com'; mail = 'support@vendor.example'; userType = 'Guest'; accountEnabled = $true; externalUserState = 'Accepted'; createdDateTime = '2025-02-03T04:05:06Z'; onPremisesSyncEnabled = $null; signInActivity = $activity }
+            [pscustomobject]@{ id = $g.Partner; displayName = 'Partner Analyst'; userPrincipalName = 'analyst_partner.example#EXT#@contoso.onmicrosoft.com'; mail = 'analyst@partner.example'; userType = 'Guest'; accountEnabled = $true; externalUserState = 'PendingAcceptance'; createdDateTime = '2026-06-01T00:00:00Z'; onPremisesSyncEnabled = $null; signInActivity = $null }
+            [pscustomobject]@{ id = $g.Former; displayName = 'Former Contractor'; userPrincipalName = 'old_contractor.example#EXT#@contoso.onmicrosoft.com'; mail = ''; userType = 'Guest'; accountEnabled = $false; externalUserState = 'Accepted'; createdDateTime = '2024-01-01T00:00:00Z'; onPremisesSyncEnabled = $null; signInActivity = $null }
+            [pscustomobject]@{ id = $g.Staff; displayName = 'Staff Member'; userPrincipalName = 'staff@contoso.com'; mail = 'staff@contoso.com'; userType = 'Member'; accountEnabled = $true; externalUserState = $null; createdDateTime = '2024-01-01T00:00:00Z'; onPremisesSyncEnabled = $null; signInActivity = $null })
+        $ra = { param([string]$Scope, [string]$Role, [string]$RoleName, [string]$Principal, [string]$Type = 'User')
+            [pscustomobject]@{ AssignmentId = "$Scope/providers/Microsoft.Authorization/roleAssignments/$(([guid]::new([Security.Cryptography.MD5]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($Scope + $Role + $Principal)))).ToString())".Replace('//', '/'); subscriptionId = ''; Scope = $Scope; RoleDefinitionId = "/providers/Microsoft.Authorization/roleDefinitions/$Role"; Role = $RoleName; PrincipalId = $Principal; PrincipalType = $Type; Condition = ''; ConditionVersion = '' } }
+        $script:gxArg = @(
+            (& $ra '/' $g.Owner 'Owner' $g.Vendor)
+            (& $ra "/subscriptions/$($g.S1)/resourceGroups/rg-app" $g.Contributor 'Contributor' $g.Vendors 'Group')
+            (& $ra "/subscriptions/$($g.S1)" $g.Owner 'Owner' $g.Former)
+            (& $ra "/subscriptions/$($g.S1)" $g.Owner 'Owner' $g.Staff))
+        $member = { param([string]$Id, [string]$Type, [string]$Name) [pscustomobject]@{ '@odata.type' = "#microsoft.graph.$Type"; id = $Id; displayName = $Name } }
+        function script:New-GuestGraph {
+            $g = $script:gx
+            [ordered]@{
+                "users\?\`$filter=userType eq 'Guest'&\`$select=[^&]*signInActivity" = $script:gxUsers
+                "users\?\`$filter=userType eq 'Guest'&\`$select=" = @($script:gxUsers | Select-Object -Property * -ExcludeProperty signInActivity)
+                'roleManagement/directory/roleAssignments\?' = @()
+                'roleManagement/directory/roleDefinitions' = @()
+                'roleAssignmentScheduleInstances' = @()
+                'roleEligibilityScheduleInstances' = @()
+                "groups/$($g.Vendors)/members" = @((& $member $g.Tier2 'group' 'ext-tier2'), (& $member $g.Staff 'user' 'Staff Member'))
+                "groups/$($g.Vendors)\?\`$select=id,displayName" = [pscustomobject]@{ id = $g.Vendors; displayName = 'ext-vendors'; groupTypes = @(); onPremisesSyncEnabled = $null }
+                "groups/$($g.Tier2)/members" = @((& $member $g.Partner 'user' 'Partner Analyst'))
+                "groups/$($g.Tier2)\?\`$select=id,displayName" = [pscustomobject]@{ id = $g.Tier2; displayName = 'ext-tier2'; groupTypes = @(); onPremisesSyncEnabled = $null }
+            }
+        }
+        function script:New-GuestCtx {
+            [pscustomobject]@{
+                TenantGuid = 'client'; GraphAvailable = $true; GraphReason = ''; GraphCache = @{}; ArmTenant = 'client'; AccessPath = 'Direct'; Subscriptions = @($script:gx.S1)
+                GraphMissingScopes = [System.Collections.Generic.List[string]]::new(); GraphPartial = [System.Collections.Generic.List[string]]::new(); Pending = [System.Collections.Generic.List[object]]::new()
+                OutDir = $TestDrive; WindowStart = [datetime]'2026-07-01'; WindowEnd = [datetime]'2026-09-30'; ManagedRgPattern = 'aznativesol0'
+            }
+        }
+        $script:guestItem = Get-EbrQueryCatalog | Where-Object Id -eq 'IA.17-GUESTS'
+        $null = New-Item -ItemType Directory -Path (Join-Path $TestDrive 'queries') -Force
+    }
+    BeforeEach {
+        $script:graph = New-GuestGraph
+        Mock Invoke-EbrGraphGet {
+            foreach ($k in $script:graph.Keys) {
+                if ($Uri -match $k) {
+                    $v = $script:graph[$k]
+                    if ($v -is [string]) { throw $v }
+                    if ($v -is [array]) { return , @($v) }
+                    return $v
+                }
+            }
+            throw "unexpected $Uri"
+        }
+        Mock Invoke-EbrArgQuery { [pscustomobject]@{ Columns = @(); Rows = $script:gxArg; Detail = '' } }
+    }
+
+    It 'reads the Azure role assignments with the IA.15 query, from the root down, with the managed resource group exclusion' {
+        $script:guestItem.Engine | Should -Be 'GUEST-ROLES'
+        $script:guestItem.Phase | Should -Be 'P2 Identity'
+        $script:guestItem.LighthouseIncomplete | Should -BeTrue
+        $script:guestItem.Query | Should -Be (Get-EbrQueryCatalog | Where-Object Id -eq 'IA.15-DISABLED').Query -Because 'both engines read the same role assignments'
+        $script:guestItem.Query | Should -Match '\| where id !contains "\{\{MRG\}\}"'
+        foreach ($p in 'User\.Read\.All', 'AuditLog\.Read\.All', 'GroupMember\.Read\.All', 'Added in CyberSOC 1\.21\.0', 'CR-26', 'Internal') { $script:guestItem.Notes | Should -Match $p }
+        $null = Invoke-EbrCatalogItem -Ctx (New-GuestCtx) -Item $script:guestItem
+        Should -Invoke Invoke-EbrArgQuery -Times 1 -Exactly -ParameterFilter { $RequestOptions.authorizationScopeFilter -eq 'AtScopeAboveAndBelow' -and $Query -match 'id !contains "aznativesol0"' }
+        Test-Path (Join-Path $TestDrive 'queries/IA.17-GUESTS.kql') | Should -BeTrue
+    }
+
+    It 'lists the enabled guests only, with when each was created and last signed in, and the roles they hold directly or through a nested group' {
+        $ctx = New-GuestCtx
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:guestItem
+        $r.ResultId | Should -Be 'IA.17-GUESTS'
+        $r.Status | Should -Be 'OK'
+        @($r.Rows | ForEach-Object DisplayName) | Should -Be @('Partner Analyst', 'Vendor Support') -Because 'a disabled guest is in IA.15 and a member account is never a guest'
+        Should -Invoke Invoke-EbrGraphGet -Times 1 -Exactly -ParameterFilter { $Uri -like "https://graph.microsoft.com/v1.0/users?`$filter=userType eq 'Guest'&`$select=id,displayName,userPrincipalName,mail,userType,accountEnabled,externalUserState,createdDateTime,onPremisesSyncEnabled,signInActivity&`$top=500" -and $Complete }
+        $vendor = $r.Rows | Where-Object DisplayName -eq 'Vendor Support'
+        $vendor.PrincipalId | Should -Be $script:gx.Vendor -Because 'object IDs are kept in lower case, so they match the role assignments'
+        @($vendor.Mail, $vendor.ExternalUserState, $vendor.CreatedDateUtc, $vendor.LastSuccessfulSignInUtc, $vendor.LastSignInUtc, $vendor.LastNonInteractiveSignInUtc, $vendor.SignInRead) | Should -Be @('support@vendor.example', 'Accepted', '2025-02-03T04:05:06Z', '2026-10-01T08:00:00Z', '2026-09-30T10:00:00Z', '2026-10-01T08:00:00Z', 'Yes')
+        ($r.Rows | Where-Object DisplayName -eq 'Partner Analyst').LastSuccessfulSignInUtc | Should -BeNullOrEmpty -Because 'a guest that never signed in has no sign-in activity'
+        @($ctx.Pending | ForEach-Object ResultId) | Should -Be @('IA.17-RBAC', 'IA.17-ENTRA')
+        $rbac = $ctx.Pending | Where-Object ResultId -eq 'IA.17-RBAC'
+        $rbac.Status | Should -Be 'OK'
+        @($rbac.Rows | ForEach-Object { '{0}|{1}|{2}|{3}|{4}' -f $_.DisplayName, $_.ScopeLevel, $_.Role, $_.HeldThrough, $_.MemberOfName } | Sort-Object) | Should -Be @('Partner Analyst|Resource group|Contributor|Group|ext-tier2', 'Vendor Support|Root|Owner|Direct|')
+        @(($rbac.Rows | Where-Object HeldThrough -eq 'Group').GroupPath) | Should -Be @('ext-vendors', 'ext-tier2')
+        $rbac.Detail | Should -Match '^2 Azure role assignments held by 2 of the 2 enabled guests, 1 through a group'
+        ($ctx.Pending | Where-Object ResultId -eq 'IA.17-ENTRA').Status | Should -Be 'EMPTY'
+        $r.Detail | Should -Be '2 enabled guest accounts. 2 hold an Azure role (IA.17-RBAC OK) and 0 a Microsoft Entra role (IA.17-ENTRA EMPTY), directly or through a group. Disabled guests are in IA.15-DISABLED.'
+        $all = @($r.Rows) + @($ctx.Pending | ForEach-Object { @($_.Rows) })
+        ($all | ConvertTo-Json -Depth 5) | Should -Not -Match 'Staff Member|Former Contractor' -Because 'no result names a member account or a disabled guest'
+    }
+
+    It 'reads the guests again without the last sign-in when that read is refused, and says so' {
+        $ctx = New-GuestCtx
+        $script:graph["users\?\`$filter=userType eq 'Guest'&\`$select=[^&]*signInActivity"] = 'GRAPH-403 https://graph.microsoft.com/v1.0/users: HTTP 403: Forbidden | Authentication_RequestFromNonPremiumTenantOrB2CTenant'
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:guestItem
+        $r.Status | Should -Be 'OK' -Because 'every guest is still listed, with its roles'
+        @($r.Rows | ForEach-Object SignInRead | Sort-Object -Unique) | Should -Be @('No')
+        @($r.Rows | ForEach-Object CreatedDateUtc | Where-Object { $_ }).Count | Should -Be 2
+        $r.Detail | Should -Match 'The last sign-in was not read \(SignInRead No\), since it needs AuditLog\.Read\.All and Microsoft Entra ID P1 or P2: GRAPH-403'
+        @($ctx.GraphMissingScopes) | Should -Be @('AuditLog.Read.All')
+        @($ctx.GraphPartial) | Should -Contain 'IA.17-GUESTS (last sign-in)'
+        ($ctx.Pending | Where-Object ResultId -eq 'IA.17-RBAC').Status | Should -Be 'OK'
+    }
+
+    It 'reports all three UNAVAILABLE, not a zero, when the guests cannot be read at all' {
+        $ctx = New-GuestCtx
+        $script:graph = New-GuestGraph
+        foreach ($k in @($script:graph.Keys | Where-Object { $_ -like 'users*' })) { $script:graph[$k] = 'GRAPH-403 https://graph.microsoft.com/v1.0/users: HTTP 403: Forbidden | Authorization_RequestDenied' }
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:guestItem
+        foreach ($x in @($r) + @($ctx.Pending)) {
+            $x.Status | Should -Be 'UNAVAILABLE' -Because $x.ResultId
+            $x.Detail | Should -Match '^Not a zero: the Graph token cannot read user accounts, so the guest accounts, and the roles they hold, are unknown\. Needs User\.Read\.All\.' -Because $x.ResultId
+        }
+        @($ctx.Pending | ForEach-Object ResultId) | Should -Be @('IA.17-RBAC', 'IA.17-ENTRA')
+        Should -Invoke Invoke-EbrArgQuery -Times 0 -Exactly
+        $ctx = New-GuestCtx
+        foreach ($k in @($script:graph.Keys | Where-Object { $_ -like 'users*' })) { $script:graph[$k] = 'HTTP 500: Internal Server Error' }
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:guestItem
+        @(@($r) + @($ctx.Pending) | ForEach-Object Status | Sort-Object -Unique) | Should -Be @('FAILED')
+        $r.Detail | Should -Match '^The guest accounts could not be read in full'
+    }
+
+    It 'reads nothing more when no guest is enabled' {
+        $ctx = New-GuestCtx
+        foreach ($k in @($script:graph.Keys | Where-Object { $_ -like 'users*' })) { $script:graph[$k] = @($script:gxUsers | Where-Object { $_.userType -ne 'Guest' -or -not $_.accountEnabled }) }
+        $r = Invoke-EbrCatalogItem -Ctx $ctx -Item $script:guestItem
+        @(@($r) + @($ctx.Pending) | ForEach-Object Status) | Should -Be @('EMPTY', 'EMPTY', 'EMPTY')
+        $r.Detail | Should -Be 'No enabled guest account. Disabled guests are in IA.15-DISABLED.'
+        Should -Invoke Invoke-EbrArgQuery -Times 0 -Exactly
+    }
+}
+
 Describe 'Emergency access accounts (IA.16, CyberSOC 1.12.0)' {
     BeforeAll {
         # A scenario from tests/fixtures/offline-pack/emergency-access: the Graph answers, and what the read makes of them.
@@ -3499,7 +3643,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
     }
 
     It 'runs the licensing check, records the Licenses page reading and keeps Unknown for what it could not read (CyberSOC 1.11.0)' {
-        $params.ScriptVersion | Should -Be '1.20.0'
+        $params.ScriptVersion | Should -Be '1.21.0'
         $params.Licensing.DefenderEndpointPlan | Should -Be 'Plan2'
         foreach ($id in 'LIC.1-SKUS', 'LIC.2-MACHINES', 'LIC.3-TVM', 'LIC.4-DEVICES', 'LIC.5-MATRIX', 'LIC.5-SERVERS') { (Get-M $id) | Should -Not -BeNullOrEmpty -Because $id }
         (Get-M 'LIC.1-SKUS').Status | Should -Be 'OK'
@@ -3597,7 +3741,7 @@ Describe 'End to end with mocked Azure: three workspaces, one per subscription' 
         $params2.ChangeRequests.Written | Should -BeTrue
         $params2.ChangeRequests.DrClient | Should -BeFalse
         $params2.ChangeRequests.SenderName | Should -BeNullOrEmpty
-        $params2.ScriptVersion | Should -Be '1.20.0'
+        $params2.ScriptVersion | Should -Be '1.21.0'
     }
 
     It 'warns and leaves the collection complete when the change requests fail' {

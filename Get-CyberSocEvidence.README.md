@@ -22,7 +22,7 @@ It is a copy of the EBR collector (`Get-EbrSecurityEvidence.ps1` 1.14.0). What i
   (LIC.1-SKUS to LIC.5-MATRIX). See [Licensing check](#licensing-check).
 - **Emergency access accounts.** Every account with Atmosera in its UPN or in an Atmosera group (IA.16-ACCOUNTS and
   IA.16-GROUPS), which every Conditional Access change excludes. See the collector 1.12.0 notes below.
-- **Versions.** `00-parameters.json` records `ScriptVersion` 1.20.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
+- **Versions.** `00-parameters.json` records `ScriptVersion` 1.21.0 and `EbrBaseVersion` 1.14.0, with `ReportType`,
   `ReportMonth`, `TrendMonths` and the `VulnAssessment` runs used.
 
 Collector notes from the EBR history below (1.6.0 to 1.14.0) still describe this script.
@@ -193,7 +193,7 @@ ATMOSERA_SCRIPT_REQUIREMENTS.md 1.4 still forbids Graph; that standard has not b
 | Defender for Endpoint devices (LIC.2-MACHINES) | `api.security.microsoft.com/api/machines`, GET, `$top` 10,000 and `$skip` paging | same as Advanced Hunting. Needs Machine.Read and the View Data role. Not yet confirmed on a live run that the Azure CLI token carries Machine.Read: a 403 marks LIC.2-MACHINES UNAVAILABLE |
 | Sentinel rules (DR.9) | `{workspace}/providers/Microsoft.SecurityInsights/alertRules` | ARM |
 | Azure Virtual Desktop session hosts (EW.10-ASSESSMENT) | `{host pool}/sessionHosts?api-version=2024-04-03`, GET, `nextLink` paging, after Resource Graph lists the host pools | ARM. Reader on the host pools is enough. A host pool not read makes EW.10-ASSESSMENT PARTIAL |
-| Microsoft Graph (IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, IA.16-ACCOUNTS, POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS, LIC.4-DEVICES) | `graph.microsoft.com/v1.0`, GET only, `@odata.nextLink` paging | resource `https://graph.microsoft.com/`, client tenant, same reauth prompt as Defender |
+| Microsoft Graph (IA.1-FEDERATION, IA.5, IA.6, IA.8, IA.11, IA.13, IA.15-DISABLED, IA.16-ACCOUNTS, IA.17-GUESTS, POS.6, DP.8, DP.10, DR.11, EW.13, LIC.1-SKUS, LIC.4-DEVICES) | `graph.microsoft.com/v1.0`, GET only, `@odata.nextLink` paging | resource `https://graph.microsoft.com/`, client tenant, same reauth prompt as Defender |
 | Exchange Online and Purview (IA.9, DP.7-ZAP, DP.6) | `ExchangeOnlineManagement` module, browser sign-in | module |
 
 **What the Graph token can read.** The Azure CLI application carries a fixed set of delegated
@@ -285,6 +285,7 @@ Details:
 | IA.6 Privileged roles | `roleManagement/directory/roleAssignmentScheduleInstances` and `roleEligibilityScheduleInstances`, falling back to `roleAssignments` without PIM | RoleManagement.Read.Directory | **IA.6-SUB**: current privileged role holders from `IdentityInfo` |
 | IA.8 Conditional Access inventory | `identity/conditionalAccess/policies` | Policy.Read.All | **IA.8-SUB**: every CA policy seen in 30 days of sign-ins |
 | IA.15-DISABLED Roles held by disabled accounts (engine DISABLED-ROLES) | `users?$filter=accountEnabled eq false`, then the IA.6 `roleAssignments` read (cached, every directory role), `roleDefinitions`, the PIM schedule instances, and `groups/{id}` and `groups/{id}/members` for each group that holds a role and each group nested in it. Also reads the Azure role assignments from Resource Graph and writes IA.15-RBAC and IA.15-ENTRA | User.Read.All (users), RoleManagement.Read.Directory (Entra roles, eligible ones), GroupMember.Read.All (group members) | None. Users unreadable makes all three UNAVAILABLE, Entra roles unreadable makes IA.15-ENTRA UNAVAILABLE only |
+| IA.17-GUESTS Roles held by enabled guest accounts (engine GUEST-ROLES, CyberSOC 1.21.0) | `users?$filter=userType eq 'Guest'` with `createdDateTime` and `signInActivity` (`$top=500`, the page size Graph allows with `signInActivity`), read again without `signInActivity` when that read is refused, then the reads of IA.15 for the roles. Also reads the Azure role assignments from Resource Graph with the IA.15 query and writes IA.17-RBAC and IA.17-ENTRA | User.Read.All (users), AuditLog.Read.All with Microsoft Entra ID P1 or P2 (the last sign-in), RoleManagement.Read.Directory and GroupMember.Read.All as IA.15 | None. Without AuditLog.Read.All the guests are still read with `SignInRead` No. Users unreadable makes all three UNAVAILABLE |
 | IA.16-ACCOUNTS Emergency access accounts (engine EMERGENCY-ACCESS, CyberSOC 1.12.0) | `users` and `groups` in full with `$select` and `$top=999`, matched offline, then `groups/{id}/transitiveMembers/microsoft.graph.user` (`$count=true`, `ConsistencyLevel: eventual`) for each Atmosera group. Also writes IA.16-GROUPS | User.Read.All (users), GroupMember.Read.All (groups and their members), Member.Read.Hidden (a group with hidden membership) | None. A read that fails, is cut short or misses a group's members is never EMPTY, and no Conditional Access change is written |
 | IA.11 Risk policies in force | the cached IA.8 list, plus `directory/onPremisesSynchronization` | Policy.Read.All (and OnPremDirectorySynchronization.Read.All for password hash sync) | none |
 | IA.13 Consent governance | `policies/authorizationPolicy`, `policies/adminConsentRequestPolicy` | Policy.Read.All | none |
@@ -340,6 +341,26 @@ in the pack (`results/<ID>.csv`).
   - Exchange Online and Purview connect with `-CommandName`, so each connect builds its temporary module from only the cmdlets the collectors call (`$script:EbrExoCommands`, `$script:EbrIppsCommands`) rather than every cmdlet the role allows. Exchange also skips format data, and Purview no longer downloads and prints its announcement banner. Parameters an older ExchangeOnlineManagement does not know are left out. Results are unchanged.
   - On Windows the run turns QuickEdit off in its console and restores it at the end. With QuickEdit on, a click in the window (coming back from a sign-in, or selecting output to copy) starts a text selection that pauses the script at its next line of output until Esc or Enter. That was the whole slowdown of an October 14 Shook run: step 5 took 87 minutes (20 seconds on a Mac) and P0.1 and OUT.1 took 16 and 13 minutes (14 and 8 seconds). It uses `Add-Type` for `GetConsoleMode` and `SetConsoleMode` in kernel32 and does nothing when there is no console or QuickEdit is already off.
   - Step 5 prints and logs how long each stage took (Exchange connect with sign-in, Exchange reads, Purview connect with sign-in, sign-out), and any request that takes 30 seconds or more is written to `run.log` with its duration. A slow run with no slow requests was held up at the console or the machine, not the network.
+- CyberSOC collector 1.21.0 (October 24, 2026): `IA.17-GUESTS` (engine `GUEST-ROLES`, phase P2 Identity) reads the
+  guest accounts that are still enabled, for change request CR-26, which removes the Azure roles guests no longer need.
+  Disabled guests are already in IA.15. The engine of IA.15 moves into `Get-EbrUserRoles`, which both reads share, and
+  the Azure role assignment query into one variable, so the roles, the groups each guest sits in and their membership
+  type are read exactly as for the disabled accounts. Internal, since it names accounts.
+  - `IA.17-GUESTS`: the users Graph returns for `users?$filter=userType eq 'Guest'`, kept only when `userType` reads
+    Guest and `accountEnabled` true: `PrincipalId` (lower case), `PrincipalType`, `DisplayName`, `UserPrincipalName`,
+    `Mail`, `UserType`, `AccountEnabled`, `ExternalUserState` (PendingAcceptance for an invitation not accepted),
+    `CreatedDateUtc`, `LastSuccessfulSignInUtc`, `LastSignInUtc` and `LastNonInteractiveSignInUtc` from
+    `signInActivity`, `SignInRead` and `OnPremisesSyncEnabled`. The read asks for `signInActivity`, which needs
+    AuditLog.Read.All and Microsoft Entra ID P1 or P2, with `$top=500`, the most Graph returns per page with it. When
+    that read is refused the guests are read again without it, `SignInRead` reads No, the detail says why and the run
+    notes ask for AuditLog.Read.All: the guests and their roles still read, since the client decides on each guest with
+    or without the date. The list is read in full (`-Complete`), so a read cut short fails rather than leaving a guest
+    out.
+  - `IA.17-RBAC` and `IA.17-ENTRA`: the Azure and Microsoft Entra roles those guests hold, with the columns of
+    IA.15-RBAC and IA.15-ENTRA, directly or through a group, nested groups followed and the group each guest sits in
+    recorded. A Lighthouse read, a group not read or a truncated Resource Graph result makes IA.17-RBAC PARTIAL.
+  - No enabled guest reads EMPTY for all three, with no further read. Users unreadable makes all three UNAVAILABLE.
+  CR-26 asks for recollection on an earlier pack. The query is in section 6 of the CyberSOC Monthly Report Runbook.
 - CyberSOC collector 1.20.0 (October 24, 2026): `DP.1-CONTAINERS` also writes `DP.1-SOFTDELETE` in the same pass over
   the storage accounts, for change request CR-25, which turns on blob and container soft delete. One row per storage
   account with blob soft delete and container soft delete (`deleteRetentionPolicy` and `containerDeleteRetentionPolicy`
