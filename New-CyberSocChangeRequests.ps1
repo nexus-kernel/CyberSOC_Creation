@@ -482,7 +482,8 @@ $settingLabel = { '{0} (resource group {1}, {2})' -f $_.Name, $_.ResourceGroup, 
 # device code flow or legacy authentication and the exclusions removed, which belong to the tenant. CR-22 lists the
 # domain controllers on their own, since the client confirms them apart from the other servers. CR-24 counts the devices
 # by operating system and join type, which belong to no subscription, after a sentence rather than a label, as CR-21 does.
-$emailHeading = '^(Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
+# CR-26 introduces the guests of each subscription, management group and the root scope with a sentence too.
+$emailHeading = '^((In the (subscription|management group) .+|At the root scope, above every subscription), the guests with a role are these|Subscription .+|Management group .+|Root scope|Microsoft Entra ID directory roles|Conditional Access policies|Device code sign-ins in the last 30 days|The Conditional Access policies it changes are these|It removes the exclusions of these accounts|These accounts completed a legacy authentication sign-in in the last 30 days|Domain controllers, included only if you confirm|Counted by operating system and join type, the devices? in the file (are these|is this)):$'
 function Get-Yours([int]$n, [string]$many) { if ($n -eq 1) { "one of your $many" } else { "$n of your $many" } }
 # A spreadsheet reads a cell that starts with =, +, - or @ as a formula, quoted or not, and a device, display or role name
 # comes from the directory, so the CSV an email attaches (CR-19, CR-24) and change-requests.csv put an apostrophe in
@@ -4436,9 +4437,13 @@ $catalog = @(
                         $r = $_.Group[0]; $g = & $guestOf $r
                         $roles = @(Get-DistinctRoles $_.Group).Count; $through = @(Get-DistinctRoles @($_.Group | Where-Object { (Get-Text $_.HeldThrough) -eq 'Group' })).Count
                         '{0} ({1}), {2}{3}' -f (ConvertTo-CopyText $r.DisplayName), $(if (Get-Text $g.Mail) { ConvertTo-CopyText $g.Mail } else { ConvertTo-CopyText $r.UserPrincipalName }), (Get-Count $roles 'role' 'roles'), $(if (-not $through) { '' } elseif ($through -eq $roles) { ', held through a group' } else { ', {0} of them through a group' -f $through }) }) }
+            # Each place is introduced with a sentence rather than a heading line, since the email reads as a letter.
+            $placeLine = { param([string]$Heading)
+                if ($Heading -eq 'Root scope') { 'At the root scope, above every subscription, the guests with a role are these:' }
+                else { 'In the {0}, the guests with a role are these:' -f ($Heading -replace '^Subscription ', 'subscription ' -replace '^Management group ', 'management group ') } }
             $emailResources = [System.Collections.Generic.List[object]]::new()
             foreach ($g in @($inScope | Group-Object { Get-RoleHeading $_ } | Sort-Object { Get-RoleHeadingOrder $_.Name })) {
-                $emailResources.Add("$($g.Name):")
+                $emailResources.Add((& $placeLine $g.Name))
                 $emailResources.Add([string[]]@(& $guestWords $g.Group))
             }
             $effect = @(
@@ -4454,7 +4459,7 @@ $catalog = @(
                     else { @(('I would like to remove the Azure roles held by {0} in your tenant, for each guest you tell me no longer needs that access.' -f (Get-Count $m 'guest account' 'guest accounts')), $explainGuest) }) `
                 -Why 'I recommend reviewing these roles because Microsoft Defender for Cloud recommends removing guest accounts with owner, write or read permissions on Azure resources. Guest accounts are not managed to the same standards as your own accounts, and an attacker can use one to reach your data without being noticed.' `
                 -Effect @($effect | Where-Object { $_ }) `
-                -Listed ('{0} in the attached file {1}, one line for each role with when the guest was created and last signed in, the role, where it applies, how the guest holds it and a Decision column{2}, and by subscription they are these:' -f (Get-Pick $m 'The guest and its roles are' 'The guests and their roles are'), $attachment, $(if ($answered) { ' with your answers' } else { ' for your answer' })) `
+                -Listed ('{0} in the attached file {1}, one line for each role with when the guest was created and last signed in, the role, where it applies, how the guest holds it and a Decision column{2}, and where they hold their roles is set out below:' -f (Get-Pick $m 'The guest and its roles are' 'The guests and their roles are'), $attachment, $(if ($answered) { ' with your answers' } else { ' for your answer' })) `
                 -Resources $emailResources.ToArray() `
                 -Reversal ('I can restore any of these roles at any time from the record I keep of each one, with its role, where it applies and the guest it belongs to{0}.' -f $(if ($memberships.Count) { ', and add a guest back to the group it was removed from' } else { '' })) `
                 -Ask $(if ($answered) { 'Could you approve removing the roles of the guests you marked Remove for {0}? The guests you marked Keep, and any guest without an answer, stay out of this change.' -f $proposedDay }
